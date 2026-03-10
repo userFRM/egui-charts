@@ -102,23 +102,14 @@ impl ChartState {
         );
 
         let (mut start, mut end) = logical_range.to_strict_range();
-        log::debug!(
-            "[visible_data] BEFORE clamping: start={}, end={}",
-            start,
-            end
-        );
+        log::debug!("[visible_data] BEFORE clamping: start={start}, end={end}");
 
         // Clamp to valid data range
         let data_len = self.data.len();
         end = end.min(data_len);
         start = start.min(end);
 
-        log::debug!(
-            "[visible_data] AFTER clamping: start={}, end={}, data_len={}",
-            start,
-            end,
-            data_len
-        );
+        log::debug!("[visible_data] AFTER clamping: start={start}, end={end}, data_len={data_len}");
 
         // Calculate how many bars should be visible
         let expected_visible = self.time_scale.visible_candles();
@@ -126,9 +117,7 @@ impl ChartState {
         // If we have too few bars visible (scrolled past beginning), extend the range
         let actual_visible = end.saturating_sub(start);
         log::debug!(
-            "[visible_data] actual_visible={}, expected_visible={}",
-            actual_visible,
-            expected_visible
+            "[visible_data] actual_visible={actual_visible}, expected_visible={expected_visible}"
         );
 
         if actual_visible < expected_visible && start == 0 && data_len > 1 {
@@ -166,11 +155,7 @@ impl ChartState {
         let logical_range = self.time_scale.visible_logical_range();
         let (mut start, mut end) = logical_range.to_strict_range();
 
-        log::debug!(
-            "[visible_range] BEFORE clamping: start={}, end={}",
-            start,
-            end
-        );
+        log::debug!("[visible_range] BEFORE clamping: start={start}, end={end}");
 
         // Clamp to valid data range
         let data_len = self.data.len();

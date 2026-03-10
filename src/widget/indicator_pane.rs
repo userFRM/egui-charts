@@ -824,7 +824,7 @@ impl IndicatorPane {
         while y_val <= y_max {
             let y = self.value_to_y(y_val, chart_rect, y_min, y_max);
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = format!("{:.2}", y_val);
+                let label = format!("{y_val:.2}");
                 painter.text(
                     Pos2::new(label_x, y),
                     egui::Align2::LEFT_CENTER,
@@ -858,12 +858,12 @@ impl IndicatorPane {
         if let Some(last_value) = values.last() {
             match last_value {
                 IndicatorValue::Single(v) => {
-                    legend_parts.push(format!("{:.2}", v));
+                    legend_parts.push(format!("{v:.2}"));
                 }
                 IndicatorValue::Multiple(vals) => {
                     for (i, v) in vals.iter().enumerate() {
                         let color = colors.get(i).copied().unwrap_or(text_color);
-                        legend_parts.push(format!("{:.2}", v));
+                        legend_parts.push(format!("{v:.2}"));
                         // Could draw colored value, but keeping it simple for now
                         let _ = color;
                     }

@@ -149,7 +149,7 @@ impl Drawing {
             painter.text(
                 Pos2::new(mid_xb.x - DESIGN_TOKENS.spacing.xxxl, mid_xb.y),
                 egui::Align2::RIGHT_CENTER,
-                format!("{:.3}", xab_ratio),
+                format!("{xab_ratio:.3}"),
                 egui::FontId::proportional(typography::XS),
                 ratio_color,
             );
@@ -172,7 +172,7 @@ impl Drawing {
             painter.text(
                 Pos2::new(mid_bd.x + DESIGN_TOKENS.spacing.xxxl, mid_bd.y),
                 egui::Align2::LEFT_CENTER,
-                format!("{:.3}", bcd_ratio),
+                format!("{bcd_ratio:.3}"),
                 egui::FontId::proportional(typography::XS),
                 ratio_color,
             );
@@ -531,7 +531,7 @@ impl Drawing {
             painter.text(
                 ratio_pos,
                 egui::Align2::CENTER_CENTER,
-                format!("CD/AB: {:.2}", ratio),
+                format!("CD/AB: {ratio:.2}"),
                 egui::FontId::proportional(typography::XS),
                 ratio_color,
             );

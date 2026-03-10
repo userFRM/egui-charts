@@ -27,8 +27,8 @@ use super::sizing::{
 
 /// Parse the raw RON tokens into the final DesignTokens structure
 pub(super) fn parse_tokens(tokens_ron: &str) -> Result<DesignTokens, String> {
-    let raw: RawDesignTokens = ron::from_str(tokens_ron)
-        .map_err(|e| format!("Failed to parse design_tokens.ron: {}", e))?;
+    let raw: RawDesignTokens =
+        ron::from_str(tokens_ron).map_err(|e| format!("Failed to parse design_tokens.ron: {e}"))?;
 
     Ok(resolve_tokens(raw))
 }

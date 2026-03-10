@@ -401,11 +401,11 @@ pub fn render_legend(
     // Format price helper - auto-detect decimals based on price magnitude
     let format_price = |price: f64| -> String {
         if price >= 100.0 {
-            format!("{:.2}", price)
+            format!("{price:.2}")
         } else if price >= 1.0 {
-            format!("{:.4}", price)
+            format!("{price:.4}")
         } else {
-            format!("{:.6}", price)
+            format!("{price:.6}")
         }
     };
 
@@ -462,7 +462,7 @@ pub fn render_legend(
     };
     let sign = if change >= 0.0 { "+" } else { "" };
 
-    let change_text = format!("{}{:.2} ({}{:.2}%)", sign, change, sign, change_pct);
+    let change_text = format!("{sign}{change:.2} ({sign}{change_pct:.2}%)");
     let change_galley = painter.layout_no_wrap(change_text, val_font, change_color);
     painter.galley(Pos2::new(x, y), change_galley, change_color);
 }

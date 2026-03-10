@@ -625,7 +625,7 @@ impl TryFrom<&str> for Resolution {
             "W" => Ok(Self::W1),
             "1M" => Ok(Self::MN1),
             "M" => Ok(Self::MN1),
-            _ => Err(format!("Unknown resolution: {}", value)),
+            _ => Err(format!("Unknown resolution: {value}")),
         }
     }
 }

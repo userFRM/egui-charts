@@ -137,10 +137,10 @@ impl Indicator for GuppyMA {
     fn line_names(&self) -> Vec<String> {
         let mut names = Vec::with_capacity(12);
         for &p in &SHORT_PERIODS {
-            names.push(format!("EMA({})", p));
+            names.push(format!("EMA({p})"));
         }
         for &p in &LONG_PERIODS {
-            names.push(format!("EMA({})", p));
+            names.push(format!("EMA({p})"));
         }
         names
     }

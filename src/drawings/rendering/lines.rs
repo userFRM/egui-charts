@@ -217,7 +217,7 @@ impl Drawing {
                 f32::INFINITY
             };
             let slope_display = if slope.is_finite() {
-                format!("{:.3}", slope)
+                format!("{slope:.3}")
             } else {
                 "∞".to_string()
             };
@@ -278,7 +278,7 @@ impl Drawing {
                 mid_point.y + info_offset * perpendicular_angle.sin(),
             );
 
-            let info_text = format!("d: {:.0}px  m: {}", distance, slope_display);
+            let info_text = format!("d: {distance:.0}px  m: {slope_display}");
             let info_font = egui::FontId::proportional(typography::XS);
             let muted_color =
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180);
@@ -371,7 +371,7 @@ impl Drawing {
                 painter.text(
                     width_label_pos,
                     egui::Align2::CENTER_CENTER,
-                    format!("{:.0}px", width),
+                    format!("{width:.0}px"),
                     label_font.clone(),
                     middle_color,
                 );
@@ -391,7 +391,7 @@ impl Drawing {
                 painter.text(
                     height_label_pos,
                     egui::Align2::CENTER_CENTER,
-                    format!("{:.0}px", height),
+                    format!("{height:.0}px"),
                     label_font,
                     middle_color,
                 );

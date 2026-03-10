@@ -117,17 +117,17 @@ fn format_price(price: f64) -> String {
     }
 
     if price >= 10000.0 {
-        format!("{:.0}", price)
+        format!("{price:.0}")
     } else if price >= 1000.0 {
-        format!("{:.1}", price)
+        format!("{price:.1}")
     } else if price >= 10.0 {
-        format!("{:.2}", price)
+        format!("{price:.2}")
     } else if price >= 1.0 {
-        format!("{:.4}", price)
+        format!("{price:.4}")
     } else if price >= 0.001 {
-        format!("{:.6}", price)
+        format!("{price:.6}")
     } else {
-        format!("{:.8}", price)
+        format!("{price:.8}")
     }
 }
 
@@ -144,7 +144,7 @@ fn format_volume(volume: f64) -> String {
     } else if volume >= 1_000.0 {
         format!("{:.2}K", volume / 1_000.0)
     } else {
-        format!("{:.0}", volume)
+        format!("{volume:.0}")
     }
 }
 

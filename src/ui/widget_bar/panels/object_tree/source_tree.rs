@@ -159,7 +159,7 @@ fn render_group(
 
         // Item count badge
         if config.show_item_counts {
-            ui.hint_label(format!("({})", count));
+            ui.hint_label(format!("({count})"));
         }
     });
 

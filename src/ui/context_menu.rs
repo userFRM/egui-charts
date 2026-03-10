@@ -205,11 +205,11 @@ impl ChartContextMenu {
     fn format_price(price: f64) -> String {
         // Use 2 decimal places for most prices, but handle very small prices
         let formatted = if price.abs() < 0.01 {
-            format!("{:.6}", price)
+            format!("{price:.6}")
         } else if price.abs() < 1.0 {
-            format!("{:.4}", price)
+            format!("{price:.4}")
         } else {
-            format!("{:.2}", price)
+            format!("{price:.2}")
         };
 
         // Add thousands separators
@@ -240,14 +240,14 @@ impl ChartContextMenu {
 
         if decimal_part.is_empty() {
             if negative {
-                format!("-{}", with_commas)
+                format!("-{with_commas}")
             } else {
                 with_commas
             }
         } else if negative {
-            format!("-{}.{}", with_commas, decimal_part)
+            format!("-{with_commas}.{decimal_part}")
         } else {
-            format!("{}.{}", with_commas, decimal_part)
+            format!("{with_commas}.{decimal_part}")
         }
     }
 
@@ -265,7 +265,7 @@ impl ChartContextMenu {
             MenuEntry::Separator,
             // Clipboard section
             MenuEntry::Item(MenuItem::new(
-                format!("Copy price {}", price_str),
+                format!("Copy price {price_str}"),
                 ContextMenuAction::CopyPrice(self.click_price),
             )),
             MenuEntry::Item(
@@ -275,7 +275,7 @@ impl ChartContextMenu {
             // Trading section - using exact SVG icons
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add alert on {} at {}…", symbol, price_str),
+                    format!("Add alert on {symbol} at {price_str}…"),
                     ContextMenuAction::AddAlert {
                         symbol: symbol.clone(),
                         price: self.click_price,
@@ -286,7 +286,7 @@ impl ChartContextMenu {
             ),
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Sell 1 {} @ {} limit", symbol, price_str),
+                    format!("Sell 1 {symbol} @ {price_str} limit"),
                     ContextMenuAction::SellLimit {
                         symbol: symbol.clone(),
                         price: self.click_price,
@@ -298,7 +298,7 @@ impl ChartContextMenu {
             ),
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Buy 1 {} @ {} stop", symbol, price_str),
+                    format!("Buy 1 {symbol} @ {price_str} stop"),
                     ContextMenuAction::BuyStop {
                         symbol: symbol.clone(),
                         price: self.click_price,
@@ -309,7 +309,7 @@ impl ChartContextMenu {
             ),
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add order on {} at {}…", symbol, price_str),
+                    format!("Add order on {symbol} at {price_str}…"),
                     ContextMenuAction::AddOrder {
                         symbol: symbol.clone(),
                         price: self.click_price,

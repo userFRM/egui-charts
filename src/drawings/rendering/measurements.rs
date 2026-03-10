@@ -152,9 +152,9 @@ impl Drawing {
             let hours = total_minutes / 60;
             let minutes = total_minutes % 60;
             let time_str = if hours > 0 {
-                format!("{}h {}m", hours, minutes)
+                format!("{hours}h {minutes}m")
             } else {
-                format!("{}m", minutes)
+                format!("{minutes}m")
             };
 
             // Calculate pips/points (scaled price difference)
@@ -255,10 +255,10 @@ impl Drawing {
             } else {
                 0.0
             };
-            format!("{:+.2} ({:+.2}%)", price_diff, price_pct)
+            format!("{price_diff:+.2} ({price_pct:+.2}%)")
         } else {
             let dy = (p2.y - p1.y).abs();
-            format!("Δ: {:.1}", dy)
+            format!("Δ: {dy:.1}")
         };
 
         painter.text(
@@ -324,10 +324,10 @@ impl Drawing {
             let cp1 = &self.chart_points[0];
             let cp2 = &self.chart_points[1];
             let bars_diff = (cp2.bar_idx - cp1.bar_idx).abs() as i32;
-            format!("{} bars", bars_diff)
+            format!("{bars_diff} bars")
         } else {
             let dx = (p2.x - p1.x).abs();
-            format!("Δ: {:.1}", dx)
+            format!("Δ: {dx:.1}")
         };
 
         painter.text(
@@ -386,14 +386,11 @@ impl Drawing {
             } else {
                 0.0
             };
-            format!(
-                "{} bars | {:+.2} ({:+.2}%)",
-                bars_diff, price_diff, price_pct
-            )
+            format!("{bars_diff} bars | {price_diff:+.2} ({price_pct:+.2}%)")
         } else {
             let dx = (p2.x - p1.x).abs();
             let dy = (p2.y - p1.y).abs();
-            format!("Δx:{:.0} Δy:{:.0}", dx, dy)
+            format!("Δx:{dx:.0} Δy:{dy:.0}")
         };
         painter.text(
             rect.center(),
@@ -441,9 +438,9 @@ impl Drawing {
             let hours = total_minutes / 60;
             let minutes = total_minutes % 60;
             let time_str = if hours > 0 {
-                format!("{}h {}m", hours, minutes)
+                format!("{hours}h {minutes}m")
             } else {
-                format!("{}m", minutes)
+                format!("{minutes}m")
             };
 
             // Calculate angle
@@ -457,8 +454,7 @@ impl Drawing {
             // Line 3: Angle
             (
                 format!(
-                    "{:+.2} ({:+.2}%)\n{} bars, {}\n{:.1}°",
-                    price_diff, price_pct, bars_diff, time_str, angle_deg
+                    "{price_diff:+.2} ({price_pct:+.2}%)\n{bars_diff} bars, {time_str}\n{angle_deg:.1}°"
                 ),
                 price_diff >= 0.0,
             )
@@ -468,10 +464,7 @@ impl Drawing {
             let dist = (dx * dx + dy * dy).sqrt();
             let angle_deg = dy.atan2(dx).to_degrees();
             (
-                format!(
-                    "D:{:.1}\nΔx:{:.0} Δy:{:.0}\n{:.1}°",
-                    dist, dx, dy, angle_deg
-                ),
+                format!("D:{dist:.1}\nΔx:{dx:.0} Δy:{dy:.0}\n{angle_deg:.1}°"),
                 dy <= 0.0,
             )
         };

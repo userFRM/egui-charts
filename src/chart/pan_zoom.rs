@@ -159,10 +159,7 @@ impl Chart {
                     .unwrap_or(chart_width / 2.0);
 
                 log::debug!(
-                    "[PINCH ZOOM] zoom_delta={:.4}, zoom_scale={:.4}, anchor_x={:.1}",
-                    zoom_delta,
-                    zoom_scale,
-                    zoom_point_x
+                    "[PINCH ZOOM] zoom_delta={zoom_delta:.4}, zoom_scale={zoom_scale:.4}, anchor_x={zoom_point_x:.1}"
                 );
 
                 self.state.time_scale_mut().zoom(

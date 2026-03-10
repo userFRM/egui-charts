@@ -78,7 +78,7 @@ pub fn handle_selection<F1, F2>(
             // Eraser mode: delete drawing on click
             if cursor_modes.eraser.active {
                 if let Some(hit_id) = drawing_manager.hit_test(pos) {
-                    log::info!("Eraser: deleting drawing {}", hit_id);
+                    log::info!("Eraser: deleting drawing {hit_id}");
                     drawing_manager.delete_drawing(hit_id);
                     cursor_modes.eraser.set_hover(None);
                 }

@@ -191,7 +191,7 @@ impl Drawing {
 
         // Move label (at midpoint of AB)
         let mid_ab = Pos2::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
-        let label_text = format!("{:.2} ({:.1}%)", price_change, pct_change);
+        let label_text = format!("{price_change:.2} ({pct_change:.1}%)");
         let label_bg = Rect::from_center_size(
             Pos2::new(mid_ab.x + 10.0, mid_ab.y - 10.0),
             egui::vec2(90.0, 16.0),
@@ -215,7 +215,7 @@ impl Drawing {
 
         // Projection target label
         let zone_height = (dy.abs() * 0.2).max(20.0);
-        let target_label = format!("Target: {:.2}", price_change);
+        let target_label = format!("Target: {price_change:.2}");
         let target_bg = Rect::from_center_size(
             Pos2::new(proj_end.x, proj_end.y - zone_height / 2.0 - 12.0),
             egui::vec2(80.0, 16.0),

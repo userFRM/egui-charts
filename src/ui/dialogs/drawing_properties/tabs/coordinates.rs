@@ -36,7 +36,7 @@ impl CoordinatesTab {
                 ui.strong(format!("Point {}", i + 1));
                 ui.space_sm();
 
-                FormGrid::new(format!("coord_grid_{}", i))
+                FormGrid::new(format!("coord_grid_{i}"))
                     .spacing(DESIGN_TOKENS.spacing.lg, DESIGN_TOKENS.spacing.sm)
                     .show(ui, |ui| {
                         ui.label("Price:");

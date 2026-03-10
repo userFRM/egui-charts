@@ -36,7 +36,7 @@ impl PnlLabel {
         let sign = if value >= 0.0 { "+" } else { "" };
         Self {
             value,
-            text: format!("{}${:.2}", sign, value),
+            text: format!("{sign}${value:.2}"),
             strong: false,
             size: None,
         }
@@ -47,7 +47,7 @@ impl PnlLabel {
         let sign = if value >= 0.0 { "+" } else { "" };
         Self {
             value,
-            text: format!("{}{:.2}%", sign, value),
+            text: format!("{sign}{value:.2}%"),
             strong: false,
             size: None,
         }

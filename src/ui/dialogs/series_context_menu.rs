@@ -181,11 +181,11 @@ impl SeriesContextMenu {
     /// Format price with appropriate precision
     fn format_price(price: f64) -> String {
         if price.abs() < 0.01 {
-            format!("{:.6}", price)
+            format!("{price:.6}")
         } else if price.abs() < 1.0 {
-            format!("{:.4}", price)
+            format!("{price:.4}")
         } else {
-            format!("{:.2}", price)
+            format!("{price:.2}")
         }
     }
 
@@ -198,7 +198,7 @@ impl SeriesContextMenu {
             // Trading section
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add alert on {} at {}…", symbol, price_str),
+                    format!("Add alert on {symbol} at {price_str}…"),
                     SeriesContextMenuAction::AddAlert,
                 )
                 .with_icon(&embedded_icons::ALERTS)
@@ -206,7 +206,7 @@ impl SeriesContextMenu {
             ),
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add order on {} at {}…", symbol, price_str),
+                    format!("Add order on {symbol} at {price_str}…"),
                     SeriesContextMenuAction::AddOrder,
                 )
                 .with_icon(&embedded_icons::PLUS)
@@ -214,14 +214,14 @@ impl SeriesContextMenu {
             ),
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add indicator/strategy on {}…", symbol),
+                    format!("Add indicator/strategy on {symbol}…"),
                     SeriesContextMenuAction::AddIndicator,
                 )
                 .with_icon(&embedded_icons::INDICATORS),
             ),
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add financial metric for {}…", symbol),
+                    format!("Add financial metric for {symbol}…"),
                     SeriesContextMenuAction::AddFinancialMetric,
                 )
                 .with_icon(&embedded_icons::BAR_CHART),
@@ -240,7 +240,7 @@ impl SeriesContextMenu {
             MenuEntry::Separator,
             // Edit section
             MenuEntry::Item(MenuItem::new(
-                format!("Copy price {}", price_str),
+                format!("Copy price {price_str}"),
                 SeriesContextMenuAction::CopyPrice,
             )),
             MenuEntry::Item(
@@ -279,7 +279,7 @@ impl SeriesContextMenu {
             // Watchlist & notes section
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add {} to watchlist", symbol),
+                    format!("Add {symbol} to watchlist"),
                     SeriesContextMenuAction::AddToWatchlist,
                 )
                 .with_icon(&embedded_icons::WATCHLIST)
@@ -287,7 +287,7 @@ impl SeriesContextMenu {
             ),
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add text note for {}", symbol),
+                    format!("Add text note for {symbol}"),
                     SeriesContextMenuAction::AddTextNote,
                 )
                 .with_icon(&embedded_icons::TEXT)

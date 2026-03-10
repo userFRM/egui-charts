@@ -170,19 +170,19 @@ impl ObjectTreeAction {
     pub fn description(&self) -> String {
         match self {
             Self::None => "No action".to_string(),
-            Self::Select(id) => format!("Select object {}", id),
-            Self::Delete(id) => format!("Delete object {}", id),
+            Self::Select(id) => format!("Select object {id}"),
+            Self::Delete(id) => format!("Delete object {id}"),
             Self::DeleteSelected => "Delete selected objects".to_string(),
-            Self::Duplicate(id) => format!("Duplicate object {}", id),
-            Self::ToggleVisibility(id) => format!("Toggle visibility for {}", id),
-            Self::ToggleLock(id) => format!("Toggle lock for {}", id),
-            Self::Rename(id, name) => format!("Rename {} to '{}'", id, name),
-            Self::BringToFront(id) => format!("Bring {} to front", id),
-            Self::SendToBack(id) => format!("Send {} to back", id),
-            Self::ZoomTo(id) => format!("Zoom to object {}", id),
+            Self::Duplicate(id) => format!("Duplicate object {id}"),
+            Self::ToggleVisibility(id) => format!("Toggle visibility for {id}"),
+            Self::ToggleLock(id) => format!("Toggle lock for {id}"),
+            Self::Rename(id, name) => format!("Rename {id} to '{name}'"),
+            Self::BringToFront(id) => format!("Bring {id} to front"),
+            Self::SendToBack(id) => format!("Send {id} to back"),
+            Self::ZoomTo(id) => format!("Zoom to object {id}"),
             Self::RemoveAllDrawings => "Remove all drawings".to_string(),
             Self::RemoveAllIndicators => "Remove all indicators".to_string(),
-            _ => format!("{:?}", self),
+            _ => format!("{self:?}"),
         }
     }
 }

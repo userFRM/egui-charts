@@ -106,14 +106,14 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
                     if self.show_details {
                         // Progress
                         ui.label(
-                            RichText::new(format!("{:.1}%", progress_pct))
+                            RichText::new(format!("{progress_pct:.1}%"))
                                 .color(DESIGN_TOKENS.semantic.ui.text_muted_dark)
                                 .size(11.0),
                         );
 
                         // Speed
                         ui.label(
-                            RichText::new(format!("{}x", speed))
+                            RichText::new(format!("{speed}x"))
                                 .color(DESIGN_TOKENS.semantic.ui.text_muted_dark)
                                 .size(11.0),
                         );
@@ -148,7 +148,7 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
 
                     if self.show_details {
                         ui.label(
-                            RichText::new(format!("{:.1}%", progress_pct))
+                            RichText::new(format!("{progress_pct:.1}%"))
                                 .color(DESIGN_TOKENS.semantic.ui.text_muted_dark)
                                 .size(11.0),
                         );

@@ -227,7 +227,7 @@ fn format_custom_seconds(seconds: u64) -> String {
     } else if seconds >= 60 && seconds.is_multiple_of(60) {
         format!("{}min", seconds / 60)
     } else {
-        format!("{}s", seconds)
+        format!("{seconds}s")
     }
 }
 

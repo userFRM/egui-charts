@@ -245,7 +245,7 @@ impl Drawing {
         painter.text(
             Pos2::new(label_pos.x + 35.0, label_pos.y + typography::XS),
             egui::Align2::CENTER_CENTER,
-            format!("R² = {:.2}", r_squared),
+            format!("R² = {r_squared:.2}"),
             egui::FontId::proportional(typography::XS),
             color,
         );
@@ -254,7 +254,7 @@ impl Drawing {
         painter.text(
             Pos2::new(label_pos.x + 35.0, label_pos.y + typography::XXL),
             egui::Align2::CENTER_CENTER,
-            format!("m = {:.4}", slope),
+            format!("m = {slope:.4}"),
             egui::FontId::proportional(typography::XS),
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180),
         );
@@ -427,7 +427,7 @@ impl Drawing {
         painter.text(
             height_label_pos,
             egui::Align2::LEFT_CENTER,
-            format!("{:.0}px", height_diff),
+            format!("{height_diff:.0}px"),
             egui::FontId::proportional(typography::XS),
             measure_color,
         );
@@ -568,7 +568,7 @@ impl Drawing {
             painter.text(
                 mid_connector,
                 egui::Align2::CENTER_CENTER,
-                format!("{:.0}px", channel_width),
+                format!("{channel_width:.0}px"),
                 egui::FontId::proportional(typography::XS),
                 connector_color,
             );

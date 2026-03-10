@@ -126,7 +126,7 @@ impl KeyboardShortcutsDialog {
         ui.space_xs();
 
         // Shortcut rows in a grid
-        egui::Grid::new(format!("shortcuts_{}", name))
+        egui::Grid::new(format!("shortcuts_{name}"))
             .num_columns(2)
             .spacing([DESIGN_TOKENS.spacing.xl, DESIGN_TOKENS.spacing.sm])
             .min_col_width(DESIGN_TOKENS.sizing.settings_dialog.label_width)

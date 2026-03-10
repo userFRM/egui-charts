@@ -332,7 +332,7 @@ impl Drawing {
                     .extended
                     .chart_axis_bg
                     .gamma_multiply(0.85);
-                let label_text = format!("{}", fib_num);
+                let label_text = format!("{fib_num}");
                 let label_pos = Pos2::new(curr_x, chart_rect.min.y + DESIGN_TOKENS.rounding.xl);
                 let label_rect = Rect::from_center_size(label_pos, egui::Vec2::new(24.0, 14.0));
                 painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);

@@ -41,7 +41,7 @@ pub fn render_last_price_line(
 
     // Draw price label on the right with colored background
     if show_right_axis {
-        let label = format!("{:.2}", last_close);
+        let label = format!("{last_close:.2}");
         let label_pos = Pos2::new(price_rect.max.x + 5.0, y);
 
         // Measure text size first

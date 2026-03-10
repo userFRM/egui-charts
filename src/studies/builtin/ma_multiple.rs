@@ -107,6 +107,6 @@ impl Indicator for MultipleMA {
     }
 
     fn line_names(&self) -> Vec<String> {
-        PERIODS.iter().map(|p| format!("SMA({})", p)).collect()
+        PERIODS.iter().map(|p| format!("SMA({p})")).collect()
     }
 }

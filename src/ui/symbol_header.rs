@@ -366,7 +366,7 @@ impl SymbolHeader {
     ) -> f32 {
         // Label
         let label_galley = painter.layout_no_wrap(
-            format!("{}:", label),
+            format!("{label}:"),
             egui::FontId::proportional(typography::MD),
             self.config.label_color,
         );
@@ -379,7 +379,7 @@ impl SymbolHeader {
 
         // Value
         let val_galley = painter.layout_no_wrap(
-            format!("{:.2}", value),
+            format!("{value:.2}"),
             egui::FontId::proportional(typography::MD),
             val_color,
         );
@@ -404,7 +404,7 @@ impl SymbolHeader {
         label: &str,
         bg_color: Color32,
     ) -> f32 {
-        let text = format!("{:.2} {}", price, label);
+        let text = format!("{price:.2} {label}");
         let galley = painter.layout_no_wrap(
             text,
             egui::FontId::proportional(typography::SM),
@@ -437,7 +437,7 @@ impl SymbolHeader {
         } else if vol >= 1_000.0 {
             format!("{:.2}K", vol / 1_000.0)
         } else {
-            format!("{:.0}", vol)
+            format!("{vol:.0}")
         }
     }
 }

@@ -123,7 +123,7 @@ impl DrawingToolShortcuts {
         self.shortcuts
             .iter()
             .map(|(shortcut, tool)| {
-                let key_text = format!("{:?}", shortcut);
+                let key_text = format!("{shortcut:?}");
                 (key_text, tool.as_str().to_string())
             })
             .collect()

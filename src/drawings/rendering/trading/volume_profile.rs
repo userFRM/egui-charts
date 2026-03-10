@@ -204,7 +204,7 @@ impl Drawing {
         let label_x = line_end - 60.0;
 
         // VWAP label
-        let vwap_label = format!("VWAP {:.2}", vwap_price);
+        let vwap_label = format!("VWAP {vwap_price:.2}");
         let vwap_bg = Rect::from_center_size(Pos2::new(label_x, vwap_y), egui::vec2(80.0, 16.0));
         painter.rect_filled(vwap_bg, DESIGN_TOKENS.rounding.sm, color);
         painter.text(

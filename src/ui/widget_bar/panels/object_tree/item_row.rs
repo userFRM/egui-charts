@@ -47,7 +47,7 @@ pub fn render_item_row(
 
     // Handle expand/collapse for items with properties
     if item.source_type == SourceType::Drawing && state.is_item_expanded(id) {
-        ui.indent(format!("item_props_{}", id), |ui| {
+        ui.indent(format!("item_props_{id}"), |ui| {
             if let Some(props) = &item.properties {
                 // Show expandable properties
                 render_properties(ui, props, id, &mut action);
@@ -332,7 +332,7 @@ fn render_properties(
 ) {
     ui.space_xs();
 
-    egui::Grid::new(format!("props_grid_{}", id))
+    egui::Grid::new(format!("props_grid_{id}"))
         .num_columns(2)
         .spacing([DESIGN_TOKENS.spacing.sm, DESIGN_TOKENS.spacing.xs])
         .show(ui, |ui| {

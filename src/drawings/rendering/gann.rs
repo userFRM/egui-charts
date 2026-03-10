@@ -426,7 +426,7 @@ impl Drawing {
             if i == 0 || i == divisions || i == divisions / 2 {
                 let y = rect.min.y + step_y * i as f32;
                 let pct = (100.0 * i as f32 / divisions as f32) as i32;
-                let label_text = format!("{}%", pct);
+                let label_text = format!("{pct}%");
                 let label_pos = Pos2::new(rect.min.x - 25.0, y);
                 let label_rect =
                     Rect::from_center_size(label_pos, egui::Vec2::new(24.0, typography::MD));

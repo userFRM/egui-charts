@@ -372,7 +372,7 @@ impl DatePicker {
                         ui.painter().text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
-                            format!("{}", day),
+                            format!("{day}"),
                             egui::FontId::proportional(typography::MD),
                             text_color,
                         );

@@ -451,7 +451,7 @@ impl ISeriesApi for SeriesApiImpl {
     }
 
     fn merge_with_pane(&mut self, pane_index: usize) -> Result<(), String> {
-        log::info!("Merging series with pane {}", pane_index);
+        log::info!("Merging series with pane {pane_index}");
         Ok(())
     }
 

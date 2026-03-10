@@ -79,7 +79,7 @@ fn render_dimension_labels(painter: &Painter, rect: Rect) {
         return;
     }
 
-    let label_text = format!("{:.0}x{:.0}", width, height);
+    let label_text = format!("{width:.0}x{height:.0}");
     let label_pos = Pos2::new(rect.center().x, rect.min.y - 15.0);
 
     // Draw label background

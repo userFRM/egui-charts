@@ -259,7 +259,7 @@ impl AlertsPanel {
                             .count();
 
                     ui.label(
-                        RichText::new(format!("{} active", active_cnt))
+                        RichText::new(format!("{active_cnt} active"))
                             .small()
                             .color(self.config.active_color),
                     );
@@ -809,7 +809,7 @@ impl AlertStatusWidget {
             ui.visuals().weak_text_color()
         };
 
-        let text = format!("{} alerts", active_cnt);
+        let text = format!("{active_cnt} alerts");
 
         ui.label(RichText::new(text).color(color))
     }

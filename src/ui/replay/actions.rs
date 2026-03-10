@@ -223,7 +223,7 @@ impl ReplaySpeed {
     /// Get display label for the speed
     pub fn label(&self) -> String {
         match self {
-            ReplaySpeed::Custom(v) => format!("{:.1}x", v),
+            ReplaySpeed::Custom(v) => format!("{v:.1}x"),
             _ => format!("{:.1}x", self.multiplier()),
         }
     }

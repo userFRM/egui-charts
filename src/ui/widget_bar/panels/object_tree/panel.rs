@@ -273,7 +273,7 @@ impl ObjectTreePanel {
                     drawings,
                     visible,
                     if selected > 0 {
-                        format!(" • {} selected", selected)
+                        format!(" • {selected} selected")
                     } else {
                         String::new()
                     }

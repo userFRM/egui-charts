@@ -65,7 +65,7 @@ impl Drawing {
             fill_toggle = !fill_toggle;
 
             // Cycle number label at top
-            let label = format!("{}", cycle_num);
+            let label = format!("{cycle_num}");
             let label_bg = Rect::from_center_size(
                 Pos2::new(x, chart_rect.min.y + DESIGN_TOKENS.spacing.xl),
                 egui::vec2(
@@ -114,7 +114,7 @@ impl Drawing {
         } else {
             (period / 10.0) as i32 // Approximate
         };
-        let period_label = format!("Period: {} bars", period_bars);
+        let period_label = format!("Period: {period_bars} bars");
         let period_bg = Rect::from_center_size(
             Pos2::new(
                 (p1.x + p2.x) / 2.0,
@@ -210,7 +210,7 @@ impl Drawing {
                     + DESIGN_TOKENS.sizing.technical_labels.line_label_width
                     + DESIGN_TOKENS.spacing.lg
             {
-                let label = format!("{}x", mult);
+                let label = format!("{mult}x");
                 let label_bg = Rect::from_center_size(
                     Pos2::new(
                         label_x + DESIGN_TOKENS.spacing.xl + DESIGN_TOKENS.spacing.sm,
@@ -330,7 +330,7 @@ impl Drawing {
         } else {
             (base_radius / 10.0) as i32
         };
-        let info_label = format!("Cycle: {} bars", bars);
+        let info_label = format!("Cycle: {bars} bars");
         let info_bg = Rect::from_center_size(
             Pos2::new(
                 center.x,
@@ -472,7 +472,7 @@ impl Drawing {
         } else {
             (wavelength / 10.0) as i32
         };
-        let wavelength_label = format!("λ: {} bars", wave_bars);
+        let wavelength_label = format!("λ: {wave_bars} bars");
         let wave_bg = Rect::from_center_size(
             Pos2::new(
                 p1.x + wavelength / 4.0,
@@ -507,7 +507,7 @@ impl Drawing {
         } else {
             (amplitude / 10.0) as f64
         };
-        let amp_label = format!("A: {:.2}", amp_price);
+        let amp_label = format!("A: {amp_price:.2}");
         let amp_bg = Rect::from_center_size(
             Pos2::new(
                 p2.x + DESIGN_TOKENS.spacing.xxl + DESIGN_TOKENS.spacing.sm,

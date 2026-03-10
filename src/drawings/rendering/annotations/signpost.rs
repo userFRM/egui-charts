@@ -76,7 +76,7 @@ impl Drawing {
         // Date label if we have chart point data
         if !self.chart_points.is_empty() {
             let bar_idx = self.chart_points[0].bar_idx as i64;
-            let date_text = format!("Bar {}", bar_idx);
+            let date_text = format!("Bar {bar_idx}");
             let date_font = egui::FontId::proportional(typography::XS);
             painter.text(
                 Pos2::new(
