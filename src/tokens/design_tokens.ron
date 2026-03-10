@@ -1,0 +1,1126 @@
+// Design Tokens - Chart Design System
+// This file defines all design tokens used throughout the application.
+// Loaded at compile time for zero runtime cost.
+
+(
+    // ==========================================================================
+    // Color Palette - Raw color values (HashMap requires {} and quoted keys)
+    // ==========================================================================
+    palette: {
+        // Primitives
+        "white": (255, 255, 255),
+        "black": (0, 0, 0),
+        "transparent": (0, 0, 0, 0),
+
+        // Gray scale
+        "gray_50": (250, 250, 250),
+        "gray_100": (245, 245, 245),
+        "gray_200": (229, 229, 229),
+        "gray_300": (212, 212, 212),
+        "gray_400": (163, 163, 163),
+        "gray_500": (131, 137, 151),
+        "gray_600": (120, 123, 134),
+        "gray_700": (82, 82, 82),
+        "gray_800": (55, 59, 70),
+        "gray_900": (30, 34, 45),
+        "gray_950": (19, 23, 34),
+
+        // Brand / Accent
+        "blue_500": (41, 98, 255),
+        "blue_600": (51, 115, 255),
+
+        // Trading colors (sacred - never change)
+        "green_400": (38, 166, 154),
+        "red_400": (239, 83, 80),
+        "red_500": (242, 54, 69),
+
+        // Status colors
+        "orange_500": (255, 152, 0),
+        "green_500": (76, 175, 80),
+        "yellow_500": (255, 235, 59),
+        "amber_500": (255, 193, 7),
+
+        // Extended status colors
+        "red_600": (244, 67, 54),     // Error
+        "info_blue": (33, 150, 243),
+        "info_blue_light": (100, 181, 246),
+        "disabled_gray": (158, 158, 158),
+
+        // Material palette - Extended colors for indicators/drawings
+        "purple_500": (156, 39, 176),
+        "purple_400": (126, 87, 194),
+        "deep_purple_500": (103, 58, 183),
+        "cyan_500": (0, 188, 212),
+        "teal_500": (0, 150, 136),
+        "indigo_500": (63, 81, 181),
+        "pink_500": (233, 30, 99),
+        "brown_500": (121, 85, 72),
+        "deep_orange_500": (255, 87, 34),
+        "lime_500": (139, 195, 74),
+
+        // Fibonacci level colors
+        "fib_red": (255, 82, 82),
+        "fib_green": (76, 175, 80),
+        "fib_blue": (33, 150, 243),
+        "fib_purple": (156, 39, 176),
+        "fib_orange": (255, 152, 0),
+        "fib_cyan": (0, 188, 212),
+
+        // Success/Error variants
+        "green_600": (46, 125, 50),    // Success dark
+        "green_700": (27, 94, 32),     // Success darker
+        "red_700": (211, 47, 47),      // Error dark
+        "red_800": (183, 28, 28),      // Error darker
+
+        // Tier colors
+        "tier_free": (128, 128, 128),
+        "tier_pro": (41, 98, 255),
+        "tier_premium": (255, 193, 7),
+
+        // UI chrome colors (light mode)
+        "ui_bg_outer": (240, 243, 250),
+        "ui_bg_hover": (243, 244, 246),
+        "ui_bg_active": (230, 232, 240),
+        "ui_border": (224, 227, 235),
+        "ui_border_subtle": (240, 240, 240),
+        "ui_text_muted": (178, 181, 190),
+        "ui_light_gray": (224, 224, 224),
+        "ui_accent_active": (31, 78, 205),
+
+        // Chart text colors
+        "chart_text": (209, 212, 220),
+        "chart_text_muted": (93, 96, 107),
+        "chart_tooltip_bg": (42, 46, 57),
+
+        // Neutral grays (pure)
+        "neutral_gray": (128, 128, 128),
+    },
+
+    // ==========================================================================
+    // Semantic Colors - Meaning-based color assignments
+    // ==========================================================================
+    semantic: (
+        ui: (
+            // Light mode UI
+            panel_bg_light: "white",
+            panel_bg_secondary_light: (240, 243, 250),
+            text_light: "gray_950",
+            text_secondary_light: "gray_500",
+            text_muted_light: (178, 181, 190),
+            border_light: (224, 227, 235),
+            border_subtle_light: "gray_100",
+
+            // Dark mode UI
+            panel_bg_dark: "gray_900",
+            panel_bg_secondary_dark: "gray_800",
+            text_dark: (209, 212, 220),
+            text_secondary_dark: "gray_600",
+            text_muted_dark: "gray_500",
+            border_dark: "gray_800",
+            border_subtle_dark: "gray_700",
+
+            // Icons
+            icon_light: "gray_500",
+            icon_hover_light: "gray_950",
+            icon_dark: (179, 184, 188),
+            icon_hover_dark: "white",
+            icon_active: "blue_500",
+
+            // Buttons
+            btn_bg_light: "white",
+            btn_bg_hover_light: (243, 244, 246),
+            btn_bg_active_light: (230, 232, 240),
+            btn_bg_dark: "gray_900",
+            btn_bg_hover_dark: "gray_800",
+            btn_bg_active_dark: "gray_700",
+
+            // Accent
+            accent: "blue_500",
+            accent_hover: "blue_600",
+
+            // Status
+            warning: "orange_500",
+            success: "green_500",
+        ),
+
+        chart: (
+            // Chart background (always dark)
+            bg: "gray_950",
+            bg_axis: "gray_900",
+            bg_selection: (5, 12, 30, 30),
+
+            // Light chart (rare but supported)
+            bg_light: "white",
+            bg_axis_light: (240, 243, 250),
+            bg_selection_light: (41, 98, 255, 20),
+            grid_line_light: (0, 0, 0, 12),
+            grid_line_major_light: (0, 0, 0, 20),
+            crosshair_line_light: (120, 120, 120, 150),
+
+            // Grid (dark chart)
+            grid_line: (255, 255, 255, 12),
+            grid_line_major: (255, 255, 255, 18),
+
+            // Text
+            axis_text: (209, 212, 220),
+            axis_text_secondary: "gray_600",
+
+            // Crosshair
+            crosshair_line: (178, 181, 190, 120),
+            crosshair_label_bg: "gray_800",
+            crosshair_label_text: (209, 212, 220),
+
+            // Trading colors
+            bullish: "green_400",
+            bearish: "red_400",
+            bullish_fill: (38, 166, 154, 50),
+            bearish_fill: (239, 83, 80, 50),
+            volume_up_alpha: 128,
+            volume_down_alpha: 128,
+            volume: (104, 109, 126, 128),
+            session_break: (255, 255, 255, 30),
+
+            // Watermark
+            watermark_alpha: 60,
+
+            // Selection text (on accent backgrounds)
+            selection_text: "white",
+        ),
+
+        brand: (
+            accent: "blue_500",
+            accent_hover: "blue_600",
+        ),
+
+        // Status colors - Extended set
+        status: (
+            error: "red_600",
+            error_dark: "red_700",
+            error_darker: "red_800",
+            info: "info_blue",
+            info_light: "info_blue_light",
+            disabled: "disabled_gray",
+            caution: "yellow_500",
+        ),
+
+        // Footprint chart colors
+        footprint: (
+            poc: "yellow_500",
+            value_area: (255, 193, 7, 50),
+            imbalance_buy: (38, 166, 154, 200),
+            imbalance_sell: (242, 54, 69, 200),
+        ),
+
+        // TPO (Market Profile) chart colors
+        tpo: (
+            poc: (255, 193, 7),              // Amber/gold - Point of Control
+            value_area: (33, 150, 243, 40),  // Blue with alpha - Value Area
+            initial_balance: (156, 39, 176), // Purple - Initial Balance
+            single_print: (255, 152, 0, 80), // Orange with alpha - Single prints
+            session_separator: (100, 100, 100), // Gray - Session separator
+            letter_default: (189, 189, 189), // Light gray - Default letter
+            opening_range: (0, 188, 212),    // Cyan - Opening range
+            grid: (255, 255, 255, 20),       // White with alpha - Grid
+            // Period colors for time-based coloring
+            period_1: (239, 83, 80),         // Red
+            period_2: (255, 152, 0),         // Orange
+            period_3: (255, 235, 59),        // Yellow
+            period_4: (76, 175, 80),         // Green
+            period_5: (33, 150, 243),        // Blue
+            period_6: (103, 58, 183),        // Deep Purple
+            period_7: (233, 30, 99),         // Pink
+            period_8: (0, 188, 212),         // Cyan
+            period_9: (139, 195, 74),        // Light Green
+            period_10: (121, 85, 72),        // Brown
+            period_11: (96, 125, 139),       // Blue Grey
+            period_12: (255, 87, 34),        // Deep Orange
+        ),
+
+        // Order book heatmap colors
+        heatmap: (
+            // Bid gradient (5 levels: darkest to brightest)
+            bid_1: (0, 50, 50, 40),          // Very dark teal
+            bid_2: (0, 100, 100, 80),        // Dark teal
+            bid_3: (0, 150, 150, 140),       // Medium teal
+            bid_4: (0, 200, 200, 200),       // Bright teal
+            bid_5: (0, 255, 255, 255),       // Full cyan
+            // Ask gradient (5 levels: darkest to brightest)
+            ask_1: (50, 0, 25, 40),          // Very dark magenta
+            ask_2: (100, 0, 50, 80),         // Dark magenta
+            ask_3: (150, 25, 75, 140),       // Medium magenta
+            ask_4: (200, 50, 100, 200),      // Bright magenta
+            ask_5: (255, 100, 150, 255),     // Full pink
+            // Other heatmap colors
+            mid_price: (255, 193, 7),        // Amber - Mid price line
+            border: (255, 255, 255, 30),     // White with alpha - Cell border
+            large_order_border: (255, 235, 59), // Yellow - Large order highlight
+        ),
+
+        // Indicator colors
+        indicators: (
+            ma: "orange_500",
+            ema: "info_blue",
+            sma: "orange_500",
+            bb_upper: "purple_500",
+            bb_middle: "gray_600",
+            bb_lower: "purple_500",
+            bb_fill: (156, 39, 176, 30),
+            rsi: "purple_400",
+            rsi_overbought: "red_400",
+            rsi_oversold: "green_400",
+            macd_line: "info_blue",
+            macd_signal: "orange_500",
+            macd_hist_pos: "green_400",
+            macd_hist_neg: "red_500",
+            vwap: "yellow_500",
+        ),
+
+        // Drawing tool colors
+        drawings: (
+            default_line: "info_blue",
+            handle: "blue_500",
+            handle_hover: "blue_600",
+            handle_active: "blue_600",
+            line_hover: (51, 115, 255),
+            line_selected: "blue_500",
+            label_bg: "gray_800",
+            label_text: (209, 212, 220),
+            // Fibonacci levels
+            fib_0: "fib_red",
+            fib_236: "fib_green",
+            fib_382: "fib_blue",
+            fib_50: "fib_purple",
+            fib_618: "fib_orange",
+            fib_100: "fib_cyan",
+        ),
+
+        // Tier colors
+        tiers: (
+            free: "tier_free",
+            pro: "tier_pro",
+            premium: "tier_premium",
+        ),
+
+        // ==========================================================================
+        // Button variant colors (rerun-inspired)
+        // ==========================================================================
+        buttons: (
+            // Primary variant (high emphasis - inverse colors)
+            primary_bg: "gray_900",
+            primary_bg_hover: "gray_800",
+            primary_bg_active: "gray_700",
+            primary_fg: "gray_100",
+
+            // Secondary variant (medium emphasis)
+            secondary_bg: "gray_300",
+            secondary_bg_hover: "gray_400",
+            secondary_bg_active: "gray_500",
+            secondary_fg: "gray_900",
+
+            // Outlined variant (border stroke)
+            outlined_border: "gray_500",
+            outlined_border_hover: "gray_600",
+
+            // Danger variant
+            danger_bg: "red_400",
+            danger_bg_hover: "red_500",
+            danger_bg_active: "red_600",
+            danger_fg: "white",
+        ),
+
+        // ==========================================================================
+        // List item colors (rerun-inspired with methods)
+        // ==========================================================================
+        list_item: (
+            // Backgrounds
+            hovered_bg: (229, 229, 229, 180),
+            active_bg: (212, 212, 212, 200),
+
+            // Text colors - default state
+            default_text: "gray_700",
+            hovered_text: "gray_900",
+            active_text: "gray_950",
+            strong_text: "gray_900",
+            noninteractive_text: "gray_500",
+
+            // Text on selection (primary bg)
+            text_on_primary: "blue_500",
+            text_on_primary_hovered: "gray_950",
+
+            // Icon colors
+            default_icon: "gray_500",
+            hovered_icon: "gray_600",
+            active_icon: "gray_700",
+            icon_on_primary: "blue_500",
+            icon_on_primary_hovered: "gray_900",
+        ),
+
+        // ==========================================================================
+        // Alert colors (semantic message boxes)
+        // ==========================================================================
+        alert: (
+            // Info (blue)
+            info_bg: (41, 98, 255, 25),
+            info_border: (41, 98, 255, 100),
+            info_icon: "blue_500",
+
+            // Success (green)
+            success_bg: (38, 166, 154, 25),
+            success_border: (38, 166, 154, 100),
+            success_icon: "green_400",
+
+            // Warning (amber)
+            warning_bg: (255, 193, 7, 25),
+            warning_border: (255, 193, 7, 100),
+            warning_icon: "amber_500",
+
+            // Error (red)
+            error_bg: (239, 83, 80, 25),
+            error_border: (239, 83, 80, 100),
+            error_icon: "red_400",
+        ),
+
+        // ==========================================================================
+        // Modal colors (dialogs and overlays)
+        // ==========================================================================
+        modal: (
+            // Backdrop
+            overlay_bg: (0, 0, 0, 180),
+
+            // Panel
+            panel_bg: "gray_800",
+            panel_border: "gray_700",
+            header_bg: "gray_900",
+        ),
+
+        // ==========================================================================
+        // Toast colors (notifications)
+        // ==========================================================================
+        toast: (
+            // Info toast
+            info_bg: (41, 98, 255, 230),
+            info_icon: "blue_500",
+
+            // Success toast
+            success_bg: (38, 166, 154, 230),
+            success_icon: "green_400",
+
+            // Warning toast
+            warning_bg: (255, 193, 7, 230),
+            warning_icon: "amber_500",
+
+            // Error toast
+            error_bg: (239, 83, 80, 230),
+            error_icon: "red_400",
+
+            // Common
+            text: "white",
+            shadow: (0, 0, 0, 60),
+            progress_bar_bg: (255, 255, 255, 50),
+            progress_bar_fill: (255, 255, 255, 128),
+        ),
+
+        // Command palette
+        command_palette: (
+            bg: "gray_900",
+            border: "gray_700",
+            input_bg: "gray_950",
+            item_hover: (41, 98, 255, 50),
+            item_selected: (41, 98, 255, 100),
+            shortcut_text: "gray_500",
+        ),
+
+        // Extended UI colors (for direct access, mirrors old theme::ui constants)
+        extended: (
+            // UI backgrounds (light mode)
+            bg_outer: "ui_bg_outer",
+            bg_panel: "white",
+            bg_hover: "ui_bg_hover",
+            bg_active: "ui_bg_active",
+
+            // UI borders
+            border: "ui_border",
+            border_subtle: "ui_border_subtle",
+
+            // UI text colors
+            text: "gray_950",
+            text_secondary: "gray_500",
+            text_muted: "ui_text_muted",
+
+            // Accent colors
+            accent: "blue_500",
+            accent_hover: "blue_600",
+            accent_active: "ui_accent_active",
+
+            // Status colors - flat access
+            success: "green_500",
+            success_light: "lime_500",
+            success_dark: "green_600",
+            success_darker: "green_700",
+            error: "red_600",
+            error_dark: "red_700",
+            error_darker: "red_800",
+            warning: "orange_500",
+            caution: "yellow_500",
+            info: "info_blue",
+            info_light: "info_blue_light",
+            disabled: "disabled_gray",
+
+            // Material design colors - flat access
+            purple: "purple_500",
+            deep_purple: "deep_purple_500",
+            cyan: "cyan_500",
+            teal: "teal_500",
+            indigo: "indigo_500",
+            pink: "pink_500",
+            brown: "brown_500",
+            deep_orange: "deep_orange_500",
+            gray: "neutral_gray",
+            light_gray: "ui_light_gray",
+            favorite_gold: "amber_500",
+
+            // Chart colors - flat access
+            chart_bg: "gray_950",
+            chart_axis_bg: "gray_900",
+            chart_tooltip_bg: "chart_tooltip_bg",
+            chart_text: "chart_text",
+            chart_text_secondary: "gray_600",
+            chart_text_muted: "chart_text_muted",
+            chart_crosshair_label_bg: "gray_800",
+
+            // Trading colors - flat access
+            bullish: "green_400",
+            bearish: "red_500",
+        ),
+    ),
+
+    // ==========================================================================
+    // Spacing - Gaps, margins, padding
+    // ==========================================================================
+    spacing: (
+        xs: 2.0,
+        sm: 4.0,
+        md: 6.0,
+        lg: 8.0,
+        xl: 12.0,
+        xxl: 16.0,
+        xxxl: 24.0,
+        hairline: 1.0,      // Visual 1px separators
+        section_lg: 40.0,   // Large section spacing (24 + 16)
+
+        // Semantic aliases
+        panel_gap: 4.0, // 4px gaps between panels
+        button_padding: 4.0,
+        toolbar_item_gap: 4.0,
+        menu_item_padding: 8.0,
+    ),
+
+    // ==========================================================================
+    // Sizing - Component dimensions
+    // ==========================================================================
+    sizing: (
+        // Target sizes
+        target_min: 24.0,
+
+        // Icons
+        icon_xs: 12.0,
+        icon_14: 14.0,      // 14px icons (indicator dialog)
+        icon_sm: 16.0,
+        icon_md: 20.0,
+        icon_btn: 22.0,     // Button icons (22px)
+        icon_lg: 24.0,
+        icon_xl: 28.0,
+        icon_xxl: 32.0,
+
+        // Buttons
+        button_sm: 24.0,
+        button_md: 28.0,
+        button_dialog: 32.0,         // Dialog button height
+        button_lg: 36.0,
+        button_xl: 40.0,
+        button_xxl: 48.0,
+        button_min_width_xs: 70.0,   // Cancel/OK buttons
+        button_min_width_sm: 80.0,   // Auth buttons
+        button_min_width_md: 100.0,  // Trading buttons
+        button_min_width_lg: 150.0,  // Large dialog buttons
+
+        // List items
+        list_item_height: 28.0,
+        menu_item_height: 38.0,
+
+        // ======================================================================
+        // Toolbar dimensions
+        // ======================================================================
+        toolbar: (
+            top_height: 48.0,
+            left_width: 52.0,
+            bottom_height: 28.0,
+            right_icon_width: 52.0,
+            right_panel_width: 300.0,
+            right_panel_min_width: 180.0,
+            right_panel_max_width: 350.0,
+
+            // Exact toolbar dimensions
+            left_toolbar_width: 52.0,
+            button_width: 52.0,
+            button_height: 38.0,
+            hover_margin_h: 9.0,                // Horizontal margin for inner hover rect
+            hover_margin_v: 2.0,                // Vertical margin for inner hover rect
+            inner_rounding: 6.0,                // Inner hover rect corner radius
+            icon_size: 28.0,                    // Icon size in toolbar buttons
+            separator_margin: 8.0,              // Separator margin from toolbar edges
+            separator_gap: 6.0,                 // Gap above/below separators
+
+            // Right sidebar (widget bar) exact dimensions
+            right_sidebar_width: 52.0,
+            right_btn_size: 44.0,               // 44×44 buttons
+            right_icon_size: 44.0,              // Icons match button size (native viewBox)
+            right_btn_spacing: 2.0,             // 2px gap between buttons
+            right_hover_margin: 3.0,            // 3px inset for hover rect
+            right_hover_rounding: 8.0,          // 8px corners on hover
+
+            // Top toolbar separator dimensions
+            separator_height: 20.0,             // Vertical separator height
+            separator_width: 1.0,               // Separator line width
+        ),
+
+        // ======================================================================
+        // Panel - Bottom panel and widget panel dimensions
+        // ======================================================================
+        panel: (
+            bottom_default_height: 150.0,
+            bottom_min_height: 100.0,
+            bottom_max_height: 300.0,
+            bottom_toolbar_height: 36.0,
+            widget_default_width: 300.0,
+            widget_default_height: 400.0,
+            widget_min_width: 200.0,
+            widget_min_height: 150.0,
+
+            // Trading panel row (collapsible row)
+            trading_panel_row_height: 28.0,         // Row height
+            trading_panel_row_icon_size: 16.0,      // Icon size
+            trading_panel_row_btn_size: 24.0,       // Button size
+            trading_panel_row_icon_size_touch: 24.0, // Touch icon size (larger)
+            trading_panel_row_btn_size_touch: 44.0,  // Touch button size (44pt min)
+        ),
+
+        // ======================================================================
+        // Dialog - Popup and dialog dimensions
+        // ======================================================================
+        dialog: (
+            symbol_search_width: 500.0,
+            symbol_search_height: 400.0,
+            submenu_width: 200.0,
+            submenu_item_height: 38.0,
+            color_picker_width: 160.0,
+            color_picker_height: 150.0,
+            // Menu dimensions
+            menu_settings_width: 220.0,
+            menu_settings_height: 400.0,
+            // Modal dialog defaults
+            default_width: 400.0,
+            default_height: 300.0,
+            default_min_height: 100.0,
+            confirm_width: 350.0,
+            prompt_width_sm: 350.0,
+            prompt_width_lg: 450.0,
+            alert_width: 480.0,
+            properties_height: 450.0,
+            label_width: 100.0,
+            input_width: 100.0,
+            series_sidebar_width: 140.0,
+            grid_dropdown_width: 140.0,
+            indicator_item_width: 130.0,
+            button_min_width_xs: 60.0,
+        ),
+
+        // ======================================================================
+        // Auth Dialog - Authentication dialog dimensions
+        // ======================================================================
+        auth_dialog: (
+            user_menu_width: 220.0,
+        ),
+
+        // ======================================================================
+        // Settings Dialog dimensions
+        // ======================================================================
+        settings_dialog: (
+            // Dialog frame
+            width: 620.0,
+            height: 720.0,
+            min_width: 610.0,
+            max_width: 750.0,
+            rounding: 6.0,
+            // Title bar
+            title_height: 52.0,
+            title_font_size: 18.0,
+            title_padding_left: 24.0,
+            close_button_size: 32.0,
+            close_button_margin: 10.0,
+            close_icon_size: 10.0,
+            // Sidebar
+            sidebar_width: 160.0,
+            tab_height: 40.0,
+            tab_padding_h: 16.0,
+            tab_padding_v: 8.0,
+            tab_icon_size: 20.0,
+            tab_icon_text_gap: 12.0,
+            tab_font_size: 13.0,
+            // Content area
+            content_padding_top: 16.0,
+            content_padding_h: 24.0,
+            scroll_area_height: 560.0,
+            content_min_width: 400.0,
+            // Section headers
+            section_margin_top: 24.0,
+            section_margin_bottom: 12.0,
+            section_font_size: 13.0,
+            // Row layout
+            row_height: 40.0,
+            row_spacing: 4.0,
+            label_width: 110.0,
+            // Controls
+            control_height: 32.0,
+            dropdown_width: 160.0,
+            input_width: 100.0,
+            swatch_size: 32.0,
+            checkbox_size: 18.0,
+            slider_width: 120.0,
+            small_input_width: 60.0,
+            input_width_margin: 60.0,
+            section_spacing: 16.0,
+            // Footer
+            footer_height: 60.0,
+            footer_padding_h: 24.0,
+            footer_padding_v: 12.0,
+            button_height: 36.0,
+            button_min_width: 80.0,
+            button_padding_h: 16.0,
+            button_gap: 8.0,
+            // Additional controls
+            small_dropdown_width: 80.0,
+            xs_dropdown_width: 70.0,
+            template_button_width: 100.0,
+            template_menu_width: 180.0,
+            template_menu_max_height: 300.0,
+            // Tab indicator
+            indicator_width: 3.0,
+            indicator_offset: 4.0,
+            // Grid layout
+            grid_col_spacing: 40.0,
+            grid_row_spacing: 12.0,
+        ),
+
+        // ======================================================================
+        // Context Menu dimensions
+        // ======================================================================
+        context_menu: (
+            // Menu frame
+            min_width: 220.0,
+            max_width: 380.0,
+            rounding: 6.0,
+            padding_v: 4.0,
+            // Menu items
+            item_height: 32.0,
+            item_padding_h: 12.0,
+            item_padding_v: 6.0,
+            icon_width: 28.0,
+            icon_size: 18.0,
+            icon_label_gap: 8.0,
+            font_size: 13.0,
+            shortcut_font_size: 12.0,
+            // Separator
+            separator_height: 9.0,
+            separator_thickness: 1.0,
+            separator_margin_h: 12.0,
+            // Submenu
+            submenu_arrow_size: 8.0,
+            submenu_offset: -4.0,
+            shortcut_width: 70.0,
+            char_width: 7.5,
+            screen_edge_padding: 4.0,
+            submenu_arrow_font_size: 8.0,
+        ),
+
+        // ======================================================================
+        // Right Sidebar - Panel dimensions
+        // ======================================================================
+        right_sidebar: (
+            width: 280.0,
+            min_width: 200.0,
+            max_width: 400.0,
+        ),
+
+        // ======================================================================
+        // Watermark - Chart watermark dimensions
+        // ======================================================================
+        watermark: (
+            font_size: 48.0,
+            padding: 20.0,
+            line_spacing: 1.2,
+        ),
+
+        // ======================================================================
+        // Burger Menu - Hamburger menu dimensions
+        // ======================================================================
+        burger_menu: (
+            // Button
+            button_size: 36.0,
+            line_width_ratio: 0.5,
+            line_height: 2.0,
+            line_spacing_ratio: 0.18,
+            // Panel
+            panel_width: 280.0,
+            header_padding: 12.0,
+            header_spacing: 8.0,
+            separator_padding: 4.0,
+            // Menu items
+            item_height: 40.0,
+            item_padding: 12.0,
+            icon_size: 18.0,
+            font_size: 14.0,
+        ),
+
+        // ======================================================================
+        // Symbol Header - Symbol display dimensions
+        // ======================================================================
+        symbol_header: (
+            height: 28.0,
+            quote_box_height: 18.0,
+        ),
+
+        // ======================================================================
+        // Timeframe Toolbar - Bottom toolbar dimensions
+        // ======================================================================
+        timeframe_toolbar: (
+            right_section_width: 220.0,
+        ),
+
+        // ======================================================================
+        // Footprint Chart - Volume profile dimensions
+        // ======================================================================
+        footprint: (
+            bar_width_ratio: 0.8,
+            poc_height_multiplier: 1.0,
+            value_area_alpha: 50,
+            stacked_imbalance_alpha: 100,
+        ),
+
+        // ======================================================================
+        // Chart Layout
+        // ======================================================================
+        chart: (
+            padding: 40.0,
+            right_axis_width: 70.0,
+        ),
+
+        // ======================================================================
+        // Candle - candlestick rendering constants
+        // ======================================================================
+        candle: (
+            body_width_ratio: 0.6,
+            wick_width: 1.0,
+            wick_width_hidpi: 2.0,
+            min_body_height: 1.0,
+            volume_alpha: 128,
+            grid_width: 1.0,
+        ),
+
+        // ======================================================================
+        // Floating Toolbar - Draggable toolbar dimensions
+        // ======================================================================
+        floating_toolbar: (
+            default_x: 100.0,
+            default_y: 100.0,
+            drag_handle_width: 24.0,
+            button_size: 24.0,
+            color_size: 20.0,
+            separator_width: 8.0,
+            drag_handle_height: 20.0,
+            height: 32.0,
+            dot_size: 1.5,
+            dot_spacing: 4.0,
+            separator_height: 16.0,
+        ),
+
+        // ======================================================================
+        // Command Palette - Sizing dimensions
+        // ======================================================================
+        command_palette: (
+            width: 500.0,
+            height: 400.0,
+            margin_x: 40.0,
+            margin_y: 100.0,
+            input_padding: 60.0,
+            scroll_padding: 80.0,
+        ),
+
+        // ======================================================================
+        // Replay Controls - Replay toolbar dimensions
+        // ======================================================================
+        replay: (
+            control_bar_height: 40.0,
+            button_size: 28.0,
+            speed_dropdown_width: 60.0,
+            date_display_width: 150.0,
+            progress_bar_width: 200.0,
+        ),
+
+        // ======================================================================
+        // Emoji Picker - Emoji selection panel dimensions
+        // ======================================================================
+        emoji_picker: (
+            width: 320.0,
+            cell_size: 32.0,
+            cell_size_lg: 40.0,
+            category_width: 40.0,
+            submenu_width: 280.0,
+            input_padding: 60.0,
+        ),
+
+        // ======================================================================
+        // Drawing Toolbar Extended - Additional drawing toolbar dimensions
+        // ======================================================================
+        drawing_toolbar_ext: (
+            submenu_width_sm: 180.0,
+            submenu_width_lg: 200.0,
+            submenu_width_xl: 220.0,
+            min_icon: 24.0,
+            min_width: 44.0,
+            name_offset_active: 42.0,
+            name_offset_inactive: 36.0,
+            submenu_offset_y: 70.0,
+            submenu_margin: 10.0,
+        ),
+
+        // ======================================================================
+        // Annotations - Text and label annotation dimensions
+        // ======================================================================
+        annotation: (
+            label_padding_x: 8.0,
+            label_padding_y: 4.0,
+            callout_padding_x: 10.0,
+            callout_padding_y: 6.0,
+            pointer_size: 8.0,
+            comment_bubble_width: 28.0,
+            comment_bubble_height: 22.0,
+            note_size: 24.0,
+            note_fold_size: 6.0,
+            table_cell_width: 70.0,
+            table_cell_height: 22.0,
+            table_header_height: 26.0,
+            flag_pole_length: 35.0,
+            flag_width: 25.0,
+            flag_height: 15.0,
+            signpost_padding_x: 6.0,
+            signpost_padding_y: 4.0,
+            signpost_post_width: 10.0,
+            signpost_post_height: 5.0,
+            signpost_bracket: 12.0,
+            text_padding_x: 8.0,
+            text_padding_y: 5.0,
+            text_line_height: 6.0,
+            text_inner_padding: 4.0,
+            text_anchored_size: 18.0,
+        ),
+
+        // ======================================================================
+        // Media - Image and media placeholder dimensions
+        // ======================================================================
+        media: (
+            image_min_width: 60.0,
+            image_min_height: 45.0,
+            image_default_width: 120.0,
+            image_default_height: 90.0,
+            checkerboard_size: 10.0,
+            tweet_card_width: 280.0,
+            tweet_card_height: 120.0,
+            idea_card_width: 200.0,
+            idea_card_height: 80.0,
+            profile_radius: 18.0,
+        ),
+
+        // ======================================================================
+        // Crosshair - Crosshair rendering dimensions
+        // ======================================================================
+        crosshair: (
+            dot_radius: 4.0,
+            label_offset_x: 5.0,
+            label_offset_y: 5.0,
+            label_rounding: 2.0,
+            plus_symbol_spacing: 16.0,
+            dash_on: 5.0,
+            dash_off: 3.0,
+        ),
+
+        // ======================================================================
+        // Position Tool - Trading position tool dimensions
+        // ======================================================================
+        position_tool: (
+            min_width: 200.0,
+            label_info_width: 350.0,
+            label_info_height: 25.0,
+            label_target_width: 180.0,
+            label_offset_x: 10.0,
+            label_offset_y: 20.0,
+            text_offset_x: 15.0,
+            text_offset_y: 12.0,
+        ),
+
+        // ======================================================================
+        // Charts Extended - Additional chart dimensions
+        // ======================================================================
+        charts_ext: (
+            min_width: 100.0,
+            min_height: 150.0,
+            indicator_pane_min: 100.0,
+            indicator_pane_default: 120.0,
+            volume_bubbles_max_diameter: 40.0,
+            heatmap_strip_height: 24.0,
+            order_line_label_width: 120.0,
+            order_line_label_height: 20.0,
+            time_label_min_spacing: 60.0,
+            time_label_max_spacing: 140.0,
+            price_label_min_spacing: 80.0,
+            realtime_button_width: 110.0,
+            price_scale_width: 65.0,
+            time_scale_height: 28.0,
+        ),
+
+        // ======================================================================
+        // Technical Labels - Gann, Elliott, Fibonacci label dimensions
+        // ======================================================================
+        technical_labels: (
+            gann_label_width: 28.0,
+            gann_label_height: 14.0,
+            elliott_label_size: 18.0,
+            fib_label_offset_x: 80.0,
+            fib_timezone_width: 24.0,
+            fib_timezone_height: 14.0,
+            channel_label_width: 70.0,
+            channel_label_height: 36.0,
+            channel_offset_x: 60.0,
+            cycle_label_width: 40.0,
+            cycle_label_height: 14.0,
+            pattern_label_width: 70.0,
+            pattern_label_height: 16.0,
+            line_label_width: 40.0,
+            line_label_height: 14.0,
+            line_arc_radius: 40.0,
+            hs_label_width: 35.0,
+        ),
+
+        // ======================================================================
+        // Tooltip - Tooltip rendering dimensions
+        // ======================================================================
+        tooltip: (
+            cursor_offset_x: 15.0,
+            padding_x: 8.0,
+            padding_y: 5.0,
+        ),
+
+        // ======================================================================
+        // Cursor - Cursor mode dimensions
+        // ======================================================================
+        cursor: (),
+
+        // ======================================================================
+        // Drawing - Drawing manager dimensions
+        // ======================================================================
+        drawing: (
+            magnet_distance: 20.0,
+        ),
+
+        // ======================================================================
+        // Notification - Notification panel dimensions
+        // ======================================================================
+        notification: (
+            panel_width: 320.0,
+        ),
+
+        // ======================================================================
+        // Widget - Widget bar panel dimensions
+        // ======================================================================
+        widget: (
+            bid_ask_height: 80.0,
+        ),
+
+        // ======================================================================
+        // Menu - Menu item dimensions
+        // ======================================================================
+        menu: (
+            item_height: 28.0,
+        ),
+    ),
+
+    // ==========================================================================
+    // Rounding - Corner radii
+    // ==========================================================================
+    rounding: (
+        none: 0.0,
+        xs: 2.0,
+        sm: 4.0,
+        md: 6.0,
+        lg: 8.0,
+        xl: 12.0,
+        pill: 9999.0,
+
+        // Semantic aliases
+        button: 6.0,
+        panel: 6.0,
+        dialog: 6.0,
+        input: 4.0,
+    ),
+
+    // ==========================================================================
+    // Typography - Font sizes
+    // ==========================================================================
+    typography: (
+        micro: 8.0,     // Very small text (TPO chart)
+        tiny: 9.0,      // Tiny text (TPO chart)
+        xs: 10.0,
+        sm: 11.0,
+        md: 13.0,
+        lg: 14.0,
+        xl: 16.0,
+        xxl: 18.0,
+        xxxl: 24.0,
+
+        // Semantic aliases
+        body: 13.0,
+        small: 11.0,
+        heading: 18.0,
+        title: 24.0,
+    ),
+
+    // ==========================================================================
+    // Stroke Widths
+    // ==========================================================================
+    stroke: (
+        extra_thin: 0.5,   // Grids, subtle lines, cycles
+        light: 0.8,        // Gann lines, light strokes
+        hairline: 1.0,
+        thin: 1.2,
+        medium: 1.5,
+        thick: 2.0,
+    ),
+
+    // ==========================================================================
+    // Shadow Offsets
+    // ==========================================================================
+    shadow: (
+        offset_sm: 2.0,    // Small shadow offset
+        offset_md: 4.0,    // Medium shadow offset
+    ),
+
+    // ==========================================================================
+    // Layout Positioning
+    // ==========================================================================
+    layout: (
+        menu_shadow_offset_x: 0.0,   // Menu shadow X offset
+        menu_shadow_offset_y: 2.0,   // Menu shadow Y offset
+        label_offset_sm: 5.0,        // Small label offset
+        label_offset_md: 8.0,        // Medium label offset
+    ),
+)

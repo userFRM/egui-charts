@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" width="28" height="28"> <g fill="#ffffff"> <path fill-rule="nonzero" d="M4.529 18.21l3.157-1.292-.379-.926-3.157 1.292z">
+  </path> <path fill-rule="nonzero" d="M9.734 16.081l2.97-1.215-.379-.926-2.97 1.215z">
+  </path> <path fill-rule="nonzero" d="M14.725 14.039l2.957-1.21-.379-.926-2.957 1.21z">
+  </path> <path fill-rule="nonzero" d="M19.708 12.001l3.114-1.274-.379-.926-3.114 1.274z">
+  </path> <path d="M8 18h1v3h-1z" id="Path">
+  </path> <path d="M8 9h1v5h-1z">
+  </path> <path fill-rule="nonzero" d="M8 18h1v-4h-1v4zm-1-5h3v6h-3v-6z" id="Rectangle-44">
+  </path> <path d="M18 16h1v3h-1z" id="Path">
+  </path> <path d="M18 3h1v6h-1z">
+  </path> <path fill-rule="nonzero" d="M18 16h1v-7h-1v7zm-1-8h3v9h-3v-9z" id="Rectangle-44">
+  </path> <path d="M13 6h1v5h-1z">
+  </path> <path d="M13 15h1v5h-1z">
+  </path> <path fill-rule="nonzero" d="M13 15h1v-4h-1v4zm-1-5h3v6h-3v-6z">
+  </path> <path fill-rule="nonzero" d="M2.5 20c.828 0 1.5-.672 1.5-1.5s-.672-1.5-1.5-1.5-1.5.672-1.5 1.5.672 1.5 1.5 1.5zm0 1c-1.381 0-2.5-1.119-2.5-2.5s1.119-2.5 2.5-2.5 2.5 1.119 2.5 2.5-1.119 2.5-2.5 2.5zM24.5 11c.828 0 1.5-.672 1.5-1.5s-.672-1.5-1.5-1.5-1.5.672-1.5 1.5.672 1.5 1.5 1.5zm0 1c-1.381 0-2.5-1.119-2.5-2.5s1.119-2.5 2.5-2.5 2.5 1.119 2.5 2.5-1.119 2.5-2.5 2.5z">
+  </path> </g> </svg>

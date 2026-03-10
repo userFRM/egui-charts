@@ -1,0 +1,26 @@
+[package]
+name = "egui-charts-demo"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "egui-charts-demo"
+path = "main.rs"
+
+[dependencies]
+egui-charts = { path = "../.." }
+eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu"] }
+egui = "0.33.3"
+chrono = "0.4.43"
+log = "0.4.29"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4.58"
+web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
+console_error_panic_hook = "0.1.7"
+wgpu = { version = "27.0", features = ["webgpu", "webgl"] }
+getrandom = { version = "0.2", features = ["js"] }

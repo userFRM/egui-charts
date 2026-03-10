@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>egui-charts | Live Demo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #131722; }
+        canvas { width: 100vw; height: 100vh; display: block; outline: none; }
+        #loading {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #131722;
+            color: #787b86;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 16px;
+            z-index: 10;
+        }
+        #loading .spinner {
+            width: 28px;
+            height: 28px;
+            border: 3px solid #2a2e39;
+            border-top-color: #2962ff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="loading">
+        <div class="spinner"></div>
+        Loading egui-charts demo&hellip;
+    </div>
+    <canvas id="demo_canvas"></canvas>
+    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <script>
+        // Hide loading overlay once the canvas starts rendering
+        const canvas = document.getElementById('demo_canvas');
+        const observer = new MutationObserver(() => {
+            if (canvas.width > 0 && canvas.height > 0) {
+                document.getElementById('loading').style.display = 'none';
+                observer.disconnect();
+            }
+        });
+        observer.observe(canvas, { attributes: true });
+        // Fallback: hide after 8s regardless
+        setTimeout(() => {
+            const el = document.getElementById('loading');
+            if (el) el.style.display = 'none';
+        }, 8000);
+    </script>
+</body>
+</html>

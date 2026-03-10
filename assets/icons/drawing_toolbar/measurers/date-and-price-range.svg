@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" width="28" height="28"> <g fill="#ffffff"> <path fill-rule="nonzero" d="M6.5 23v1h17.5v-17.5h-1v16.5z">
+  </path> <path fill-rule="nonzero" d="M21.5 5v-1h-17.5v17.5h1v-16.5z">
+  </path> <path fill-rule="nonzero" d="M4.5 25c.828 0 1.5-.672 1.5-1.5s-.672-1.5-1.5-1.5-1.5.672-1.5 1.5.672 1.5 1.5 1.5zm0 1c-1.381 0-2.5-1.119-2.5-2.5s1.119-2.5 2.5-2.5 2.5 1.119 2.5 2.5-1.119 2.5-2.5 2.5zM23.5 6c.828 0 1.5-.672 1.5-1.5s-.672-1.5-1.5-1.5-1.5.672-1.5 1.5.672 1.5 1.5 1.5zm0 1c-1.381 0-2.5-1.119-2.5-2.5s1.119-2.5 2.5-2.5 2.5 1.119 2.5 2.5-1.119 2.5-2.5 2.5z">
+  </path> <path fill-rule="nonzero" d="M13 9v13h1v-13z" id="Line">
+  </path> <path d="M13.5 6l2.5 3h-5z">
+  </path> <path fill-rule="nonzero" d="M19 14h-13v1h13z">
+  </path> <path d="M19 17v-5l3 2.5z">
+  </path> </g> </svg>
