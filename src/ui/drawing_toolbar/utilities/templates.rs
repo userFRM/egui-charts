@@ -36,7 +36,7 @@ impl TemplatesButton {
         sidebar_rect: Rect,
         category_rect: Option<Rect>,
         templates: &[DrawingTemplate],
-        _template_name_input: &mut String,
+        _template_name_input: &mut str,
         _show_name_input: bool,
     ) -> Option<DrawingToolbarAction> {
         let mut builder = SubmenuBuilder::new(ui, sidebar_rect)
