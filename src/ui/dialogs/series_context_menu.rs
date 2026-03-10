@@ -550,12 +550,10 @@ impl SeriesContextMenu {
     fn check_for_close(&self, ctx: &Context, pos: Pos2, width: f32, height: f32) -> bool {
         let clicked = ctx.input(|i| i.pointer.primary_clicked() || i.pointer.secondary_clicked());
 
-        if clicked {
-            if let Some(click_pos) = ctx.input(|i| i.pointer.interact_pos()) {
-                let menu_rect = Rect::from_min_size(pos, Vec2::new(width, height));
-                if !menu_rect.contains(click_pos) {
-                    return true;
-                }
+        if clicked && let Some(click_pos) = ctx.input(|i| i.pointer.interact_pos()) {
+            let menu_rect = Rect::from_min_size(pos, Vec2::new(width, height));
+            if !menu_rect.contains(click_pos) {
+                return true;
             }
         }
 

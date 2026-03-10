@@ -269,12 +269,12 @@ impl ObjectTreeState {
     ///
     /// If `selected_drawing` is `Some`, ensures it is the sole selection.
     pub fn sync_selected_drawing(&mut self, selected_drawing: Option<usize>) {
-        if let Some(drawing_id) = selected_drawing {
-            if !self.selected_ids.contains(&drawing_id) {
-                self.selected_ids.clear();
-                self.selected_ids.insert(drawing_id);
-                self.last_selected_id = Some(drawing_id);
-            }
+        if let Some(drawing_id) = selected_drawing
+            && !self.selected_ids.contains(&drawing_id)
+        {
+            self.selected_ids.clear();
+            self.selected_ids.insert(drawing_id);
+            self.last_selected_id = Some(drawing_id);
         }
     }
 }

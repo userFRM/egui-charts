@@ -435,7 +435,7 @@ impl TickMarkGenerator {
         // Below here only applies to time-level primary types (intraday data)
 
         // Check for 4-hour boundary
-        if time.hour() % 4 == 0 && time.minute() == 0 && time.second() == 0 {
+        if time.hour().is_multiple_of(4) && time.minute() == 0 && time.second() == 0 {
             return (TickMarkType::Time, TickMarkWeight::HOUR_4);
         }
 
@@ -445,17 +445,17 @@ impl TickMarkGenerator {
         }
 
         // Check for 30-minute boundary
-        if time.minute() % 30 == 0 && time.second() == 0 {
+        if time.minute().is_multiple_of(30) && time.second() == 0 {
             return (TickMarkType::Time, TickMarkWeight::MIN_30);
         }
 
         // Check for 15-minute boundary
-        if time.minute() % 15 == 0 && time.second() == 0 {
+        if time.minute().is_multiple_of(15) && time.second() == 0 {
             return (TickMarkType::Time, TickMarkWeight::MIN_15);
         }
 
         // Check for 5-minute boundary
-        if time.minute() % 5 == 0 && time.second() == 0 {
+        if time.minute().is_multiple_of(5) && time.second() == 0 {
             return (TickMarkType::Time, TickMarkWeight::MIN_5);
         }
 
@@ -465,7 +465,7 @@ impl TickMarkGenerator {
         }
 
         // Check for 10-second boundary
-        if time.second() % 10 == 0 {
+        if time.second().is_multiple_of(10) {
             return (TickMarkType::TimeWithSeconds, TickMarkWeight::SEC_10);
         }
 

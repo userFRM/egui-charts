@@ -267,31 +267,31 @@ impl Indicator for StopRunIndicator {
             }
 
             // Check for bearish stop run (break above swing high, then reverse down)
-            if detected.is_none() {
-                if let Some((_, swing_high)) = self.find_swing_high(data, idx) {
-                    // Did we break above the swing high?
-                    if bar.high > swing_high + break_distance {
-                        // Check for reversal
-                        let reversed = bar.close < swing_high || bar.close < bar.open;
-                        let reversal_magnitude = bar.high - bar.close;
+            if detected.is_none()
+                && let Some((_, swing_high)) = self.find_swing_high(data, idx)
+            {
+                // Did we break above the swing high?
+                if bar.high > swing_high + break_distance {
+                    // Check for reversal
+                    let reversed = bar.close < swing_high || bar.close < bar.open;
+                    let reversal_magnitude = bar.high - bar.close;
 
-                        // Volume confirmation
-                        let volume_ok = !self.require_volume_confirmation
-                            || bar.volume > avg_volume * self.volume_threshold;
+                    // Volume confirmation
+                    let volume_ok = !self.require_volume_confirmation
+                        || bar.volume > avg_volume * self.volume_threshold;
 
-                        if reversed && volume_ok {
-                            let confidence = (reversal_magnitude / atr).min(1.0)
-                                * if volume_ok { 1.0 } else { 0.7 };
+                    if reversed && volume_ok {
+                        let confidence =
+                            (reversal_magnitude / atr).min(1.0) * if volume_ok { 1.0 } else { 0.7 };
 
-                            detected = Some(StopRunDetection {
-                                bar_idx: idx,
-                                hunted_price: swing_high,
-                                run_type: StopRunType::BearishStopRun,
-                                volume: bar.volume,
-                                reversal_magnitude,
-                                confidence,
-                            });
-                        }
+                        detected = Some(StopRunDetection {
+                            bar_idx: idx,
+                            hunted_price: swing_high,
+                            run_type: StopRunType::BearishStopRun,
+                            volume: bar.volume,
+                            reversal_magnitude,
+                            confidence,
+                        });
                     }
                 }
             }

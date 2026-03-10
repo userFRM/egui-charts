@@ -144,10 +144,9 @@ impl KeyboardAction {
                 modifiers,
                 ..
             } = event
+                && let Some(action) = Self::from_key_press(*key, modifiers)
             {
-                if let Some(action) = Self::from_key_press(*key, modifiers) {
-                    return Some(action);
-                }
+                return Some(action);
             }
         }
         None

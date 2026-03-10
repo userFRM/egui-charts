@@ -146,10 +146,10 @@ impl FloatingSelectionToolbar {
                 }
             }
 
-            if ui.ctx().input(|i| i.pointer.any_down()) {
-                if let Some(offset) = self.drag_offset {
-                    self.position = pointer_pos - offset;
-                }
+            if ui.ctx().input(|i| i.pointer.any_down())
+                && let Some(offset) = self.drag_offset
+            {
+                self.position = pointer_pos - offset;
             }
 
             if ui.ctx().input(|i| i.pointer.any_released()) {

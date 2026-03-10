@@ -310,81 +310,75 @@ impl DatePicker {
                         ui.allocate_exact_size(Vec2::splat(cell_size), Sense::click());
 
                     // Only render valid days within the month
-                    if day >= 1 && day <= days_in_month {
-                        if let Some(date) = NaiveDate::from_ymd_opt(
+                    if day >= 1
+                        && day <= days_in_month
+                        && let Some(date) = NaiveDate::from_ymd_opt(
                             self.displayed_month.year(),
                             self.displayed_month.month(),
                             day as u32,
-                        ) {
-                            let is_sel = date == self.sel_date;
-                            let is_today = date == today;
-                            let is_in_range = if self.custom_range_mode {
-                                match (self.range_start, self.range_end) {
-                                    (Some(start), Some(end)) => date >= start && date <= end,
-                                    (Some(start), None) => date == start,
-                                    _ => false,
-                                }
-                            } else {
-                                false
-                            };
-
-                            // Background
-                            if is_sel {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    DESIGN_TOKENS.rounding.md,
-                                    self.config.sel_color,
-                                );
-                            } else if is_in_range {
-                                // Range selection uses selection color with reduced alpha
-                                let range_color =
-                                    ui.visuals().selection.bg_fill.gamma_multiply(0.5);
-                                ui.painter().rect_filled(
-                                    rect,
-                                    DESIGN_TOKENS.rounding.sm,
-                                    range_color,
-                                );
-                            } else if response.hovered() {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    DESIGN_TOKENS.rounding.md,
-                                    self.config.hover_color,
-                                );
+                        )
+                    {
+                        let is_sel = date == self.sel_date;
+                        let is_today = date == today;
+                        let is_in_range = if self.custom_range_mode {
+                            match (self.range_start, self.range_end) {
+                                (Some(start), Some(end)) => date >= start && date <= end,
+                                (Some(start), None) => date == start,
+                                _ => false,
                             }
+                        } else {
+                            false
+                        };
 
-                            // Today indicator
-                            if is_today && !is_sel {
-                                ui.painter().rect_stroke(
-                                    rect.shrink(2.0),
-                                    DESIGN_TOKENS.rounding.md,
-                                    Stroke::new(
-                                        DESIGN_TOKENS.stroke.thick,
-                                        self.config.today_color,
-                                    ),
-                                    StrokeKind::Outside,
-                                );
-                            }
-
-                            // Day number
-                            let text_color = if is_sel {
-                                ui.visuals().selection.stroke.color
-                            } else if is_today {
-                                self.config.today_color
-                            } else {
-                                self.config.text_color
-                            };
-
-                            ui.painter().text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                format!("{}", day),
-                                egui::FontId::proportional(typography::MD),
-                                text_color,
+                        // Background
+                        if is_sel {
+                            ui.painter().rect_filled(
+                                rect,
+                                DESIGN_TOKENS.rounding.md,
+                                self.config.sel_color,
                             );
+                        } else if is_in_range {
+                            // Range selection uses selection color with reduced alpha
+                            let range_color = ui.visuals().selection.bg_fill.gamma_multiply(0.5);
+                            ui.painter()
+                                .rect_filled(rect, DESIGN_TOKENS.rounding.sm, range_color);
+                        } else if response.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                DESIGN_TOKENS.rounding.md,
+                                self.config.hover_color,
+                            );
+                        }
 
-                            if response.clicked() {
-                                selected = Some(date);
-                            }
+                        // Today indicator
+                        if is_today && !is_sel {
+                            ui.painter().rect_stroke(
+                                rect.shrink(2.0),
+                                DESIGN_TOKENS.rounding.md,
+                                Stroke::new(DESIGN_TOKENS.stroke.thick, self.config.today_color),
+                                StrokeKind::Outside,
+                            );
+                        }
+
+                        // Day number
+                        let text_color = if is_sel {
+                            ui.visuals().selection.stroke.color
+                        } else if is_today {
+                            self.config.today_color
+                        } else {
+                            self.config.text_color
+                        };
+
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            format!("{}", day),
+                            egui::FontId::proportional(typography::MD),
+                            text_color,
+                        );
+
+                        if response.clicked() {
+                            selected = Some(date);
                         }
                     }
 

@@ -469,14 +469,15 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        if let Some(ref mut drawing) = self.curr_drawing {
-            if !drawing.points.is_empty() && !drawing.completed {
-                if drawing.points.len() == 1 {
-                    drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
-                    drawing.completed = false;
-                } else if drawing.points.len() >= 2 {
-                    drawing.update_last_point_with_chart_coords(point, x_to_bar, y_to_price);
-                }
+        if let Some(ref mut drawing) = self.curr_drawing
+            && !drawing.points.is_empty()
+            && !drawing.completed
+        {
+            if drawing.points.len() == 1 {
+                drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
+                drawing.completed = false;
+            } else if drawing.points.len() >= 2 {
+                drawing.update_last_point_with_chart_coords(point, x_to_bar, y_to_price);
             }
         }
     }
@@ -484,15 +485,15 @@ impl DrawingManager {
     /// Manually completes the in-progress drawing (e.g., on double-click or Enter
     /// for multi-point tools). Requires at least 2 points.
     pub fn complete_curr_drawing(&mut self) {
-        if let Some(ref mut drawing) = self.curr_drawing {
-            if drawing.points.len() >= 2 {
-                drawing.completed = true;
-                self.history.push_add(drawing.clone());
-                self.drawings.push(drawing.clone());
-                self.curr_drawing = None;
-                if !self.stay_in_drawing_mode {
-                    self.active_tool = None;
-                }
+        if let Some(ref mut drawing) = self.curr_drawing
+            && drawing.points.len() >= 2
+        {
+            drawing.completed = true;
+            self.history.push_add(drawing.clone());
+            self.drawings.push(drawing.clone());
+            self.curr_drawing = None;
+            if !self.stay_in_drawing_mode {
+                self.active_tool = None;
             }
         }
     }
@@ -720,10 +721,10 @@ impl DrawingManager {
         }
 
         // Render handles for selected drawing
-        if let Some(sel_id) = self.selection.primary() {
-            if let Some(drawing) = self.drawings.iter().find(|d| d.id == sel_id) {
-                self.render_handles(painter, drawing);
-            }
+        if let Some(sel_id) = self.selection.primary()
+            && let Some(drawing) = self.drawings.iter().find(|d| d.id == sel_id)
+        {
+            self.render_handles(painter, drawing);
         }
     }
 }

@@ -220,11 +220,11 @@ fn format_custom_seconds(seconds: u64) -> String {
     if seconds == 0 {
         return "0s".to_string();
     }
-    if seconds >= 86400 && seconds % 86400 == 0 {
+    if seconds >= 86400 && seconds.is_multiple_of(86400) {
         format!("{}D", seconds / 86400)
-    } else if seconds >= 3600 && seconds % 3600 == 0 {
+    } else if seconds >= 3600 && seconds.is_multiple_of(3600) {
         format!("{}h", seconds / 3600)
-    } else if seconds >= 60 && seconds % 60 == 0 {
+    } else if seconds >= 60 && seconds.is_multiple_of(60) {
         format!("{}min", seconds / 60)
     } else {
         format!("{}s", seconds)

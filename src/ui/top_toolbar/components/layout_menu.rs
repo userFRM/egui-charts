@@ -267,10 +267,10 @@ impl LayoutMenu {
         action = self.draw_action_items(ui, &mut y, inner_rect, &colors, action);
 
         // Save as dialog (if open)
-        if self.show_save_as {
-            if let Some(a) = self.draw_save_as_dialog(ui, &mut y, inner_rect, &colors) {
-                action = a;
-            }
+        if self.show_save_as
+            && let Some(a) = self.draw_save_as_dialog(ui, &mut y, inner_rect, &colors)
+        {
+            action = a;
         }
 
         // Layouts section

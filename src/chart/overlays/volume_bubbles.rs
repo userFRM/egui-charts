@@ -363,10 +363,10 @@ impl VolumeBubbles {
             }
 
             // Apply size filter
-            if let Some(min_size) = self.config.min_size_filter {
-                if bubble.total_size < min_size {
-                    continue;
-                }
+            if let Some(min_size) = self.config.min_size_filter
+                && bubble.total_size < min_size
+            {
+                continue;
             }
 
             let diameter = self.calculate_diameter(bubble.total_size);

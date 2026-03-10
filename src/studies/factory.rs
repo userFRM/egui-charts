@@ -142,7 +142,7 @@ mod tests {
 
         // Test built-in indicators
         assert!(factory.has("RSI(14)"));
-        assert!(factory.has("MACD(12,26,9)"));
+        assert!(factory.has("MACD"));
 
         // Test creation
         let rsi = factory.create("RSI(14)");

@@ -62,12 +62,12 @@ impl ChartGridSelector {
             }
 
             // Close on click outside
-            if ui.input(|i| i.pointer.any_click()) {
-                if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-                    let dropdown_rect = self.dropdown_rect(btn_rect);
-                    if !btn_rect.contains(pos) && !dropdown_rect.contains(pos) {
-                        self.is_open = false;
-                    }
+            if ui.input(|i| i.pointer.any_click())
+                && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
+            {
+                let dropdown_rect = self.dropdown_rect(btn_rect);
+                if !btn_rect.contains(pos) && !dropdown_rect.contains(pos) {
+                    self.is_open = false;
                 }
             }
         }

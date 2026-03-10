@@ -539,10 +539,8 @@ impl TimeframeSelector {
                     }
 
                     // Custom dialog
-                    if show_custom {
-                        if let Some(tf) = custom_dialog.show(ui) {
-                            action = TimeframeAction::Select(tf);
-                        }
+                    if show_custom && let Some(tf) = custom_dialog.show(ui) {
+                        action = TimeframeAction::Select(tf);
                     }
                 });
             });

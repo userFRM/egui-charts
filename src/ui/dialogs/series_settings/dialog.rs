@@ -138,11 +138,9 @@ impl SeriesSettingsDialog {
                         let _ = ui.selectable_label(false, "Save as...");
                     });
             });
-        if ok {
-            if let Some(id) = self.series_id {
-                action = SeriesSettingsAction::Apply(id, self.settings.clone());
-                self.is_open = false;
-            }
+        if ok && let Some(id) = self.series_id {
+            action = SeriesSettingsAction::Apply(id, self.settings.clone());
+            self.is_open = false;
         }
         if cancel {
             action = SeriesSettingsAction::Cancel;

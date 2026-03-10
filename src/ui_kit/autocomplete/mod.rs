@@ -254,10 +254,11 @@ impl<'a> AutocompleteEdit<'a> {
             // Close popup if clicked outside
             if ui.input(|i| i.pointer.any_pressed()) {
                 let pointer_pos = ui.input(|i| i.pointer.interact_pos());
-                if let Some(pos) = pointer_pos {
-                    if !area_response.response.rect.contains(pos) && !response.rect.contains(pos) {
-                        Popup::close_id(ui.ctx(), popup_id);
-                    }
+                if let Some(pos) = pointer_pos
+                    && !area_response.response.rect.contains(pos)
+                    && !response.rect.contains(pos)
+                {
+                    Popup::close_id(ui.ctx(), popup_id);
                 }
             }
         }

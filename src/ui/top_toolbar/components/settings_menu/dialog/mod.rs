@@ -756,12 +756,12 @@ impl SettingsDialog {
     }
 
     fn handle_template_menu_close(&mut self, ui: &Ui, template_btn: &Response, menu_rect: Rect) {
-        if ui.input(|i| i.pointer.any_click()) && !template_btn.hovered() {
-            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                if !menu_rect.contains(pos) {
-                    self.template_menu_open = false;
-                }
-            }
+        if ui.input(|i| i.pointer.any_click())
+            && !template_btn.hovered()
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+            && !menu_rect.contains(pos)
+        {
+            self.template_menu_open = false;
         }
     }
 

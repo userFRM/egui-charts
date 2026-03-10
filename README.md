@@ -8,7 +8,7 @@
 [![crates.io](https://img.shields.io/crates/v/egui-charts.svg)](https://crates.io/crates/egui-charts)
 [![docs.rs](https://docs.rs/egui-charts/badge.svg)](https://docs.rs/egui-charts)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
-[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue.svg)](#minimum-supported-rust-version)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](#minimum-supported-rust-version)
 
 [Live Demo](https://userfrm.github.io/egui-charts/) · [API Docs](https://docs.rs/egui-charts) · [Examples](https://github.com/userFRM/egui-charts/tree/main/examples)
 
@@ -344,7 +344,7 @@ Kinetic scrolling with momentum-based panning and elastic bounce at edges. Real-
 
 ## Minimum Supported Rust Version
 
-The MSRV is **1.85** (Rust edition 2024), enforced in `Cargo.toml` via `rust-version`.
+The MSRV is **1.88** (Rust edition 2024), enforced in `Cargo.toml` via `rust-version`.
 
 ---
 
