@@ -134,28 +134,52 @@ impl SnapService {
     /// 2. Snap to time (X axis)
     /// 3. Magnet mode (snap to nearest drawing point)
     pub fn snap_point(&self, point: Pos2, targets: &SnapTargets) -> Pos2 {
+        self.snap_point_with_drawing_points(
+            point,
+            &targets.prices,
+            &targets.times,
+            targets.drawing_points.iter().copied(),
+        )
+    }
+
+    /// Apply snap to a point, sourcing magnet targets from a borrowed iterator.
+    ///
+    /// Identical behavior to [`SnapService::snap_point`], but the magnet-mode
+    /// drawing points are supplied as an iterator rather than an owned `Vec`.
+    /// This lets per-pointer-move callers (e.g. during a drag) borrow the live
+    /// drawing geometry instead of cloning every point of every drawing on each
+    /// pointer event. The iterator is only consumed when magnet mode is active.
+    pub fn snap_point_with_drawing_points<I>(
+        &self,
+        point: Pos2,
+        prices: &[f32],
+        times: &[f32],
+        drawing_points: I,
+    ) -> Pos2
+    where
+        I: IntoIterator<Item = Pos2>,
+    {
         let mut result = point;
 
         // Snap to price (Y axis)
         if self.options.snap_to_price
-            && !targets.prices.is_empty()
-            && let Some(snapped_y) = self.find_closest(&targets.prices, point.y)
+            && !prices.is_empty()
+            && let Some(snapped_y) = self.find_closest(prices, point.y)
         {
             result.y = snapped_y;
         }
 
         // Snap to time (X axis)
         if self.options.snap_to_time
-            && !targets.times.is_empty()
-            && let Some(snapped_x) = self.find_closest(&targets.times, point.x)
+            && !times.is_empty()
+            && let Some(snapped_x) = self.find_closest(times, point.x)
         {
             result.x = snapped_x;
         }
 
         // Magnet mode - snap to nearby drawing points
         if self.options.magnet_mode
-            && !targets.drawing_points.is_empty()
-            && let Some(closest_point) = self.find_closest_point(&targets.drawing_points, point)
+            && let Some(closest_point) = self.find_closest_point(drawing_points, point)
         {
             result = closest_point;
         }
@@ -178,11 +202,14 @@ impl SnapService {
     }
 
     /// Find closest point within magnet distance
-    fn find_closest_point(&self, points: &[Pos2], target: Pos2) -> Option<Pos2> {
+    fn find_closest_point<I>(&self, points: I, target: Pos2) -> Option<Pos2>
+    where
+        I: IntoIterator<Item = Pos2>,
+    {
         let mut min_dist = self.options.magnet_distance;
         let mut closest = None;
 
-        for &p in points {
+        for p in points {
             let dist = ((target.x - p.x).powi(2) + (target.y - p.y).powi(2)).sqrt();
             if dist < min_dist {
                 min_dist = dist;

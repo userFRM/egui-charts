@@ -12,8 +12,8 @@
 
 use crate::drawings::domain::{Drawing, DrawingToolType, HandlePos};
 use crate::drawings::services::{
-    HandleConfig, HandleService, HistoryService, SelectionService, SnapOptions, SnapService,
-    SnapTargets,
+    DrawingInteraction, HandleConfig, HandleService, HistoryService, SelectionService, SnapOptions,
+    SnapService,
 };
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect};
@@ -274,14 +274,18 @@ impl DrawingManager {
     /// Applies snap behavior to a screen point, returning the snapped position.
     ///
     /// Snaps to price levels, time markers, and existing drawing anchor points
-    /// depending on the current snap/magnet configuration.
+    /// depending on the current snap/magnet configuration. Magnet targets are
+    /// borrowed directly from `drawings`, so no per-pointer-move allocation of
+    /// the flattened point set occurs during a drag.
     pub fn snap_point(&self, point: Pos2, drawings: &[Drawing]) -> Pos2 {
-        let targets = SnapTargets {
-            prices: vec![], // Would be populated from chart
-            times: vec![],
-            drawing_points: drawings.iter().flat_map(|d| d.points.clone()).collect(),
-        };
-        self.snap_service.snap_point(point, &targets)
+        // Prices/times would be populated from the chart; magnet points are
+        // borrowed from the live drawings without cloning.
+        self.snap_service.snap_point_with_drawing_points(
+            point,
+            &[],
+            &[],
+            drawings.iter().flat_map(|d| d.points.iter().copied()),
+        )
     }
 
     // === Handle delegation ===
@@ -603,41 +607,13 @@ impl DrawingManager {
     /// Hit-tests a screen point against all visible drawings (back-to-front).
     ///
     /// Returns the ID of the topmost drawing at `point`, or `None` if no
-    /// drawing was hit. Uses a 5-pixel tolerance.
+    /// drawing was hit. Delegates to [`DrawingInteraction::hit_test`], the single
+    /// source of truth for per-segment / per-level geometry hit testing, so that
+    /// channels, Fibonacci levels, fans, and pitchforks are selectable along
+    /// their drawn geometry rather than only near a control point. Honors the
+    /// active timeframe so drawings hidden on the current timeframe are not hit.
     pub fn hit_test(&self, point: Pos2) -> Option<usize> {
-        let hit_distance = 5.0;
-        for drawing in self.drawings.iter().rev() {
-            if !drawing.visible {
-                continue;
-            }
-            if self.hit_test_drawing(drawing, point, hit_distance) {
-                return Some(drawing.id);
-            }
-        }
-        None
-    }
-
-    fn hit_test_drawing(&self, drawing: &Drawing, point: Pos2, tolerance: f32) -> bool {
-        match drawing.tool_type {
-            DrawingToolType::TrendLine | DrawingToolType::Measure => {
-                drawing.points.len() >= 2
-                    && point_to_line_distance(point, drawing.points[0], drawing.points[1])
-                        <= tolerance
-            }
-            DrawingToolType::HorizontalLine => {
-                !drawing.points.is_empty() && (point.y - drawing.points[0].y).abs() <= tolerance
-            }
-            DrawingToolType::VerticalLine => {
-                !drawing.points.is_empty() && (point.x - drawing.points[0].x).abs() <= tolerance
-            }
-            DrawingToolType::Rect => {
-                drawing.points.len() >= 2
-                    && Rect::from_two_pos(drawing.points[0], drawing.points[1]).contains(point)
-            }
-            _ => drawing.points.iter().any(|&p| {
-                ((point.x - p.x).powi(2) + (point.y - p.y).powi(2)).sqrt() <= tolerance * 2.0
-            }),
-        }
+        DrawingInteraction::new().hit_test(point, &self.drawings, &self.curr_timeframe)
     }
 
     // === Visibility ===
@@ -729,30 +705,6 @@ impl DrawingManager {
     }
 }
 
-/// Calculates the perpendicular distance from `point` to the closest point on
-/// the line segment `[line_start, line_end]`.
-///
-/// The projection is clamped to the segment, so if the closest point on the
-/// infinite line lies outside the segment, the distance to the nearest endpoint
-/// is returned instead. Returns the distance to `line_start` if the segment is
-/// degenerate (zero-length).
-fn point_to_line_distance(point: Pos2, line_start: Pos2, line_end: Pos2) -> f32 {
-    let dx = line_end.x - line_start.x;
-    let dy = line_end.y - line_start.y;
-    let len_sq = dx * dx + dy * dy;
-
-    if len_sq < 1e-6 {
-        return ((point.x - line_start.x).powi(2) + (point.y - line_start.y).powi(2)).sqrt();
-    }
-
-    let t =
-        (((point.x - line_start.x) * dx + (point.y - line_start.y) * dy) / len_sq).clamp(0.0, 1.0);
-    let proj_x = line_start.x + t * dx;
-    let proj_y = line_start.y + t * dy;
-
-    ((point.x - proj_x).powi(2) + (point.y - proj_y).powi(2)).sqrt()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,5 +723,81 @@ mod tests {
         assert_eq!(manager.sel_drawing(), Some(1));
         manager.deselect();
         assert_eq!(manager.sel_drawing(), None);
+    }
+
+    /// A click on a Fibonacci level line, far from every control point, must
+    /// select the drawing. This proves selection is routed through the unified
+    /// per-level hit testing in the interaction service rather than the old
+    /// vertex-proximity fallback that only matched near a control point.
+    #[test]
+    fn test_hit_test_fibonacci_level_off_control_point() {
+        let mut manager = DrawingManager::new();
+        let mut fib = Drawing::new(7, DrawingToolType::FibonacciRetracement);
+        // Control points: Start (100,100), End (300,200), Middle (200,150).
+        fib.points = vec![Pos2::new(100.0, 100.0), Pos2::new(300.0, 200.0)];
+        fib.completed = true;
+        manager.drawings.push(fib);
+
+        // 0.236 level: y = 100 + (200-100)*0.236 = 123.6, sampled at x = 180.
+        // This point is > 50px from Start, End, and Middle handles.
+        let click = Pos2::new(180.0, 123.6);
+        for handle in [
+            Pos2::new(100.0, 100.0),
+            Pos2::new(300.0, 200.0),
+            Pos2::new(200.0, 150.0),
+        ] {
+            let d = ((click.x - handle.x).powi(2) + (click.y - handle.y).powi(2)).sqrt();
+            assert!(d > 20.0, "click must be off control points, was {d}px away");
+        }
+
+        assert_eq!(manager.hit_test(click), Some(7));
+        assert!(manager.select_at(click));
+        assert_eq!(manager.sel_drawing(), Some(7));
+    }
+
+    /// A click on a parallel-channel segment, far from every control point,
+    /// must select the drawing -- again proving per-segment hit testing.
+    #[test]
+    fn test_hit_test_channel_segment_off_control_point() {
+        let mut manager = DrawingManager::new();
+        let mut channel = Drawing::new(11, DrawingToolType::ParallelChannel);
+        // Main line p1 (100,100) -> p2 (300,100); offset point p3 (200,200).
+        channel.points = vec![
+            Pos2::new(100.0, 100.0),
+            Pos2::new(300.0, 100.0),
+            Pos2::new(200.0, 200.0),
+        ];
+        channel.completed = true;
+        manager.drawings.push(channel);
+
+        // Midway along the main line, 50px+ from p1, p2, and p3.
+        let click = Pos2::new(150.0, 100.0);
+        for handle in [
+            Pos2::new(100.0, 100.0),
+            Pos2::new(300.0, 100.0),
+            Pos2::new(200.0, 200.0),
+        ] {
+            let d = ((click.x - handle.x).powi(2) + (click.y - handle.y).powi(2)).sqrt();
+            assert!(d > 20.0, "click must be off control points, was {d}px away");
+        }
+
+        assert_eq!(manager.hit_test(click), Some(11));
+    }
+
+    /// Snapping must borrow magnet targets from the live drawings without
+    /// allocating a flattened point set on each call.
+    #[test]
+    fn test_snap_point_borrows_magnet_targets() {
+        let mut manager = DrawingManager::new();
+        manager.options.magnet_mode = true;
+        manager.update_snap_options();
+
+        let mut d = Drawing::new(1, DrawingToolType::TrendLine);
+        d.points = vec![Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0)];
+        let drawings = vec![d];
+
+        // A pointer near the first anchor snaps to it under magnet mode.
+        let snapped = manager.snap_point(Pos2::new(103.0, 102.0), &drawings);
+        assert_eq!(snapped, Pos2::new(100.0, 100.0));
     }
 }
