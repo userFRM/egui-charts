@@ -1,96 +1,24 @@
-//! Toast Manager
+//! Toasts container
 //!
-//! Global toast manager for managing and displaying toasts.
-
-use std::sync::Mutex;
-
-use once_cell::sync::Lazy;
+//! Per-instance storage for toast notifications. Each chart instance owns its
+//! own [`Toasts`] queue so that notifications never leak across independent
+//! widgets in the same process.
 
 use super::toast::Toast;
 
-/// Global toast storage
-static TOASTS: Lazy<Mutex<Vec<Toast>>> = Lazy::new(|| Mutex::new(Vec::new()));
-
-/// Add a toast to the global toast list
-pub fn add_toast(mut toast: Toast) {
-    // Set the creation time
-    toast.created_at = get_current_time();
-
-    if let Ok(mut toasts) = TOASTS.lock() {
-        toasts.push(toast);
-    }
-}
-
-/// Add an info toast
-pub fn toast_info(message: impl Into<String>) {
-    add_toast(Toast::info(message));
-}
-
-/// Add a success toast
-pub fn toast_success(message: impl Into<String>) {
-    add_toast(Toast::success(message));
-}
-
-/// Add a warning toast
-pub fn toast_warning(message: impl Into<String>) {
-    add_toast(Toast::warning(message));
-}
-
-/// Add an error toast
-pub fn toast_error(message: impl Into<String>) {
-    add_toast(Toast::error(message));
-}
-
-/// Remove a toast by ID
-pub fn remove_toast(id: u64) {
-    if let Ok(mut toasts) = TOASTS.lock() {
-        toasts.retain(|t| t.id != id);
-    }
-}
-
-/// Clear all toasts
-pub fn clear_toasts() {
-    if let Ok(mut toasts) = TOASTS.lock() {
-        toasts.clear();
-    }
-}
-
-/// Get the current toasts (cloned for thread safety)
-pub fn get_toasts() -> Vec<Toast> {
-    if let Ok(toasts) = TOASTS.lock() {
-        toasts.clone()
-    } else {
-        Vec::new()
-    }
-}
-
-/// Remove expired toasts
-pub fn cleanup_expired_toasts() {
-    let current_time = get_current_time();
-    if let Ok(mut toasts) = TOASTS.lock() {
-        toasts.retain(|t| !t.is_expired(current_time));
-    }
-}
-
-/// Get the number of active toasts
-pub fn toast_count() -> usize {
-    if let Ok(toasts) = TOASTS.lock() {
-        toasts.len()
-    } else {
-        0
-    }
-}
-
-/// Get current time in seconds (since app start)
-fn get_current_time() -> f64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+/// Current wall-clock time in seconds.
+///
+/// Uses [`web_time`] so the same call resolves on native and `wasm32` targets;
+/// the standard-library clock panics in the browser, which would crash any
+/// host embedding this crate in WebAssembly.
+pub(crate) fn current_time_seconds() -> f64 {
+    web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
 }
 
-/// Toasts container for non-global usage
+/// Toasts container for per-instance usage.
 #[derive(Default)]
 pub struct Toasts {
     toasts: Vec<Toast>,
@@ -104,7 +32,7 @@ impl Toasts {
 
     /// Add a toast
     pub fn add(&mut self, mut toast: Toast) {
-        toast.created_at = get_current_time();
+        toast.created_at = current_time_seconds();
         self.toasts.push(toast);
     }
 
@@ -150,7 +78,7 @@ impl Toasts {
 
     /// Remove expired toasts
     pub fn cleanup_expired(&mut self) {
-        let current_time = get_current_time();
+        let current_time = current_time_seconds();
         self.toasts.retain(|t| !t.is_expired(current_time));
     }
 
@@ -162,5 +90,38 @@ impl Toasts {
     /// Check if there are no toasts
     pub fn is_empty(&self) -> bool {
         self.toasts.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_time_is_monotonic_and_nonzero() {
+        // web_time::SystemTime must resolve on every target the crate ships to;
+        // a working clock returns a positive wall-clock value.
+        let t = current_time_seconds();
+        assert!(t > 0.0, "expected a positive wall-clock time, got {t}");
+    }
+
+    #[test]
+    fn add_stamps_creation_time_from_web_time() {
+        let mut toasts = Toasts::new();
+        toasts.info("hello");
+        assert_eq!(toasts.len(), 1);
+        assert!(
+            toasts.toasts()[0].created_at > 0.0,
+            "add() must stamp created_at from the web_time clock"
+        );
+    }
+
+    #[test]
+    fn cleanup_keeps_permanent_and_fresh_toasts() {
+        let mut toasts = Toasts::new();
+        toasts.add(Toast::info("permanent").permanent());
+        toasts.add(Toast::info("fresh").duration(60.0));
+        toasts.cleanup_expired();
+        assert_eq!(toasts.len(), 2);
     }
 }
