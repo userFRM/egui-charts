@@ -575,6 +575,10 @@ impl ChartBuilder {
             is_fetching_historical: false,
             historical_fetch_threshold: 150, // Prefetch when within 150 bars (anticipatory loading)
             has_more_historical_data: true,  // Assume more data available initially
+            #[cfg(feature = "ui")]
+            theme: self.theme,
+            #[cfg(feature = "ui")]
+            context_menus: ContextMenus::default(),
         }
     }
 }
@@ -632,6 +636,27 @@ pub struct TradingChart {
     historical_fetch_threshold: usize,
     /// Progressive loading: whether more historical data is available
     has_more_historical_data: bool,
+    /// Theme used to render the built-in right-click context menus.
+    #[cfg(feature = "ui")]
+    theme: Theme,
+    /// Turnkey right-click context-menu state. Populated and shown by
+    /// [`show`](Self::show); the resolved action is drained with
+    /// [`take_context_action`](Self::take_context_action).
+    #[cfg(feature = "ui")]
+    context_menus: ContextMenus,
+}
+
+/// Owns the three right-click menus and the action they resolve to, so the
+/// turnkey path in [`TradingChart::show`] can open, render, and surface them in
+/// one place. Gated behind the `ui` feature because the menus are.
+#[cfg(feature = "ui")]
+#[derive(Default)]
+struct ContextMenus {
+    chart: crate::ui::context_menu::ChartContextMenu,
+    series: crate::ui::dialogs::SeriesContextMenu,
+    drawing: crate::ui::dialogs::DrawingContextMenu,
+    /// Action resolved in the last frame, drained by `take_context_action`.
+    pending_action: Option<crate::ui::context_menu::ChartContextAction>,
 }
 
 impl TradingChart {
@@ -811,6 +836,175 @@ impl TradingChart {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         self.chart
             .show_with_indicators(ui, self.drawing_manager.as_mut(), Some(&self.indicators));
+
+        #[cfg(feature = "ui")]
+        self.handle_context_menus(ui.ctx());
+    }
+
+    /// Opens, renders, and resolves the built-in right-click context menus.
+    ///
+    /// A fresh right-click (drained from the chart) opens whichever menu matches
+    /// the hit object; previously-open menus are then rendered and, when an item
+    /// is chosen, the action is stored for [`take_context_action`](Self::take_context_action).
+    #[cfg(feature = "ui")]
+    fn handle_context_menus(&mut self, ctx: &egui::Context) {
+        use crate::widget::RightClickTarget;
+
+        if let Some(target) = self.chart.take_right_click() {
+            // A new right-click supersedes any menu still open.
+            self.context_menus.chart.close();
+            self.context_menus.series.close();
+            self.context_menus.drawing.close();
+
+            match target {
+                RightClickTarget::Element { id, pos, price, .. } => {
+                    self.open_element_menu(id, pos, price);
+                }
+                RightClickTarget::Drawing { drawing_id, pos } => {
+                    self.open_drawing_menu(drawing_id, pos);
+                }
+                RightClickTarget::Background { pos, price } => {
+                    self.context_menus
+                        .chart
+                        .set_indicator_cnt(self.indicators.indicators().len());
+                    self.context_menus.chart.set_symbol(self.symbol.clone());
+                    self.context_menus.chart.open(pos, price);
+                }
+            }
+        }
+
+        let theme = &self.theme;
+        self.context_menus.chart.show(ctx, theme);
+        self.context_menus.series.show(ctx, theme);
+        self.context_menus.drawing.show(ctx, theme);
+
+        // At most one menu is open at a time, so at most one action resolves.
+        use crate::ui::context_menu::ChartContextAction;
+        use crate::ui::context_menu::ContextMenuAction;
+        use crate::ui::dialogs::{DrawingContextMenuAction, SeriesContextMenuAction};
+
+        let chart_action = self.context_menus.chart.take_action();
+        if chart_action != ContextMenuAction::None {
+            self.context_menus.pending_action = Some(ChartContextAction::Chart(chart_action));
+        }
+        let series_action = self.context_menus.series.take_action();
+        if series_action != SeriesContextMenuAction::None {
+            self.context_menus.pending_action = Some(ChartContextAction::Series(series_action));
+        }
+        let drawing_action = self.context_menus.drawing.take_action();
+        if drawing_action != DrawingContextMenuAction::None {
+            self.context_menus.pending_action = Some(ChartContextAction::Drawing(drawing_action));
+        }
+    }
+
+    /// Configures and opens the series/indicator context menu for a hit element.
+    #[cfg(feature = "ui")]
+    fn open_element_menu(
+        &mut self,
+        id: crate::chart::selection::ChartElementId,
+        pos: egui::Pos2,
+        price: f64,
+    ) {
+        use crate::chart::selection::ChartElementId;
+
+        // The series menu fronts both the price series and indicator lines: it
+        // is the object-level menu (settings, hide, etc.) in TradingView.
+        let label = match id {
+            ChartElementId::Series(_) => self.symbol.clone(),
+            ChartElementId::OverlayIndicator(idx) | ChartElementId::PaneIndicator(idx) => self
+                .indicators
+                .indicators()
+                .get(idx)
+                .map(|ind| ind.name().to_string())
+                .unwrap_or_else(|| self.symbol.clone()),
+        };
+        let series_id = match id {
+            ChartElementId::Series(sid) => sid,
+            _ => crate::chart::selection::SeriesId::MAIN,
+        };
+        self.context_menus.series.set_context(label, price);
+        self.context_menus.series.open(pos, series_id);
+    }
+
+    /// Configures and opens the drawing context menu for a hit drawing.
+    #[cfg(feature = "ui")]
+    fn open_drawing_menu(&mut self, drawing_id: usize, pos: egui::Pos2) {
+        if let Some(dm) = self.drawing_manager.as_ref()
+            && let Some(drawing) = dm.drawings.iter().find(|d| d.id == drawing_id)
+        {
+            let type_name = drawing.tool_type.as_str().to_string();
+            self.context_menus
+                .drawing
+                .set_context(type_name, drawing.locked, drawing.visible);
+        }
+        self.context_menus.drawing.open(pos, drawing_id);
+    }
+
+    /// Drains the action chosen from a built-in right-click context menu, if any.
+    ///
+    /// Returns `Some` once after the user selects a menu item. The variant
+    /// identifies which menu it came from (chart background, series/indicator,
+    /// or drawing). Available only with the `ui` feature.
+    #[cfg(feature = "ui")]
+    pub fn take_context_action(&mut self) -> Option<crate::ui::context_menu::ChartContextAction> {
+        self.context_menus.pending_action.take()
+    }
+
+    /// Returns a mutable reference to the underlying chart's visual configuration.
+    ///
+    /// Apply settings-dialog output in place, e.g.
+    /// `settings.apply_to_config(trading_chart.config_mut())`. Changes take
+    /// effect on the next frame.
+    pub fn config_mut(&mut self) -> &mut ChartConfig {
+        self.chart.config_mut()
+    }
+
+    /// Applies per-series visual settings to the chart.
+    ///
+    /// Forwards to [`Chart::apply_series_settings`](crate::Chart::apply_series_settings),
+    /// copying candle colors and the price source from `settings` into the
+    /// chart config.
+    pub fn apply_series_settings(&mut self, settings: &crate::chart::series::SeriesSettings) {
+        self.chart.apply_series_settings(settings);
+    }
+
+    /// Removes the indicator at `index` from the registry, returning it if present.
+    ///
+    /// The registry holds independent studies, so removal alone needs no
+    /// recompute of the others.
+    pub fn remove_indicator(&mut self, index: usize) -> Option<Box<dyn crate::studies::Indicator>> {
+        self.indicators.remove_indicator(index)
+    }
+
+    /// Sets the visibility of the indicator at `index`.
+    ///
+    /// Hidden indicators are retained in the registry (and keep their computed
+    /// values) but are skipped during rendering. Returns `false` if `index` is
+    /// out of bounds.
+    pub fn set_indicator_visible(&mut self, index: usize, visible: bool) -> bool {
+        match self.indicators.indicators_mut().get_mut(index) {
+            Some(indicator) => {
+                indicator.set_visible(visible);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Removes the drawing with the given id, returning `true` if one was removed.
+    ///
+    /// No-op (returns `false`) when there is no drawing manager or no drawing
+    /// matches `drawing_id`.
+    pub fn remove_drawing(&mut self, drawing_id: usize) -> bool {
+        let Some(dm) = self.drawing_manager.as_mut() else {
+            return false;
+        };
+        if dm.drawings.iter().any(|d| d.id == drawing_id) {
+            dm.delete_drawing(drawing_id);
+            true
+        } else {
+            false
+        }
     }
 
     /// Change the active trading symbol.

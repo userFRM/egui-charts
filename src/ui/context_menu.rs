@@ -677,3 +677,20 @@ enum MenuEntry {
     Item(MenuItem),
     Separator,
 }
+
+/// A context-menu action surfaced by the turnkey right-click path, tagged with
+/// the menu it came from.
+///
+/// The chart opens one of three menus depending on what the right-click landed
+/// on (background, a series/indicator, or a drawing); each menu has its own
+/// action enum. [`TradingChart::take_context_action`](crate::TradingChart::take_context_action)
+/// returns this unified value so a host can match a single type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChartContextAction {
+    /// An action from the chart-background menu.
+    Chart(ContextMenuAction),
+    /// An action from the series/indicator menu.
+    Series(crate::ui::dialogs::SeriesContextMenuAction),
+    /// An action from the drawing menu.
+    Drawing(crate::ui::dialogs::DrawingContextMenuAction),
+}

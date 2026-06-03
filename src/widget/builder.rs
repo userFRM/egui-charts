@@ -107,6 +107,7 @@ impl Chart {
             timescale_marks: Vec::new(),
             // Selection (Widget API)
             selection: SelectionState::new(),
+            right_click: None,
         }
     }
 
@@ -175,6 +176,7 @@ impl Chart {
             timescale_marks: Vec::new(),
             // Selection (Widget API)
             selection: SelectionState::new(),
+            right_click: None,
         }
     }
 
