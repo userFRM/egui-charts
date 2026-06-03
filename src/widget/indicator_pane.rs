@@ -182,6 +182,27 @@ impl IndicatorCoordParams {
     }
 }
 
+/// Layout and interaction results from rendering one interactive indicator pane.
+///
+/// Returned by [`IndicatorPane::show_aligned_interactive`]. Besides the rects
+/// and y-axis range used for click hit-testing, it carries the [`Response`] for
+/// the legend's close "x" so the host can offer one-click pane removal.
+pub struct PaneInteraction {
+    /// Full panel rect, including the y-axis label gutter.
+    pub panel_rect: Rect,
+    /// Chart drawing area rect, excluding the y-axis label gutter.
+    pub chart_rect: Rect,
+    /// Y-axis minimum value used for this frame.
+    pub y_min: f64,
+    /// Y-axis maximum value used for this frame.
+    pub y_max: f64,
+    /// Interaction response for the whole pane (line selection, hover).
+    pub response: Response,
+    /// Interaction response for the legend's close "x", or `None` when the pane
+    /// shows no legend and therefore exposes no remove affordance.
+    pub close_response: Option<Response>,
+}
+
 /// A separate-pane indicator panel rendered via direct egui painting.
 ///
 /// Each `IndicatorPane` renders one indicator (RSI, MACD, etc.) in its own
@@ -272,8 +293,9 @@ impl IndicatorPane {
         // Draw y-axis labels
         self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
 
-        // Draw indicator legend at top-left
-        self.draw_legend(painter, chart_rect, indicator, text_color);
+        // Draw indicator legend at top-left. The non-interactive path cannot
+        // host a clickable close affordance, so no remove "x" is drawn here.
+        self.draw_legend(painter, chart_rect, indicator, text_color, None, false);
     }
 
     /// Render with explicit coordinate parameters for perfect x-axis alignment.
@@ -356,8 +378,9 @@ impl IndicatorPane {
         // Draw y-axis labels
         self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
 
-        // Draw indicator legend at top-left
-        self.draw_legend(painter, chart_rect, indicator, text_color);
+        // Draw indicator legend at top-left. The non-interactive path cannot
+        // host a clickable close affordance, so no remove "x" is drawn here.
+        self.draw_legend(painter, chart_rect, indicator, text_color, None, false);
     }
 
     /// Render with coordinate alignment and return layout info for hit testing.
@@ -368,6 +391,10 @@ impl IndicatorPane {
     /// other interactive features on indicator panes.
     ///
     /// Returns `None` if the indicator is not visible.
+    ///
+    /// The returned [`PaneInteraction`] also carries the [`Response`] for the
+    /// legend's close "x" (when the pane shows a legend), so the host can offer
+    /// TradingView-style one-click pane removal.
     pub fn show_aligned_interactive(
         &mut self,
         ui: &mut Ui,
@@ -375,7 +402,7 @@ impl IndicatorPane {
         _bars: &[Bar],
         visible_range: Range<usize>,
         coords: IndicatorCoordParams,
-    ) -> Option<(Rect, Rect, f64, f64, Response)> {
+    ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
             return None;
         }
@@ -443,11 +470,35 @@ impl IndicatorPane {
         // Draw y-axis labels
         self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
 
-        // Draw indicator legend at top-left
-        self.draw_legend(painter, chart_rect, indicator, text_color);
+        // Reserve the legend's close "x" and make it independently clickable so
+        // it can surface a remove request without stealing pane-line clicks.
+        let close_rect = self.legend_close_rect(ui.painter(), chart_rect, indicator);
+        let close_response = close_rect
+            .map(|cr| ui.interact(cr, response.id.with("indicator_pane_close"), Sense::click()));
+        let close_hovered = close_response.as_ref().is_some_and(|r| r.hovered());
+        if close_hovered {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
+        // Draw indicator legend (and the close glyph) at top-left.
+        self.draw_legend(
+            ui.painter(),
+            chart_rect,
+            indicator,
+            text_color,
+            close_rect,
+            close_hovered,
+        );
 
         // Return panel info for hit testing
-        Some((rect, chart_rect, y_min, y_max, response))
+        Some(PaneInteraction {
+            panel_rect: rect,
+            chart_rect,
+            y_min,
+            y_max,
+            response,
+            close_response,
+        })
     }
 
     fn calculate_y_range(
@@ -824,52 +875,105 @@ impl IndicatorPane {
         }
     }
 
-    fn draw_legend(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        indicator: &dyn Indicator,
-        text_color: Color32,
-    ) {
-        if !self.config.show_legend {
-            return;
-        }
-
-        // Get current values for legend
+    /// Builds the legend text (indicator name plus its current value) shown at
+    /// the pane's top-left.
+    fn legend_text(&self, indicator: &dyn Indicator) -> String {
         let values = indicator.values();
-        let colors = indicator.colors();
-
         let mut legend_parts = vec![indicator.name().to_string()];
 
-        // Add current values if available
         if let Some(last_value) = values.last() {
             match last_value {
                 IndicatorValue::Single(v) => {
                     legend_parts.push(format!("{v:.2}"));
                 }
                 IndicatorValue::Multiple(vals) => {
-                    for (i, v) in vals.iter().enumerate() {
-                        let color = colors.get(i).copied().unwrap_or(text_color);
+                    for v in vals {
                         legend_parts.push(format!("{v:.2}"));
-                        // Could draw colored value, but keeping it simple for now
-                        let _ = color;
                     }
                 }
                 IndicatorValue::None => {}
             }
         }
 
-        let legend_text = legend_parts.join(" ");
+        legend_parts.join(" ")
+    }
+
+    /// Computes the screen rect of the close "x" trailing the legend text for a
+    /// pane drawn into `rect`, or `None` when the legend (and thus the remove
+    /// affordance) is hidden. Layout is measured through `painter` so the hit
+    /// region matches the painted glyph exactly.
+    fn legend_close_rect(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        indicator: &dyn Indicator,
+    ) -> Option<Rect> {
+        if !self.config.show_legend {
+            return None;
+        }
+
+        let galley = painter.layout_no_wrap(
+            self.legend_text(indicator),
+            egui::FontId::proportional(typography::SM),
+            Color32::WHITE,
+        );
+        let text_left = rect.min.x + DESIGN_TOKENS.spacing.sm;
+        let center_y = rect.min.y + DESIGN_TOKENS.spacing.xl;
+        let glyph_size = typography::SM;
+        let center = Pos2::new(
+            text_left + galley.size().x + DESIGN_TOKENS.spacing.md,
+            center_y,
+        );
+        let pad = DESIGN_TOKENS.spacing.sm;
+        Some(Rect::from_center_size(
+            center,
+            egui::vec2(glyph_size + pad, glyph_size + pad),
+        ))
+    }
+
+    /// Draws the indicator legend (name + current value) at the pane's
+    /// top-left, plus a subtle TradingView-style close "x" inside
+    /// `close_rect` when one was reserved by [`Self::legend_close_rect`]. The
+    /// glyph dims at rest and brightens to the text color when `close_hovered`,
+    /// so it reads as clickable without competing with the indicator readout.
+    fn draw_legend(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        indicator: &dyn Indicator,
+        text_color: Color32,
+        close_rect: Option<Rect>,
+        close_hovered: bool,
+    ) {
+        if !self.config.show_legend {
+            return;
+        }
+
         painter.text(
             Pos2::new(
                 rect.min.x + DESIGN_TOKENS.spacing.sm,
                 rect.min.y + DESIGN_TOKENS.spacing.xl,
             ),
             egui::Align2::LEFT_CENTER,
-            legend_text,
+            self.legend_text(indicator),
             egui::FontId::proportional(typography::SM),
             text_color,
         );
+
+        if let Some(close_rect) = close_rect {
+            let glyph_color = if close_hovered {
+                text_color
+            } else {
+                Color32::from_rgba_unmultiplied(text_color.r(), text_color.g(), text_color.b(), 140)
+            };
+            painter.text(
+                close_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "\u{00d7}",
+                egui::FontId::proportional(typography::SM),
+                glyph_color,
+            );
+        }
     }
 
     fn value_to_y(&self, value: f64, rect: Rect, y_min: f64, y_max: f64) -> f32 {
