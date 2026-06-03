@@ -93,7 +93,7 @@ pub fn fuzzy_search<'a, T>(
         .collect();
 
     // Sort by score (descending)
-    matches.sort_by(|a, b| b.1.score.cmp(&a.1.score));
+    matches.sort_by_key(|m| std::cmp::Reverse(m.1.score));
 
     matches
 }

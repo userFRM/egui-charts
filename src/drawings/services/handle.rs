@@ -319,10 +319,10 @@ impl HandleService {
                     drawing.chart_points[last].price = y_to_price(new_pos.y);
                 }
             }
-            HandlePos::Middle => {
+            HandlePos::Middle
                 // Move entire drawing by centroid delta
                 if !drawing.points.is_empty() && drawing.points.len() == drawing.chart_points.len()
-                {
+                => {
                     let cx: f32 = drawing.points.iter().map(|p| p.x).sum::<f32>()
                         / drawing.points.len() as f32;
                     let cy: f32 = drawing.points.iter().map(|p| p.y).sum::<f32>()
@@ -337,7 +337,6 @@ impl HandleService {
                         drawing.chart_points[i].price = y_to_price(drawing.points[i].y);
                     }
                 }
-            }
             _ => {}
         }
     }

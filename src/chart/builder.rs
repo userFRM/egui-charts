@@ -652,47 +652,48 @@ impl TradingChart {
                         self.indicators.calculate_all(&data.bars);
                         let _ = symbol; // consumed
                     }
-                    DataUpdate::NewBars { symbol, bars } if symbol == self.symbol => {
+                    DataUpdate::NewBars { symbol, bars }
+                        if symbol == self.symbol
                         // LIVE DATA: Append new bars to existing data
-                        if !bars.is_empty() {
-                            let mut existing_bars = self.chart.data().bars.clone();
-                            let bars_before = existing_bars.len();
+                        && !bars.is_empty() =>
+                    {
+                        let mut existing_bars = self.chart.data().bars.clone();
+                        let bars_before = existing_bars.len();
 
-                            // Merge new bars: update last bar if same timestamp, otherwise append
-                            for new_bar in bars {
-                                if let Some(last) = existing_bars.last_mut() {
-                                    if last.time == new_bar.time {
-                                        // Update existing bar (live bar update)
-                                        *last = new_bar;
-                                    } else if new_bar.time > last.time {
-                                        // Append new completed bar
-                                        existing_bars.push(new_bar);
-                                    }
-                                    // Ignore bars older than last (out of order)
-                                } else {
-                                    // First bar
+                        // Merge new bars: update last bar if same timestamp, otherwise append
+                        for new_bar in bars {
+                            if let Some(last) = existing_bars.last_mut() {
+                                if last.time == new_bar.time {
+                                    // Update existing bar (live bar update)
+                                    *last = new_bar;
+                                } else if new_bar.time > last.time {
+                                    // Append new completed bar
                                     existing_bars.push(new_bar);
                                 }
+                                // Ignore bars older than last (out of order)
+                            } else {
+                                // First bar
+                                existing_bars.push(new_bar);
                             }
-
-                            let bars_after = existing_bars.len();
-                            let data = BarData::from_bars(existing_bars);
-                            self.chart.update_data(data.clone());
-
-                            // Recalculate indicators with updated data
-                            self.indicators.calculate_all(&data.bars);
-
-                            // Log new bar activity
-                            if bars_after > bars_before {
-                                log::debug!(
-                                    "[TradingChart] Live data: {} new bars (total: {})",
-                                    bars_after - bars_before,
-                                    bars_after
-                                );
-                            }
-
-                            let _ = symbol; // consumed
                         }
+
+                        let bars_after = existing_bars.len();
+                        let data = BarData::from_bars(existing_bars);
+                        self.chart.update_data(data.clone());
+
+                        // Recalculate indicators with updated data
+                        self.indicators.calculate_all(&data.bars);
+
+                        // Log new bar activity
+                        if bars_after > bars_before {
+                            log::debug!(
+                                "[TradingChart] Live data: {} new bars (total: {})",
+                                bars_after - bars_before,
+                                bars_after
+                            );
+                        }
+
+                        let _ = symbol; // consumed
                     }
                     _ => {}
                 }
