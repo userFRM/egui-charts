@@ -64,6 +64,7 @@
 pub mod builder;
 pub mod coords;
 pub mod overlays;
+pub mod selection;
 pub mod series;
 pub mod series_api;
 
@@ -76,6 +77,5 @@ pub(crate) mod interaction;
 pub(crate) mod pan_zoom;
 pub(crate) mod renderers;
 pub(crate) mod rendering;
-pub(crate) mod selection;
 pub(crate) mod state;
 pub(crate) mod tool_interaction;

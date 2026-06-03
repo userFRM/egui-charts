@@ -939,6 +939,20 @@ impl TradingChart {
         &self.symbol
     }
 
+    /// Returns the chart element the user has currently selected, if any.
+    ///
+    /// A selection is made by clicking a series, an overlay indicator line, or a
+    /// separate-pane indicator line. Host apps read this to open settings for,
+    /// or delete, the selected object. Returns `None` when nothing is selected.
+    pub fn selected_element(&self) -> Option<crate::chart::selection::ChartElementId> {
+        self.chart.selected_element()
+    }
+
+    /// Clears any current selection (equivalent to clicking empty chart area).
+    pub fn clear_selection(&mut self) {
+        self.chart.clear_selection();
+    }
+
     /// Toggle main series visibility
     ///
     /// This is used by the series context menu to hide/show the main price series.

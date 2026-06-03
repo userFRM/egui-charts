@@ -34,20 +34,6 @@ impl Default for SelectionDotConfig {
     }
 }
 
-/// Calculate dot interval based on bar spacing
-pub fn calculate_dot_interval(bar_spacing: f32) -> usize {
-    // Fewer dots when zoomed out, more when zoomed in
-    if bar_spacing < 3.0 {
-        20
-    } else if bar_spacing < 6.0 {
-        10
-    } else if bar_spacing < 12.0 {
-        5
-    } else {
-        3
-    }
-}
-
 /// Render selection dots on an indicator line
 pub fn render_indicator_selection_dots<F>(
     painter: &Painter,

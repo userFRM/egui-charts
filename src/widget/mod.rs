@@ -80,8 +80,16 @@
 //! - [`indicator_pane`] -- Separate indicator panels (RSI, MACD, Stochastic)
 
 use crate::chart::cursor_modes::CursorModeState;
+use crate::chart::indicators::{
+    SelectionDotConfig, hit_test_indicator, hit_test_pane_indicator,
+    render_indicator_selection_dots,
+};
 use crate::chart::renderers::{self, ChartMapping, PriceScale, RenderContext, StyleColors};
-use crate::chart::series::SeriesSettings;
+use crate::chart::selection::{ChartElementId, SelectionState, SeriesId};
+use crate::chart::series::{
+    SelectionHandleConfig, SeriesSettings, calculate_dot_interval, hit_test_candles,
+    hit_test_volume, render_candle_selection_dots,
+};
 use crate::config::{BackgroundStyle, ChartConfig, ChartOptions, WatermarkPos};
 use crate::drawings::DrawingManager;
 use crate::model::ChartState;
@@ -230,6 +238,14 @@ pub struct Chart {
     pub marks: Vec<crate::model::Marker>,
     /// Timescale marks (annotations on the time axis)
     pub timescale_marks: Vec<crate::model::Marker>,
+
+    // =========================================================================
+    // Selection State
+    // =========================================================================
+    /// Chart-wide click selection, shared by series, overlay indicators, and
+    /// pane indicators. Populated by click hit testing during rendering and
+    /// readable by host apps via [`Chart::selected_element`].
+    pub(crate) selection: SelectionState<ChartElementId>,
 }
 
 /// Information about a rendered indicator pane, used for hit testing and coordinate mapping.
@@ -623,6 +639,13 @@ impl Chart {
             }
 
             if has_pane_indicators {
+                // A pane click is resolved after the loop so the immutable `bars`
+                // borrow can be released before mutating selection state. `Some`
+                // means a pane was clicked; the inner value is the element to
+                // select, or `None` to clear (click on empty pane area).
+                let mut pending_pane_selection: Option<Option<ChartElementId>> = None;
+                let current_selection = self.selection.selected_id();
+
                 for (idx, indicator) in indicators.indicators().iter().enumerate() {
                     if indicator.is_overlay() || !indicator.is_visible() {
                         continue;
@@ -642,7 +665,7 @@ impl Chart {
                         IndicatorPane::with_config(egui::Id::new("main_chart_x_axis"), config);
 
                     // Use show_aligned_interactive to get pane info for hit testing
-                    if let Some((panel_rect, chart_rect, y_min, y_max, _response)) = panel
+                    if let Some((panel_rect, chart_rect, y_min, y_max, pane_response)) = panel
                         .show_aligned_interactive(
                             ui,
                             indicator.as_ref(),
@@ -651,6 +674,46 @@ impl Chart {
                             coords,
                         )
                     {
+                        let pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
+
+                        // Resolve a click on this pane: a hit on the line selects
+                        // it, an empty-pane click clears the whole selection.
+                        if pane_response.clicked()
+                            && let Some(click_pos) = pane_response.interact_pointer_pos()
+                        {
+                            let hit = hit_test_pane_indicator(
+                                click_pos,
+                                indicator.as_ref(),
+                                idx,
+                                visible_range.clone(),
+                                chart_rect,
+                                y_min,
+                                y_max,
+                                &pane_coords,
+                            );
+                            pending_pane_selection =
+                                Some(hit.map(|h| ChartElementId::PaneIndicator(h.indicator_idx)));
+                        }
+
+                        // Draw selection handles when this pane is selected.
+                        if current_selection == Some(ChartElementId::PaneIndicator(idx)) {
+                            let dot_config = SelectionDotConfig {
+                                dot_interval: calculate_dot_interval(pane_coords.bar_spacing),
+                                ..Default::default()
+                            };
+                            for line_idx in 0..indicator.line_cnt() {
+                                render_indicator_selection_dots(
+                                    ui.painter(),
+                                    indicator.as_ref(),
+                                    line_idx,
+                                    visible_range.clone(),
+                                    &pane_coords,
+                                    |value| pane_coords.price_to_y(value),
+                                    &dot_config,
+                                );
+                            }
+                        }
+
                         // Store the pane info for hit testing by platform
                         self.last_rendered_indicator_panes
                             .push(RenderedIndicatorPane {
@@ -661,6 +724,15 @@ impl Chart {
                                 y_max,
                                 coords,
                             });
+                    }
+                }
+
+                // Apply the deferred pane selection now that `bars` is no longer
+                // borrowed.
+                if let Some(decision) = pending_pane_selection {
+                    match decision {
+                        Some(id) => self.selection.select(id, None),
+                        None => self.selection.deselect(),
                     }
                 }
             }
@@ -1085,6 +1157,44 @@ impl Chart {
             );
         }
 
+        // Resolve a click on the main chart area into a selection. Overlay
+        // indicators take priority over the series beneath them; an empty-area
+        // click clears the selection. Pane-indicator clicks are resolved by
+        // show_with_indicators, which renders the panes outside this rect.
+        let main_visible_range = start_idx..(start_idx + visible_data.len());
+        if response.clicked()
+            && let Some(click_pos) = response.interact_pointer_pos()
+        {
+            let volume_coords = if self.config.show_volume {
+                Some(coords.with_rect(volume_rect))
+            } else {
+                None
+            };
+            let hit = hit_test_main_chart(
+                click_pos,
+                indicators,
+                &coords,
+                volume_coords.as_ref(),
+                &self.state.data().bars,
+                max_volume,
+                main_visible_range.clone(),
+            );
+            match hit {
+                Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
+                None => self.selection.deselect(),
+            }
+        }
+
+        // Draw selection handles for whichever element is currently selected on
+        // the main chart (overlay indicator line or series data points).
+        self.render_main_chart_selection(
+            &painter,
+            indicators,
+            &coords,
+            visible_data,
+            main_visible_range,
+        );
+
         // Render bar marks (Widget API annotations)
         if !self.marks.is_empty() {
             renderers::render_markers(
@@ -1335,5 +1445,312 @@ impl Chart {
             self.last_rendered_price_range.0,
             self.last_rendered_price_range.1,
         )
+    }
+
+    // =========================================================================
+    // Selection API
+    // =========================================================================
+
+    /// Returns the chart element the user has currently selected, if any.
+    ///
+    /// Selection is driven by clicking a series, an overlay indicator line, or a
+    /// separate-pane indicator line. Host apps read this to open a settings
+    /// dialog for, or delete, the selected object. Returns `None` when nothing
+    /// is selected (for example after a click on empty chart area).
+    pub fn selected_element(&self) -> Option<ChartElementId> {
+        self.selection.selected_id()
+    }
+
+    /// Returns the bar index at which the current selection was made, if any.
+    ///
+    /// This is the data-space index of the segment that was clicked, useful for
+    /// anchoring tooltips or context menus near the click.
+    pub fn selected_bar(&self) -> Option<usize> {
+        self.selection.selected_bar()
+    }
+
+    /// Clears any current selection.
+    ///
+    /// Equivalent to clicking empty chart area. Call this after the host app has
+    /// finished acting on a selection (e.g. closing a settings dialog).
+    pub fn clear_selection(&mut self) {
+        self.selection.deselect();
+    }
+
+    /// Draws selection handles for the element currently selected on the main
+    /// chart (an overlay indicator line or a price/volume series).
+    ///
+    /// Pane-indicator handles are drawn separately by `show_with_indicators`
+    /// since their panes live outside the main chart rect.
+    fn render_main_chart_selection(
+        &self,
+        painter: &egui::Painter,
+        indicators: Option<&IndicatorRegistry>,
+        coords: &ChartMapping,
+        visible_data: &[crate::model::Bar],
+        visible_range: std::ops::Range<usize>,
+    ) {
+        let Some(selected) = self.selection.selected_id() else {
+            return;
+        };
+
+        match selected {
+            ChartElementId::OverlayIndicator(idx) => {
+                let Some(registry) = indicators else { return };
+                let Some(indicator) = registry.indicators().get(idx) else {
+                    return;
+                };
+                if !indicator.is_visible() || !indicator.is_overlay() {
+                    return;
+                }
+                let config = SelectionDotConfig {
+                    dot_interval: calculate_dot_interval(coords.bar_spacing),
+                    ..Default::default()
+                };
+                // Multi-line indicators highlight every line so the whole study
+                // reads as selected.
+                for line_idx in 0..indicator.line_cnt() {
+                    render_indicator_selection_dots(
+                        painter,
+                        indicator.as_ref(),
+                        line_idx,
+                        visible_range.clone(),
+                        coords,
+                        |price| coords.price_to_y(price),
+                        &config,
+                    );
+                }
+            }
+            ChartElementId::Series(series_id) => {
+                let config = SelectionHandleConfig {
+                    dot_interval: calculate_dot_interval(coords.bar_spacing),
+                    ..Default::default()
+                };
+                let closes: Vec<f64> = visible_data.iter().map(|b| b.close).collect();
+                match series_id {
+                    SeriesId::VOLUME => {
+                        // Volume handles sit on the volume rect; render on the
+                        // bar tops at the configured interval.
+                        let volume_coords = coords.with_rect(self.last_rendered_volume_rect);
+                        let max_volume = visible_data
+                            .iter()
+                            .map(|b| b.volume)
+                            .fold(0.0_f64, f64::max)
+                            .max(1.0);
+                        render_candle_selection_dots(
+                            painter,
+                            visible_range,
+                            &volume_coords,
+                            &closes,
+                            |volume| {
+                                let norm = (volume / max_volume) as f32;
+                                volume_coords.rect.bottom() - norm * volume_coords.rect.height()
+                            },
+                            &config,
+                        );
+                    }
+                    _ => {
+                        render_candle_selection_dots(
+                            painter,
+                            visible_range,
+                            coords,
+                            &closes,
+                            |price| coords.price_to_y(price),
+                            &config,
+                        );
+                    }
+                }
+            }
+            // Pane indicators are handled where their panes are rendered.
+            ChartElementId::PaneIndicator(_) => {}
+        }
+    }
+}
+
+/// Hit-test a click on the main chart area, applying selection priority.
+///
+/// Overlay indicator lines take priority over the series beneath them, matching
+/// the visual stacking order. Returns the hit element and the bar index where
+/// the hit occurred, or `None` when the click landed on empty chart area.
+fn hit_test_main_chart(
+    click_pos: Pos2,
+    indicators: Option<&IndicatorRegistry>,
+    coords: &ChartMapping,
+    volume_coords: Option<&ChartMapping>,
+    bars: &[crate::model::Bar],
+    max_volume: f64,
+    visible_range: std::ops::Range<usize>,
+) -> Option<(ChartElementId, usize)> {
+    if bars.is_empty() {
+        return None;
+    }
+
+    // 1. Overlay indicators (drawn on top of the series).
+    if let Some(registry) = indicators {
+        for (idx, indicator) in registry.indicators().iter().enumerate() {
+            if let Some(hit) = hit_test_indicator(
+                click_pos,
+                indicator.as_ref(),
+                idx,
+                visible_range.clone(),
+                coords,
+                |price| coords.price_to_y(price),
+            ) {
+                return Some((
+                    ChartElementId::OverlayIndicator(hit.indicator_idx),
+                    hit.bar_idx,
+                ));
+            }
+        }
+    }
+
+    // 2. Main price series (candles/bars/line).
+    if let Some(hit) = hit_test_candles(
+        click_pos,
+        bars,
+        visible_range.clone(),
+        coords,
+        |price| coords.price_to_y(price),
+        &crate::chart::series::HitTestConfig::default(),
+    ) {
+        return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
+    }
+
+    // 3. Volume series (only when a volume pane was rendered).
+    if let Some(volume_coords) = volume_coords
+        && let Some(hit) =
+            hit_test_volume(click_pos, bars, visible_range, volume_coords, max_volume)
+    {
+        return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use crate::model::Bar;
+    use crate::studies::{CustomIndicator, IndicatorValue};
+    use chrono::{TimeZone, Utc};
+    use egui::{Pos2, Rect, Vec2};
+
+    /// Build a deterministic mapping plus a small candle series.
+    ///
+    /// The series is flat OHLC at the integer prices `[10, 11, 12, 13, 14]` so
+    /// every candle has a visible body and an exact price-to-screen mapping.
+    fn fixture() -> (ChartMapping, Vec<Bar>) {
+        let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(500.0, 400.0));
+        let bars: Vec<Bar> = (0..5)
+            .map(|i| {
+                let close = 10.0 + i as f64;
+                Bar::new(
+                    Utc.timestamp_opt(i as i64, 0).unwrap(),
+                    close - 0.4,
+                    close + 0.5,
+                    close - 0.5,
+                    close + 0.4,
+                    100.0,
+                )
+            })
+            .collect();
+        // base_idx = last bar, no scroll offset, price window covers the data.
+        let mapping = ChartMapping::new(rect, 40.0, 0, bars.len() - 1, 0.0, 8.0, 16.0);
+        (mapping, bars)
+    }
+
+    fn overlay_at(values: Vec<IndicatorValue>) -> IndicatorRegistry {
+        let mut registry = IndicatorRegistry::new();
+        let captured = values.clone();
+        registry.add(Box::new(
+            CustomIndicator::new("TestLine", Box::new(move |_| captured.clone()))
+                .with_overlay(true),
+        ));
+        // Prime the cached values without needing real bar input.
+        registry.calculate_all(&[]);
+        registry
+    }
+
+    #[test]
+    fn click_on_empty_area_returns_none() {
+        let (mapping, bars) = fixture();
+        // A point near the top of the chart, above every candle body and on no
+        // indicator line.
+        let pos = Pos2::new(mapping.idx_to_x(2), mapping.rect.min.y + 1.0);
+        let hit = hit_test_main_chart(pos, None, &mapping, None, &bars, 100.0, 0..bars.len());
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn click_on_candle_selects_main_series() {
+        let (mapping, bars) = fixture();
+        // Click the center of bar 2's body (close = 12.4, open = 11.6).
+        let bar = &bars[2];
+        let mid_price = (bar.open + bar.close) / 2.0;
+        let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(mid_price));
+        let hit = hit_test_main_chart(pos, None, &mapping, None, &bars, 100.0, 0..bars.len());
+        assert_eq!(hit, Some((ChartElementId::Series(SeriesId::MAIN), 2)));
+    }
+
+    #[test]
+    fn overlay_indicator_wins_over_series_at_same_point() {
+        let (mapping, bars) = fixture();
+        // Place an indicator value at bar 2 and bar 3 exactly on the candle's
+        // close price so its line passes through the body. A click there must
+        // resolve to the overlay, not the series beneath it.
+        let mut values = vec![IndicatorValue::None; bars.len()];
+        values[2] = IndicatorValue::Single(bars[2].close);
+        values[3] = IndicatorValue::Single(bars[3].close);
+        let registry = overlay_at(values);
+
+        let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(bars[2].close));
+        let hit = hit_test_main_chart(
+            pos,
+            Some(&registry),
+            &mapping,
+            None,
+            &bars,
+            100.0,
+            0..bars.len(),
+        );
+        assert_eq!(hit, Some((ChartElementId::OverlayIndicator(0), 2)));
+    }
+
+    #[test]
+    fn hidden_or_pane_indicator_does_not_steal_overlay_priority() {
+        let (mapping, bars) = fixture();
+        // A non-overlay (pane) indicator must be ignored by the main-chart hit
+        // test even though its values sit on the candle body.
+        let mut values = vec![IndicatorValue::None; bars.len()];
+        values[2] = IndicatorValue::Single(bars[2].close);
+        let mut registry = IndicatorRegistry::new();
+        let captured = values.clone();
+        registry.add(Box::new(
+            CustomIndicator::new("Pane", Box::new(move |_| captured.clone())).with_overlay(false),
+        ));
+        registry.calculate_all(&[]);
+
+        let bar = &bars[2];
+        let mid_price = (bar.open + bar.close) / 2.0;
+        let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(mid_price));
+        let hit = hit_test_main_chart(
+            pos,
+            Some(&registry),
+            &mapping,
+            None,
+            &bars,
+            100.0,
+            0..bars.len(),
+        );
+        // Falls through to the series, since the pane indicator is not an overlay.
+        assert_eq!(hit, Some((ChartElementId::Series(SeriesId::MAIN), 2)));
+    }
+
+    #[test]
+    fn empty_data_returns_none() {
+        let (mapping, _) = fixture();
+        let pos = mapping.rect.center();
+        let hit = hit_test_main_chart(pos, None, &mapping, None, &[], 100.0, 0..0);
+        assert!(hit.is_none());
     }
 }

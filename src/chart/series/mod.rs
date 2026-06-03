@@ -32,7 +32,7 @@ pub use baseline::BaselineSeries;
 pub use histogram::HistogramSeries;
 pub use hit_test::{HitTestConfig, hit_test_candles, hit_test_line, hit_test_volume};
 pub use line::LineSeries;
-pub use selection::{SeriesHitResult, SeriesId, SeriesSelectionState};
+pub use selection::{SeriesHitResult, SeriesId};
 pub use selection_render::{
     SelectionHandleConfig, calculate_dot_interval, render_candle_selection_dots,
     render_series_selection_on_points,
