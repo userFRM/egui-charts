@@ -8,7 +8,7 @@ use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::styles::{icons as icon_sizes, typography};
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::stubs::{
+use crate::ui::model::{
     PlaybackSpeed, ReplayCommand, ReplayProgress, ToolbarReplayState as ReplayState,
 };
 use egui::{Response, Ui, Vec2, Widget};

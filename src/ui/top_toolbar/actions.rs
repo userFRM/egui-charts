@@ -1,8 +1,8 @@
 //! Actions emitted by the top toolbar.
 
 use super::components::layout_menu::LayoutAction;
+use crate::ui::model::ChartLayoutMode;
 use crate::ui::multi_chart::ChartSyncOptions;
-use crate::ui::stubs::ChartLayoutMode;
 
 /// Actions emitted by the top toolbar
 #[derive(Debug, Clone, PartialEq)]

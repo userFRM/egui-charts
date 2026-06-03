@@ -8,8 +8,8 @@
 pub mod app_state;
 pub use app_state::ChartAppState;
 
-// Stub types for missing frontend dependencies
-pub mod stubs;
+// Shared UI domain model
+pub mod model;
 
 // Toolbars
 pub mod drawing_toolbar;

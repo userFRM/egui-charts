@@ -6,7 +6,7 @@ use crate::icons::icons as embedded_icons;
 use crate::styles::typography;
 use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::stubs::ChartLayoutMode;
+use crate::ui::model::ChartLayoutMode;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 /// Chart grid selector widget

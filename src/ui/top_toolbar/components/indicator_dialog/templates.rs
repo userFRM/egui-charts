@@ -6,7 +6,7 @@
 use crate::ext::UiExt;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::stubs::IndicatorTemplate;
+use crate::ui::model::IndicatorTemplate;
 use crate::ui_kit::{EmptyState, LoadingIndicator};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Ui, Vec2};
 

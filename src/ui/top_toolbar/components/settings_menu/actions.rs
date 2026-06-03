@@ -1,7 +1,7 @@
 //! Actions emitted by settings UI components
 
 use super::data::ChartSettingsState;
-use crate::ui::stubs::LayoutStyle;
+use crate::ui::model::LayoutStyle;
 
 /// Settings action (emitted by both SettingsMenu and SettingsDialog)
 #[derive(Clone)]

@@ -7,7 +7,7 @@ use egui::{Color32, FontId, RichText, Stroke, Ui};
 
 use super::SettingsDialog;
 use crate::theme::components::SettingsDialogStyle;
-use crate::ui::stubs::LayoutStyle;
+use crate::ui::model::LayoutStyle;
 use crate::ui_kit::ColorPicker;
 
 use crate::styles::{stroke, typography};
