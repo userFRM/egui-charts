@@ -809,7 +809,7 @@ pub mod icons {
     );
 
     pub const ALERTS: Icon = Icon::new(
-        "top_toolbar/alerts.svg",
+        "settings_dialog/alerts.svg",
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/assets/icons/settings_dialog/alerts.svg"
@@ -1490,4 +1490,129 @@ pub mod icons {
     // =========================================================================
     // SEMANTIC ALIASES (for Alert component, etc.)
     // =========================================================================
+}
+
+#[cfg(test)]
+mod tests {
+    //! The runtime image cache and URI key are derived from an icon's `name`
+    //! alone, while the pixels come from the `include_bytes!` path. If those two
+    //! disagree, a lookup by name resolves to the wrong (or a nonexistent)
+    //! asset. These tests pin the invariant that every embedded icon's `name`
+    //! equals its `include_bytes!` path and that the asset exists on disk.
+
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    /// Every embedded icon constructor in this file, parsed from source as
+    /// `(line, name, asset-relative-path)`. The constructor token is assembled
+    /// at runtime so this doc and the parser itself are not mistaken for an
+    /// embedded icon.
+    fn embedded_icons() -> Vec<(usize, String, String)> {
+        let src = include_str!("mod.rs");
+        let needle = concat!("Icon", "::new(");
+        let mut out = Vec::new();
+        let bytes = src.as_bytes();
+        let mut search = 0usize;
+        while let Some(rel) = src[search..].find(needle) {
+            let start = search + rel;
+            search = start + needle.len();
+
+            // The name is the first string literal between the constructor and the
+            // following `include_bytes!`. The macro definition passes `$path`
+            // (not a string literal) there, so it is skipped.
+            let Some(ib) = src[search..].find("include_bytes!").map(|o| search + o) else {
+                continue;
+            };
+            let Some(name) = next_string_literal(&src[..ib], search) else {
+                continue;
+            };
+            // The asset path is the literal inside `include_bytes!(concat!(...))`
+            // beginning with the asset prefix (the earlier `"CARGO_MANIFEST_DIR"`
+            // literal is skipped by matching on the prefix).
+            let prefix = "/assets/icons/";
+            if let Some(path) = string_literal_with_prefix(src, ib, needle, prefix) {
+                let rel_path = &path[prefix.len()..];
+                let line = bytes[..start].iter().filter(|&&b| b == b'\n').count() + 1;
+                out.push((line, name, rel_path.to_string()));
+            }
+        }
+        out
+    }
+
+    /// Return the contents of the first `"..."` string literal at or after `from`.
+    fn next_string_literal(src: &str, from: usize) -> Option<String> {
+        let open = from + src[from..].find('"')?;
+        let rest = &src[open + 1..];
+        let close = rest.find('"')?;
+        Some(rest[..close].to_string())
+    }
+
+    /// Return the first `"..."` string literal at or after `from` whose contents
+    /// begin with `prefix`, stopping at the next constructor (`needle`) boundary.
+    fn string_literal_with_prefix(
+        src: &str,
+        from: usize,
+        needle: &str,
+        prefix: &str,
+    ) -> Option<String> {
+        let stop = src[from..]
+            .find(needle)
+            .map(|o| from + o)
+            .unwrap_or(src.len());
+        let mut cursor = from;
+        while cursor < stop {
+            let open = cursor + src[cursor..stop].find('"')?;
+            let rest = &src[open + 1..stop];
+            let close = rest.find('"')?;
+            let literal = &rest[..close];
+            if literal.starts_with(prefix) {
+                return Some(literal.to_string());
+            }
+            cursor = open + 1 + close + 1;
+        }
+        None
+    }
+
+    #[test]
+    fn every_icon_name_matches_its_embedded_asset_path() {
+        let icons = embedded_icons();
+        assert!(
+            icons.len() > 100,
+            "parser regressed: only found {} embedded icons",
+            icons.len()
+        );
+        for (line, name, path) in &icons {
+            assert_eq!(
+                name, path,
+                "icon at line {line}: name {name:?} disagrees with embedded asset {path:?}; \
+                 the URI/cache key derives from the name, so it must match the bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn every_icon_asset_exists_on_disk() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        for (line, name, _path) in embedded_icons() {
+            let asset = Path::new(root).join("assets/icons").join(&name);
+            assert!(
+                asset.exists(),
+                "icon at line {line}: asset {} (from name {name:?}) does not exist",
+                asset.display()
+            );
+        }
+    }
+
+    #[test]
+    fn icon_names_are_unique() {
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for (line, name, _path) in embedded_icons() {
+            if let Some(prev) = seen.insert(name.clone(), line) {
+                panic!(
+                    "icon name {name:?} embedded twice (lines {prev} and {line}); \
+                     names are cache keys and must be unique"
+                );
+            }
+        }
+    }
 }

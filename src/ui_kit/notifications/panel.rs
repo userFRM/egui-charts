@@ -5,7 +5,7 @@
 use egui::{Align2, Color32, Context, Order, Pos2, RichText, Ui, Vec2};
 
 use super::toast::Toast;
-use super::toasts::{Toasts, cleanup_expired_toasts, get_toasts, remove_toast};
+use super::toasts::{Toasts, current_time_seconds};
 use crate::icons::icons;
 use crate::tokens::DESIGN_TOKENS;
 
@@ -122,30 +122,7 @@ impl NotificationPanel {
         self
     }
 
-    /// Show the notification panel using the global toast list
-    pub fn show(&self, ctx: &Context) {
-        // Clean up expired toasts
-        cleanup_expired_toasts();
-
-        // Get toasts
-        let toasts = get_toasts();
-        if toasts.is_empty() {
-            return;
-        }
-
-        // Show toasts
-        let dismissed = self.show_toasts(ctx, &toasts);
-
-        // Remove dismissed toasts
-        for id in dismissed {
-            remove_toast(id);
-        }
-
-        // Request repaint if there are toasts (for animations/expiry)
-        ctx.request_repaint();
-    }
-
-    /// Show the notification panel with a custom toast list
+    /// Show the notification panel with a per-instance toast list
     pub fn show_with_toasts(&self, ctx: &Context, toasts: &mut Toasts) {
         // Clean up expired toasts
         toasts.cleanup_expired();
@@ -266,10 +243,7 @@ impl NotificationPanel {
             // Progress bar (if duration > 0)
             if toast.duration > 0.0 {
                 ui.add_space(DESIGN_TOKENS.spacing.sm);
-                let current_time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs_f64())
-                    .unwrap_or(0.0);
+                let current_time = current_time_seconds();
                 let fraction = toast.remaining_fraction(current_time);
 
                 let (rect, _) = ui.allocate_exact_size(
@@ -296,14 +270,4 @@ impl NotificationPanel {
 
         dismissed
     }
-}
-
-/// Show the global notification panel
-pub fn show_notifications(ctx: &Context) {
-    NotificationPanel::new().show(ctx);
-}
-
-/// Show the global notification panel at a specific position
-pub fn show_notifications_at(ctx: &Context, position: NotificationPosition) {
-    NotificationPanel::new().position(position).show(ctx);
 }
