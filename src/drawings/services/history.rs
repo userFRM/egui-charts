@@ -236,11 +236,18 @@ impl HistoryService {
         }
     }
 
-    /// Prune history entries for deleted drawings
+    /// Prune undo history entries for drawings that no longer exist.
+    ///
+    /// Only the undo stack is pruned against the live id set. The redo stack is
+    /// intentionally left intact: a redo entry legitimately references a drawing
+    /// that is absent from the live set. After an `Add` is undone, the drawing
+    /// is removed from the live set but its re-adding command sits on the redo
+    /// stack; pruning the redo stack against live ids would silently drop that
+    /// entry and lose the redo. The redo stack is the authoritative record of
+    /// what redo would restore, so it is the wrong place to enforce live-id
+    /// membership.
     pub fn prune(&mut self, existing_ids: &HashSet<usize>) {
         self.undo_stack
-            .retain(|cmd| existing_ids.contains(&cmd.drawing_id()));
-        self.redo_stack
             .retain(|cmd| existing_ids.contains(&cmd.drawing_id()));
     }
 
@@ -392,6 +399,39 @@ mod tests {
         // The drawing in history should have shifted bar indices
         // (We can't easily verify this without exposing internals,
         // but the method should not panic)
+    }
+
+    /// Undoing an `Add` parks the re-add command on the redo stack while the
+    /// drawing is absent from the live set. A subsequent `prune` against the
+    /// live ids must not drop that redo entry, or the redo would be silently
+    /// lost. This guards the invariant that redo survives pruning.
+    #[test]
+    fn test_undo_add_then_prune_preserves_redo() {
+        let mut history = HistoryService::new();
+        let mut drawings = Vec::new();
+
+        let drawing = make_drawing(1);
+        drawings.push(drawing.clone());
+        history.push_add(drawing);
+
+        // Undo the add: drawing leaves the live set, redo becomes available.
+        history.undo(&mut drawings);
+        assert!(drawings.is_empty());
+        assert!(history.can_redo());
+
+        // Prune against the (now empty) live id set, as a delete-driven cleanup
+        // would. The undone-add redo entry must survive.
+        history.prune(&HashSet::new());
+        assert!(
+            history.can_redo(),
+            "redo entry for an undone Add must survive prune"
+        );
+
+        // Redo must re-add the drawing.
+        let affected = history.redo(&mut drawings);
+        assert_eq!(affected, Some(1));
+        assert_eq!(drawings.len(), 1);
+        assert_eq!(drawings[0].id, 1);
     }
 
     #[test]
