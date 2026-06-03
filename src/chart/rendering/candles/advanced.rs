@@ -9,7 +9,7 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
 use super::helpers::PriceCoords;
-use crate::chart::renderers::PriceScale;
+use crate::chart::renderers::LinearPriceMap;
 use crate::model::Bar;
 
 const SESSION_SIZE: usize = 10;
@@ -25,7 +25,7 @@ pub(super) fn render_volume_footprint_placeholder(
     visible_data: &[Bar],
     start_idx: usize,
     bar_width: f32,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
@@ -58,7 +58,7 @@ pub(super) fn render_tpo_placeholder(
     visible_data: &[Bar],
     start_idx: usize,
     _bar_width: f32,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     color: Color32,
@@ -84,7 +84,7 @@ pub(super) fn render_session_volume_placeholder(
     visible_data: &[Bar],
     start_idx: usize,
     bar_width: f32,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,

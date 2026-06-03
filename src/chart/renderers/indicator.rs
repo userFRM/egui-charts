@@ -1,4 +1,4 @@
-use super::context::{ChartMapping, PriceScale, RenderContext};
+use super::context::{ChartMapping, LinearPriceMap, RenderContext};
 use crate::model::Bar;
 /// Indicator Renderer
 /// Renders indicator lines overlay on the chart
@@ -13,7 +13,7 @@ impl IndicatorRenderer {
         context: &RenderContext,
         indicators: &[Box<dyn Indicator>],
         bars: &[Bar],
-        price_scale: &PriceScale,
+        price_scale: &LinearPriceMap,
         coords: &ChartMapping,
     ) {
         for indicator in indicators {
@@ -62,7 +62,7 @@ impl IndicatorRenderer {
                     };
 
                     if let Some(price) = price {
-                        // Convert price to screen Y coord using PriceScale helper
+                        // Convert price to screen Y coord using LinearPriceMap helper
                         let y = price_scale.price_to_y(price, context.rect);
 
                         // Only add if within chart bounds

@@ -6,7 +6,7 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
 use super::volume::render_volume_bars;
-use crate::chart::renderers::{PriceScale, RenderContext, StyleColors};
+use crate::chart::renderers::{LinearPriceMap, RenderContext, StyleColors};
 use crate::model::{Bar, PriceSource};
 
 pub(super) fn render_line(
@@ -19,7 +19,7 @@ pub(super) fn render_line(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     line_color: Color32,
@@ -72,7 +72,7 @@ pub(super) fn render_line_with_markers(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     line_color: Color32,
@@ -139,7 +139,7 @@ pub(super) fn render_step_line(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     line_color: Color32,

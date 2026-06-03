@@ -1,4 +1,4 @@
-use super::context::{BarRenderParams, PriceScale, RenderContext, StyleColors};
+use super::context::{BarRenderParams, LinearPriceMap, RenderContext, StyleColors};
 use crate::model::Bar;
 use egui::{Pos2, Rect, Stroke, Vec2};
 
@@ -6,7 +6,7 @@ use egui::{Pos2, Rect, Stroke, Vec2};
 pub fn render_candle(
     context: &RenderContext,
     candle: &Bar,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     colors: &StyleColors,
     params: &BarRenderParams,
 ) {
@@ -14,7 +14,7 @@ pub fn render_candle(
     let body_color = colors.bar_color(is_bullish);
     let wick_color = colors.wick_color(is_bullish);
 
-    // Convert prices to screen coords using PriceScale helper
+    // Convert prices to screen coords using LinearPriceMap helper
     let high_y = price_scale.price_to_y(candle.high, context.rect);
     let low_y = price_scale.price_to_y(candle.low, context.rect);
     let open_y = price_scale.price_to_y(candle.open, context.rect);

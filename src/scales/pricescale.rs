@@ -259,6 +259,12 @@ impl PriceScale {
 
     /// Convert Y coord to price
     pub fn coord_to_price(&self, y: f32) -> f64 {
+        // A zero-height scale has no inverse; treat every coordinate as the
+        // bottom of the range rather than dividing by zero.
+        if self.height.abs() < f32::EPSILON {
+            return self.denormalize_price(self.ratio_to_price(0.0));
+        }
+
         let ratio = if self.options.invert_scale {
             (y / self.height) as f64
         } else {
@@ -557,6 +563,16 @@ mod tests {
         assert!((indexed_90 - 90.0).abs() < 0.1, "90 should map to 90");
         assert!((indexed_100 - 100.0).abs() < 0.1, "100 should map to 100");
         assert!((indexed_110 - 110.0).abs() < 0.1, "110 should map to 110");
+    }
+
+    #[test]
+    fn test_coord_to_price_zero_height_is_finite() {
+        // A zero-height scale has no inverse; coord_to_price must return a
+        // finite price instead of dividing by zero.
+        let mut scale = PriceScale::new(0.0);
+        scale.auto_scale(100.0, 200.0);
+        let price = scale.coord_to_price(0.0);
+        assert!(price.is_finite());
     }
 
     #[test]

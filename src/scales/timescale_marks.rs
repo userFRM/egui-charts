@@ -356,6 +356,11 @@ impl TickMarkGenerator {
         if seconds < 1 {
             // Sub-second: round to milliseconds
             let millis = interval.num_milliseconds();
+            // A zero-millisecond interval has no boundary to snap to; integer
+            // division by it would panic, so leave the time unrounded.
+            if millis == 0 {
+                return time;
+            }
             let timestamp_millis = time.timestamp_millis();
             let rounded = (timestamp_millis / millis) * millis;
             DateTime::from_timestamp_millis(rounded).unwrap_or(time)
@@ -623,6 +628,16 @@ mod tests {
         let (mark_type, weight) = generator.classify_time_boundary(time, TickMarkType::Time);
         assert_eq!(mark_type, TickMarkType::Time);
         assert_eq!(weight, TickMarkWeight::HOUR);
+    }
+
+    #[test]
+    fn test_round_to_boundary_zero_interval_does_not_panic() {
+        // A zero-millisecond interval has no boundary to snap to; integer
+        // division by it would panic, so the time must pass through unchanged.
+        let generator = TickMarkGenerator::new();
+        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap();
+        let rounded = generator.round_time_to_boundary(time, Duration::milliseconds(0));
+        assert_eq!(rounded, time);
     }
 
     #[test]

@@ -22,7 +22,15 @@ mod volume;
 
 pub use bar::render_ohlc_bar;
 pub use candle::render_candle;
-pub use context::{BarRenderParams, ChartMapping, PriceScale, RenderContext, StyleColors};
+pub use context::{BarRenderParams, ChartMapping, LinearPriceMap, RenderContext, StyleColors};
+
+/// Backwards-compatible name for the render-local linear price mapper.
+///
+/// The render path uses [`LinearPriceMap`]; this alias is retained so the chart
+/// widget can keep referring to it by the historical name. The price-scale
+/// *engine* (logarithmic / percentage / indexed modes) is the unrelated
+/// [`crate::scales::PriceScale`]; the two are intentionally different types.
+pub use context::LinearPriceMap as PriceScale;
 pub use crosshair::{render_crosshair, render_crosshair_full, render_crosshair_with_mode};
 pub use indicator::IndicatorRenderer;
 pub use labels::{render_legend, render_ohlc_info, render_price_labels, render_time_labels};

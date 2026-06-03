@@ -13,6 +13,7 @@
 mod advanced;
 mod area;
 mod candlestick;
+mod heikin_ashi;
 mod helpers;
 mod japanese;
 mod line;
@@ -69,6 +70,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 ctx.colors,
                 ctx.visible_data,
+                ctx.full_data,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),
