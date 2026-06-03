@@ -8,13 +8,11 @@ use crate::chart::hit_test::{HIT_TOLERANCE, point_to_segment_distance};
 use crate::studies::{Indicator, IndicatorValue};
 use egui::{Pos2, Rect};
 
-use super::selection::IndicatorId;
-
 /// Describes which indicator line was hit by a click, and where.
 #[derive(Clone, Debug)]
 pub struct IndicatorHitResult {
-    /// The indicator that was hit (by index in registry)
-    pub indicator_id: IndicatorId,
+    /// Index of the indicator in the registry that was hit
+    pub indicator_idx: usize,
     /// Index of the line that was hit (for multi-line indicators)
     pub line_idx: usize,
     /// Index of the bar where the hit occurred
@@ -126,7 +124,7 @@ where
 
         if dist <= HIT_TOLERANCE {
             return Some(IndicatorHitResult {
-                indicator_id: IndicatorId(indicator_idx),
+                indicator_idx,
                 line_idx,
                 bar_idx: i,
                 position: click_pos,
@@ -252,7 +250,7 @@ where
 
         if dist <= HIT_TOLERANCE {
             return Some(IndicatorHitResult {
-                indicator_id: IndicatorId(indicator_idx),
+                indicator_idx,
                 line_idx,
                 bar_idx: i,
                 position: click_pos,

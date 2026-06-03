@@ -2,8 +2,56 @@
 //!
 //! Provides a shared selection pattern used by series, indicators, and other
 //! selectable chart elements.
+//!
+//! The whole chart tracks a single selection through one
+//! [`SelectionState<ChartElementId>`]. The [`ChartElementId`] enum distinguishes
+//! the kinds of selectable things — a price/volume series, an overlay indicator
+//! drawn on the main chart, or a separate-pane indicator — so one selection
+//! model can express "whatever the user last clicked" regardless of which layer
+//! it lives on.
 
 use std::marker::PhantomData;
+
+/// Unique numeric identifier for a chart series.
+///
+/// Well-known constants: [`MAIN`](Self::MAIN) (candlesticks/bars) and
+/// [`VOLUME`](Self::VOLUME).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SeriesId(pub usize);
+
+impl SeriesId {
+    /// Main chart series (candlesticks/bars)
+    pub const MAIN: SeriesId = SeriesId(0);
+    /// Volume series
+    pub const VOLUME: SeriesId = SeriesId(1);
+
+    /// Get display name for this series
+    pub fn name(&self) -> &'static str {
+        match self.0 {
+            0 => "Main Series",
+            1 => "Volume",
+            _ => "Series",
+        }
+    }
+}
+
+/// Identifies any selectable element across the entire chart.
+///
+/// A single [`SelectionState<ChartElementId>`] tracks the one element the user
+/// has clicked, whether it is a series, an overlay indicator on the main chart,
+/// or a separate-pane indicator (RSI, MACD, …). Indicators are identified by
+/// their index in the indicator registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChartElementId {
+    /// A price or volume series on the main chart.
+    Series(SeriesId),
+    /// An overlay indicator drawn on the main price chart (SMA, EMA, …),
+    /// identified by its index in the indicator registry.
+    OverlayIndicator(usize),
+    /// A separate-pane indicator below the main chart (RSI, MACD, …),
+    /// identified by its index in the indicator registry.
+    PaneIndicator(usize),
+}
 
 /// Trait bound for IDs that can be used with [`SelectionState`].
 ///
@@ -134,5 +182,49 @@ mod tests {
 
         state.set_hovered(None);
         assert!(!state.is_hovered(TestId(1)));
+    }
+
+    #[test]
+    fn test_chart_element_select_reselect_deselect() {
+        // The unified selection model must move cleanly between the different
+        // kinds of chart elements and back to nothing.
+        let mut state = SelectionState::<ChartElementId>::new();
+        assert!(!state.has_selection());
+
+        // Select a pane indicator.
+        state.select(ChartElementId::PaneIndicator(2), Some(10));
+        assert_eq!(state.selected_id(), Some(ChartElementId::PaneIndicator(2)));
+        assert_eq!(state.selected_bar(), Some(10));
+
+        // Re-select a different element kind — the previous selection is replaced.
+        state.select(ChartElementId::Series(SeriesId::MAIN), Some(20));
+        assert_eq!(
+            state.selected_id(),
+            Some(ChartElementId::Series(SeriesId::MAIN))
+        );
+        assert!(!state.is_selected(ChartElementId::PaneIndicator(2)));
+        assert_eq!(state.selected_bar(), Some(20));
+
+        // Re-select an overlay indicator.
+        state.select(ChartElementId::OverlayIndicator(0), Some(5));
+        assert!(state.is_selected(ChartElementId::OverlayIndicator(0)));
+
+        // Deselect clears everything.
+        state.deselect();
+        assert!(!state.has_selection());
+        assert_eq!(state.selected_id(), None);
+        assert_eq!(state.selected_bar(), None);
+    }
+
+    #[test]
+    fn test_chart_element_ids_are_distinct() {
+        // Series, overlay, and pane indicators with the same numeric index must
+        // never be conflated by the selection model.
+        let overlay = ChartElementId::OverlayIndicator(1);
+        let pane = ChartElementId::PaneIndicator(1);
+        let series = ChartElementId::Series(SeriesId(1));
+        assert_ne!(overlay, pane);
+        assert_ne!(overlay, series);
+        assert_ne!(pane, series);
     }
 }

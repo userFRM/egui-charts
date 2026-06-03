@@ -26,6 +26,7 @@
 //! ```
 
 use crate::chart::cursor_modes::CursorModeState;
+use crate::chart::selection::SelectionState;
 use crate::config::{ChartConfig, ChartOptions};
 use crate::model::ChartType;
 use crate::model::{BarData, ChartState};
@@ -104,6 +105,8 @@ impl Chart {
             // Marks (Widget API)
             marks: Vec::new(),
             timescale_marks: Vec::new(),
+            // Selection (Widget API)
+            selection: SelectionState::new(),
         }
     }
 
@@ -170,6 +173,8 @@ impl Chart {
             // Marks (Widget API)
             marks: Vec::new(),
             timescale_marks: Vec::new(),
+            // Selection (Widget API)
+            selection: SelectionState::new(),
         }
     }
 
