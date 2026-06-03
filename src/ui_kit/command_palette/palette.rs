@@ -76,7 +76,7 @@ impl CommandPalette {
             }
 
             // Sort by score (descending)
-            self.filtered.sort_by(|a, b| b.1.score.cmp(&a.1.score));
+            self.filtered.sort_by_key(|m| std::cmp::Reverse(m.1.score));
         }
 
         // Reset selection if out of bounds

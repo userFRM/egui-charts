@@ -1074,10 +1074,8 @@ impl ChartStyleParameters {
                     return Err("Kagi reversal must be positive".to_string());
                 }
             }
-            ChartStyle::PnF => {
-                if self.pnf_box_size.is_none_or(|s| s <= 0.0) {
-                    return Err("Point & Figure box size must be positive".to_string());
-                }
+            ChartStyle::PnF if self.pnf_box_size.is_none_or(|s| s <= 0.0) => {
+                return Err("Point & Figure box size must be positive".to_string());
             }
             _ => {}
         }
