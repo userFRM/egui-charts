@@ -351,11 +351,13 @@ impl ChartBuilder {
     ///
     /// # Examples
     /// ```
+    /// use egui_charts::ChartBuilder;
+    ///
     /// // Fetch 500 bars on initial load
-    /// chart.with_initial_bars(Some(500));
+    /// let chart = ChartBuilder::new().with_initial_bars(Some(500)).build();
     ///
     /// // Disable auto-fetch (manual control)
-    /// chart.with_initial_bars(None);
+    /// let manual = ChartBuilder::new().with_initial_bars(None).build();
     /// ```
     #[must_use]
     pub fn with_initial_bars(mut self, bars: Option<usize>) -> Self {
@@ -399,7 +401,7 @@ impl ChartBuilder {
     /// # Examples
     /// ```
     /// use egui_charts::ChartBuilder;
-    /// use egui_charts::scale::PriceScaleMode;
+    /// use egui_charts::scales::PriceScaleMode;
     ///
     /// // Enable left scale with percentage mode (good for indicators like RSI)
     /// let chart = ChartBuilder::new()
@@ -424,7 +426,7 @@ impl ChartBuilder {
     /// # Examples
     /// ```
     /// use egui_charts::ChartBuilder;
-    /// use egui_charts::scale::PriceScaleMode;
+    /// use egui_charts::scales::PriceScaleMode;
     ///
     /// // Use logarithmic scale for long-term price charts
     /// let chart = ChartBuilder::new()
