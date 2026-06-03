@@ -64,6 +64,13 @@ impl Aroon {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for Aroon {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for Aroon {
     fn name(&self) -> &str {
         "Aroon"

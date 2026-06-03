@@ -61,6 +61,13 @@ impl ElderRay {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for ElderRay {
+    fn default() -> Self {
+        Self::new(13)
+    }
+}
+
 impl Indicator for ElderRay {
     fn name(&self) -> &str {
         "Elder Ray"

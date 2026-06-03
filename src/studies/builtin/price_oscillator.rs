@@ -70,6 +70,13 @@ impl PriceOscillator {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for PriceOscillator {
+    fn default() -> Self {
+        Self::new(12, 26, 9)
+    }
+}
+
 impl Indicator for PriceOscillator {
     fn name(&self) -> &str {
         "PPO"

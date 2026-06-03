@@ -88,6 +88,13 @@ impl ALMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for ALMA {
+    fn default() -> Self {
+        Self::new(9, 0.85, 6.0)
+    }
+}
+
 impl Indicator for ALMA {
     fn name(&self) -> &str {
         "ALMA"

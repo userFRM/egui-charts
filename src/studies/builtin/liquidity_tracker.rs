@@ -321,6 +321,13 @@ impl LiquidityTracker {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for LiquidityTracker {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for LiquidityTracker {
     fn name(&self) -> &str {
         "Liquidity"

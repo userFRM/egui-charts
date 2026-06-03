@@ -59,6 +59,13 @@ impl VolumeOscillator {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for VolumeOscillator {
+    fn default() -> Self {
+        Self::new(5, 10)
+    }
+}
+
 impl Indicator for VolumeOscillator {
     fn name(&self) -> &str {
         "Volume Osc"

@@ -69,6 +69,13 @@ impl SMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for SMA {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for SMA {
     fn name(&self) -> &str {
         "SMA"

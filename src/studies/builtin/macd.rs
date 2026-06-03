@@ -83,6 +83,13 @@ impl MACD {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for MACD {
+    fn default() -> Self {
+        Self::new(12, 26, 9)
+    }
+}
+
 impl Indicator for MACD {
     fn name(&self) -> &str {
         "MACD"

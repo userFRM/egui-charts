@@ -64,6 +64,13 @@ impl CCI {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for CCI {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for CCI {
     fn name(&self) -> &str {
         "CCI"

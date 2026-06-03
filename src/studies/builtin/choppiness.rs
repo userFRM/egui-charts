@@ -31,6 +31,13 @@ impl ChoppinessIndex {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for ChoppinessIndex {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for ChoppinessIndex {
     fn name(&self) -> &str {
         "CHOP"

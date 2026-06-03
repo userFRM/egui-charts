@@ -59,6 +59,13 @@ impl ATR {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for ATR {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for ATR {
     fn name(&self) -> &str {
         "ATR"

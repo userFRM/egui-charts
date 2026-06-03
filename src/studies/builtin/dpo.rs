@@ -31,6 +31,13 @@ impl DetrendedPriceOscillator {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for DetrendedPriceOscillator {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for DetrendedPriceOscillator {
     fn name(&self) -> &str {
         "DPO"

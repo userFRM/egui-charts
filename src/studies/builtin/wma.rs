@@ -49,6 +49,13 @@ impl WMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for WMA {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for WMA {
     fn name(&self) -> &str {
         "WMA"

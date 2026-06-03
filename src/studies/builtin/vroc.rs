@@ -31,6 +31,13 @@ impl VolumeRateOfChange {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for VolumeRateOfChange {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for VolumeRateOfChange {
     fn name(&self) -> &str {
         "VROC"

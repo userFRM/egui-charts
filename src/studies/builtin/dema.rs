@@ -72,6 +72,13 @@ impl DEMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for DEMA {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for DEMA {
     fn name(&self) -> &str {
         "DEMA"

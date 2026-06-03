@@ -50,6 +50,13 @@ impl BalanceOfPower {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for BalanceOfPower {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for BalanceOfPower {
     fn name(&self) -> &str {
         "BoP"

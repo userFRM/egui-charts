@@ -111,6 +111,13 @@ impl IchimokuCloud {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for IchimokuCloud {
+    fn default() -> Self {
+        Self::new(9, 26, 52)
+    }
+}
+
 impl Indicator for IchimokuCloud {
     fn name(&self) -> &str {
         "Ichimoku"

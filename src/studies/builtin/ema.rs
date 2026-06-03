@@ -12,7 +12,12 @@
 //! EMA(t) = (Close[t] - EMA[t-1]) * multiplier + EMA[t-1]
 //! ```
 //!
-//! The first EMA value is seeded with the first closing price.
+//! # Seeding convention
+//!
+//! The first output value equals the first closing price (`values[0] ==
+//! data[0].close`); recursive smoothing begins at the second bar. There is no
+//! `None` warmup. This matches the seeding used by the EMAs inside [`MACD`],
+//! so the standalone indicator and the composite agree bar-for-bar.
 //!
 //! # Interpretation
 //!
@@ -71,6 +76,13 @@ impl EMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for EMA {
+    fn default() -> Self {
+        Self::new(12)
+    }
+}
+
 impl Indicator for EMA {
     fn name(&self) -> &str {
         "EMA"
@@ -88,9 +100,13 @@ impl Indicator for EMA {
         }
 
         let multiplier = 2.0 / (self.period as f64 + 1.0);
-        let mut ema = data[0].close;
 
-        for bar in data {
+        // Seed the series with the first close, then smooth from the second bar
+        // onward. This keeps values[0] == close[0] and emits one value per bar.
+        let mut ema = data[0].close;
+        self.values.push(IndicatorValue::Single(ema));
+
+        for bar in data.iter().skip(1) {
             ema = (bar.close - ema) * multiplier + ema;
             self.values.push(IndicatorValue::Single(ema));
         }
@@ -128,5 +144,75 @@ impl Indicator for EMA {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("EMA({})", self.period)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    fn bars_from_closes(closes: &[f64]) -> Vec<Bar> {
+        let start = Utc::now();
+        closes
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| Bar {
+                time: start + Duration::minutes(i as i64),
+                open: c,
+                high: c,
+                low: c,
+                close: c,
+                volume: 1.0,
+            })
+            .collect()
+    }
+
+    /// The documented seeding convention: the first output equals the first
+    /// close, there is no `None` warmup, and the series is one value per bar.
+    #[test]
+    fn first_value_equals_first_close() {
+        let closes = [10.0, 11.0, 12.0, 13.0, 14.0];
+        let bars = bars_from_closes(&closes);
+
+        let mut ema = EMA::new(3);
+        ema.calculate(&bars);
+
+        assert_eq!(ema.values().len(), bars.len());
+        match ema.values()[0] {
+            IndicatorValue::Single(v) => assert!((v - closes[0]).abs() < 1e-12),
+            _ => panic!("first EMA value must be the seeded first close"),
+        }
+    }
+
+    /// The recursive step must match the documented formula exactly from the
+    /// second bar onward, proving bar 0 is not re-smoothed.
+    #[test]
+    fn recursion_matches_formula() {
+        let closes = [10.0, 20.0, 30.0];
+        let bars = bars_from_closes(&closes);
+
+        let mut ema = EMA::new(4);
+        ema.calculate(&bars);
+
+        let mult = 2.0 / (4.0 + 1.0);
+        let mut expected = closes[0];
+        for (i, &c) in closes.iter().enumerate() {
+            if i > 0 {
+                expected = (c - expected) * mult + expected;
+            }
+            match ema.values()[i] {
+                IndicatorValue::Single(v) => assert!((v - expected).abs() < 1e-12),
+                _ => panic!("bar {i} must carry a value"),
+            }
+        }
+    }
+
+    /// Empty input yields no values rather than an out-of-bounds seed read.
+    #[test]
+    fn empty_input_yields_empty() {
+        let mut ema = EMA::new(12);
+        ema.calculate(&[]);
+        assert!(ema.values().is_empty());
     }
 }

@@ -90,6 +90,13 @@ impl TRIX {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for TRIX {
+    fn default() -> Self {
+        Self::new(15)
+    }
+}
+
 impl Indicator for TRIX {
     fn name(&self) -> &str {
         "TRIX"

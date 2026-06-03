@@ -76,6 +76,13 @@ impl ForceIndex {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for ForceIndex {
+    fn default() -> Self {
+        Self::new(13)
+    }
+}
+
 impl Indicator for ForceIndex {
     fn name(&self) -> &str {
         "Force Index"

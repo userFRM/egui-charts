@@ -65,6 +65,13 @@ impl ChaikinMoneyFlow {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for ChaikinMoneyFlow {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for ChaikinMoneyFlow {
     fn name(&self) -> &str {
         "CMF"

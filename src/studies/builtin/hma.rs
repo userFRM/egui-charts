@@ -70,6 +70,13 @@ impl HMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for HMA {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for HMA {
     fn name(&self) -> &str {
         "HMA"

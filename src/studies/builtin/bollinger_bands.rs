@@ -75,6 +75,13 @@ impl BollingerBands {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for BollingerBands {
+    fn default() -> Self {
+        Self::new(20, 2.0)
+    }
+}
+
 impl Indicator for BollingerBands {
     fn name(&self) -> &str {
         "BB"

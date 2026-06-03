@@ -82,6 +82,13 @@ impl KeltnerChannels {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for KeltnerChannels {
+    fn default() -> Self {
+        Self::new(20, 10, 2.0)
+    }
+}
+
 impl Indicator for KeltnerChannels {
     fn name(&self) -> &str {
         "Keltner"

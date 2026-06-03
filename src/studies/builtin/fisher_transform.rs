@@ -35,6 +35,13 @@ impl FisherTransform {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for FisherTransform {
+    fn default() -> Self {
+        Self::new(9)
+    }
+}
+
 impl Indicator for FisherTransform {
     fn name(&self) -> &str {
         "Fisher Transform"

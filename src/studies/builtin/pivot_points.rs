@@ -189,6 +189,13 @@ struct PivotLevels {
     r3: f64,
 }
 
+/// Construct with the conventional default parameters.
+impl Default for PivotPoints {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for PivotPoints {
     fn name(&self) -> &str {
         "Pivot Points"

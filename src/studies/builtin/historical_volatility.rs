@@ -44,6 +44,13 @@ impl HistoricalVolatility {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for HistoricalVolatility {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for HistoricalVolatility {
     fn name(&self) -> &str {
         "HV"

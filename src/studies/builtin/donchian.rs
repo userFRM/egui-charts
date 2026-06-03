@@ -80,6 +80,13 @@ impl DonchianChannels {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for DonchianChannels {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for DonchianChannels {
     fn name(&self) -> &str {
         "Donchian"

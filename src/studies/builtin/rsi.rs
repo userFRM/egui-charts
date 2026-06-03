@@ -77,6 +77,13 @@ impl RSI {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for RSI {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for RSI {
     fn name(&self) -> &str {
         "RSI"
@@ -103,12 +110,14 @@ impl Indicator for RSI {
             losses.push(if change < 0.0 { -change } else { 0.0 });
         }
 
-        // Calculate initial avg gain/loss
+        // Initial average gain/loss is the simple mean of the first `period`
+        // price changes (the changes spanning bars 1..=period).
         let mut avg_gain = gains[..self.period].iter().sum::<f64>() / self.period as f64;
         let mut avg_loss = losses[..self.period].iter().sum::<f64>() / self.period as f64;
 
-        // First RSI value
-        self.values.push(IndicatorValue::None);
+        // Warmup: bars 0..period have no value. The first computable RSI lands
+        // at bar `period`, so exactly `period` leading `None`s keep the output
+        // one-to-one with the input bars (values.len() == data.len()).
         for _ in 0..self.period {
             self.values.push(IndicatorValue::None);
         }
@@ -160,5 +169,90 @@ impl Indicator for RSI {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("RSI({})", self.period)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    fn bars_from_closes(closes: &[f64]) -> Vec<Bar> {
+        closes
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| {
+                Bar::new(
+                    Utc.timestamp_opt(i as i64 * 60, 0).unwrap(),
+                    c,
+                    c,
+                    c,
+                    c,
+                    1.0,
+                )
+            })
+            .collect()
+    }
+
+    /// The output must stay one-to-one with the input bars: exactly `period`
+    /// leading `None`s, the first RSI at index `period`, and equal length. A
+    /// one-bar shift here would misalign RSI against every other indicator.
+    #[test]
+    fn output_length_matches_bar_count() {
+        let closes: Vec<f64> = (0..40).map(|i| 100.0 + (i as f64).sin() * 5.0).collect();
+        let bars = bars_from_closes(&closes);
+
+        let mut rsi = RSI::new(14);
+        rsi.calculate(&bars);
+
+        assert_eq!(
+            rsi.values().len(),
+            bars.len(),
+            "RSI output length must equal the input bar count",
+        );
+
+        for (i, v) in rsi.values().iter().take(14).enumerate() {
+            assert!(
+                matches!(v, IndicatorValue::None),
+                "bar {i} must be warmup None",
+            );
+        }
+        assert!(
+            matches!(rsi.values()[14], IndicatorValue::Single(_)),
+            "first RSI value must land exactly at index `period`",
+        );
+        assert!(
+            rsi.values()[13..]
+                .iter()
+                .skip(1)
+                .all(|v| matches!(v, IndicatorValue::Single(_))),
+            "every bar from `period` onward must carry a value",
+        );
+    }
+
+    /// A monotonically rising series has no losses, so RSI saturates at 100.
+    /// This pins both the value and that the first computed bar is correct.
+    #[test]
+    fn all_gains_saturate_at_100() {
+        let closes: Vec<f64> = (0..30).map(|i| 100.0 + i as f64).collect();
+        let bars = bars_from_closes(&closes);
+
+        let mut rsi = RSI::new(14);
+        rsi.calculate(&bars);
+
+        match rsi.values()[14] {
+            IndicatorValue::Single(v) => assert!((v - 100.0).abs() < 1e-6),
+            _ => panic!("expected first RSI at index 14"),
+        }
+    }
+
+    /// Below the minimum sample size the indicator yields no values rather than
+    /// an under-warmed series.
+    #[test]
+    fn insufficient_data_yields_empty() {
+        let bars = bars_from_closes(&[100.0, 101.0, 102.0]);
+        let mut rsi = RSI::new(14);
+        rsi.calculate(&bars);
+        assert!(rsi.values().is_empty());
     }
 }

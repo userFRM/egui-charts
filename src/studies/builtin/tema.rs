@@ -76,6 +76,13 @@ impl TEMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for TEMA {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for TEMA {
     fn name(&self) -> &str {
         "TEMA"

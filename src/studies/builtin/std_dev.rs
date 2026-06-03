@@ -59,6 +59,13 @@ impl StandardDeviation {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for StandardDeviation {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for StandardDeviation {
     fn name(&self) -> &str {
         "StdDev"

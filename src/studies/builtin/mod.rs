@@ -374,8 +374,9 @@ pub use spread_study::SpreadStudy;
 /// Return a list of `(short_name, description)` pairs for every built-in indicator.
 ///
 /// This is useful for building indicator-picker UIs or auto-complete
-/// lists. The short name matches the factory registration key used by
-/// [`IndicatorFactory`](super::IndicatorFactory).
+/// lists. To construct an indicator dynamically, look it up through
+/// [`IndicatorFactory`](super::IndicatorFactory), which keys every built-in by
+/// its [`Indicator::name`](super::Indicator::name).
 pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
     vec![
         // Moving Avgs

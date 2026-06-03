@@ -205,6 +205,13 @@ impl StopRunIndicator {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for StopRunIndicator {
+    fn default() -> Self {
+        Self::new(10)
+    }
+}
+
 impl Indicator for StopRunIndicator {
     fn name(&self) -> &str {
         "Stop Run"

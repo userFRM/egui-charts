@@ -71,6 +71,13 @@ impl WilliamsR {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for WilliamsR {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for WilliamsR {
     fn name(&self) -> &str {
         "Williams %R"

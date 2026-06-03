@@ -68,6 +68,13 @@ impl UltimateOscillator {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for UltimateOscillator {
+    fn default() -> Self {
+        Self::new(7, 14, 28)
+    }
+}
+
 impl Indicator for UltimateOscillator {
     fn name(&self) -> &str {
         "UO"
