@@ -128,6 +128,7 @@ impl DemoApp {
             .with_indicators(registry)
             .with_visible_candles(100)
             .with_initial_bars(None)
+            .with_session_breaks(true)
             .build();
 
         // Generate sample data
