@@ -280,7 +280,7 @@ pub enum RightClickTarget {
         price: f64,
     },
     /// A drawing object was hit. The drawing is identified by its
-    /// [`DrawingManager`](crate::drawings::DrawingManager) id.
+    /// [`crate::drawings::DrawingManager`] id.
     Drawing {
         /// Id of the hit drawing within the drawing manager.
         drawing_id: usize,
