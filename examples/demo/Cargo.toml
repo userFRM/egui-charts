@@ -11,12 +11,19 @@ name = "egui-charts-demo"
 path = "main.rs"
 
 [dependencies]
-egui-charts = { path = "../..", features = ["ui"] }
+egui-charts = { path = "../..", features = ["ui", "scripting"] }
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu"] }
 egui = "0.33.3"
 egui_extras = { version = "0.33.3", features = ["svg"] }
 chrono = "0.4.43"
 log = "0.4.29"
+
+# Native gets the windowing backends winit needs plus PNG encoding for the
+# screenshot button. WASM uses the canvas backend and a browser download, so
+# neither dependency is pulled there.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.108"
