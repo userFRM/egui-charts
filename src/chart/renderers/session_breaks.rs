@@ -1,318 +1,305 @@
-use super::context::RenderContext;
-/// Session break rendering for charts
-/// Displays vertical lines and labels for trading session boundaries
-use crate::model::{Bar, SessionBreak, SessionBreakType, SessionProvider, find_session_breaks};
-use crate::theme::Theme;
-use egui::{Color32, FontId, Pos2, Rect, Stroke};
+//! Session-break rendering: day/session boundary dividers and optional
+//! alternating session background shading.
+//!
+//! Intraday charts (1-minute, hourly, …) show a thin vertical divider wherever
+//! the calendar day — or the configured trading session — changes between two
+//! consecutive bars, mirroring the day separators on TradingView intraday
+//! charts. On daily-and-higher charts the same machinery draws the next coarser
+//! boundary (week, then month) so the dividers stay meaningful rather than
+//! landing on every bar.
+//!
+//! Boundaries are detected with [`find_session_breaks`] over the *visible* bar
+//! slice and placed with the chart's canonical [`ChartMapping::idx_to_x`], so
+//! they track the bars exactly under pan and zoom and never duplicate the
+//! coordinate math used by the candles.
 
-/// Configuration for session break rendering
+use super::context::{ChartMapping, RenderContext};
+use crate::config::SessionBreakStyle;
+use crate::model::{Bar, SessionBreakType, SessionProvider, Timeframe, find_session_breaks};
+use egui::{Color32, Pos2, Stroke};
+
+/// Pick the session provider whose boundaries are meaningful at `timeframe`.
+///
+/// Boundary granularity is chosen one tier coarser than the bar interval so a
+/// divider marks a genuine break in the series rather than appearing between
+/// every pair of bars:
+///
+/// | Timeframe tier            | Boundary drawn            |
+/// |---------------------------|---------------------------|
+/// | Intraday (`< 1 day`)      | Day change (midnight UTC) |
+/// | Daily (`1D`)              | ISO-week change           |
+/// | Weekly / monthly (`≥ 1W`) | Calendar-month change     |
+///
+/// Intraday charts use a midnight-UTC day boundary by default; callers that
+/// know the exchange session can substitute a session-aware provider.
+pub fn provider_for_timeframe(timeframe: Timeframe) -> Box<dyn SessionProvider> {
+    use crate::model::{DailySessionProvider, MonthlySessionProvider, WeeklySessionProvider};
+
+    // Day1 has duration 86_400_000 ms; anything below that is intraday.
+    let day_ms = Timeframe::Day1.duration_ms();
+    let ms = timeframe.duration_ms();
+
+    if ms < day_ms {
+        Box::new(DailySessionProvider::continuous())
+    } else if ms == day_ms {
+        Box::new(WeeklySessionProvider::default())
+    } else {
+        Box::new(MonthlySessionProvider)
+    }
+}
+
+/// Convert a [`SessionBreakStyle`] into the dash pattern egui needs.
+///
+/// `Solid` yields a single segment so the caller can take a plain
+/// `line_segment` fast path; `Dashed`/`Dotted` return on/off lengths scaled so
+/// the pattern reads at the typical divider width.
+fn dash_pattern(style: SessionBreakStyle) -> Option<(f32, f32)> {
+    match style {
+        SessionBreakStyle::Solid => None,
+        SessionBreakStyle::Dashed => Some((6.0, 4.0)),
+        SessionBreakStyle::Dotted => Some((2.0, 3.0)),
+    }
+}
+
+/// Configuration for session-break divider rendering.
 #[derive(Debug, Clone)]
 pub struct SessionBreakRenderConfig {
-    /// Show vertical lines at session breaks
-    pub show_lines: bool,
-    /// Show labels for session breaks
-    pub show_labels: bool,
-    /// Line style for session breaks
+    /// Base color for the divider lines.
+    pub line_color: Color32,
+    /// Base line width in points.
     pub line_width: f32,
-    /// Line color override (None uses theme default)
-    pub line_color: Option<Color32>,
-    /// Label font size
-    pub label_font_size: f32,
-    /// Show only major breaks (e.g., weekly/monthly, not daily)
-    pub major_breaks_only: bool,
+    /// Line style (solid / dashed / dotted).
+    pub style: SessionBreakStyle,
 }
 
 impl Default for SessionBreakRenderConfig {
     fn default() -> Self {
         Self {
-            show_lines: true,
-            show_labels: true,
+            line_color: Color32::from_gray(80),
             line_width: 1.0,
-            line_color: None,
-            label_font_size: 10.0,
-            major_breaks_only: false,
+            style: SessionBreakStyle::Dashed,
         }
     }
 }
 
-/// Renderer for session breaks
-pub struct SessionBreakRenderer<'a> {
+/// Renderer for session-break divider lines.
+///
+/// Draws a thin vertical line at the first bar of each new session/day/week/
+/// month within the visible range. The emphasis (width and opacity) scales with
+/// the break type so monthly boundaries read stronger than daily ones, matching
+/// the visual hierarchy on professional terminals.
+pub struct SessionBreakRenderer {
     config: SessionBreakRenderConfig,
-    theme: &'a Theme,
 }
 
-impl<'a> SessionBreakRenderer<'a> {
-    pub fn new(theme: &'a Theme) -> Self {
-        Self {
-            config: SessionBreakRenderConfig::default(),
-            theme,
-        }
+impl SessionBreakRenderer {
+    /// Create a renderer with the given divider styling.
+    pub fn new(config: SessionBreakRenderConfig) -> Self {
+        Self { config }
     }
 
-    pub fn with_config(mut self, config: SessionBreakRenderConfig) -> Self {
-        self.config = config;
-        self
-    }
-
-    /// Render session breaks for visible data
+    /// Draw dividers for `visible_data`.
+    ///
+    /// `start_idx` is the global index of `visible_data[0]`; it is added to the
+    /// local break index so the divider is placed at the bar's true x via the
+    /// shared [`ChartMapping`]. Dividers outside the chart rect are skipped.
     pub fn render(
         &self,
-        context: &RenderContext,
+        ctx: &RenderContext,
         visible_data: &[Bar],
         provider: &dyn SessionProvider,
-        bar_spacing: f32,
-        origin_x: f32,
+        mapping: &ChartMapping,
+        start_idx: usize,
     ) {
-        if !self.config.show_lines && !self.config.show_labels {
+        if visible_data.len() < 2 {
             return;
         }
 
-        // Find all session breaks in visible data
-        let breaks = find_session_breaks(visible_data, provider);
-
-        for (bar_idx, session_break) in breaks {
-            // Skip minor breaks if configured
-            if self.config.major_breaks_only
-                && matches!(session_break.break_type, SessionBreakType::Daily)
-            {
+        for (local_idx, session_break) in find_session_breaks(visible_data, provider) {
+            let x = mapping.idx_to_x(start_idx + local_idx);
+            if !mapping.is_x_visible(x) {
                 continue;
             }
 
-            // Calculate x position for this break
-            let x = origin_x + (bar_idx as f32 * bar_spacing);
+            let (color, width) = self.style_for(session_break.break_type);
+            let from = Pos2::new(x, ctx.rect.min.y);
+            let to = Pos2::new(x, ctx.rect.max.y);
 
-            // Check if within visible chart area
-            if x < context.rect.min.x || x > context.rect.max.x {
-                continue;
-            }
-
-            // Determine color and style based on break type
-            let (line_color, line_width, label_color) =
-                self.get_style_for_break_type(&session_break.break_type);
-
-            // Draw vertical line
-            if self.config.show_lines {
-                let from = Pos2::new(x, context.rect.min.y);
-                let to = Pos2::new(x, context.rect.max.y);
-                context
-                    .painter
-                    .line_segment([from, to], Stroke::new(line_width, line_color));
-            }
-
-            // Draw label
-            if self.config.show_labels {
-                if let Some(label) = &session_break.label {
-                    let label_pos = Pos2::new(x + 3.0, context.rect.min.y + 5.0);
-                    context.painter.text(
-                        label_pos,
-                        egui::Align2::LEFT_TOP,
-                        label,
-                        FontId::proportional(self.config.label_font_size),
-                        label_color,
-                    );
-                } else {
-                    // Default label based on break type
-                    let default_label = self.get_default_label(&session_break);
-                    let label_pos = Pos2::new(x + 3.0, context.rect.min.y + 5.0);
-                    context.painter.text(
-                        label_pos,
-                        egui::Align2::LEFT_TOP,
-                        default_label,
-                        FontId::proportional(self.config.label_font_size),
-                        label_color,
-                    );
+            match dash_pattern(self.config.style) {
+                None => {
+                    ctx.painter
+                        .line_segment([from, to], Stroke::new(width, color));
+                }
+                Some((dash, gap)) => {
+                    ctx.painter.add(egui::Shape::dashed_line(
+                        &[from, to],
+                        Stroke::new(width, color),
+                        dash,
+                        gap,
+                    ));
                 }
             }
         }
     }
 
-    fn get_style_for_break_type(&self, break_type: &SessionBreakType) -> (Color32, f32, Color32) {
-        let base_color = self.config.line_color.unwrap_or(self.theme.grid());
-
+    /// Color and width for a break type. Coarser boundaries read stronger.
+    fn style_for(&self, break_type: SessionBreakType) -> (Color32, f32) {
+        let base = self.config.line_color;
         match break_type {
-            SessionBreakType::Daily => {
-                // Subtle gray for daily breaks
-                let color = base_color.gamma_multiply(0.5);
-                (color, self.config.line_width, color)
-            }
-            SessionBreakType::Weekly => {
-                // Medium emphasis for weekly breaks
-                let color = base_color.gamma_multiply(0.8);
-                (color, self.config.line_width * 1.5, color)
-            }
-            SessionBreakType::Monthly => {
-                // Strong emphasis for monthly breaks
-                let color = base_color;
-                (color, self.config.line_width * 2.0, color)
-            }
-            SessionBreakType::Custom => {
-                // Custom breaks use theme color
-                let color = self.theme.text().gamma_multiply(0.6);
-                (color, self.config.line_width * 1.2, color)
-            }
-        }
-    }
-
-    fn get_default_label(&self, session_break: &SessionBreak) -> String {
-        let date = session_break.ts.format("%Y-%m-%d").to_string();
-        match session_break.break_type {
-            SessionBreakType::Daily => format!("Day {date}"),
-            SessionBreakType::Weekly => {
-                format!("Week {}", session_break.ts.format("%Y-W%V"))
-            }
-            SessionBreakType::Monthly => format!("{}", session_break.ts.format("%B %Y")),
-            SessionBreakType::Custom => date,
+            SessionBreakType::Daily => (base.gamma_multiply(0.6), self.config.line_width),
+            SessionBreakType::Weekly => (base.gamma_multiply(0.8), self.config.line_width * 1.5),
+            SessionBreakType::Monthly => (base, self.config.line_width * 2.0),
+            SessionBreakType::Custom => (base.gamma_multiply(0.7), self.config.line_width * 1.2),
         }
     }
 }
 
-/// Helper for rendering session background shading (alternating colors)
+/// Renderer for alternating session background shading.
+///
+/// Fills each session span (the region between two consecutive boundaries) with
+/// one of two near-identical tints so adjacent trading days are subtly
+/// distinguishable without competing with the candles drawn on top. Intended to
+/// be drawn *behind* the candles, alongside the grid.
 pub struct SessionBackgroundRenderer {
-    alternating_colors: (Color32, Color32),
+    /// The two alternating fill colors.
+    colors: (Color32, Color32),
 }
 
 impl SessionBackgroundRenderer {
-    pub fn new(theme: &Theme) -> Self {
-        let color1 = theme.background();
-        let color2 = theme.background().gamma_multiply(0.95);
-
+    /// Build a shading renderer from a base background color.
+    ///
+    /// The second tint is a faint darkening of the base so the alternation is
+    /// perceptible but unobtrusive; pass explicit colors via
+    /// [`with_colors`](Self::with_colors) to override.
+    pub fn from_background(background: Color32) -> Self {
         Self {
-            alternating_colors: (color1, color2),
+            colors: (Color32::TRANSPARENT, background.gamma_multiply(0.94)),
         }
     }
 
-    pub fn with_colors(mut self, color1: Color32, color2: Color32) -> Self {
-        self.alternating_colors = (color1, color2);
+    /// Override the alternating fill colors.
+    pub fn with_colors(mut self, even: Color32, odd: Color32) -> Self {
+        self.colors = (even, odd);
         self
     }
 
-    /// Render alternating session backgrounds
+    /// Fill alternating session spans across the visible range.
+    ///
+    /// Spans are delimited by the same boundaries the divider renderer uses, so
+    /// shading and dividers always agree. The leading partial span (before the
+    /// first visible boundary) and the trailing partial span (after the last)
+    /// are both filled so the alternation covers the whole chart rect.
     pub fn render(
         &self,
-        context: &RenderContext,
+        ctx: &RenderContext,
         visible_data: &[Bar],
         provider: &dyn SessionProvider,
-        bar_spacing: f32,
-        origin_x: f32,
+        mapping: &ChartMapping,
+        start_idx: usize,
     ) {
         let breaks = find_session_breaks(visible_data, provider);
 
-        let mut is_even = true;
-        let mut prev_x = context.rect.min.x;
+        let mut even = true;
+        let mut prev_x = ctx.rect.min.x;
 
-        for (bar_idx, _session_break) in breaks {
-            let x = origin_x + (bar_idx as f32 * bar_spacing);
-
-            if x >= context.rect.min.x && x <= context.rect.max.x {
-                // Fill region from prev_x to x
-                let region_rect = Rect::from_min_max(
-                    Pos2::new(prev_x.max(context.rect.min.x), context.rect.min.y),
-                    Pos2::new(x, context.rect.max.y),
-                );
-
-                let color = if is_even {
-                    self.alternating_colors.0
-                } else {
-                    self.alternating_colors.1
-                };
-
-                context.painter.rect_filled(region_rect, 0.0, color);
-                is_even = !is_even;
-            }
-
+        for (local_idx, _) in breaks {
+            let x = mapping
+                .idx_to_x(start_idx + local_idx)
+                .clamp(ctx.rect.min.x, ctx.rect.max.x);
+            self.fill_span(ctx, prev_x, x, even);
+            even = !even;
             prev_x = x;
         }
 
-        // Fill remaining region
-        if prev_x < context.rect.max.x {
-            let region_rect =
-                Rect::from_min_max(Pos2::new(prev_x, context.rect.min.y), context.rect.max);
+        // Trailing span up to the right edge.
+        self.fill_span(ctx, prev_x, ctx.rect.max.x, even);
+    }
 
-            let color = if is_even {
-                self.alternating_colors.0
-            } else {
-                self.alternating_colors.1
-            };
-
-            context.painter.rect_filled(region_rect, 0.0, color);
+    fn fill_span(&self, ctx: &RenderContext, x0: f32, x1: f32, even: bool) {
+        if x1 <= x0 {
+            return;
         }
+        let color = if even { self.colors.0 } else { self.colors.1 };
+        if color == Color32::TRANSPARENT {
+            return;
+        }
+        let rect =
+            egui::Rect::from_min_max(Pos2::new(x0, ctx.rect.min.y), Pos2::new(x1, ctx.rect.max.y));
+        ctx.painter.rect_filled(rect, 0.0, color);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{DailySessionProvider, MonthlySessionProvider};
+    use crate::model::DailySessionProvider;
     use chrono::{TimeZone, Utc};
 
-    fn create_test_bars() -> Vec<Bar> {
-        vec![
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
-                open: 100.0,
-                high: 105.0,
-                low: 95.0,
-                close: 102.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
-                open: 102.0,
-                high: 108.0,
-                low: 101.0,
-                close: 107.0,
-                volume: 1200.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap(),
-                open: 107.0,
-                high: 110.0,
-                low: 105.0,
-                close: 109.0,
-                volume: 1100.0,
-            },
-        ]
+    fn bar_at(year: i32, month: u32, day: u32, hour: u32) -> Bar {
+        Bar {
+            time: Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap(),
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.5,
+            volume: 1000.0,
+        }
     }
 
     #[test]
-    fn test_session_break_config_default() {
-        let config = SessionBreakRenderConfig::default();
-        assert!(config.show_lines);
-        assert!(config.show_labels);
-        assert_eq!(config.line_width, 1.0);
+    fn provider_tier_is_one_step_coarser_than_bars() {
+        // Intraday -> day boundary.
+        let p = provider_for_timeframe(Timeframe::Min1);
+        assert_eq!(p.name(), "Daily Sessions");
+        let p = provider_for_timeframe(Timeframe::Hour4);
+        assert_eq!(p.name(), "Daily Sessions");
+
+        // Daily -> week boundary.
+        let p = provider_for_timeframe(Timeframe::Day1);
+        assert_eq!(p.name(), "Weekly Sessions");
+
+        // Weekly / monthly -> month boundary.
+        let p = provider_for_timeframe(Timeframe::Week1);
+        assert_eq!(p.name(), "Monthly Sessions");
+        let p = provider_for_timeframe(Timeframe::Month1);
+        assert_eq!(p.name(), "Monthly Sessions");
     }
 
     #[test]
-    fn test_session_break_renderer_creation() {
-        let theme = Theme::dark();
-        let renderer = SessionBreakRenderer::new(&theme);
-        assert!(renderer.config.show_lines);
-    }
-
-    #[test]
-    fn test_session_background_renderer() {
-        let theme = Theme::dark();
-        let renderer = SessionBackgroundRenderer::new(&theme);
-        assert_eq!(renderer.alternating_colors.0, theme.background());
-    }
-
-    #[test]
-    fn test_find_breaks_with_daily_provider() {
-        let bars = create_test_bars();
-        let provider = DailySessionProvider::default();
+    fn two_days_yield_one_break_at_first_bar_of_day_two() {
+        // Three hourly bars on day one, three on day two: exactly one day
+        // boundary, at the first bar of day two (local index 3).
+        let bars = vec![
+            bar_at(2024, 1, 1, 9),
+            bar_at(2024, 1, 1, 12),
+            bar_at(2024, 1, 1, 15),
+            bar_at(2024, 1, 2, 9),
+            bar_at(2024, 1, 2, 12),
+            bar_at(2024, 1, 2, 15),
+        ];
+        let provider = DailySessionProvider::continuous();
         let breaks = find_session_breaks(&bars, &provider);
 
-        // Should find break between Jan 1 and Jan 2, and between Jan 2 and Feb 1
-        assert!(!breaks.is_empty());
+        assert_eq!(breaks.len(), 1, "exactly one day boundary");
+        assert_eq!(breaks[0].0, 3, "break at first bar of day two");
+        assert_eq!(breaks[0].1.break_type, SessionBreakType::Daily);
     }
 
     #[test]
-    fn test_find_breaks_with_monthly_provider() {
-        let bars = create_test_bars();
-        let provider = MonthlySessionProvider;
-        let breaks = find_session_breaks(&bars, &provider);
+    fn single_session_in_view_has_no_breaks() {
+        let bars = vec![
+            bar_at(2024, 1, 1, 9),
+            bar_at(2024, 1, 1, 12),
+            bar_at(2024, 1, 1, 15),
+        ];
+        let provider = DailySessionProvider::continuous();
+        assert!(find_session_breaks(&bars, &provider).is_empty());
+    }
 
-        // Should find break between January and February
-        assert!(!breaks.is_empty());
+    #[test]
+    fn solid_style_has_no_dash_pattern() {
+        assert!(dash_pattern(SessionBreakStyle::Solid).is_none());
+        assert!(dash_pattern(SessionBreakStyle::Dashed).is_some());
+        assert!(dash_pattern(SessionBreakStyle::Dotted).is_some());
     }
 }
