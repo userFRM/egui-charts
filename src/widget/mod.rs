@@ -101,7 +101,9 @@ pub mod indicator_pane;
 use crate::styles::{sizing, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
-pub use indicator_pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig};
+pub use indicator_pane::{
+    IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
+};
 
 // Re-export from logic layer
 use crate::chart::{helpers, rendering, state};
@@ -251,6 +253,11 @@ pub struct Chart {
     /// path in `TradingChart`). Holds no UI types so the core widget builds
     /// without the `ui` feature.
     pub(crate) right_click: Option<RightClickTarget>,
+    /// Registry index of a pane indicator whose legend close "x" was clicked
+    /// during the last frame, drained by the host via
+    /// [`Chart::take_indicator_remove`]. Holds no `ui`-feature types so the core
+    /// widget builds without the `ui` feature.
+    pub(crate) indicator_remove: Option<usize>,
 }
 
 /// The object a right-click landed on, with the data needed to position and
@@ -692,6 +699,9 @@ impl Chart {
                 // means a pane was clicked; the inner value is the element to
                 // select, or `None` to clear (click on empty pane area).
                 let mut pending_pane_selection: Option<Option<ChartElementId>> = None;
+                // Registry index of a pane whose legend "x" was clicked this
+                // frame, if any. Applied after the immutable `bars` borrow ends.
+                let mut pending_indicator_remove: Option<usize> = None;
                 let current_selection = self.selection.selected_id();
 
                 for (idx, indicator) in indicators.indicators().iter().enumerate() {
@@ -712,20 +722,38 @@ impl Chart {
                     let mut panel = IndicatorPane::with_config(config);
 
                     // Use show_aligned_interactive to get pane info for hit testing
-                    if let Some((panel_rect, chart_rect, y_min, y_max, pane_response)) = panel
-                        .show_aligned_interactive(
-                            ui,
-                            indicator.as_ref(),
-                            bars,
-                            visible_range.clone(),
-                            coords,
-                        )
-                    {
+                    if let Some(interaction) = panel.show_aligned_interactive(
+                        ui,
+                        indicator.as_ref(),
+                        bars,
+                        visible_range.clone(),
+                        coords,
+                    ) {
+                        let PaneInteraction {
+                            panel_rect,
+                            chart_rect,
+                            y_min,
+                            y_max,
+                            response: pane_response,
+                            close_response,
+                        } = interaction;
+
+                        // A click on the legend's close "x" requests removal of
+                        // this pane indicator. Recorded by registry index and
+                        // drained once by the host via `take_indicator_remove`.
+                        let close_clicked = close_response.is_some_and(|r| r.clicked());
+                        if close_clicked {
+                            pending_indicator_remove = Some(idx);
+                        }
+
                         let pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
 
                         // Resolve a click on this pane: a hit on the line selects
-                        // it, an empty-pane click clears the whole selection.
-                        if pane_response.clicked()
+                        // it, an empty-pane click clears the whole selection. A
+                        // close-"x" click is handled above and must not also
+                        // change the selection.
+                        if !close_clicked
+                            && pane_response.clicked()
                             && let Some(click_pos) = pane_response.interact_pointer_pos()
                         {
                             let hit = hit_test_pane_indicator(
@@ -781,6 +809,13 @@ impl Chart {
                         Some(id) => self.selection.select(id, None),
                         None => self.selection.deselect(),
                     }
+                }
+
+                // Record a pane remove request for the host to drain. The chart
+                // does not own the registry, so it cannot remove the indicator
+                // itself; it surfaces the index via `take_indicator_remove`.
+                if pending_indicator_remove.is_some() {
+                    self.indicator_remove = pending_indicator_remove;
                 }
             }
         }
@@ -1713,6 +1748,21 @@ impl Chart {
         self.right_click.take()
     }
 
+    /// Drains a pane-indicator remove request captured during the last frame.
+    ///
+    /// Returns `Some(index)` exactly once when the user clicks the close "x" on
+    /// an indicator pane's legend, where `index` is the indicator's position in
+    /// the registry passed to [`Chart::show_with_indicators`]. The chart does
+    /// not own the registry, so the host performs the actual removal (e.g.
+    /// [`IndicatorRegistry::remove_indicator`](crate::studies::IndicatorRegistry::remove_indicator)
+    /// followed by a recompute); the pane layout reflows on the next frame.
+    ///
+    /// Carries no `ui`-feature types, so it is available with
+    /// `--no-default-features`.
+    pub fn take_indicator_remove(&mut self) -> Option<usize> {
+        self.indicator_remove.take()
+    }
+
     /// Returns a mutable reference to the chart's visual configuration.
     ///
     /// Use this to apply settings produced by a dialog in place, e.g.
@@ -1997,5 +2047,20 @@ mod selection_tests {
         let pos = mapping.rect.center();
         let hit = hit_test_main_chart(pos, None, &mapping, None, &[], 100.0, 0..0);
         assert!(hit.is_none());
+    }
+
+    #[test]
+    fn take_indicator_remove_drains_once() {
+        use crate::model::BarData;
+
+        let mut chart = Chart::new(BarData::default());
+        // No request pending after construction.
+        assert_eq!(chart.take_indicator_remove(), None);
+
+        // A pane legend "x" click records the indicator's registry index.
+        chart.indicator_remove = Some(2);
+        assert_eq!(chart.take_indicator_remove(), Some(2));
+        // The request is consumed exactly once, mirroring `take_right_click`.
+        assert_eq!(chart.take_indicator_remove(), None);
     }
 }

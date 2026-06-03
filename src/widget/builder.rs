@@ -108,6 +108,7 @@ impl Chart {
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,
+            indicator_remove: None,
         }
     }
 
@@ -177,6 +178,7 @@ impl Chart {
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,
+            indicator_remove: None,
         }
     }
 

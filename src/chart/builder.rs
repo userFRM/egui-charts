@@ -837,6 +837,15 @@ impl TradingChart {
         self.chart
             .show_with_indicators(ui, self.drawing_manager.as_mut(), Some(&self.indicators));
 
+        // A click on an indicator pane's legend close "x" surfaces a remove
+        // request. Apply it here so the turnkey chart removes the study and
+        // recomputes the rest; the pane layout reflows on the next frame.
+        if let Some(index) = self.chart.take_indicator_remove() {
+            self.indicators.remove_indicator(index);
+            let bars = self.chart.data().bars.clone();
+            self.indicators.calculate_all(&bars);
+        }
+
         #[cfg(feature = "ui")]
         self.handle_context_menus(ui.ctx());
     }
