@@ -359,16 +359,24 @@ pub fn render_chart_type(
             );
         }
         ChartType::TimePriceOpportunity => {
-            advanced::render_tpo_placeholder(
+            // Auto-derive the price-bin size from the visible range: a zero
+            // tick_size signals `render_live_tpo` to pick a readable row count.
+            let tpo_config = crate::model::TPOConfig {
+                tick_size: 0.0,
+                ..Default::default()
+            };
+            tpo::render_live_tpo(
                 painter,
                 price_rect,
                 ctx.visible_data,
                 ctx.start_idx,
-                params.bar_width(),
-                ctx.price_scale,
-                params.chart_rect_min_x(),
+                ctx.price_scale.min_price,
+                ctx.price_scale.max_price,
+                &tpo_config,
                 &idx_to_coord,
+                params.chart_rect_min_x(),
                 params.bullish_color(),
+                params.bearish_color(),
             );
         }
         ChartType::SessionVolume => {

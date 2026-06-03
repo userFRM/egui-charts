@@ -47,31 +47,6 @@ pub(super) fn render_volume_footprint_placeholder(
     }
 }
 
-/// TPO (Time Price Opportunity) placeholder - Market Profile approximation
-///
-/// # Note
-/// Renders a simplified stand-in visual. True TPO profiles require intraday
-/// tick data; this approximation distributes letters across the OHLCV range.
-pub(super) fn render_tpo_placeholder(
-    painter: &Painter,
-    price_rect: Rect,
-    visible_data: &[Bar],
-    start_idx: usize,
-    _bar_width: f32,
-    price_scale: &LinearPriceMap,
-    chart_rect_min_x: f32,
-    idx_to_coord: impl Fn(usize, f32) -> f32,
-    color: Color32,
-) {
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_rect);
-    let letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
-
-    for (i, bar) in visible_data.iter().enumerate() {
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        draw_tpo_bar(painter, x, bar, &coords, letters[i % letters.len()], color);
-    }
-}
-
 /// Session Volume placeholder - shows volume aggregated by session
 ///
 /// # Note
@@ -171,31 +146,6 @@ fn draw_footprint_bar(
         ],
         Stroke::new(DESIGN_TOKENS.stroke.thick, color),
     ));
-}
-
-fn draw_tpo_bar(
-    painter: &Painter,
-    x: f32,
-    bar: &Bar,
-    coords: &PriceCoords,
-    letter: char,
-    color: Color32,
-) {
-    let y_high = coords.price_to_y(bar.high);
-    let y_low = coords.price_to_y(bar.low);
-    let block_height = ((y_low - y_high) / 4.0).max(10.0);
-
-    let mut y = y_high;
-    while y < y_low {
-        painter.text(
-            Pos2::new(x, y + block_height / 2.0),
-            egui::Align2::CENTER_CENTER,
-            letter.to_string(),
-            egui::FontId::monospace(10.0),
-            color.gamma_multiply(0.8),
-        );
-        y += block_height;
-    }
 }
 
 fn draw_session_profile(

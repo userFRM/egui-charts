@@ -24,9 +24,30 @@
 
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
-use crate::model::{TPOColorMode, TPOConfig, TPODisplayMode, TPOProfile};
+use super::helpers::PriceCoords;
+use crate::model::{
+    Bar, TPOColorMode, TPOConfig, TPODisplayMode, TPOProfile, derive_tick_size, to_tpo_profiles,
+};
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
+
+/// Target number of price rows when auto-deriving the TPO bin (tick) size.
+///
+/// The bin height is chosen so the visible price range spans roughly this many
+/// rows, keeping the profile readable across instruments that trade at very
+/// different price magnitudes.
+const TARGET_ROWS: usize = 40;
+
+/// Fixed pixel width of one TPO period column.
+///
+/// Letters/blocks for successive 30-minute periods stack horizontally to the
+/// right of each session's anchor; this is the per-period horizontal step.
+const PERIOD_COLUMN_PX: f32 = 9.0;
+
+/// Below this column width letters become unreadable, so we switch to blocks —
+/// mirroring how TradingView shows blocks when zoomed out and letters when
+/// zoomed in.
+const LETTER_MIN_COLUMN_PX: f32 = 7.0;
 
 /// TPO rendering configuration (visual settings)
 #[derive(Debug, Clone)]
@@ -652,6 +673,268 @@ pub fn render_tpo_profile(
         bullish_color,
         bearish_color,
     );
+}
+
+/// Render a real Market Profile for the visible bars, anchored in chart time.
+///
+/// This is the live entry point used by `render_chart_type`. Unlike
+/// [`render_tpo_profile`] (which left-justifies a set of pre-built profiles in
+/// an isolated rect), this builds the profiles from the currently visible bars
+/// and anchors each session's letter histogram at the x-coordinate of that
+/// session's first visible bar. Coordinates flow through the chart's shared
+/// price mapping ([`PriceCoords`]) and the supplied `idx_to_coord`, so the
+/// profile stays correct under pan and zoom.
+///
+/// The price-bin (tick) size auto-derives from the visible price range toward a
+/// readable row count unless the caller pins it via `config.tick_size`. Letters
+/// are drawn when the period column is wide enough to read; otherwise blocks are
+/// drawn, matching the zoomed-out behaviour of professional terminals.
+#[allow(clippy::too_many_arguments)]
+pub fn render_live_tpo(
+    painter: &Painter,
+    price_rect: Rect,
+    visible_data: &[Bar],
+    start_idx: usize,
+    min_price: f64,
+    max_price: f64,
+    base_config: &TPOConfig,
+    idx_to_coord: impl Fn(usize, f32) -> f32,
+    chart_rect_min_x: f32,
+    bullish_color: Color32,
+    bearish_color: Color32,
+) {
+    if visible_data.is_empty() {
+        return;
+    }
+
+    let price_range = max_price - min_price;
+    if !price_range.is_finite() || price_range <= 0.0 {
+        return;
+    }
+
+    // Derive a readable bin size from the visible range unless one was pinned.
+    let mut config = base_config.clone();
+    if config.tick_size <= 0.0 || !config.tick_size.is_finite() {
+        config.tick_size = derive_tick_size(price_range, TARGET_ROWS);
+    }
+
+    let profiles = to_tpo_profiles(visible_data, &config);
+    if profiles.is_empty() {
+        return;
+    }
+
+    let coords = PriceCoords::new(min_price, max_price, price_rect);
+    let render_config = TpoRenderConfig::default();
+
+    // Map each profile back to the index of its first visible bar so it anchors
+    // under the session it summarises. Sessions split on calendar day, mirroring
+    // `to_tpo_profiles`; a profile with no matching visible bar is skipped.
+    let mut profile_iter = profiles.iter();
+    let mut current = profile_iter.next();
+    let mut anchor_idx: Option<usize> = None;
+    let mut last_day = None;
+
+    for (offset, bar) in visible_data.iter().enumerate() {
+        let day = bar.time.date_naive();
+        let new_session = last_day.map(|d| d != day).unwrap_or(true);
+        last_day = Some(day);
+
+        if new_session {
+            // Flush the profile for the previous session before starting this one.
+            if let (Some(profile), Some(idx)) = (current, anchor_idx) {
+                draw_session_profile(
+                    painter,
+                    price_rect,
+                    &coords,
+                    profile,
+                    &config,
+                    &render_config,
+                    idx_to_coord(idx, chart_rect_min_x),
+                    bullish_color,
+                    bearish_color,
+                );
+                current = profile_iter.next();
+            }
+            anchor_idx = Some(start_idx + offset);
+        }
+    }
+
+    // Flush the final (or only) session.
+    if let (Some(profile), Some(idx)) = (current, anchor_idx) {
+        draw_session_profile(
+            painter,
+            price_rect,
+            &coords,
+            profile,
+            &config,
+            &render_config,
+            idx_to_coord(idx, chart_rect_min_x),
+            bullish_color,
+            bearish_color,
+        );
+    }
+}
+
+/// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward.
+#[allow(clippy::too_many_arguments)]
+fn draw_session_profile(
+    painter: &Painter,
+    price_rect: Rect,
+    coords: &PriceCoords,
+    profile: &TPOProfile,
+    config: &TPOConfig,
+    render_config: &TpoRenderConfig,
+    anchor_x: f32,
+    bullish_color: Color32,
+    bearish_color: Color32,
+) {
+    if profile.letters.is_empty() {
+        return;
+    }
+
+    let tick_size = config.tick_size;
+    let column_width = PERIOD_COLUMN_PX;
+    let use_letters = column_width >= LETTER_MIN_COLUMN_PX
+        && matches!(
+            config.display_mode,
+            TPODisplayMode::Letters | TPODisplayMode::Both
+        );
+
+    // Row height in pixels for one tick — used to size blocks/letters so they
+    // fill their price bin without overlapping the neighbour above/below.
+    let row_height = {
+        let h = (coords.price_to_y(0.0) - coords.price_to_y(tick_size)).abs();
+        h.clamp(1.0, render_config.row_height * 1.5)
+    };
+
+    let levels = profile.price_levels(tick_size);
+    let mut max_right = anchor_x;
+
+    // Value Area shading first, so letters/blocks paint on top.
+    if config.show_value_area {
+        let va_top = coords.price_to_y(profile.value_area_high + tick_size * 0.5);
+        let va_bottom = coords.price_to_y(profile.value_area_low - tick_size * 0.5);
+        // Width spans the widest row drawn below; approximate with profile width.
+        let va_right = anchor_x + profile.width() as f32 * column_width;
+        let va_rect = Rect::from_min_max(
+            Pos2::new(anchor_x, va_top.min(va_bottom)),
+            Pos2::new(va_right, va_top.max(va_bottom)),
+        );
+        painter.rect_filled(va_rect, 0.0, render_config.value_area_color);
+    }
+
+    for price in levels {
+        let y = coords.price_to_y(price);
+        if y < price_rect.top() - row_height || y > price_rect.bottom() + row_height {
+            continue;
+        }
+
+        // Letters at this level, one per period, left-justified by period order.
+        let mut letters_at_price: Vec<_> = profile.letters_at(price, tick_size);
+        letters_at_price.sort_by_key(|l| l.period_idx);
+        letters_at_price.dedup_by_key(|l| l.period_idx);
+
+        for (col, letter) in letters_at_price.iter().enumerate() {
+            let x = anchor_x + col as f32 * column_width + column_width * 0.5;
+            max_right = max_right.max(x + column_width * 0.5);
+
+            let color = letter_color(render_config, config, letter.period_idx, price, profile);
+
+            if use_letters {
+                painter.text(
+                    Pos2::new(x, y),
+                    egui::Align2::CENTER_CENTER,
+                    letter.letter.to_string(),
+                    FontId::monospace(render_config.letter_font_size),
+                    color,
+                );
+            } else {
+                let block = Rect::from_center_size(
+                    Pos2::new(x, y),
+                    egui::vec2(column_width * 0.9, row_height * 0.9),
+                );
+                painter.rect_filled(block, 0.0, color.gamma_multiply(0.85));
+            }
+        }
+    }
+
+    // POC line across the drawn width.
+    if config.show_poc {
+        let poc_y = coords.price_to_y(profile.poc_price);
+        if poc_y >= price_rect.top() && poc_y <= price_rect.bottom() {
+            painter.line_segment(
+                [Pos2::new(anchor_x, poc_y), Pos2::new(max_right, poc_y)],
+                Stroke::new(render_config.poc_line_width, render_config.poc_color),
+            );
+        }
+    }
+
+    // Value Area edges as thin guides at VAH / VAL.
+    if config.show_value_area {
+        for edge in [profile.value_area_high, profile.value_area_low] {
+            let ey = coords.price_to_y(edge);
+            if ey >= price_rect.top() && ey <= price_rect.bottom() {
+                painter.line_segment(
+                    [Pos2::new(anchor_x, ey), Pos2::new(max_right, ey)],
+                    Stroke::new(
+                        DESIGN_TOKENS.stroke.hairline,
+                        render_config.value_area_color.gamma_multiply(2.0),
+                    ),
+                );
+            }
+        }
+    }
+
+    // Opening marker: a small triangle at the session open, tinted by direction.
+    if config.show_opening_range {
+        let open_y = coords.price_to_y(profile.opening_price);
+        if open_y >= price_rect.top() && open_y <= price_rect.bottom() {
+            let dir_color = if profile.poc_price >= profile.opening_price {
+                bullish_color
+            } else {
+                bearish_color
+            };
+            let s = 5.0;
+            painter.add(Shape::convex_polygon(
+                vec![
+                    Pos2::new(anchor_x - s, open_y),
+                    Pos2::new(anchor_x, open_y - s * 0.5),
+                    Pos2::new(anchor_x, open_y + s * 0.5),
+                ],
+                dir_color,
+                Stroke::NONE,
+            ));
+        }
+    }
+}
+
+/// Pick the color for one TPO entry, honouring the configured color mode.
+fn letter_color(
+    render_config: &TpoRenderConfig,
+    config: &TPOConfig,
+    period_idx: usize,
+    price: f64,
+    profile: &TPOProfile,
+) -> Color32 {
+    match config.color_mode {
+        TPOColorMode::ByPeriod => render_config.color_for_period(period_idx),
+        TPOColorMode::Solid => render_config.default_letter_color,
+        TPOColorMode::ByValueArea => {
+            if profile.is_in_value_area(price) {
+                let va = render_config.value_area_color;
+                Color32::from_rgb(va.r(), va.g(), va.b())
+            } else {
+                render_config.default_letter_color.gamma_multiply(0.5)
+            }
+        }
+        TPOColorMode::ByInitialBalance => {
+            if profile.is_in_initial_balance(price) {
+                render_config.initial_balance_color
+            } else {
+                render_config.default_letter_color
+            }
+        }
+    }
 }
 
 #[cfg(test)]

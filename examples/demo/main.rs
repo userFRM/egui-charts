@@ -431,6 +431,11 @@ fn chart_type_from_name(name: &str) -> Option<ChartType> {
         "range" => Some(ChartType::Range),
         "high-low" | "high low" => Some(ChartType::HighLow),
         "volume candles" => Some(ChartType::VolumeCandles),
+        "time price opportunity" | "tpo" | "market profile" => {
+            Some(ChartType::TimePriceOpportunity)
+        }
+        "volume footprint" => Some(ChartType::VolumeFootprint),
+        "session volume" => Some(ChartType::SessionVolume),
         _ => None,
     }
 }

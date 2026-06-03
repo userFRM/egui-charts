@@ -66,5 +66,5 @@ pub use timeframe::Timeframe;
 pub use timescale::{LogicalRange, TimeScale};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
-    to_tpo_profiles,
+    derive_tick_size, to_tpo_profiles,
 };
