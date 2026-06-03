@@ -114,9 +114,20 @@ impl Pos {
         self.realized_pnl + self.unrealized_pnl
     }
 
-    /// Get market value of position
+    /// Signed contribution of this position to portfolio equity.
+    ///
+    /// A long position holds an asset worth `+qty * price`. A short position is
+    /// a liability: the short-sale proceeds were already credited to cash when
+    /// the position opened, so the open obligation to buy the shares back marks
+    /// against equity as `-qty * price`. Signing by side keeps equity equal to
+    /// `cash + sum(market_val)` regardless of direction, so a short round-trip
+    /// reflects only realized plus unrealized P&L.
     pub fn market_val(&self) -> f64 {
-        self.quantity * self.curr_price
+        match self.side {
+            PosSide::Long => self.quantity * self.curr_price,
+            PosSide::Short => -self.quantity * self.curr_price,
+            PosSide::Flat => 0.0,
+        }
     }
 
     /// Check if position is flat
@@ -387,6 +398,47 @@ mod tests {
         position.add(100.0, 110.0, TradeSide::Long);
         assert!((position.avg_entry_price - 105.0).abs() < 0.01);
         assert!((position.quantity - 200.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_short_open_marks_equity_flat() {
+        // Opening a short must not inflate equity. The short-sale proceeds are
+        // credited to cash and the open obligation marks against equity by the
+        // same amount, so equity at the entry price equals the starting capital.
+        let mut portfolio = Portfolio::new(100_000.0);
+        portfolio.open_trade("AAPL", TradeSide::Short, 100.0, 100.0, Utc::now(), 0.0, 0.0);
+
+        let position = portfolio.get_pos("AAPL").unwrap();
+        assert_eq!(position.side, PosSide::Short);
+        assert!((portfolio.equity() - 100_000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_short_round_trip_equity_equals_realized_pnl() {
+        // Short 100 shares at 100, cover at 90: equity must equal the starting
+        // capital plus the realized gain of (100 - 90) * 100 = 1000, with no
+        // residual position value left over.
+        let mut portfolio = Portfolio::new(100_000.0);
+        let mut prices = HashMap::new();
+
+        portfolio.open_trade("AAPL", TradeSide::Short, 100.0, 100.0, Utc::now(), 0.0, 0.0);
+
+        // Favorable move down should raise equity, not lower it.
+        prices.insert("AAPL".to_string(), 90.0);
+        portfolio.update_prices(&prices, Utc::now());
+        assert!(
+            portfolio.equity() > 100_000.0,
+            "favorable short move must increase equity, got {}",
+            portfolio.equity()
+        );
+
+        // Cover the short at 90.
+        let closed = portfolio.close_trade("AAPL", 90.0, 100.0, Utc::now(), 0.0, 0.0);
+        assert!(closed);
+        assert!(portfolio.get_pos("AAPL").unwrap().is_flat());
+
+        let realized_pnl = (100.0 - 90.0) * 100.0;
+        assert!((portfolio.equity() - (100_000.0 + realized_pnl)).abs() < 0.01);
     }
 
     #[test]
