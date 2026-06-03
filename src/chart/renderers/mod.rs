@@ -33,5 +33,9 @@ pub use crosshair::render_crosshair_full;
 pub use indicator::IndicatorRenderer;
 pub use labels::{render_legend, render_ohlc_info, render_price_labels, render_time_labels};
 pub use markers::render_markers;
+pub use session_breaks::{
+    SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,
+    provider_for_timeframe,
+};
 pub use tooltip::render_tooltip_with_options;
 pub use volume::render_volume_bar;

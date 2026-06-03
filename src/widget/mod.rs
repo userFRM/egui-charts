@@ -812,6 +812,47 @@ impl Chart {
         self.show_internal(ui, None, None)
     }
 
+    /// Resolve the timeframe used to pick a session-break granularity.
+    ///
+    /// The legend `timeframe` label is the primary source (it parses forms like
+    /// `"1H"`, `"15min"`, `"1D"`). When it is empty or unrecognized, the cadence
+    /// is inferred from the visible bars by taking the median gap between
+    /// consecutive timestamps and snapping it to the nearest preset, so session
+    /// breaks work even when the host never set a label. Falls back to the
+    /// default (1-minute) when there are too few bars to measure.
+    fn resolve_session_timeframe(
+        &self,
+        visible_data: &[crate::model::Bar],
+    ) -> crate::model::Timeframe {
+        use crate::model::Timeframe;
+        use std::str::FromStr;
+
+        if let Ok(tf) = Timeframe::from_str(self.timeframe.trim()) {
+            return tf;
+        }
+
+        // Infer from the median inter-bar gap (robust to session-edge jumps).
+        if visible_data.len() < 2 {
+            return Timeframe::default();
+        }
+        let mut gaps_ms: Vec<i64> = visible_data
+            .windows(2)
+            .map(|w| (w[1].time - w[0].time).num_milliseconds())
+            .filter(|&g| g > 0)
+            .collect();
+        if gaps_ms.is_empty() {
+            return Timeframe::default();
+        }
+        gaps_ms.sort_unstable();
+        let median = gaps_ms[gaps_ms.len() / 2];
+
+        // Snap to the closest preset by duration.
+        Timeframe::all()
+            .into_iter()
+            .min_by_key(|tf| (tf.duration_ms() - median).abs())
+            .unwrap_or_default()
+    }
+
     /// Internal rendering method that orchestrates all modules
     pub(crate) fn show_internal(
         &mut self,
@@ -1107,6 +1148,46 @@ impl Chart {
         if self.config.show_vertical_grid {
             // Simple bar-index-based vertical grid - moves 1:1 with chart
             rendering::render_vertical_grid(&painter, chart_rect, &coords, self.config.grid_color);
+        }
+
+        // Session-break layer: day/session dividers and optional alternating
+        // session shading. Drawn here — after the grid, before the candles — so
+        // the shading sits behind the bars and the dividers stay subtle. The
+        // boundary granularity follows the timeframe: day changes intraday, week
+        // changes on daily bars, month changes on weekly/monthly bars. Painters
+        // are clipped to the price rect so neither bleeds onto the axes.
+        if self.config.show_session_breaks {
+            let session_tf = self.resolve_session_timeframe(visible_data);
+            let provider = renderers::provider_for_timeframe(session_tf);
+            let session_painter = painter.with_clip_rect(price_rect);
+            let session_ctx = RenderContext::new(&session_painter, price_rect);
+
+            // Subtle alternating shading behind the candles (still gated by the
+            // same flag; the even span is transparent so the effect reads as a
+            // faint banding rather than two competing fills).
+            let background =
+                renderers::SessionBackgroundRenderer::from_background(self.config.background_color);
+            background.render(
+                &session_ctx,
+                visible_data,
+                provider.as_ref(),
+                &coords,
+                start_idx,
+            );
+
+            let break_renderer =
+                renderers::SessionBreakRenderer::new(renderers::SessionBreakRenderConfig {
+                    line_color: self.config.session_break_color,
+                    line_width: 1.0,
+                    style: self.config.session_break_style,
+                });
+            break_renderer.render(
+                &session_ctx,
+                visible_data,
+                provider.as_ref(),
+                &coords,
+                start_idx,
+            );
         }
 
         // Render chart type with clipping to prevent bars from overlapping axes
