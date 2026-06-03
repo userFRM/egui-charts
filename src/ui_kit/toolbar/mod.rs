@@ -40,14 +40,11 @@ pub enum Orientation {
 ///     });
 /// ```
 pub struct ResponsiveToolbar {
-    /// Unique toolbar ID — reserved for egui state persistence (scroll pos, collapse)
-    #[allow(dead_code)]
+    /// Unique toolbar ID, scoping the contents' egui state so multiple toolbars
+    /// in one frame do not collide.
     id: Id,
     orientation: Orientation,
     height: Option<f32>,
-    /// Force scrollable — reserved for mobile/tablet overflow support
-    #[allow(dead_code)]
-    force_scrollable: bool,
 }
 
 impl ResponsiveToolbar {
@@ -57,7 +54,6 @@ impl ResponsiveToolbar {
             id: Id::new(id),
             orientation: Orientation::Horizontal,
             height: None,
-            force_scrollable: false,
         }
     }
 
@@ -67,7 +63,6 @@ impl ResponsiveToolbar {
             id: Id::new(id),
             orientation: Orientation::Vertical,
             height: None,
-            force_scrollable: false,
         }
     }
 
@@ -75,13 +70,6 @@ impl ResponsiveToolbar {
     #[must_use]
     pub fn height(mut self, h: f32) -> Self {
         self.height = Some(h);
-        self
-    }
-
-    /// Legacy method - kept for API compatibility, but ignored on desktop
-    #[must_use]
-    pub fn force_scrollable(self, _force: bool) -> Self {
-        // Desktop-only: scrolling not needed
         self
     }
 
@@ -94,11 +82,13 @@ impl ResponsiveToolbar {
     /// Returns the value returned by the callback.
     pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui, &LayoutContext) -> R) -> R {
         let layout_ctx = LayoutContext::from_egui(ui.ctx());
+        let id = self.id;
 
-        match self.orientation {
+        ui.push_id(id, |ui| match self.orientation {
             Orientation::Horizontal => self.show_horizontal(ui, &layout_ctx, content),
             Orientation::Vertical => self.show_vertical(ui, &layout_ctx, content),
-        }
+        })
+        .inner
     }
 
     fn show_horizontal<R>(

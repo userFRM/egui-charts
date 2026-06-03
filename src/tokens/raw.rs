@@ -443,7 +443,6 @@ pub(super) struct RawSizingTokens {
     pub charts_ext: RawChartsExtSizingTokens,
     pub technical_labels: RawTechnicalLabelsSizingTokens,
     pub tooltip: RawTooltipSizingTokens,
-    pub cursor: RawCursorSizingTokens,
     pub drawing: RawDrawingSizingTokens,
     pub notification: RawNotificationSizingTokens,
     pub widget: RawWidgetSizingTokens,
@@ -868,9 +867,6 @@ pub(super) struct RawTooltipSizingTokens {
     pub padding_x: f32,
     pub padding_y: f32,
 }
-
-#[derive(Deserialize)]
-pub(super) struct RawCursorSizingTokens {}
 
 #[derive(Deserialize)]
 pub(super) struct RawDrawingSizingTokens {

@@ -149,33 +149,3 @@ impl Default for TimeScaleOptions {
         }
     }
 }
-
-/// Zoom implementation
-/// Calculates new bar spacing based on scale factor
-pub(crate) fn calculate_zoom(
-    _zoom_point_coord: f32,
-    curr_bar_spacing: f32,
-    scale: f32,
-    min_bar_spacing: f32,
-    max_bar_spacing: f32,
-) -> f32 {
-    // Formula: newBarSpacing = barSpacing + scale * (barSpacing / 10)
-    // Scale is in 1/10 parts of current bar spacing
-    let new_bar_spacing = curr_bar_spacing + scale * (curr_bar_spacing / 10.0);
-
-    // Clamp to bounds
-
-    if max_bar_spacing > 0.0 {
-        new_bar_spacing.clamp(min_bar_spacing, max_bar_spacing)
-    } else {
-        new_bar_spacing.max(min_bar_spacing)
-    }
-}
-
-/// Calculate right offset adjustment to keep point under cursor stable during zoom
-pub(crate) fn calculate_zoom_offset_adjustment(
-    zoom_point_before: f32,
-    zoom_point_after: f32,
-) -> f32 {
-    zoom_point_before - zoom_point_after
-}

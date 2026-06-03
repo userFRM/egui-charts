@@ -169,18 +169,11 @@ impl SessionBackgroundRenderer {
     /// Build a shading renderer from a base background color.
     ///
     /// The second tint is a faint darkening of the base so the alternation is
-    /// perceptible but unobtrusive; pass explicit colors via
-    /// [`with_colors`](Self::with_colors) to override.
+    /// perceptible but unobtrusive.
     pub fn from_background(background: Color32) -> Self {
         Self {
             colors: (Color32::TRANSPARENT, background.gamma_multiply(0.94)),
         }
-    }
-
-    /// Override the alternating fill colors.
-    pub fn with_colors(mut self, even: Color32, odd: Color32) -> Self {
-        self.colors = (even, odd);
-        self
     }
 
     /// Fill alternating session spans across the visible range.

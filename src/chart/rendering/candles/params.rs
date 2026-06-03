@@ -56,13 +56,6 @@ impl VolumeSettings {
             max_volume,
         }
     }
-
-    pub fn hidden() -> Self {
-        Self {
-            show_volume: false,
-            max_volume: 0.0,
-        }
-    }
 }
 
 /// Japanese chart type settings (Renko, Kagi, etc.)
@@ -77,13 +70,6 @@ impl JapaneseChartSettings {
         Self {
             renko_brick_size,
             kagi_reversal_amount,
-        }
-    }
-
-    pub fn default_renko() -> Self {
-        Self {
-            renko_brick_size: 1.0,
-            kagi_reversal_amount: 1.0,
         }
     }
 }

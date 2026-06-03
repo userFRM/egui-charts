@@ -333,7 +333,6 @@ impl<'a> ReplayControls<'a> {
 }
 
 /// Compact replay controls (minimal UI)
-#[allow(dead_code)]
 pub struct CompactReplayControls<'a> {
     config: &'a ReplayConfig,
 }
@@ -347,6 +346,7 @@ impl<'a> CompactReplayControls<'a> {
     /// Show compact controls (just play/pause and progress)
     pub fn show(&self, ui: &mut Ui, state: &mut ReplayState) -> ReplayAction {
         let mut action = ReplayAction::None;
+        let colors = &self.config.colors;
 
         // Update playback
         let _bars = state.update();
@@ -358,9 +358,11 @@ impl<'a> CompactReplayControls<'a> {
                 action = ReplayAction::TogglePlayPause;
             }
 
-            // Simple progress bar
+            // Simple progress bar, tinted with the configured fill color.
             let progress = state.progress();
-            let progress_bar = egui::ProgressBar::new(progress).show_percentage();
+            let progress_bar = egui::ProgressBar::new(progress)
+                .show_percentage()
+                .fill(colors.progress_fill);
             let response = ui.add(progress_bar);
 
             // Allow clicking on progress bar to seek
@@ -373,7 +375,11 @@ impl<'a> CompactReplayControls<'a> {
             }
 
             // Speed label
-            ui.label(RichText::new(state.speed.label()).small());
+            ui.label(
+                RichText::new(state.speed.label())
+                    .small()
+                    .color(colors.speed_color),
+            );
         });
 
         action

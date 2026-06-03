@@ -47,6 +47,7 @@
 
 pub mod focus;
 pub mod icons;
+#[cfg(feature = "ui")]
 pub(crate) mod responsive;
 pub mod sizing;
 pub mod typography;

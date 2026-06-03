@@ -20,16 +20,6 @@ use crate::drawings::DrawingManager;
 use crate::widget::Chart;
 use egui::{Painter, Rect, Response, Ui};
 
-/// Actions emitted by cursor mode toolbar buttons.
-///
-/// These are returned to the caller so the UI layer can toggle the
-/// corresponding cursor mode states.
-#[derive(Clone, Debug, PartialEq)]
-pub enum CursorModeAction {
-    /// Toggle eraser mode active state
-    ToggleEraser,
-}
-
 impl Chart {
     /// Handles drawing tool interaction and rendering
     ///

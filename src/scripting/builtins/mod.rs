@@ -14,9 +14,6 @@ mod ta;
 mod ta_advanced;
 mod ta_statistical;
 
-use super::runtime::SeriesContext;
-use super::types::{RuntimeError, Value};
-
 // Re-export all builtin functions for backwards compatibility and test access.
 pub(crate) use input::*;
 pub(crate) use math::*;
@@ -121,6 +118,8 @@ pub fn register_builtins(runtime: &mut super::runtime::Runtime) {
 mod tests {
     use super::*;
     use crate::model::Bar;
+    use crate::scripting::runtime::SeriesContext;
+    use crate::scripting::types::Value;
     use chrono::Utc;
 
     fn create_test_ctx() -> SeriesContext {
