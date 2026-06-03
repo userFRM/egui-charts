@@ -34,7 +34,6 @@ use chrono::{Duration, Utc};
 use egui_charts::data::{
     Bar, DataSource, DataSourceError, DataUpdate, HistoricalDataRequest, Timeframe,
 };
-use egui_charts::model::BarData;
 use egui_charts::theme::Theme;
 use egui_charts::{ChartBuilder, TradingChart};
 
@@ -176,7 +175,7 @@ impl DataSource for SampleDataSource {
 // ---------------------------------------------------------------------------
 
 fn generate_synthetic_bars(count: usize, base_price: f64) -> Vec<Bar> {
-    use rand::Rng;
+    use rand::RngExt;
 
     let mut rng = rand::rng();
     let mut bars = Vec::with_capacity(count);
