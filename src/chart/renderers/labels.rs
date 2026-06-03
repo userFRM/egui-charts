@@ -7,7 +7,7 @@ use crate::scales::{
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use chrono::Duration;
-use egui::{Color32, FontId, Pos2, Rect, Stroke};
+use egui::{Color32, FontId, Pos2, Rect};
 
 /// Renders price labels on the right side using smart tick mark generation
 /// Uses intelligent price mark distribution system
@@ -24,17 +24,6 @@ pub fn render_price_labels(
         scale_mode,
         PriceScaleId::Right,
     );
-}
-
-/// Renders price labels on the left side using smart tick mark generation
-/// Uses intelligent price mark distribution system
-pub fn render_price_labels_left(
-    context: &RenderContext,
-    price_scale: &LinearPriceMap,
-    colors: &StyleColors,
-    scale_mode: PriceScaleMode,
-) {
-    render_price_labels_at_pos(context, price_scale, colors, scale_mode, PriceScaleId::Left);
 }
 
 /// Renders price labels at the specified position (left or right)
@@ -215,59 +204,6 @@ fn time_to_idx(
     let offset_ms = (time - t0).num_milliseconds() as f32;
     let frac = (offset_ms / span_ms).clamp(0.0, 1.0);
     i0 as f32 + frac * (i1 as f32 - i0 as f32)
-}
-
-/// Renders vertical grid lines using tick marks
-/// Grid lines are anchored to time boundaries and move with the chart
-pub fn render_time_grid(
-    context: &RenderContext,
-    visible_data: &[Bar],
-    coords: &ChartMapping,
-    colors: &StyleColors,
-    formatter: Option<&dyn TimeFormatter>,
-) {
-    let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter);
-
-    for mark in marks {
-        // Use fractional index for smooth grid line movement during pan
-        let index = time_to_idx(mark.time, &bars);
-        // Calculate x using same formula as candle rendering
-        let delta_from_right = coords.base_idx as f32 + coords.right_offset - index;
-        let x = context.rect.min.x + context.rect.width()
-            - (delta_from_right + 0.5) * coords.bar_spacing
-            - 1.0;
-
-        if x < context.rect.min.x || x > context.rect.max.x {
-            continue;
-        }
-
-        let stroke_width = if mark.weight >= TickMarkWeight::MONTH {
-            1.0
-        } else if mark.weight >= TickMarkWeight::DAY {
-            0.7
-        } else {
-            0.5
-        };
-
-        let line_color = if mark.weight >= TickMarkWeight::MONTH {
-            Color32::from_rgba_premultiplied(
-                colors.grid.r(),
-                colors.grid.g(),
-                colors.grid.b(),
-                (colors.grid.a() as f32 * 1.5).min(255.0) as u8,
-            )
-        } else {
-            colors.grid
-        };
-
-        context.painter.line_segment(
-            [
-                Pos2::new(x, context.rect.min.y),
-                Pos2::new(x, context.rect.max.y),
-            ],
-            Stroke::new(stroke_width, line_color),
-        );
-    }
 }
 
 /// Renders time labels on the bottom using tick marks

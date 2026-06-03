@@ -35,18 +35,6 @@ pub fn point_to_segment_distance(point: Pos2, seg_start: Pos2, seg_end: Pos2) ->
     ((point.x - proj_x).powi(2) + (point.y - proj_y).powi(2)).sqrt()
 }
 
-/// Check if a point is near a line segment within the given tolerance.
-#[inline]
-pub fn is_point_near_segment(point: Pos2, seg_start: Pos2, seg_end: Pos2, tolerance: f32) -> bool {
-    point_to_segment_distance(point, seg_start, seg_end) <= tolerance
-}
-
-/// Check if a point is near a line segment within the default tolerance.
-#[inline]
-pub fn is_point_near_segment_default(point: Pos2, seg_start: Pos2, seg_end: Pos2) -> bool {
-    is_point_near_segment(point, seg_start, seg_end, HIT_TOLERANCE)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,14 +77,5 @@ mod tests {
 
         let dist = point_to_segment_distance(point, start, end);
         assert!((dist - 3.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_is_near_segment() {
-        let start = Pos2::new(0.0, 0.0);
-        let end = Pos2::new(10.0, 0.0);
-
-        assert!(is_point_near_segment(Pos2::new(5.0, 4.0), start, end, 5.0));
-        assert!(!is_point_near_segment(Pos2::new(5.0, 6.0), start, end, 5.0));
     }
 }

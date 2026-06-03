@@ -1002,7 +1002,6 @@ impl Chart {
         let colors = StyleColors {
             bullish: self.config.bullish_color,
             bearish: self.config.bearish_color,
-            grid: self.config.grid_color,
             text: self.config.text_color,
             bullish_border: self.config.bullish_border_color,
             bearish_border: self.config.bearish_border_color,
