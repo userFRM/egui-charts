@@ -110,9 +110,14 @@ pub fn render_floating_tooltip(
     let mut tooltip_x = hover_pos.x + cursor_offset;
     let mut tooltip_y = hover_pos.y - tooltip_height / 2.0;
 
-    // Keep within bounds
+    // Keep within bounds. Prefer the right of the cursor; flip to the left when
+    // the right edge would clip, then clamp both axes so a flipped or oversized
+    // tooltip never spills past the chart on any side.
     if tooltip_x + tooltip_width > price_rect.max.x {
         tooltip_x = hover_pos.x - tooltip_width - cursor_offset;
+    }
+    if tooltip_x < price_rect.min.x {
+        tooltip_x = price_rect.min.x;
     }
     if tooltip_y < price_rect.min.y {
         tooltip_y = price_rect.min.y;
