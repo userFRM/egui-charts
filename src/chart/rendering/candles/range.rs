@@ -5,7 +5,7 @@
 use egui::{Color32, Painter, Pos2, Rect, Shape};
 
 use super::volume::render_volume_bars;
-use crate::chart::renderers::{PriceScale, RenderContext, StyleColors};
+use crate::chart::renderers::{LinearPriceMap, RenderContext, StyleColors};
 use crate::model::{Bar, RangeBarConfig, to_range_bars_from_ohlc};
 
 /// High-Low chart: just the range bars
@@ -19,7 +19,7 @@ pub(super) fn render_high_low(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
@@ -72,7 +72,7 @@ pub(super) fn render_range_bars(
     start_idx: usize,
     bar_width: f32,
     range_size: f64,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,

@@ -1,4 +1,4 @@
-use super::context::{ChartMapping, PriceScale, RenderContext};
+use super::context::{ChartMapping, LinearPriceMap, RenderContext};
 use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairStyle};
 use crate::model::Bar;
 use crate::styles::typography;
@@ -10,7 +10,7 @@ pub fn render_crosshair(
     context: &RenderContext,
     hover_pos: Pos2,
     visible_data: &[Bar],
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     coords: &ChartMapping,
 ) {
     render_crosshair_with_mode(
@@ -28,7 +28,7 @@ pub fn render_crosshair_with_mode(
     context: &RenderContext,
     hover_pos: Pos2,
     visible_data: &[Bar],
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     coords: &ChartMapping,
     mode: CrosshairMode,
 ) {
@@ -48,7 +48,7 @@ pub fn render_crosshair_with_style(
     context: &RenderContext,
     hover_pos: Pos2,
     visible_data: &[Bar],
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     coords: &ChartMapping,
     mode: CrosshairMode,
     style: CrosshairStyle,
@@ -73,7 +73,7 @@ pub fn render_crosshair_full(
     context: &RenderContext,
     hover_pos: Pos2,
     visible_data: &[Bar],
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     coords: &ChartMapping,
     mode: CrosshairMode,
     style: CrosshairStyle,
@@ -202,7 +202,7 @@ pub fn render_crosshair_full(
 
     // Calculate price at cursor
     let price_ratio = (context.rect.max.y - actual_pos.y) / context.rect.height();
-    let price = price_scale.min_price + price_ratio as f64 * price_scale.price_range;
+    let price = price_scale.min_price + price_ratio as f64 * price_scale.price_range();
 
     // Price label on Y-axis with "+" alert indicator
     let price_label = format!("{price:.8}");
@@ -314,10 +314,10 @@ pub fn render_crosshair_full(
 fn snap_to_nearest_ohlc(
     hover_y: f32,
     price_rect: Rect,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     candle: &Bar,
 ) -> f64 {
-    // Get Y positions of all OHLC values using PriceScale helper
+    // Get Y positions of all OHLC values using LinearPriceMap helper
     let open_y = price_scale.price_to_y(candle.open, price_rect);
     let high_y = price_scale.price_to_y(candle.high, price_rect);
     let low_y = price_scale.price_to_y(candle.low, price_rect);

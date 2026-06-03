@@ -2,17 +2,18 @@
 //!
 //! Includes: Candlestick, OHLC Bars, Hollow Candles, Heikin-Ashi, Volume Candles
 
+use super::heikin_ashi;
 use super::helpers::{
     OhlcYCoords, PriceCoords, bar_color, draw_body_filled, draw_body_hollow, draw_wicks,
 };
-use crate::chart::renderers::{self, BarRenderParams, PriceScale, RenderContext, StyleColors};
+use crate::chart::renderers::{self, BarRenderParams, LinearPriceMap, RenderContext, StyleColors};
 use crate::model::Bar;
 use egui::Color32;
 
 pub(super) fn render_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
     start_idx: usize,
@@ -38,7 +39,7 @@ pub(super) fn render_candles(
 pub(super) fn render_ohlc_bars(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
     start_idx: usize,
@@ -65,7 +66,7 @@ pub(super) fn render_ohlc_bars(
 pub(super) fn render_hollow_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
     start_idx: usize,
@@ -101,13 +102,19 @@ pub(super) fn render_hollow_candles(
     }
 }
 
-/// Heikin-Ashi candles: smoothed candlesticks
+/// Heikin-Ashi candles: smoothed candlesticks.
+///
+/// Heikin-Ashi is a cumulative recurrence, so the series is computed over the
+/// complete dataset (`full_data`) and cached; the visible window is sliced out
+/// of the cached series. This keeps every bar's Heikin-Ashi value invariant as
+/// the user pans and zooms, instead of reseeding from the first visible bar.
 pub(super) fn render_heikin_ashi(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
+    full_data: &[Bar],
     start_idx: usize,
     bar_width: f32,
     wick_width: f32,
@@ -122,11 +129,13 @@ pub(super) fn render_heikin_ashi(
         return;
     }
 
-    let ha_bars = transform_to_heikin_ashi(visible_data);
+    // Slice the visible window out of the cached full-series transform.
+    let ha_window = heikin_ashi::window(full_data, start_idx, visible_data.len());
+
     let painter = price_ctx.painter;
     let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_ctx.rect);
 
-    for (i, bar) in ha_bars.iter().enumerate() {
+    for (i, bar) in ha_window.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
         let color = if bar.close >= bar.open {
             bullish_color
@@ -157,7 +166,7 @@ pub(super) fn render_heikin_ashi(
 pub(super) fn render_volume_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
     start_idx: usize,
@@ -194,44 +203,6 @@ pub(super) fn render_volume_candles(
 }
 
 // === Helper Functions ===
-
-fn transform_to_heikin_ashi(visible_data: &[Bar]) -> Vec<Bar> {
-    let mut ha_bars: Vec<Bar> = Vec::with_capacity(visible_data.len());
-
-    let first = &visible_data[0];
-    let mut prev_ha_open = (first.open + first.close) / 2.0;
-    let mut prev_ha_close = (first.open + first.high + first.low + first.close) / 4.0;
-
-    ha_bars.push(Bar {
-        time: first.time,
-        open: prev_ha_open,
-        high: first.high,
-        low: first.low,
-        close: prev_ha_close,
-        volume: first.volume,
-    });
-
-    for bar in visible_data.iter().skip(1) {
-        let ha_close = (bar.open + bar.high + bar.low + bar.close) / 4.0;
-        let ha_open = (prev_ha_open + prev_ha_close) / 2.0;
-        let ha_high = bar.high.max(ha_open).max(ha_close);
-        let ha_low = bar.low.min(ha_open).min(ha_close);
-
-        ha_bars.push(Bar {
-            time: bar.time,
-            open: ha_open,
-            high: ha_high,
-            low: ha_low,
-            close: ha_close,
-            volume: bar.volume,
-        });
-
-        prev_ha_open = ha_open;
-        prev_ha_close = ha_close;
-    }
-
-    ha_bars
-}
 
 fn render_volume_for_bars(
     volume_ctx: &RenderContext,

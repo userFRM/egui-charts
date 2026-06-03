@@ -1048,6 +1048,9 @@ impl Chart {
             price_scale: &price_scale,
             colors: &colors,
             visible_data,
+            // Full dataset so window-independent transforms (Heikin-Ashi) can be
+            // computed over the complete series, not just the visible slice.
+            full_data: &self.state.data().bars,
             start_idx,
         };
 

@@ -105,6 +105,11 @@ impl Default for PercentageFormatter {
 
 impl PriceFormatter for PercentageFormatter {
     fn format(&self, price: f64) -> String {
+        // A zero base has no defined percentage; emit a neutral 0% rather than
+        // dividing by zero and rendering "inf%"/"NaN%" on the axis.
+        if self.base_val.abs() < f64::EPSILON {
+            return format!("{:+.prec$}%", 0.0, prec = self.precision);
+        }
         let percentage = ((price / self.base_val) * 100.0) - 100.0;
         format!("{:+.prec$}%", percentage, prec = self.precision)
     }
@@ -407,6 +412,19 @@ mod tests {
         let formatter = PercentageFormatter::default();
         assert_eq!(formatter.format(105.0), "+5.00%");
         assert_eq!(formatter.format(95.0), "-5.00%");
+    }
+
+    #[test]
+    fn test_percentage_formatter_zero_base_is_neutral() {
+        // A zero base has no defined percentage; the formatter must emit a
+        // neutral 0% rather than "inf%"/"NaN%".
+        let formatter = PercentageFormatter {
+            precision: 2,
+            base_val: 0.0,
+        };
+        let out = formatter.format(123.0);
+        assert_eq!(out, "+0.00%");
+        assert!(!out.contains("inf") && !out.contains("NaN"));
     }
 
     #[test]

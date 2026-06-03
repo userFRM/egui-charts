@@ -4,16 +4,25 @@
 
 use egui::Color32;
 
-use crate::chart::renderers::{PriceScale, RenderContext, StyleColors};
+use crate::chart::renderers::{LinearPriceMap, RenderContext, StyleColors};
 use crate::model::{Bar, PriceSource};
 
 /// Core rendering contexts and data
 pub struct CandleDataContext<'a> {
     pub price_ctx: &'a RenderContext<'a>,
     pub volume_ctx: &'a RenderContext<'a>,
-    pub price_scale: &'a PriceScale,
+    pub price_scale: &'a LinearPriceMap,
     pub colors: &'a StyleColors,
+    /// The bars in the current visible window.
     pub visible_data: &'a [Bar],
+    /// The complete dataset the visible window is a contiguous slice of.
+    ///
+    /// `visible_data` equals `full_data[start_idx..start_idx + visible_data.len()]`.
+    /// Chart types whose values depend on bars outside the window (e.g.
+    /// Heikin-Ashi, a cumulative recurrence) compute over `full_data` and slice
+    /// the window out, so their output is invariant under panning and zooming.
+    pub full_data: &'a [Bar],
+    /// Index of the first visible bar within `full_data`.
     pub start_idx: usize,
 }
 

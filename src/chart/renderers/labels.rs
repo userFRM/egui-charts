@@ -1,4 +1,4 @@
-use super::context::{ChartMapping, PriceScale, RenderContext, StyleColors};
+use super::context::{ChartMapping, LinearPriceMap, RenderContext, StyleColors};
 use crate::model::Bar;
 use crate::scales::{
     PriceMarkGenerator, PriceScaleId, PriceScaleMode, TickMark, TickMarkGenerator,
@@ -13,7 +13,7 @@ use egui::{Color32, FontId, Pos2, Rect, Stroke};
 /// Uses intelligent price mark distribution system
 pub fn render_price_labels(
     context: &RenderContext,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     colors: &StyleColors,
     scale_mode: PriceScaleMode,
 ) {
@@ -30,7 +30,7 @@ pub fn render_price_labels(
 /// Uses intelligent price mark distribution system
 pub fn render_price_labels_left(
     context: &RenderContext,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     colors: &StyleColors,
     scale_mode: PriceScaleMode,
 ) {
@@ -41,7 +41,7 @@ pub fn render_price_labels_left(
 /// Core implementation for price label rendering
 pub fn render_price_labels_at_pos(
     context: &RenderContext,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     colors: &StyleColors,
     scale_mode: PriceScaleMode,
     position: PriceScaleId,

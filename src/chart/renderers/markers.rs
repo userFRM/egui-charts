@@ -1,4 +1,4 @@
-use super::context::{ChartMapping, PriceScale, RenderContext};
+use super::context::{ChartMapping, LinearPriceMap, RenderContext};
 /// Marker renderer for chart annotations
 use crate::model::{Bar, Marker, MarkerPos, MarkerShape};
 use crate::tokens::DESIGN_TOKENS;
@@ -9,7 +9,7 @@ pub fn render_markers(
     context: &RenderContext,
     markers: &[Marker],
     visible_data: &[Bar],
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     coords: &ChartMapping,
 ) {
     for marker in markers {
@@ -21,7 +21,7 @@ pub fn render_markers(
             // Calculate marker position using ChartCoords helper
             let x = coords.idx_to_x(global_idx);
 
-            // Calculate Y position based on marker position setting using PriceScale helper
+            // Calculate Y position based on marker position setting using LinearPriceMap helper
             let y = match marker.position {
                 MarkerPos::AboveBar => {
                     let high_y = price_scale.price_to_y(bar.high, context.rect);

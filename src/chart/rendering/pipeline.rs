@@ -18,7 +18,7 @@ use egui::{Color32, Painter, Pos2, Rect};
 
 // Import existing types from renderers module
 use super::super::renderers::{
-    BarRenderParams, ChartMapping, PriceScale, RenderContext, StyleColors,
+    BarRenderParams, ChartMapping, LinearPriceMap, RenderContext, StyleColors,
 };
 use super::super::state::BoxZoomState;
 
@@ -61,9 +61,9 @@ impl<'a> ChartRenderContext<'a> {
         RenderContext::new(self.painter, self.rect)
     }
 
-    /// Convert to legacy PriceScale
-    pub fn to_price_scale(&self) -> PriceScale {
-        PriceScale::new(self.min_price, self.max_price)
+    /// Convert to legacy LinearPriceMap
+    pub fn to_price_scale(&self) -> LinearPriceMap {
+        LinearPriceMap::new(self.min_price, self.max_price)
     }
 
     /// Convert to ChartMapping

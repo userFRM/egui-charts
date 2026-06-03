@@ -3,7 +3,7 @@
 //! Includes: Renko, Kagi, Line Break, Point & Figure
 
 use super::helpers::{PriceCoords, draw_brick, draw_o_symbol, draw_x_symbol};
-use crate::chart::renderers::PriceScale;
+use crate::chart::renderers::LinearPriceMap;
 use crate::model::{
     Bar, ColumnDirection, KagiConfig, LineBreakConfig, PointFigureConfig, RenkoConfig,
     to_kagi_lines, to_line_break_lines, to_pnf_columns, to_renko_bricks,
@@ -20,7 +20,7 @@ pub(super) fn render_renko(
     _start_idx: usize,
     bar_width: f32,
     renko_brick_size: f64,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     _chart_rect_min_x: f32,
     _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
@@ -54,7 +54,7 @@ pub(super) fn render_kagi(
     visible_data: &[Bar],
     _start_idx: usize,
     kagi_reversal_amount: f64,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     _chart_rect_min_x: f32,
     _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
@@ -80,7 +80,7 @@ pub(super) fn render_line_break(
     visible_data: &[Bar],
     _start_idx: usize,
     bar_width: f32,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     _chart_rect_min_x: f32,
     _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
@@ -120,7 +120,7 @@ pub(super) fn render_point_and_figure(
     _start_idx: usize,
     bar_width: f32,
     box_size: f64,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     _chart_rect_min_x: f32,
     _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,

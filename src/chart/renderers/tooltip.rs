@@ -1,4 +1,4 @@
-use super::context::{ChartMapping, PriceScale, RenderContext};
+use super::context::{ChartMapping, LinearPriceMap, RenderContext};
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::model::Bar;
 use crate::styles::typography;
@@ -17,7 +17,7 @@ pub fn render_tooltip_with_options(
     hover_pos: Pos2,
     candle: &Bar,
     options: &TooltipOptions,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     coords: &ChartMapping,
     visible_data: &[Bar],
 ) {
@@ -245,7 +245,7 @@ pub fn render_magnifier_tooltip(
     hover_pos: Pos2,
     _candle: &Bar,
     options: &TooltipOptions,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     coords: &ChartMapping,
     visible_data: &[Bar],
 ) {
@@ -285,8 +285,14 @@ pub fn render_magnifier_tooltip(
     let src_width = size / zoom;
     let src_height = size / zoom;
 
-    // Calculate the price range visible in magnifier
-    let price_per_pixel = price_scale.price_range / context.rect.height() as f64;
+    // Calculate the price range visible in magnifier. A zero-height rect yields
+    // no price-per-pixel gradient rather than an infinite/NaN one.
+    let rect_height = context.rect.height() as f64;
+    let price_per_pixel = if rect_height.abs() < f64::EPSILON {
+        0.0
+    } else {
+        price_scale.price_range() / rect_height
+    };
     let center_price =
         price_scale.min_price + (context.rect.max.y - hover_pos.y) as f64 * price_per_pixel;
 
@@ -294,8 +300,13 @@ pub fn render_magnifier_tooltip(
     let mag_min_price = center_price - mag_price_range / 2.0;
     let mag_max_price = center_price + mag_price_range / 2.0;
 
-    // Calculate bar indices visible in magnifier
-    let bars_per_pixel = 1.0 / coords.bar_spacing;
+    // Calculate bar indices visible in magnifier. Degenerate bar spacing maps
+    // every pixel onto the same bar rather than dividing by zero.
+    let bars_per_pixel = if coords.bar_spacing.abs() < f32::EPSILON {
+        0.0
+    } else {
+        1.0 / coords.bar_spacing
+    };
     let center_bars_from_right =
         (context.rect.max.x - hover_pos.x) * bars_per_pixel - 0.5 - coords.right_offset;
     let src_bars = (src_width * bars_per_pixel) as isize;

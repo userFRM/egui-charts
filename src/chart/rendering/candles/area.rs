@@ -7,7 +7,7 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
 use super::helpers::PriceCoords;
 use super::volume::render_volume_bars;
-use crate::chart::renderers::{PriceScale, RenderContext, StyleColors};
+use crate::chart::renderers::{LinearPriceMap, RenderContext, StyleColors};
 use crate::model::{Bar, PriceSource};
 
 const AREA_ALPHA: u8 = 50;
@@ -24,7 +24,7 @@ pub(super) fn render_area(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     fill_color: Color32,
@@ -79,7 +79,7 @@ pub(super) fn render_hlc_area(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
@@ -134,7 +134,7 @@ pub(super) fn render_baseline(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &PriceScale,
+    price_scale: &LinearPriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
