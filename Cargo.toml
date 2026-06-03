@@ -12,10 +12,14 @@ authors = ["userFRM"]
 keywords = ["trading", "charts", "finance", "egui", "candlestick"]
 categories = ["visualization", "gui", "graphics", "rendering::engine"]
 readme = "README.md"
+# `examples/demo` is a self-contained `eframe`+`wgpu`/Trunk workspace built only
+# by Trunk, never by the host crate.  Auto-discovery would otherwise pick up
+# `examples/demo/main.rs` as a `demo` example and try to build it here, so the
+# example set is declared explicitly instead.
+autoexamples = false
 exclude = [
     "plan.md",
     "ROADMAP.md",
-    "examples/",
     ".github/",
     "tests/",
     "benches/",
@@ -26,6 +30,22 @@ exclude = [
 
 [lib]
 path = "src/lib.rs"
+
+[[example]]
+name = "basic_chart"
+path = "examples/basic_chart.rs"
+
+[[example]]
+name = "with_indicators"
+path = "examples/with_indicators.rs"
+
+[[example]]
+name = "drawing_tools"
+path = "examples/drawing_tools.rs"
+
+[[example]]
+name = "tauri_integration"
+path = "examples/tauri_integration.rs"
 
 [features]
 default = ["icons"]
@@ -40,6 +60,15 @@ ui = ["icons"]
 backtest = []
 ## Embedded scripting support for user-defined indicators and strategies.
 scripting = []
+
+[dev-dependencies]
+# The bundled examples are standalone `eframe` apps; they need a windowing
+# backend to run natively.  `glow` keeps the default-feature build buildable on
+# CI without a Vulkan/Metal toolchain, and the `x11`/`wayland` platform features
+# are required because `default-features = false` otherwise leaves `winit`
+# without a Linux backend.
+eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+egui = "0.33.3"
 
 [dependencies]
 egui = { version = "0.33.3", features = ["serde"] }

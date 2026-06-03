@@ -105,7 +105,7 @@ impl eframe::App for DrawingApp {
 // ---------------------------------------------------------------------------
 
 fn generate_synthetic_bars(count: usize, base_price: f64) -> Vec<Bar> {
-    use rand::Rng;
+    use rand::RngExt;
 
     let mut rng = rand::rng();
     let mut bars = Vec::with_capacity(count);
