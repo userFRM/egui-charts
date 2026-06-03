@@ -104,7 +104,10 @@ struct DemoApp {
 }
 
 impl DemoApp {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Register egui's image loaders so the embedded SVG toolbar icons decode.
+        egui_extras::install_image_loaders(&cc.egui_ctx);
+
         let theme = Theme::dark();
         let timeframe = Timeframe::Day1;
 
