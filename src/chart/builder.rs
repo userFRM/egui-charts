@@ -317,6 +317,13 @@ impl ChartBuilder {
         self
     }
 
+    /// Toggle session-break dividers (day/week/month boundaries) and shading.
+    #[must_use]
+    pub fn with_session_breaks(mut self, show: bool) -> Self {
+        self.config.show_session_breaks = show;
+        self
+    }
+
     /// Attach an [`IndicatorRegistry`] for technical studies (SMA, RSI, MACD, etc.).
     #[must_use]
     pub fn with_indicators(mut self, registry: IndicatorRegistry) -> Self {
