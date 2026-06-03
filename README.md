@@ -18,7 +18,7 @@
 
 ---
 
-20 chart types. 95 drawing tools. 130+ technical indicators. Full design-token theme system. Pure Rust — compiles to native and WebAssembly with zero JavaScript dependencies.
+20 chart types (17 fully wired; Volume Footprint, TPO, and Session Volume Profile are in progress). 95 drawing tools. 130+ technical indicators. Full design-token theme system. Pure Rust — compiles to native and WebAssembly with zero JavaScript dependencies.
 
 ---
 
@@ -85,7 +85,7 @@ egui-charts/src/
 ├── tokens/                    RON-based design tokens (colors, spacing, typography)
 ├── styles/                    Style computation from semantic tokens
 ├── widget/                    Chart egui widget, indicator panes
-├── icons/                     280+ compile-time embedded SVG icons
+├── icons/                     160+ compile-time embedded SVG icons
 ├── ext/                       UiExt, ContextExt, ResponseExt, HasDesignTokens
 ├── ui/          [feature: ui] Toolbars, panels, dialogs, replay controls
 ├── ui_kit/      [feature: ui] Reusable widget library: buttons, forms, color pickers
@@ -116,7 +116,7 @@ use egui_charts::theme::Theme;
 // Build a chart with the fluent API
 let mut chart = ChartBuilder::new()
     .with_symbol("BTCUSDT")
-    .with_timeframe(Timeframe::H1)
+    .with_timeframe(Timeframe::Hour1)
     .with_theme(Theme::dark())
     .with_drawing_tools()
     .build();
@@ -156,7 +156,7 @@ let mini = ChartBuilder::price_chart()
 
 | Feature | Default | Description |
 |---|:---:|---|
-| `icons` | **on** | 280+ compile-time embedded SVG icons. Required by `ui`. Disable with `default-features = false` to save binary size. |
+| `icons` | **on** | 160+ compile-time embedded SVG icons. Required by `ui`. Disable with `default-features = false` to save binary size. |
 | `ui` | off | Application-level UI: drawing toolbar, top toolbar, timeframe bar, replay controls, sidebars, dialogs, and the `ui_kit` widget library. |
 | `backtest` | off | Strategy backtesting on historical data. |
 | `scripting` | off | Embedded scripting for user-defined indicators and strategies. |
@@ -176,7 +176,7 @@ egui-charts = { version = "0.1", features = ["ui", "backtest", "scripting"] }
 
 ## Chart Types
 
-20 chart types across 6 categories:
+20 chart types across 6 categories — 17 are fully wired into the render pipeline; the three Advanced profile types are in progress:
 
 | Category | Types |
 |---|---|
@@ -185,7 +185,7 @@ egui-charts = { version = "0.1", features = ["ui", "backtest", "scripting"] }
 | **Area** | Area · HLC Area · Baseline |
 | **Japanese** | Heikin-Ashi · Renko · Kagi · Line Break · Point & Figure |
 | **Range** | High-Low · Range Bars |
-| **Advanced** | Volume Footprint · TPO / Market Profile · Session Volume |
+| **Advanced** *(in progress)* | Volume Footprint · TPO / Market Profile · Session Volume |
 
 ---
 
