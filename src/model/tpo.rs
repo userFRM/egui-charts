@@ -219,6 +219,41 @@ impl TPOProfile {
     }
 }
 
+/// Derive a sensible TPO row size (price-bin height) from a price range and a
+/// target number of rows.
+///
+/// Market Profile groups price into equal bins; the bin height controls how
+/// many letters stack at each level. Rather than hard-coding a tick size that
+/// only suits one instrument, this picks a "nice" step (1, 2, 2.5 or 5 times a
+/// power of ten) so the profile lands close to `target_rows` regardless of
+/// whether the series trades near 1.0 or 50_000.0. Degenerate inputs (zero or
+/// non-finite range, non-positive target) fall back to `1.0`.
+pub fn derive_tick_size(price_range: f64, target_rows: usize) -> f64 {
+    if !price_range.is_finite() || price_range <= 0.0 || target_rows == 0 {
+        return 1.0;
+    }
+    let raw = price_range / target_rows as f64;
+    let magnitude = 10f64.powf(raw.log10().floor());
+    let normalized = raw / magnitude;
+    let nice = if normalized <= 1.0 {
+        1.0
+    } else if normalized <= 2.0 {
+        2.0
+    } else if normalized <= 2.5 {
+        2.5
+    } else if normalized <= 5.0 {
+        5.0
+    } else {
+        10.0
+    };
+    let tick = nice * magnitude;
+    if tick.is_finite() && tick > 0.0 {
+        tick
+    } else {
+        1.0
+    }
+}
+
 /// Convert price to integer key for HashMap
 fn price_to_key(price: f64, tick_size: f64) -> i64 {
     (price / tick_size).round() as i64
@@ -368,29 +403,64 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
     // Calculate total TPOs
     let total_tpos: usize = profile.price_tpo_count.values().sum();
 
-    // Calculate Value Area (70% of TPOs centered around POC)
+    // Calculate the Value Area (default 70% of TPOs) around the POC.
+    //
+    // This follows the canonical Market Profile expansion rule: start at the
+    // POC, then repeatedly extend the contiguous range one row at a time,
+    // always toward whichever adjacent side (the two rows immediately above
+    // the current high, or the two rows immediately below the current low)
+    // holds more TPOs. Counts are accumulated until the running total reaches
+    // `value_area_pct` of all TPOs. The result is guaranteed contiguous and
+    // centered on the POC, matching how CQG/Bloomberg/TradingView draw it.
     let target_tpos = (total_tpos as f64 * config.value_area_pct).ceil() as usize;
+    let count_at = |key: i64| -> usize { *profile.price_tpo_count.get(&key).unwrap_or(&0) };
 
-    // Sort price levels by distance from POC
-    let mut sorted_levels: Vec<(i64, usize)> = profile
-        .price_tpo_count
-        .iter()
-        .map(|(&k, &v)| (k, v))
-        .collect();
-    sorted_levels.sort_by_key(|(k, _)| (*k - *poc_key).abs());
+    let &min_key = profile.price_tpo_count.keys().min().unwrap();
+    let &max_key = profile.price_tpo_count.keys().max().unwrap();
 
-    // Accumulate TPOs starting from POC
-    let mut accumulated_tpos = 0;
+    let mut accumulated_tpos = count_at(*poc_key);
     let mut va_low_key = *poc_key;
     let mut va_high_key = *poc_key;
 
-    for (key, count) in sorted_levels {
-        accumulated_tpos += count;
-        va_low_key = va_low_key.min(key);
-        va_high_key = va_high_key.max(key);
+    // Two-rows-per-step look: pair the next row above the high with the row
+    // beyond it, likewise below the low, then advance toward the heavier pair.
+    while accumulated_tpos < target_tpos && (va_low_key > min_key || va_high_key < max_key) {
+        let up_avail = va_high_key < max_key;
+        let down_avail = va_low_key > min_key;
 
-        if accumulated_tpos >= target_tpos {
-            break;
+        let up_pair = if up_avail {
+            count_at(va_high_key + 1) + count_at(va_high_key + 2)
+        } else {
+            0
+        };
+        let down_pair = if down_avail {
+            count_at(va_low_key - 1) + count_at(va_low_key - 2)
+        } else {
+            0
+        };
+
+        // Prefer the heavier side; when only one side remains, take it.
+        let go_up = match (up_avail, down_avail) {
+            (true, true) => up_pair >= down_pair,
+            (true, false) => true,
+            (false, true) => false,
+            (false, false) => break,
+        };
+
+        if go_up {
+            va_high_key += 1;
+            accumulated_tpos += count_at(va_high_key);
+            if accumulated_tpos < target_tpos && va_high_key < max_key {
+                va_high_key += 1;
+                accumulated_tpos += count_at(va_high_key);
+            }
+        } else {
+            va_low_key -= 1;
+            accumulated_tpos += count_at(va_low_key);
+            if accumulated_tpos < target_tpos && va_low_key > min_key {
+                va_low_key -= 1;
+                accumulated_tpos += count_at(va_low_key);
+            }
         }
     }
 
@@ -592,5 +662,148 @@ mod tests {
         let back = key_to_price(key, tick_size);
 
         assert!((back - 100.5).abs() < 0.01);
+    }
+
+    /// Build a single bar at a chosen offset from a fixed session start.
+    fn bar_at(start: DateTime<Utc>, mins: i64, o: f64, h: f64, l: f64, c: f64) -> Bar {
+        Bar {
+            time: start + Duration::minutes(mins),
+            open: o,
+            high: h,
+            low: l,
+            close: c,
+            volume: 1.0,
+        }
+    }
+
+    #[test]
+    fn bin_assignment_covers_every_touched_tick() {
+        // A single 30-minute bar spanning 100..=104 with tick 1.0 must register
+        // exactly one TPO at each of the five integer price levels it touches.
+        let start = Utc::now();
+        let bars = vec![bar_at(start, 0, 100.0, 104.0, 100.0, 103.0)];
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let profile = &to_tpo_profiles(&bars, &config)[0];
+
+        for level in [100.0, 101.0, 102.0, 103.0, 104.0] {
+            assert_eq!(
+                profile.tpo_count_at(level, 1.0),
+                1,
+                "level {level} should have exactly one TPO"
+            );
+        }
+        // Nothing outside the bar's range.
+        assert_eq!(profile.tpo_count_at(99.0, 1.0), 0);
+        assert_eq!(profile.tpo_count_at(105.0, 1.0), 0);
+    }
+
+    #[test]
+    fn poc_is_the_highest_count_bin() {
+        // Three periods all overlap 102.0, fewer overlap the extremes, so 102.0
+        // must accumulate the most TPOs and become the POC.
+        let start = Utc::now();
+        let bars = vec![
+            bar_at(start, 0, 100.0, 102.0, 100.0, 101.0),
+            bar_at(start, 30, 101.0, 103.0, 101.0, 102.0),
+            bar_at(start, 60, 102.0, 104.0, 102.0, 103.0),
+        ];
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let profile = &to_tpo_profiles(&bars, &config)[0];
+
+        // Independently find the heaviest level and confirm POC matches it.
+        let heaviest = profile
+            .price_tpo_count
+            .iter()
+            .max_by_key(|(_, c)| **c)
+            .map(|(&k, _)| key_to_price(k, 1.0))
+            .unwrap();
+        assert_eq!(profile.poc_price, heaviest);
+        assert_eq!(profile.poc_price, 102.0);
+    }
+
+    #[test]
+    fn value_area_is_contiguous_and_covers_about_seventy_percent() {
+        // Stack many overlapping periods to build a tall, well-populated profile.
+        let start = Utc::now();
+        let mut bars = Vec::new();
+        for p in 0..10 {
+            // Each period drifts upward by one tick, all sharing the mid-band.
+            let base = 100.0 + p as f64;
+            bars.push(bar_at(start, p * 30, base, base + 5.0, base, base + 2.0));
+        }
+        let config = TPOConfig {
+            tick_size: 1.0,
+            value_area_pct: 0.70,
+            ..Default::default()
+        };
+        let profile = &to_tpo_profiles(&bars, &config)[0];
+
+        // POC sits inside the value area.
+        assert!(profile.is_in_value_area(profile.poc_price));
+        assert!(profile.value_area_low <= profile.poc_price);
+        assert!(profile.value_area_high >= profile.poc_price);
+
+        // The value area is a contiguous price band: every level between VAL and
+        // VAH (inclusive) that exists in the profile is part of one run.
+        let total: usize = profile.price_tpo_count.values().sum();
+        let va_lo = price_to_key(profile.value_area_low, 1.0);
+        let va_hi = price_to_key(profile.value_area_high, 1.0);
+        assert!(va_lo <= va_hi);
+
+        let va_tpos: usize = profile
+            .price_tpo_count
+            .iter()
+            .filter(|&(&k, _)| k >= va_lo && k <= va_hi)
+            .map(|(_, &c)| c)
+            .sum();
+
+        // Covers at least the 70% target, and isn't the whole profile (the tails
+        // outside the value area must hold something).
+        let target = (total as f64 * 0.70).ceil() as usize;
+        assert!(
+            va_tpos >= target,
+            "value area {va_tpos} should reach target {target} of {total}"
+        );
+        assert!(
+            va_tpos < total,
+            "value area should exclude the thin tails (got all {total})"
+        );
+    }
+
+    #[test]
+    fn derive_tick_size_picks_nice_steps_and_handles_degenerate_input() {
+        // ~40 rows over a 200-wide range → a 5.0 step (40 rows * 5 = 200).
+        assert_eq!(derive_tick_size(200.0, 40), 5.0);
+        // Tiny range scales down to a sub-unit nice step.
+        assert!(derive_tick_size(0.4, 40) > 0.0);
+        // Degenerate inputs fall back to 1.0 rather than producing NaN/zero ticks.
+        assert_eq!(derive_tick_size(0.0, 40), 1.0);
+        assert_eq!(derive_tick_size(-5.0, 40), 1.0);
+        assert_eq!(derive_tick_size(100.0, 0), 1.0);
+        assert_eq!(derive_tick_size(f64::NAN, 40), 1.0);
+    }
+
+    #[test]
+    fn single_bar_zero_range_does_not_panic_and_yields_a_poc() {
+        // A flat bar (high == low) is the degenerate edge: one price level, one
+        // TPO. The profile must still build with that level as the POC.
+        let start = Utc::now();
+        let bars = vec![bar_at(start, 0, 100.0, 100.0, 100.0, 100.0)];
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let profiles = to_tpo_profiles(&bars, &config);
+        assert_eq!(profiles.len(), 1);
+        let profile = &profiles[0];
+        assert_eq!(profile.poc_price, 100.0);
+        assert_eq!(profile.value_area_low, 100.0);
+        assert_eq!(profile.value_area_high, 100.0);
     }
 }
