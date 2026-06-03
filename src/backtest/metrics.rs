@@ -75,10 +75,12 @@ impl PerformanceMetrics {
 
         let mut metrics = Self::default();
 
-        // Basic portfolio metrics
+        // Basic portfolio metrics. `max_drawdown` is held as a fraction so it
+        // shares units with the fractional returns used by every risk ratio;
+        // the portfolio tracks drawdown as a percent, so divide it down here.
         metrics.final_equity = portfolio.equity();
         metrics.peak_equity = portfolio.peak_equity;
-        metrics.max_drawdown = portfolio.max_drawdown;
+        metrics.max_drawdown = portfolio.max_drawdown / 100.0;
 
         // Return metrics
         metrics.total_return = metrics.final_equity - portfolio.initial_capital;
@@ -88,12 +90,14 @@ impl PerformanceMetrics {
             0.0
         };
 
-        // Annualized return
+        // Annualized return, kept as a fraction so it shares units with the
+        // fractional per-bar returns, the risk-free rate, and the volatility
+        // that the Sharpe/Sortino/Calmar ratios divide by. Percent scaling is
+        // applied only at the reporting boundary.
         let years = trading_days as f64 / 252.0;
         if years > 0.0 {
-            metrics.cagr = ((metrics.final_equity / portfolio.initial_capital).powf(1.0 / years)
-                - 1.0)
-                * 100.0;
+            metrics.cagr =
+                (metrics.final_equity / portfolio.initial_capital).powf(1.0 / years) - 1.0;
             metrics.annualized_return = metrics.cagr;
         }
 
@@ -196,7 +200,9 @@ impl PerformanceMetrics {
             metrics.volatility = Self::std_dev(&returns);
             metrics.annualized_volatility = metrics.volatility * (252.0_f64).sqrt();
 
-            // Sharpe ratio
+            // Sharpe ratio. Every term here is a fraction: the annualized
+            // return, the risk-free rate, and the annualized volatility share
+            // the same unit, so the ratio is dimensionless and correctly scaled.
             let excess_return = metrics.annualized_return - risk_free_rate;
             if metrics.annualized_volatility > 0.0 {
                 metrics.sharpe_ratio = excess_return / metrics.annualized_volatility;
@@ -216,14 +222,16 @@ impl PerformanceMetrics {
             metrics.ulcer_idx = Self::calculate_ulcer_idx(&portfolio.equity_curve);
         }
 
-        // Calmar ratio
+        // Calmar ratio. Annualized return and max drawdown are both fractions,
+        // so the ratio is dimensionless.
         if metrics.max_drawdown > 0.0 {
             metrics.calmar_ratio = metrics.annualized_return / metrics.max_drawdown;
         }
 
-        // Recovery factor
+        // Recovery factor. `max_drawdown` is a fraction of peak equity, so the
+        // peak-loss dollar amount is the product of the two.
         if metrics.max_drawdown > 0.0 {
-            let dd_amount = (portfolio.peak_equity * metrics.max_drawdown) / 100.0;
+            let dd_amount = portfolio.peak_equity * metrics.max_drawdown;
             if dd_amount > 0.0 {
                 metrics.recovery_factor = metrics.total_return / dd_amount;
             }
@@ -350,9 +358,9 @@ Final Equity: ${:.2}
 "#,
             self.total_return,
             self.total_return_pct,
-            self.cagr,
-            self.max_drawdown,
-            self.annualized_volatility,
+            self.cagr * 100.0,
+            self.max_drawdown * 100.0,
+            self.annualized_volatility * 100.0,
             self.sharpe_ratio,
             self.sortino_ratio,
             self.calmar_ratio,
@@ -416,5 +424,55 @@ mod tests {
 
         assert!((metrics.final_equity - 100_000.0).abs() < 0.01);
         assert_eq!(metrics.total_trades, 0);
+    }
+
+    #[test]
+    fn test_sharpe_against_hand_computed_value() {
+        use super::super::trade::{TradeSide, TradeStatus};
+        use chrono::Utc;
+
+        // Drive the metric with a fully known series so the Sharpe ratio can be
+        // checked against a hand calculation. With one year of data the
+        // annualized return collapses to the simple total return: ending equity
+        // 110_000 on 100_000 of capital is a 0.10 fraction.
+        let mut portfolio = Portfolio::new(100_000.0);
+        portfolio.cash = 110_000.0;
+
+        // Equity-curve returns of [+1%, -1%, +1%, -1%] have a zero mean and a
+        // population standard deviation of exactly 0.01 per bar.
+        let curve = [100_000.0, 101_000.0, 99_990.0, 100_989.9, 99_980.001];
+        let now = Utc::now();
+        for &equity in curve.iter() {
+            portfolio.equity_curve.push((now, equity));
+        }
+
+        // At least one closed trade is required for the full metric pass to run.
+        let mut trade = Trade::new(0, "TEST".into(), TradeSide::Long, 100.0, 10.0, now);
+        trade.pnl = 100.0;
+        trade.status = TradeStatus::Closed;
+        portfolio.trades.push(trade);
+
+        let metrics = PerformanceMetrics::calculate(&portfolio, 0.0, 252);
+
+        // Internal units are fractions: 10% annualized return, 1% per-bar vol.
+        assert!((metrics.annualized_return - 0.10).abs() < 1e-9);
+        assert!((metrics.volatility - 0.01).abs() < 1e-9);
+
+        let expected_ann_vol = 0.01 * (252.0_f64).sqrt();
+        assert!((metrics.annualized_volatility - expected_ann_vol).abs() < 1e-9);
+
+        // Sharpe = (0.10 - 0.0) / (0.01 * sqrt(252)) ≈ 0.6299605.
+        let expected_sharpe = 0.10 / expected_ann_vol;
+        assert!(
+            (metrics.sharpe_ratio - expected_sharpe).abs() < 1e-9,
+            "sharpe was {}, expected {}",
+            metrics.sharpe_ratio,
+            expected_sharpe
+        );
+        assert!((metrics.sharpe_ratio - 0.629960_5).abs() < 1e-4);
+
+        // A correctly scaled Sharpe stays near unity; the unit mismatch would
+        // have inflated it by roughly 100x.
+        assert!(metrics.sharpe_ratio < 2.0);
     }
 }
