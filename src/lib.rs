@@ -173,4 +173,4 @@ pub mod scripting;
 pub use chart::builder::{ChartBuilder, TradingChart};
 pub use data::DataSource;
 pub use model::ChartType;
-pub use widget::Chart;
+pub use widget::{Chart, RightClickTarget};

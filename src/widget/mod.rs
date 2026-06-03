@@ -246,6 +246,54 @@ pub struct Chart {
     /// pane indicators. Populated by click hit testing during rendering and
     /// readable by host apps via [`Chart::selected_element`].
     pub(crate) selection: SelectionState<ChartElementId>,
+    /// Right-click hit result captured during the last frame, drained by the
+    /// host via [`Chart::take_right_click`] (or by the turnkey context-menu
+    /// path in `TradingChart`). Holds no UI types so the core widget builds
+    /// without the `ui` feature.
+    pub(crate) right_click: Option<RightClickTarget>,
+}
+
+/// The object a right-click landed on, with the data needed to position and
+/// populate a context menu.
+///
+/// Captured during [`Chart::show`]/[`Chart::show_with_indicators`] when the user
+/// right-clicks inside the chart area. Drain it once per frame with
+/// [`Chart::take_right_click`]. Right-clicking also selects the hit object (the
+/// same as a left click) so selection handles and the menu stay consistent, the
+/// way TradingView behaves.
+///
+/// This type intentionally carries no `ui`-feature types, so the core chart can
+/// surface right-clicks even when built with `--no-default-features`; the host
+/// (or the `ui`-gated turnkey menu in `TradingChart`) maps it to a concrete
+/// menu.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RightClickTarget {
+    /// A series or overlay/pane indicator line was hit.
+    Element {
+        /// The selected chart element (series or indicator).
+        id: ChartElementId,
+        /// Data-space bar index under the cursor.
+        bar_idx: usize,
+        /// Screen position of the click (menu anchor).
+        pos: Pos2,
+        /// Price under the cursor at the click position.
+        price: f64,
+    },
+    /// A drawing object was hit. The drawing is identified by its
+    /// [`DrawingManager`](crate::drawings::DrawingManager) id.
+    Drawing {
+        /// Id of the hit drawing within the drawing manager.
+        drawing_id: usize,
+        /// Screen position of the click (menu anchor).
+        pos: Pos2,
+    },
+    /// Empty chart area was hit (no series, indicator, or drawing).
+    Background {
+        /// Screen position of the click (menu anchor).
+        pos: Pos2,
+        /// Price under the cursor at the click position.
+        price: f64,
+    },
 }
 
 /// Information about a rendered indicator pane, used for hit testing and coordinate mapping.
@@ -855,7 +903,7 @@ impl Chart {
     pub(crate) fn show_internal(
         &mut self,
         ui: &mut Ui,
-        drawing_manager: Option<&mut DrawingManager>,
+        mut drawing_manager: Option<&mut DrawingManager>,
         indicators: Option<&IndicatorRegistry>,
     ) -> Response {
         // Register egui's image loaders once per context so the embedded SVG
@@ -870,6 +918,10 @@ impl Chart {
 
         // Reset zoom_just_applied flag at the start of each frame
         self.zoom_just_applied = false;
+
+        // A right-click result lives for exactly one frame: clear any stale
+        // capture so a target that is never drained does not reappear later.
+        self.right_click = None;
 
         let available_size = ui.available_size();
         let (mut response, painter) = ui.allocate_painter(available_size, Sense::click_and_drag());
@@ -1264,6 +1316,73 @@ impl Chart {
             }
         }
 
+        // Resolve a right-click into a context-menu target. Mirrors the
+        // left-click priority (drawing > overlay indicator > series), and
+        // right-clicking an object also selects it so the menu and the
+        // selection handles agree, matching TradingView. The captured target is
+        // drained by the host via `take_right_click`, or consumed by the
+        // turnkey menu in `TradingChart`.
+        if response.secondary_clicked()
+            && let Some(click_pos) = response.interact_pointer_pos()
+            && chart_rect.contains(click_pos)
+        {
+            let price = coords.y_to_price(click_pos.y);
+
+            // Drawings sit on top of the series, so they take priority. The
+            // drawing manager is reborrowed here; it is moved into
+            // `handle_drawings` later in the frame.
+            let drawing_hit = drawing_manager
+                .as_deref()
+                .and_then(|dm| dm.hit_test(click_pos));
+
+            self.right_click = Some(if let Some(drawing_id) = drawing_hit {
+                // Right-clicking a drawing selects it (TradingView parity) and
+                // clears any series/indicator selection so handles don't show
+                // on two objects at once.
+                self.selection.deselect();
+                if let Some(dm) = drawing_manager.as_deref_mut() {
+                    dm.select(drawing_id);
+                }
+                RightClickTarget::Drawing {
+                    drawing_id,
+                    pos: click_pos,
+                }
+            } else {
+                let volume_coords = if self.config.show_volume {
+                    Some(coords.with_rect(volume_rect))
+                } else {
+                    None
+                };
+                let element_hit = hit_test_main_chart(
+                    click_pos,
+                    indicators,
+                    &coords,
+                    volume_coords.as_ref(),
+                    &self.state.data().bars,
+                    max_volume,
+                    main_visible_range.clone(),
+                );
+                match element_hit {
+                    Some((id, bar_idx)) => {
+                        self.selection.select(id, Some(bar_idx));
+                        RightClickTarget::Element {
+                            id,
+                            bar_idx,
+                            pos: click_pos,
+                            price,
+                        }
+                    }
+                    None => {
+                        self.selection.deselect();
+                        RightClickTarget::Background {
+                            pos: click_pos,
+                            price,
+                        }
+                    }
+                }
+            });
+        }
+
         // Draw selection handles for whichever element is currently selected on
         // the main chart (overlay indicator line or series data points).
         self.render_main_chart_selection(
@@ -1574,6 +1693,33 @@ impl Chart {
     /// finished acting on a selection (e.g. closing a settings dialog).
     pub fn clear_selection(&mut self) {
         self.selection.deselect();
+    }
+
+    /// Drains the right-click target captured during the last frame, if any.
+    ///
+    /// Returns `Some` exactly once per right-click: the chart hit-tests the
+    /// cursor against drawings, indicators, and series (same priority as
+    /// left-click selection) and records where the click landed. The hit object
+    /// is also selected, so selection handles and any context menu stay
+    /// consistent.
+    ///
+    /// Hosts that build their own context menus read this each frame and open
+    /// the appropriate menu at [`RightClickTarget`]`::pos`. The turnkey menu in
+    /// [`TradingChart`](crate::TradingChart) consumes it for you.
+    ///
+    /// Carries no `ui`-feature types, so it is available with
+    /// `--no-default-features`.
+    pub fn take_right_click(&mut self) -> Option<RightClickTarget> {
+        self.right_click.take()
+    }
+
+    /// Returns a mutable reference to the chart's visual configuration.
+    ///
+    /// Use this to apply settings produced by a dialog in place, e.g.
+    /// `settings.apply_to_config(chart.config_mut())`, without rebuilding the
+    /// whole [`ChartConfig`]. Changes take effect on the next rendered frame.
+    pub fn config_mut(&mut self) -> &mut ChartConfig {
+        &mut self.config
     }
 
     /// Draws selection handles for the element currently selected on the main
