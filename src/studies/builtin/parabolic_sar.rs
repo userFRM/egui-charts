@@ -71,6 +71,13 @@ impl ParabolicSAR {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for ParabolicSAR {
+    fn default() -> Self {
+        Self::new(0.02, 0.02, 0.2)
+    }
+}
+
 impl Indicator for ParabolicSAR {
     fn name(&self) -> &str {
         "PSAR"

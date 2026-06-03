@@ -78,6 +78,13 @@ impl ADX {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for ADX {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for ADX {
     fn name(&self) -> &str {
         "ADX"

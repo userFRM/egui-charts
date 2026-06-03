@@ -29,6 +29,13 @@ impl VWMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for VWMA {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for VWMA {
     fn name(&self) -> &str {
         "VWMA"

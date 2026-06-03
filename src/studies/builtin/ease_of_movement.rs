@@ -54,6 +54,13 @@ impl EaseOfMovement {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for EaseOfMovement {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for EaseOfMovement {
     fn name(&self) -> &str {
         "EoM"

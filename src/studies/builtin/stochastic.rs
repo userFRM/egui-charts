@@ -95,6 +95,13 @@ impl Stochastic {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for Stochastic {
+    fn default() -> Self {
+        Self::new(14, 3, 3)
+    }
+}
+
 impl Indicator for Stochastic {
     fn name(&self) -> &str {
         "Stochastic"

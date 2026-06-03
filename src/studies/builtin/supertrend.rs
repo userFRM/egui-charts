@@ -76,6 +76,13 @@ impl SuperTrend {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for SuperTrend {
+    fn default() -> Self {
+        Self::new(10, 3.0)
+    }
+}
+
 impl Indicator for SuperTrend {
     fn name(&self) -> &str {
         "SuperTrend"

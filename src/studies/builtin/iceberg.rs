@@ -139,6 +139,13 @@ impl IcebergDetector {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for IcebergDetector {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for IcebergDetector {
     fn name(&self) -> &str {
         "Iceberg"

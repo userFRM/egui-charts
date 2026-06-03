@@ -113,6 +113,13 @@ impl KAMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for KAMA {
+    fn default() -> Self {
+        Self::new(10)
+    }
+}
+
 impl Indicator for KAMA {
     fn name(&self) -> &str {
         "KAMA"

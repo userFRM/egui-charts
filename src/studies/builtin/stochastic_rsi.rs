@@ -136,6 +136,13 @@ impl StochasticRSI {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for StochasticRSI {
+    fn default() -> Self {
+        Self::new(14, 14, 3, 3)
+    }
+}
+
 impl Indicator for StochasticRSI {
     fn name(&self) -> &str {
         "StochRSI"

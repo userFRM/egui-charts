@@ -69,6 +69,13 @@ impl ZigZag {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for ZigZag {
+    fn default() -> Self {
+        Self::new(5.0, 10)
+    }
+}
+
 impl Indicator for ZigZag {
     fn name(&self) -> &str {
         "ZigZag"

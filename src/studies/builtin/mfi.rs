@@ -62,6 +62,13 @@ impl MoneyFlowIndex {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for MoneyFlowIndex {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for MoneyFlowIndex {
     fn name(&self) -> &str {
         "MFI"

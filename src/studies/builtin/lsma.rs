@@ -102,6 +102,13 @@ impl LSMA {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for LSMA {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
 impl Indicator for LSMA {
     fn name(&self) -> &str {
         "LSMA"

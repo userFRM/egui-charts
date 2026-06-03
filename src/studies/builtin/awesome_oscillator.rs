@@ -68,6 +68,13 @@ impl AwesomeOscillator {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for AwesomeOscillator {
+    fn default() -> Self {
+        Self::new(5, 34)
+    }
+}
+
 impl Indicator for AwesomeOscillator {
     fn name(&self) -> &str {
         "AO"

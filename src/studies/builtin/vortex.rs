@@ -35,6 +35,13 @@ impl VortexIndicator {
     }
 }
 
+/// Construct with the conventional default parameters.
+impl Default for VortexIndicator {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
 impl Indicator for VortexIndicator {
     fn name(&self) -> &str {
         "Vortex"
