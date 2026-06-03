@@ -1,8 +1,7 @@
-//! Stub types for UI components
+//! Domain model shared by the application UI components.
 //!
-//! These are placeholder types that allow the UI modules to compile
-//! independently of the frontend application. When integrating with
-//! a real application, replace these with actual implementations.
+//! Connection, layout, replay, alert, and template types consumed across the
+//! toolbars, panels, and dialogs of the `ui` feature.
 
 use chrono::{DateTime, Utc};
 use std::fmt;

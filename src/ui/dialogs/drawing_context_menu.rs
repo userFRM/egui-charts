@@ -66,14 +66,6 @@ impl MenuItem {
         self
     }
 
-    /// Mark item as disabled (greyed out, non-clickable).
-    /// Used for conditional menu items (e.g., "Copy" when clipboard unavailable).
-    #[allow(dead_code)]
-    fn disabled(mut self) -> Self {
-        self.enabled = false;
-        self
-    }
-
     fn toggle(mut self, state: bool) -> Self {
         self.is_toggle = true;
         self.toggle_state = state;

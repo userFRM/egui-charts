@@ -8,5 +8,5 @@
 pub mod hit_test;
 pub mod selection_render;
 
-pub use hit_test::{IndicatorHitResult, hit_test_indicator, hit_test_pane_indicator};
+pub use hit_test::{hit_test_indicator, hit_test_pane_indicator};
 pub use selection_render::{SelectionDotConfig, render_indicator_selection_dots};

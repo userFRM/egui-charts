@@ -20,7 +20,7 @@ use crate::templates::TemplateManager;
 use crate::theme::Theme;
 use crate::theme::components::SettingsDialogStyle;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::stubs::LayoutStyle;
+use crate::ui::model::LayoutStyle;
 use crate::ui_kit::ColorPickerState;
 use egui::{
     Color32, Context, FontId, Pos2, Rect, Response, RichText, Sense, Stroke, Ui, Vec2, Window,

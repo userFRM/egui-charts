@@ -4,7 +4,7 @@
 use crate::ext::HasDesignTokens;
 use crate::ext::UiExt;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::stubs::{
+use crate::ui::model::{
     AlertCondition, AlertManager, AlertStatus, EventAlert, IndicatorAlert, IndicatorCondition,
     PriceAlert, VolumeAlert,
 };

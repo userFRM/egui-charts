@@ -103,8 +103,6 @@
 //! - [`ChartType`] — candlestick, line, area, bar, etc.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
-#![allow(dead_code)]
-#![allow(unused_imports)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::module_inception)]
 #![allow(clippy::needless_range_loop)]
@@ -159,7 +157,7 @@ pub mod ui;
 /// Provides `SettingsTemplate` and
 /// `TemplateManager` for persisting and
 /// restoring chart configurations. Requires the `ui` feature because it
-/// re-exports types from [`ui::stubs`].
+/// re-exports types from [`ui::model`].
 #[cfg(feature = "ui")]
 pub mod templates;
 

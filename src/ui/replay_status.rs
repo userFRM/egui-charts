@@ -6,7 +6,7 @@
 use crate::icons::icons;
 use crate::styles::icons as icon_sizes;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::stubs::ReplayProgress;
+use crate::ui::model::ReplayProgress;
 use egui::{Response, RichText, Ui, Vec2, Widget};
 
 /// Replay status for the indicator

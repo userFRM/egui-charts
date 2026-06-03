@@ -120,12 +120,6 @@ impl MenuItem {
         self.enabled = false;
         self
     }
-
-    #[allow(dead_code)]
-    pub fn submenu(mut self) -> Self {
-        self.is_submenu = true;
-        self
-    }
 }
 
 // ============================================================================

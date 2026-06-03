@@ -661,8 +661,7 @@ impl Chart {
                         _ => IndicatorPaneConfig::default(),
                     };
 
-                    let mut panel =
-                        IndicatorPane::with_config(egui::Id::new("main_chart_x_axis"), config);
+                    let mut panel = IndicatorPane::with_config(config);
 
                     // Use show_aligned_interactive to get pane info for hit testing
                     if let Some((panel_rect, chart_rect, y_min, y_max, pane_response)) = panel
@@ -780,8 +779,7 @@ impl Chart {
                     _ => IndicatorPaneConfig::default(),
                 };
 
-                let mut panel =
-                    IndicatorPane::with_config(egui::Id::new("main_chart_x_axis"), config);
+                let mut panel = IndicatorPane::with_config(config);
 
                 panel.show(ui, indicator.as_ref(), bars, visible_range.clone());
             }

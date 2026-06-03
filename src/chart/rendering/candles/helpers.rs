@@ -33,12 +33,9 @@ impl PriceCoords {
 ///
 /// Converts a bar's open/high/low/close prices into screen-space Y values
 /// and derives the body top/bottom (min/max of open and close Y).
-#[allow(dead_code)]
 pub struct OhlcYCoords {
-    pub y_open: f32,
     pub y_high: f32,
     pub y_low: f32,
-    pub y_close: f32,
     pub body_top: f32,
     pub body_bottom: f32,
 }
@@ -50,10 +47,8 @@ impl OhlcYCoords {
         let y_low = coords.price_to_y(bar.low);
         let y_close = coords.price_to_y(bar.close);
         Self {
-            y_open,
             y_high,
             y_low,
-            y_close,
             body_top: y_open.min(y_close),
             body_bottom: y_open.max(y_close),
         }

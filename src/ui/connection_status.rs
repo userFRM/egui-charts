@@ -6,7 +6,7 @@
 use crate::icons::{Icon, icons};
 use crate::styles::icons as icon_sizes;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::stubs::ConnectionState;
+use crate::ui::model::ConnectionState;
 use egui::{Color32, Response, RichText, Ui, Vec2, Widget};
 
 /// Connection status indicator widget

@@ -14,7 +14,7 @@ mod strategy_exec;
 pub use series_context::SeriesContext;
 
 use crate::model::Bar;
-use crate::scripting::ast::{Expr, Program, Stmt};
+use crate::scripting::ast::{Expr, Stmt};
 use crate::scripting::strategy::{PlotOutput, StrategyState};
 use crate::scripting::types::{RuntimeError, Value};
 use crate::studies::IndicatorValue;
@@ -36,10 +36,6 @@ pub struct Runtime {
     /// Series context
     pub(crate) context: SeriesContext,
 
-    /// Parsed program
-    #[allow(dead_code)]
-    program: Option<Program>,
-
     /// Plot outputs
     plots: Vec<PlotOutput>,
 
@@ -57,7 +53,6 @@ impl Runtime {
             persistent_vars: HashMap::new(),
             builtins: HashMap::new(),
             context: SeriesContext::new(&[]),
-            program: None,
             plots: Vec::new(),
             indicator_values: Vec::new(),
             strategy: StrategyState::default(),
@@ -84,15 +79,8 @@ impl Runtime {
         &self.plots
     }
 
-    #[allow(dead_code)]
     pub fn get_strategy_state(&self) -> &StrategyState {
         &self.strategy
-    }
-
-    #[allow(dead_code)]
-    pub fn set_initial_capital(&mut self, capital: f64) {
-        self.strategy.initial_capital = capital;
-        self.strategy.equity = capital;
     }
 
     pub fn execute(&mut self, script: &str) -> Result<(), RuntimeError> {

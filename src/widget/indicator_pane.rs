@@ -1,9 +1,9 @@
 //! Separate-pane indicator rendering with direct egui painting.
 //!
 //! This module renders oscillator and multi-line indicators (RSI, MACD, Stochastic,
-//! etc.) in dedicated panels below the main chart. It uses direct [`egui::Painter`]
-//! calls rather than `egui_plot` to ensure pixel-perfect x-axis alignment with
-//! the main candlestick chart.
+//! etc.) in dedicated panels below the main chart. It paints directly through
+//! [`egui::Painter`] to ensure pixel-perfect x-axis alignment with the main
+//! candlestick chart.
 //!
 //! # Usage
 //!
@@ -14,7 +14,7 @@
 //! use egui_charts::widget::indicator_pane::{IndicatorPane, IndicatorPaneConfig};
 //!
 //! let config = IndicatorPaneConfig::rsi();
-//! let mut pane = IndicatorPane::with_config(egui::Id::new("chart_x"), config);
+//! let mut pane = IndicatorPane::with_config(config);
 //! pane.show_aligned(ui, &rsi_indicator, &bars, visible_range, coords);
 //! ```
 //!
@@ -194,25 +194,12 @@ impl IndicatorCoordParams {
 /// - Optional vertical grid lines aligned with the main chart
 pub struct IndicatorPane {
     config: IndicatorPaneConfig,
-    #[allow(dead_code)]
-    linked_axis_id: egui::Id,
 }
 
 impl IndicatorPane {
-    /// Create a new indicator panel with default configuration
-    pub fn new(linked_axis_id: egui::Id) -> Self {
-        Self {
-            config: IndicatorPaneConfig::default(),
-            linked_axis_id,
-        }
-    }
-
     /// Create a new indicator panel with custom configuration
-    pub fn with_config(linked_axis_id: egui::Id, config: IndicatorPaneConfig) -> Self {
-        Self {
-            config,
-            linked_axis_id,
-        }
+    pub fn with_config(config: IndicatorPaneConfig) -> Self {
+        Self { config }
     }
 
     /// Render the indicator panel with proper x-axis alignment

@@ -89,54 +89,6 @@ impl IcebergDetector {
     pub fn detections(&self) -> &[IcebergDetection] {
         &self.detections
     }
-
-    /// Analyze price level activity
-    #[allow(dead_code)]
-    fn analyze_price_level(
-        &self,
-        bars: &[Bar],
-        start_idx: usize,
-        price: f64,
-        tick_size: f64,
-    ) -> Option<(usize, f64, bool)> {
-        let end_idx = (start_idx + self.period).min(bars.len());
-        let mut touches = 0;
-        let mut total_volume = 0.0;
-        let mut buy_volume = 0.0;
-        let mut sell_volume = 0.0;
-
-        for i in start_idx..end_idx {
-            let bar = &bars[i];
-            let bar_low = bar.low;
-            let bar_high = bar.high;
-
-            // Check if bar touched this price level
-            if bar_low - tick_size <= price && bar_high + tick_size >= price {
-                touches += 1;
-
-                // Estimate volume at this level (simplified)
-                let bar_range = bar.high - bar.low;
-                if bar_range > 0.0 {
-                    let level_volume = bar.volume / (bar_range / tick_size).max(1.0);
-                    total_volume += level_volume;
-
-                    // Estimate side based on close
-                    if bar.close >= bar.open {
-                        buy_volume += level_volume;
-                    } else {
-                        sell_volume += level_volume;
-                    }
-                }
-            }
-        }
-
-        if touches >= self.min_touches {
-            let is_buy = buy_volume > sell_volume;
-            Some((touches, total_volume, is_buy))
-        } else {
-            None
-        }
-    }
 }
 
 /// Construct with the conventional default parameters.
