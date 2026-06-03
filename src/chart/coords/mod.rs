@@ -136,6 +136,30 @@ impl ChartMapping {
         x >= self.rect.min.x && x <= self.rect.max.x
     }
 
+    /// Resolve the bar directly under a cursor X coordinate to a local index
+    /// into the visible data slice of length `visible_len`.
+    ///
+    /// Returns `None` when there is no data, or when the cursor falls before the
+    /// first bar or after the last bar (the right-side empty scroll margin), so
+    /// callers never index past the slice or read a stale neighbour. Resolution
+    /// uses [`Self::x_to_idx_f32`], the exact inverse of [`Self::idx_to_x`], so
+    /// the bar at its own centre x resolves to itself and the readout describes
+    /// the same bar the crosshair snaps to.
+    #[inline]
+    pub fn local_idx_at_x(&self, x: f32, visible_len: usize) -> Option<usize> {
+        if visible_len == 0 || self.bar_spacing.abs() < f32::EPSILON {
+            return None;
+        }
+        let global_idx = self.x_to_idx_f32(x).round() as isize;
+
+        let first = self.start_idx as isize;
+        let last = (self.start_idx + visible_len - 1) as isize;
+        if global_idx < first || global_idx > last {
+            return None;
+        }
+        Some((global_idx as usize) - self.start_idx)
+    }
+
     /// Calculate the bar width based on spacing.
     #[inline]
     pub fn bar_width(&self) -> f32 {
@@ -285,6 +309,86 @@ mod tests {
         let price = degenerate.y_to_price(10.0);
         assert!(price.is_finite());
         assert_eq!(price, 100.0);
+    }
+
+    #[test]
+    fn test_local_idx_at_x_resolves_bar_under_cursor() {
+        // 6 visible bars [50..=55], anchored so the data fills the rect.
+        let mapping = ChartMapping::new(
+            Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
+            10.0, // bar_spacing
+            50,   // start_idx
+            55,   // base_idx (last visible bar)
+            0.0,  // right_offset
+            100.0,
+            200.0,
+        );
+        let visible_len = 6;
+
+        // Hovering the exact x of each bar resolves to that local index.
+        for local in 0..visible_len {
+            let global = mapping.start_idx + local;
+            let x = mapping.idx_to_x(global);
+            assert_eq!(
+                mapping.local_idx_at_x(x, visible_len),
+                Some(local),
+                "x {x} for global {global} should map to local {local}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_local_idx_at_x_edges_and_empty() {
+        let mapping = ChartMapping::new(
+            Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
+            10.0,
+            50,
+            55,
+            0.0,
+            100.0,
+            200.0,
+        );
+        let visible_len = 6;
+
+        // Empty data never resolves a bar.
+        assert_eq!(mapping.local_idx_at_x(400.0, 0), None);
+
+        // Far to the right of the last bar (empty scroll margin) -> None.
+        assert_eq!(
+            mapping.local_idx_at_x(mapping.rect.max.x + 50.0, visible_len),
+            None
+        );
+
+        // Far to the left of the first bar -> None.
+        assert_eq!(
+            mapping.local_idx_at_x(mapping.rect.min.x - 50.0, visible_len),
+            None
+        );
+
+        // The first and last bars resolve to clamped endpoints, never out of range.
+        let first_x = mapping.idx_to_x(mapping.start_idx);
+        let last_x = mapping.idx_to_x(mapping.start_idx + visible_len - 1);
+        assert_eq!(mapping.local_idx_at_x(first_x, visible_len), Some(0));
+        assert_eq!(
+            mapping.local_idx_at_x(last_x, visible_len),
+            Some(visible_len - 1)
+        );
+    }
+
+    #[test]
+    fn test_local_idx_at_x_degenerate_spacing() {
+        // Zero bar spacing has no inverse; resolution declines rather than dividing
+        // by zero.
+        let mapping = ChartMapping::new(
+            Rect::from_min_size(Pos2::new(0.0, 0.0), egui::Vec2::new(800.0, 400.0)),
+            0.0,
+            0,
+            5,
+            0.0,
+            100.0,
+            200.0,
+        );
+        assert_eq!(mapping.local_idx_at_x(400.0, 6), None);
     }
 
     #[test]

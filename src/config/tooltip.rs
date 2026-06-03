@@ -46,6 +46,13 @@ impl std::fmt::Display for TooltipMode {
 /// Tooltip configuration options
 #[derive(Debug, Clone)]
 pub struct TooltipOptions {
+    /// Whether the hover readout is drawn at all.
+    ///
+    /// When `false` the chart still shows the crosshair but suppresses the
+    /// OHLC/value readout, matching charting UIs that let users toggle the
+    /// data tooltip independently of the crosshair.
+    pub enabled: bool,
+
     /// Tooltip display mode
     pub mode: TooltipMode,
 
@@ -100,6 +107,7 @@ pub struct TooltipOptions {
 impl Default for TooltipOptions {
     fn default() -> Self {
         Self {
+            enabled: true,
             mode: TooltipMode::Floating,
             show_ohlc: true,
             show_volume: true,
@@ -157,6 +165,12 @@ impl TooltipOptions {
     /// Set tooltip mode
     pub fn with_mode(mut self, mode: TooltipMode) -> Self {
         self.mode = mode;
+        self
+    }
+
+    /// Enable or disable the hover readout.
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
         self
     }
 

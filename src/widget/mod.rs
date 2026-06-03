@@ -1349,6 +1349,26 @@ impl Chart {
                 &coords,
                 &self.chart_options.crosshair,
             );
+
+            // Draw the OHLC/value readout for the bar under the cursor, matching
+            // the bar the crosshair snaps to. Resolve via the shared coordinate
+            // mapping so the readout and the crosshair never disagree, and skip
+            // it when the cursor is in the empty scroll margin past the data.
+            let tooltip_options = &self.chart_options.tooltip;
+            if tooltip_options.enabled
+                && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
+            {
+                let candle = &visible_data[local_idx];
+                rendering::render_tooltip_with_options(
+                    &price_ctx,
+                    hover_pos,
+                    candle,
+                    tooltip_options,
+                    &price_scale,
+                    &coords,
+                    visible_data,
+                );
+            }
         } else {
             // Clear hover bar index when not hovering locally
             self.last_hover_bar_idx = None;
