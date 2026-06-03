@@ -156,10 +156,18 @@ impl Chart {
         });
     }
 
-    /// Automatically request keyboard focus when the pointer hovers over the chart,
-    /// so keyboard shortcuts work without an explicit click.
+    /// Request keyboard focus when the user actually interacts with the chart
+    /// (click, pointer-down, or drag), so keyboard shortcuts become active.
+    ///
+    /// Focus is deliberately *not* taken on bare hover: doing so would paint the
+    /// keyboard focus ring whenever the pointer merely passes over the chart,
+    /// which reads as a spurious selection. Tab/keyboard navigation still routes
+    /// focus here through egui's own focus machinery, so the focus ring remains a
+    /// genuine keyboard affordance.
     pub fn request_focus_if_needed(&self, response: &mut Response) {
-        if self.chart_options.keyboard.enabled && response.hovered() {
+        if self.chart_options.keyboard.enabled
+            && (response.clicked() || response.dragged() || response.is_pointer_button_down_on())
+        {
             response.request_focus();
         }
     }
