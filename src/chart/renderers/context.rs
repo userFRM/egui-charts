@@ -75,7 +75,6 @@ impl LinearPriceMap {
 pub struct StyleColors {
     pub bullish: Color32,
     pub bearish: Color32,
-    pub grid: Color32,
     pub text: Color32,
     /// Border color for bullish candles (None = same as body)
     pub bullish_border: Option<Color32>,
@@ -90,20 +89,6 @@ pub struct StyleColors {
 }
 
 impl StyleColors {
-    pub fn new(bullish: Color32, bearish: Color32, grid: Color32, text: Color32) -> Self {
-        Self {
-            bullish,
-            bearish,
-            grid,
-            text,
-            bullish_border: None,
-            bearish_border: None,
-            bullish_wick: None,
-            bearish_wick: None,
-            candle_border_width: 0.0,
-        }
-    }
-
     /// Get color based on bar direction
     pub fn bar_color(&self, is_bullish: bool) -> Color32 {
         if is_bullish {

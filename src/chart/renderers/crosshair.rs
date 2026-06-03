@@ -5,69 +5,6 @@ use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Pos2, Rect, Stroke};
 
-/// Renders crosshair and tooltip
-pub fn render_crosshair(
-    context: &RenderContext,
-    hover_pos: Pos2,
-    visible_data: &[Bar],
-    price_scale: &LinearPriceMap,
-    coords: &ChartMapping,
-) {
-    render_crosshair_with_mode(
-        context,
-        hover_pos,
-        visible_data,
-        price_scale,
-        coords,
-        CrosshairMode::Normal,
-    );
-}
-
-/// Renders crosshair with specified mode and style
-pub fn render_crosshair_with_mode(
-    context: &RenderContext,
-    hover_pos: Pos2,
-    visible_data: &[Bar],
-    price_scale: &LinearPriceMap,
-    coords: &ChartMapping,
-    mode: CrosshairMode,
-) {
-    render_crosshair_with_style(
-        context,
-        hover_pos,
-        visible_data,
-        price_scale,
-        coords,
-        mode,
-        CrosshairStyle::Full,
-    );
-}
-
-/// Renders crosshair with full style and mode control
-pub fn render_crosshair_with_style(
-    context: &RenderContext,
-    hover_pos: Pos2,
-    visible_data: &[Bar],
-    price_scale: &LinearPriceMap,
-    coords: &ChartMapping,
-    mode: CrosshairMode,
-    style: CrosshairStyle,
-) {
-    // Use default color for backwards compatibility
-    render_crosshair_full(
-        context,
-        hover_pos,
-        visible_data,
-        price_scale,
-        coords,
-        mode,
-        style,
-        DESIGN_TOKENS.semantic.chart.crosshair_line,
-        1.0,
-        CrosshairLineStyle::Dashed,
-    );
-}
-
 /// Renders crosshair with full customization: style, mode, color, line width, line style
 pub fn render_crosshair_full(
     context: &RenderContext,

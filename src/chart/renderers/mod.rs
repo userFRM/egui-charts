@@ -1,18 +1,16 @@
 //! Legacy chart rendering components.
 //!
 //! Provides standalone rendering functions for individual chart elements:
-//! candlesticks, OHLC bars, crosshairs, price/time grids, labels, markers,
+//! candlesticks, OHLC bars, crosshairs, price/time labels, markers,
 //! session break lines, tooltips, and volume bars.
 //!
-//! These functions are consumed by the modern rendering pipeline in
-//! [`rendering::pipeline`](super::rendering::pipeline) via adapter structs,
-//! and can also be called directly for custom rendering scenarios.
+//! These functions are called directly by the chart widget and the modern
+//! rendering layer in [`rendering`](super::rendering).
 
 mod bar;
 mod candle;
 mod context;
 mod crosshair;
-mod grid;
 mod indicator;
 mod labels;
 mod markers;
@@ -31,7 +29,7 @@ pub use context::{BarRenderParams, ChartMapping, LinearPriceMap, RenderContext, 
 /// *engine* (logarithmic / percentage / indexed modes) is the unrelated
 /// [`crate::scales::PriceScale`]; the two are intentionally different types.
 pub use context::LinearPriceMap as PriceScale;
-pub use crosshair::{render_crosshair, render_crosshair_full, render_crosshair_with_mode};
+pub use crosshair::render_crosshair_full;
 pub use indicator::IndicatorRenderer;
 pub use labels::{render_legend, render_ohlc_info, render_price_labels, render_time_labels};
 pub use markers::render_markers;
