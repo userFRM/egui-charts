@@ -89,10 +89,29 @@ pub fn render_series_selection_on_points(
     }
 }
 
-/// Render selection dots on candle data points
+/// Resolve the close price for an absolute bar index against a visible-slice
+/// array.
 ///
-/// For candlestick charts, places dots at the close price of each candle
-/// at regular intervals.
+/// `visible_range` is expressed in absolute (data-space) bar indices because
+/// [`ChartMapping::idx_to_x`] positions bars by their absolute index. The
+/// `closes` slice, however, holds only the visible bars and is therefore
+/// indexed locally: the close for absolute bar `abs_idx` lives at
+/// `closes[abs_idx - start_idx]`. Conflating the two index spaces drops every
+/// handle once the chart is scrolled past the first bar (a non-zero
+/// `start_idx`), which is why the local offset is applied explicitly here.
+///
+/// Returns `None` when `abs_idx` precedes the visible window or falls beyond the
+/// available data.
+#[inline]
+fn close_for_abs_idx(closes: &[f64], start_idx: usize, abs_idx: usize) -> Option<f64> {
+    let local = abs_idx.checked_sub(start_idx)?;
+    closes.get(local).copied()
+}
+
+/// Render selection dots on candle data points.
+///
+/// For candlestick charts, places dots at the close price of each candle at
+/// regular intervals.
 pub fn render_candle_selection_dots<F>(
     painter: &Painter,
     visible_range: std::ops::Range<usize>,
@@ -103,19 +122,64 @@ pub fn render_candle_selection_dots<F>(
 ) where
     F: Fn(f64) -> f32,
 {
+    let start_idx = visible_range.start;
     for i in visible_range {
         if i % config.dot_interval != 0 {
             continue;
         }
 
-        if let Some(&close) = closes.get(i) {
-            let x = coords.idx_to_x(i);
-            let y = price_to_y(close);
+        let Some(close) = close_for_abs_idx(closes, start_idx, i) else {
+            continue;
+        };
 
-            // Only draw if within chart bounds
-            if coords.rect.contains(Pos2::new(x, y)) {
-                draw_selection_dot(painter, Pos2::new(x, y), config);
-            }
+        let x = coords.idx_to_x(i);
+        let y = price_to_y(close);
+
+        // Only draw if within chart bounds
+        if coords.rect.contains(Pos2::new(x, y)) {
+            draw_selection_dot(painter, Pos2::new(x, y), config);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_lookup_resolves_for_nonzero_start_index() {
+        // Mirrors the demo: ~100 visible bars drawn from a larger series, so the
+        // visible window starts well past index 0. The `closes` slice is the
+        // local visible slice; absolute index `i` must map to `closes[i -
+        // start]`, not `closes[i]`.
+        let start_idx = 400;
+        let closes: Vec<f64> = (0..100).map(|local| 10.0 + local as f64).collect();
+        let visible_range = start_idx..start_idx + closes.len();
+
+        // Every absolute index in the visible window must resolve.
+        for abs_idx in visible_range.clone() {
+            let resolved = close_for_abs_idx(&closes, start_idx, abs_idx)
+                .expect("close must resolve for an in-window absolute index");
+            assert_eq!(resolved, closes[abs_idx - start_idx]);
+        }
+
+        // The first and last handle positions are the regression cases: with the
+        // old `closes.get(i)` lookup these returned `None` and nothing drew.
+        assert_eq!(close_for_abs_idx(&closes, start_idx, start_idx), Some(10.0));
+        assert_eq!(
+            close_for_abs_idx(&closes, start_idx, visible_range.end - 1),
+            Some(10.0 + 99.0)
+        );
+    }
+
+    #[test]
+    fn close_lookup_rejects_out_of_window_indices() {
+        let start_idx = 400;
+        let closes: Vec<f64> = vec![1.0, 2.0, 3.0];
+
+        // Before the window: would underflow if subtracted naively.
+        assert_eq!(close_for_abs_idx(&closes, start_idx, start_idx - 1), None);
+        // Past the available data.
+        assert_eq!(close_for_abs_idx(&closes, start_idx, start_idx + 3), None);
     }
 }
