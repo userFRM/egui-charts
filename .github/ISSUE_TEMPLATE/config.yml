@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and discussions
+    url: https://github.com/userFRM/egui-charts/discussions
+    about: Ask questions, share ideas, and discuss usage with the community.
+  - name: Live WebAssembly demo
+    url: https://userfrm.github.io/egui-charts/
+    about: Try egui-charts in your browser before filing — it may help clarify the issue.

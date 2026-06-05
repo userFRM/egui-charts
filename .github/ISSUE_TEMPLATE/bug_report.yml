@@ -1,0 +1,85 @@
+name: Bug report
+description: Report a defect so we can reproduce and fix it.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Clear reproduction steps are the fastest path to a fix.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear and concise description of the bug.
+      placeholder: When I add a Fibonacci retracement on a log-scale chart, the anchors render at the wrong price.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Minimal, ordered steps to reproduce. A code snippet or which example you ran helps a lot.
+      placeholder: |
+        1. Run `cargo run --example drawing_tools`
+        2. Switch the Y axis to logarithmic
+        3. Draw a Fibonacci retracement
+        4. Observe the level labels
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The egui-charts version (e.g. 0.2.0) or the commit SHA you are on.
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform-type
+    attributes:
+      label: Platform
+      description: Where did you hit this?
+      options:
+        - Native (desktop app or example)
+        - Web (WebAssembly demo or browser build)
+    validations:
+      required: true
+  - type: input
+    id: platform-details
+    attributes:
+      label: OS or browser details
+      description: Native OS and version, or web browser and version.
+      placeholder: macOS 14.5 (native) / Firefox 126 (web)
+    validations:
+      required: false
+  - type: input
+    id: feature-flags
+    attributes:
+      label: Feature flags enabled
+      description: Which Cargo features were on (default is `icons`). Examples — `icons`, `ui`, `backtest`, `scripting`, or `--all-features`.
+      placeholder: icons, ui
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Relevant log output, panic backtraces, or screenshots. Logs are rendered as code automatically.
+      render: shell
+    validations:
+      required: false

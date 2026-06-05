@@ -1,0 +1,53 @@
+name: Feature request
+description: Propose a new capability or improvement.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We welcome creative contributions. Describe the problem first — the strongest proposals start from a concrete need rather than a chosen solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what is currently blocking or awkward? Describe the use case, not just the missing feature.
+      placeholder: I want to overlay a volume-weighted average price band, but there is no built-in VWAP indicator.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: What you would like to see. Sketch the API, behavior, or UI if you have one in mind. Alternatives you considered are welcome too.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who benefits and how. Roughly how common or important is this, and does it unblock other work?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the engine does this touch?
+      options:
+        - chart
+        - indicators
+        - drawings
+        - ui
+        - scripting
+        - backtest
+        - docs
+    validations:
+      required: false
+  - type: checkboxes
+    id: willing-to-pr
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to submit a PR for this
+          required: false
