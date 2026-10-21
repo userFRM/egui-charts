@@ -75,21 +75,11 @@ Each item is marked as complete, partial, or missing.
 - [x] Price formatters: default, currency, percentage, scientific, volume, custom
 - [x] Time formatters: default, locale, relative, custom
 
-### Series API
-- [x] `ISeriesApi` trait defined with coordinate conversion
-- [x] `SeriesApiImpl` with real coordinate math
-- [ ] `bars_in_logical_range()` returns synthetic placeholder bars (hardcoded values)
-- [ ] `current_price()` always returns `None`
-- [ ] `symbol()` returns literal `"SYMBOL"`
-- [ ] `ITimeScaleApi` trait defined but has no concrete implementation
-- [ ] `PriceScaleApiImpl::width()` hardcoded to `60.0`
-
 ### Multi-Pane
 - [x] `IndicatorPane` widget for separate-pane indicators
 - [x] Predefined configs: RSI, MACD, etc.
 - [x] X-axis synchronization with main chart
 - [ ] No `PaneManager` — indicator sub-panes manually constructed
-- [ ] `move_to_pane` / `merge_with_pane` / `detach_pane` are stubs on `ISeriesApi`
 
 ---
 
@@ -597,7 +587,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 - [ ] Fix Volume Profile drawing tools to use real volume data
 - [ ] Add indicator-specific rendering (histograms, filled clouds, dot plots)
 - [ ] Register all ~130 indicators in `IndicatorFactory`
-- [ ] Complete `ISeriesApi` and `ITimeScaleApi` implementations
 - [ ] Build multi-pane layout manager (`PaneManager`)
 
 ### What needs work (P2 — polish and completeness)

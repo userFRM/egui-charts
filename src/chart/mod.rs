@@ -33,7 +33,6 @@
 //! | [`builder`] | `ChartBuilder` (fluent API) and `TradingChart` (runtime wrapper) |
 //! | [`coords`] | Unified coordinate system — single source of truth for idx/price ↔ screen |
 //! | [`series`] | Series types (Line, Area, Baseline, Histogram, Bar) with hit testing and selection |
-//! | [`series_api`] | TradingView-compatible `ISeriesApi` / `ITimeScaleApi` / `IStudyApi` traits |
 //! | [`overlays`] | Visual overlays — order lines, heatmap strips, volume bubbles |
 //!
 //! # Internal Modules (crate-only)
@@ -66,7 +65,6 @@ pub mod coords;
 pub mod overlays;
 pub mod selection;
 pub mod series;
-pub mod series_api;
 
 // Internal engine modules — used within the crate but not part of the public API.
 pub(crate) mod cursor_modes;
