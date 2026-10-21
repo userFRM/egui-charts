@@ -34,7 +34,7 @@ To add one: add a variant to `DrawingToolType`, slot it into the right category 
 
 ### A new chart type
 
-Chart types are defined by the `ChartType` enum in [`src/model/chart_type.rs`](src/model/chart_type.rs). Price-transform chart types (Renko, Kagi, Point & Figure, Line Break, range bars, footprint, TPO) have their model logic alongside it in [`src/model/`](src/model) (for example `renko.rs`, `kagi.rs`, `point_figure.rs`, `line_break.rs`, `range_bar.rs`, `footprint.rs`, `tpo.rs`). Rendering and series dispatch live under [`src/chart/series/`](src/chart/series) and [`src/chart/rendering/`](src/chart/rendering).
+Chart types are defined by the `ChartType` enum in [`src/model/chart_type.rs`](src/model/chart_type.rs). Price-transform chart types (Renko, Kagi, Point & Figure, Line Break, range bars, TPO) have their model logic alongside it in [`src/model/`](src/model) (for example `renko.rs`, `kagi.rs`, `point_figure.rs`, `line_break.rs`, `range_bar.rs`, `tpo.rs`). Rendering and series dispatch live under [`src/chart/series/`](src/chart/series) and [`src/chart/rendering/`](src/chart/rendering).
 
 To add one: add a `ChartType` variant with its metadata, add any price transform under `src/model/`, then wire the variant into the series/rendering dispatch so it draws.
 

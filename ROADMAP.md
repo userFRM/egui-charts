@@ -36,10 +36,8 @@ Each item is marked as complete, partial, or missing.
 - [x] **Line Break** — 3-line break bricks via `to_line_break_lines()`
 - [x] **Point & Figure** — X/O column rendering, max 1000 columns
 
-#### Advanced (require tick/order-flow data for full accuracy)
-- [ ] **Volume Footprint** — Renders buyer/seller split from OHLCV approximation; needs real bid/ask tick data
+#### Advanced
 - [ ] **Time Price Opportunity (TPO)** — Full `TpoRenderer` exists (value area, POC, initial balance, 3 display modes, 4 color modes) but is NOT wired into the main dispatch; pipeline still routes to placeholder
-- [ ] **Session Volume Profile** — Session-chunked approximation, not per-price-level aggregation
 
 ### Pan / Zoom
 - [x] Mouse wheel zoom (centered on cursor)
@@ -563,7 +561,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 | High | Regression Trend R-squared hardcoded to 0.95 | `drawings/rendering/channels.rs` |
 | High | Anchored VWAP std_dev is visual approximation | `drawings/rendering/trading/volume_profile.rs` |
 | High | Volume profile tools use approximate bar lengths | `drawings/rendering/trading/volume_profile.rs` |
-| High | TPO full renderer not wired into dispatch | `chart/rendering/candles/advanced.rs` |
 | Medium | MACD histogram renders as line, not bars | `chart/renderers/indicator.rs` |
 | Medium | Ichimoku cloud renders as lines, not filled regions | `chart/renderers/indicator.rs` |
 | Medium | Parabolic SAR renders as line, not dots | `chart/renderers/indicator.rs` |
@@ -582,7 +579,7 @@ All ui_kit components are **fully implemented** generic building blocks:
 ## Feature Gap Summary
 
 ### What's built (ready to ship)
-- 17 of 20 chart types with full rendering
+- 17 of 18 chart types with full rendering
 - Complete pan/zoom/crosshair/scale system
 - 80 of 88 drawing tools with real geometry (95 total incl. 4 cursor modes + 3 placeholders)
 - ~130 technical indicators with complete calculation logic

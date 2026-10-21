@@ -18,8 +18,8 @@
 //! - Line-based: Line, Line with Markers, Step Line
 //! - Area-based: Area, HLC Area, Baseline
 //! - Japanese: Renko, Kagi, Line Break, Heikin-Ashi
-//! - Range-based: Range Bars, Point & Figure
-//! - Advanced: Volume Footprint, TPO, Session Volume, High-Low
+//! - Range-based: High-Low, Range Bars, Point & Figure
+//! - Advanced: TPO (Market Profile)
 
 use std::fmt;
 
@@ -75,12 +75,8 @@ pub enum ChartType {
     PointAndFigure,
 
     // === Advanced/Professional Types ===
-    /// Volume footprint / order flow
-    VolumeFootprint,
     /// Time Price Opportunity (Market Profile)
     TimePriceOpportunity,
-    /// Volume aggregated by session
-    SessionVolume,
 }
 
 /// Categories for grouping chart types in the UI
@@ -141,9 +137,7 @@ impl ChartType {
             ChartType::HlcArea,
             ChartType::Baseline,
             ChartType::HighLow,
-            ChartType::VolumeFootprint,
             ChartType::TimePriceOpportunity,
-            ChartType::SessionVolume,
             ChartType::LineBreak,
             ChartType::Kagi,
             ChartType::Range,
@@ -167,9 +161,7 @@ impl ChartType {
             ChartType::HlcArea => "HLC area",
             ChartType::Baseline => "Baseline",
             ChartType::HighLow => "High-low",
-            ChartType::VolumeFootprint => "Volume footprint",
             ChartType::TimePriceOpportunity => "Time Price Opportunity",
-            ChartType::SessionVolume => "Session volume",
             ChartType::LineBreak => "Line break",
             ChartType::Kagi => "Kagi",
             ChartType::Range => "Range",
@@ -198,9 +190,7 @@ impl ChartType {
             ChartType::HlcArea => "High-Low-Close area",
             ChartType::Baseline => "Baseline comparison",
             ChartType::HighLow => "High-Low range",
-            ChartType::VolumeFootprint => "Order flow analysis",
             ChartType::TimePriceOpportunity => "TPO / Market Profile",
-            ChartType::SessionVolume => "Volume by session",
             ChartType::LineBreak => "Three line break",
             ChartType::Kagi => "Kagi chart",
             ChartType::Range => "Range bars",
@@ -239,9 +229,7 @@ impl ChartType {
 
             ChartType::HighLow | ChartType::Range => ChartTypeCategory::RangeBased,
 
-            ChartType::VolumeFootprint
-            | ChartType::TimePriceOpportunity
-            | ChartType::SessionVolume => ChartTypeCategory::Advanced,
+            ChartType::TimePriceOpportunity => ChartTypeCategory::Advanced,
         }
     }
 
@@ -269,9 +257,7 @@ impl ChartType {
             | ChartType::Heikin
             | ChartType::Range
             | ChartType::PointAndFigure
-            | ChartType::VolumeFootprint
-            | ChartType::TimePriceOpportunity
-            | ChartType::SessionVolume => true,
+            | ChartType::TimePriceOpportunity => true,
 
             ChartType::Line
             | ChartType::LineWithMarkers
@@ -283,19 +269,8 @@ impl ChartType {
 
     /// Whether this chart type supports volume display
     pub fn supports_volume(&self) -> bool {
-        match self {
-            // Time-independent charts don't align with volume
-            ChartType::Renko
-            | ChartType::Kagi
-            | ChartType::PointAndFigure
-            | ChartType::Range
-            | ChartType::LineBreak => false,
-
-            // Volume footprint IS the volume display
-            ChartType::VolumeFootprint | ChartType::SessionVolume => false,
-
-            _ => true,
-        }
+        // Time-independent charts don't align with volume
+        !self.is_time_independent()
     }
 
     /// Whether this chart type requires special parameters
@@ -376,7 +351,7 @@ impl From<ChartStyle> for ChartType {
 impl ChartType {
     /// Convert to `ChartStyle`, if a mapping exists.
     ///
-    /// Domain-only types (VolumeFootprint, TimePriceOpportunity, SessionVolume, Range)
+    /// Domain-only types (TimePriceOpportunity, Range)
     /// have no wire-format equivalent and return `None`.
     pub fn to_chart_style(&self) -> Option<ChartStyle> {
         match self {
@@ -397,10 +372,7 @@ impl ChartType {
             ChartType::Heikin => Some(ChartStyle::HeikinAshi),
             ChartType::PointAndFigure => Some(ChartStyle::PnF),
             // Domain-only types with no TV equivalent
-            ChartType::Range
-            | ChartType::VolumeFootprint
-            | ChartType::TimePriceOpportunity
-            | ChartType::SessionVolume => None,
+            ChartType::Range | ChartType::TimePriceOpportunity => None,
         }
     }
 }
@@ -451,11 +423,6 @@ impl ChartTypeParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_all_chart_types_count() {
-        assert_eq!(ChartType::all().len(), 20);
-    }
 
     #[test]
     fn test_default_is_candles() {

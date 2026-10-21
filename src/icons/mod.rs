@@ -1073,27 +1073,11 @@ pub mod icons {
         )),
     );
 
-    pub const CHART_VOLUME_FOOTPRINT: Icon = Icon::new(
-        "chart_types/chart-volume-footprint.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-volume-footprint.svg"
-        )),
-    );
-
     pub const CHART_TPO: Icon = Icon::new(
         "chart_types/chart-tpo.svg",
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/assets/icons/chart_types/chart-tpo.svg"
-        )),
-    );
-
-    pub const CHART_SESSION_VOLUME: Icon = Icon::new(
-        "chart_types/chart-session-volume.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-session-volume.svg"
         )),
     );
 

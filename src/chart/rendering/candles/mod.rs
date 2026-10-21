@@ -8,9 +8,8 @@
 //! - Area-based: Area, HLC Area, Baseline
 //! - Japanese: Renko, Kagi, Line Break, Heikin-Ashi
 //! - Range: High-Low, Range Bars, Point & Figure
-//! - Advanced: Volume Footprint, TPO, Session Volume
+//! - Advanced: TPO
 
-mod advanced;
 mod area;
 mod candlestick;
 mod heikin_ashi;
@@ -343,21 +342,7 @@ pub fn render_chart_type(
             );
         }
 
-        // === Advanced Types (placeholders) ===
-        ChartType::VolumeFootprint => {
-            advanced::render_volume_footprint_placeholder(
-                painter,
-                price_rect,
-                ctx.visible_data,
-                ctx.start_idx,
-                params.bar_width(),
-                ctx.price_scale,
-                params.chart_rect_min_x(),
-                &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
-            );
-        }
+        // === Advanced Types ===
         ChartType::TimePriceOpportunity => {
             // Auto-derive the price-bin size from the visible range: a zero
             // tick_size signals `render_live_tpo` to pick a readable row count.
@@ -375,20 +360,6 @@ pub fn render_chart_type(
                 &tpo_config,
                 &idx_to_coord,
                 params.chart_rect_min_x(),
-                params.bullish_color(),
-                params.bearish_color(),
-            );
-        }
-        ChartType::SessionVolume => {
-            advanced::render_session_volume_placeholder(
-                painter,
-                price_rect,
-                ctx.visible_data,
-                ctx.start_idx,
-                params.bar_width(),
-                ctx.price_scale,
-                params.chart_rect_min_x(),
-                &idx_to_coord,
                 params.bullish_color(),
                 params.bearish_color(),
             );

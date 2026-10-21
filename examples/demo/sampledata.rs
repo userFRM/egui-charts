@@ -200,8 +200,6 @@ pub fn chart_type_from_name(name: &str) -> Option<egui_charts::model::ChartType>
         "time price opportunity" | "tpo" | "market profile" => {
             Some(ChartType::TimePriceOpportunity)
         }
-        "volume footprint" => Some(ChartType::VolumeFootprint),
-        "session volume" => Some(ChartType::SessionVolume),
         _ => None,
     }
 }

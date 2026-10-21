@@ -17,7 +17,6 @@ mod chartstate;
 mod color;
 mod date_range;
 pub mod enums;
-pub mod footprint;
 pub mod kagi;
 pub mod line_break;
 mod markers;

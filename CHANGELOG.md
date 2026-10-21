@@ -11,6 +11,10 @@ All notable changes to this project are documented in this file. The format is b
 - Dashed lines are clipped to the visible area before they are dashed, so a drawing anchored far off screen no longer hangs the UI thread or exhausts memory. Every dashed line in the crate (drawings, crosshair, order lines, last-price line, session breaks, indicator pane zones) now shares this routine.
 - Auto-scaling flat price or indicator data now centres the series in a range proportional to the price level instead of collapsing to a near-zero range.
 
+### Removed
+
+- The Volume Footprint and Session Volume chart types, which approximated per-price volume from bar totals, and the unused `model::footprint` module.
+
 ## [0.2.0] - 2026-06-04
 
 ### Added

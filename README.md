@@ -18,13 +18,13 @@
 
 ---
 
-20 chart types (17 fully wired; Volume Footprint, TPO, and Session Volume Profile are in progress). 95 drawing tools. 130+ technical indicators. Full design-token theme system. Pure Rust — compiles to native and WebAssembly with zero JavaScript dependencies.
+18 chart types (17 fully wired; TPO is in progress). 95 drawing tools. 130+ technical indicators. Full design-token theme system. Pure Rust: compiles to native and WebAssembly with zero JavaScript dependencies.
 
 ---
 
 ## When This Is Useful
 
-- **You need TradingView-quality charts inside an egui application** — candlesticks, OHLC, Heikin-Ashi, Renko, Kagi, Market Profile, and 14 more chart types out of the box.
+- **You need TradingView-quality charts inside an egui application**: candlesticks, OHLC, Heikin-Ashi, Renko, Kagi, Market Profile, and 12 more chart types out of the box.
 - **You're building a Tauri desktop trading terminal** — designed as a drop-in rendering engine with toolbar, panel, and dialog UI behind a feature flag.
 - **You want interactive drawings and indicators** — 95 drawing tools with undo/redo, magnet snapping, and persistence; 130+ indicators with a uniform trait interface.
 - **You need a themeable, token-driven design system** — five presets (Classic, Dark, Light, Midnight, High Contrast) backed by a RON-based token pipeline.
@@ -61,7 +61,7 @@ graph LR
 egui-charts/src/
 ├── chart/                     Rendering engine, pan/zoom, hit-testing, series, overlays
 │   ├── builder.rs             ChartBuilder fluent API + TradingChart runtime wrapper
-│   ├── renderers/             Per-chart-type rendering (candles, renko, kagi, footprint…)
+│   ├── renderers/             Per-chart-type rendering (candles, renko, kagi, TPO…)
 │   ├── coords/                Coordinate mapping (chart ↔ screen space)
 │   ├── pan_zoom.rs            Smooth pan/zoom with kinetic scrolling, elastic bounce
 │   ├── indicators/            Indicator pane rendering and layout
@@ -176,7 +176,7 @@ egui-charts = { version = "0.1", features = ["ui", "backtest", "scripting"] }
 
 ## Chart Types
 
-20 chart types across 6 categories — 17 are fully wired into the render pipeline; the three Advanced profile types are in progress:
+18 chart types across 6 categories. 17 are fully wired into the render pipeline; the Advanced TPO type is in progress:
 
 | Category | Types |
 |---|---|
@@ -185,7 +185,7 @@ egui-charts = { version = "0.1", features = ["ui", "backtest", "scripting"] }
 | **Area** | Area · HLC Area · Baseline |
 | **Japanese** | Heikin-Ashi · Renko · Kagi · Line Break · Point & Figure |
 | **Range** | High-Low · Range Bars |
-| **Advanced** *(in progress)* | Volume Footprint · TPO / Market Profile · Session Volume |
+| **Advanced** *(in progress)* | TPO / Market Profile |
 
 ---
 
