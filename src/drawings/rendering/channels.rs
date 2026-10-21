@@ -3,6 +3,8 @@
 //! Includes: parallel channel, disjoint channel, regression trend, and flat top/bottom.
 
 use crate::drawings::domain::Drawing;
+use crate::drawings::rendering::{ChartView, bars_between};
+use crate::model::Bar;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -58,127 +60,72 @@ impl Drawing {
         painter.line_segment([p2, p5], dashed_stroke);
     }
 
-    /// Render Regression Trend - Linear regression channel with standard deviation bands
-    pub(crate) fn render_regression_trend(&self, painter: &egui::Painter, chart_rect: Rect) {
-        if self.points.len() < 2 {
+    /// Render Regression Trend - least-squares line through the closes of the
+    /// bars between the anchors, with bands one and two standard deviations away
+    pub(crate) fn render_regression_trend(&self, painter: &egui::Painter, view: &ChartView) {
+        let (&[start, end, ..], &[a, b, ..]) =
+            (self.points.as_slice(), self.chart_points.as_slice())
+        else {
             return;
+        };
+        let color = self.color32();
+
+        if let Some((first, bars)) = bars_between(view.bars, a.bar_idx, b.bar_idx)
+            && let Some(fit) = linear_fit(bars)
+        {
+            self.draw_regression_channel(painter, view, first, bars.len(), &fit, color);
         }
 
-        let start = self.points[0];
-        let end = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
+        // Draw anchor points with white border
+        for anchor in [start, end] {
+            painter.circle_filled(anchor, DESIGN_TOKENS.rounding.lg, color);
+            painter.circle_stroke(
+                anchor,
+                DESIGN_TOKENS.rounding.lg,
+                Stroke::new(stroke::MEDIUM, Color32::WHITE),
+            );
+        }
+    }
 
-        // Calculate regression line (y = mx + b)
-        let dx = end.x - start.x;
-        let dy = end.y - start.y;
-        let slope = if dx.abs() > 0.001 { dy / dx } else { 0.0 };
-        let intercept = start.y - slope * start.x;
-
-        // Extend regression line to chart edges
-        let extended_start_x = chart_rect.min.x.max(start.x.min(end.x) - 50.0);
-        let extended_end_x = chart_rect.max.x.min(start.x.max(end.x) + 50.0);
-        let extended_start = Pos2::new(extended_start_x, slope * extended_start_x + intercept);
-        let extended_end = Pos2::new(extended_end_x, slope * extended_end_x + intercept);
-
-        // Draw main regression line (thicker)
-        painter.line_segment(
-            [extended_start, extended_end],
-            Stroke::new(self.stroke_width + 0.5, color),
-        );
-
-        // Calculate perpendicular offset for channel bands
-        let line_length = (dx * dx + dy * dy).sqrt();
-        let perp_x = if line_length > 0.001 {
-            -dy / line_length
-        } else {
-            0.0
+    fn draw_regression_channel(
+        &self,
+        painter: &egui::Painter,
+        view: &ChartView,
+        first: usize,
+        len: usize,
+        fit: &LinearFit,
+        color: Color32,
+    ) {
+        let last = len - 1;
+        // The fitted line shifted by `k` standard deviations, from the first bar to the last
+        let line = |k: f64| {
+            [0, last].map(|i| {
+                let price = fit.intercept + fit.slope * i as f64 + k * fit.sigma;
+                Pos2::new(
+                    (view.bar_to_x)((first + i) as f32),
+                    (view.price_to_y)(price),
+                )
+            })
         };
-        let perp_y = if line_length > 0.001 {
-            dx / line_length
-        } else {
-            1.0
-        };
-
-        // Standard deviation bands (1σ, 2σ)
-        let base_deviation = (end.y - start.y).abs() * 0.15 + 20.0; // Minimum deviation for visibility
-
-        // 1 Standard Deviation bands
-        let sd1_offset = base_deviation;
-        let upper_1sd_start = Pos2::new(
-            extended_start.x + perp_x * sd1_offset,
-            extended_start.y + perp_y * sd1_offset,
-        );
-        let upper_1sd_end = Pos2::new(
-            extended_end.x + perp_x * sd1_offset,
-            extended_end.y + perp_y * sd1_offset,
-        );
-        let lower_1sd_start = Pos2::new(
-            extended_start.x - perp_x * sd1_offset,
-            extended_start.y - perp_y * sd1_offset,
-        );
-        let lower_1sd_end = Pos2::new(
-            extended_end.x - perp_x * sd1_offset,
-            extended_end.y - perp_y * sd1_offset,
-        );
-
-        // 2 Standard Deviation bands
-        let sd2_offset = base_deviation * 2.0;
-        let upper_2sd_start = Pos2::new(
-            extended_start.x + perp_x * sd2_offset,
-            extended_start.y + perp_y * sd2_offset,
-        );
-        let upper_2sd_end = Pos2::new(
-            extended_end.x + perp_x * sd2_offset,
-            extended_end.y + perp_y * sd2_offset,
-        );
-        let lower_2sd_start = Pos2::new(
-            extended_start.x - perp_x * sd2_offset,
-            extended_start.y - perp_y * sd2_offset,
-        );
-        let lower_2sd_end = Pos2::new(
-            extended_end.x - perp_x * sd2_offset,
-            extended_end.y - perp_y * sd2_offset,
-        );
+        let [upper_2sd, upper_1sd, center, lower_1sd, lower_2sd] =
+            [2.0, 1.0, 0.0, -1.0, -2.0].map(line);
 
         // Fill between 2σ bands (outer fill - very light)
         let fill_2sd =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 15);
-        painter.add(egui::epaint::PathShape::convex_polygon(
-            vec![
-                upper_2sd_start,
-                upper_2sd_end,
-                upper_1sd_end,
-                upper_1sd_start,
-            ],
-            fill_2sd,
-            Stroke::NONE,
-        ));
-        painter.add(egui::epaint::PathShape::convex_polygon(
-            vec![
-                lower_1sd_start,
-                lower_1sd_end,
-                lower_2sd_end,
-                lower_2sd_start,
-            ],
-            fill_2sd,
-            Stroke::NONE,
-        ));
+        for (outer, inner) in [(upper_2sd, upper_1sd), (lower_2sd, lower_1sd)] {
+            painter.add(egui::epaint::PathShape::convex_polygon(
+                vec![outer[0], outer[1], inner[1], inner[0]],
+                fill_2sd,
+                Stroke::NONE,
+            ));
+        }
 
         // Fill between 1σ bands (inner fill - slightly more visible)
         let fill_1sd =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
         painter.add(egui::epaint::PathShape::convex_polygon(
-            vec![
-                upper_1sd_start,
-                upper_1sd_end,
-                lower_1sd_end,
-                lower_1sd_start,
-            ],
+            vec![upper_1sd[0], upper_1sd[1], lower_1sd[1], lower_1sd[0]],
             fill_1sd,
             Stroke::NONE,
         ));
@@ -186,41 +133,30 @@ impl Drawing {
         // Draw 2σ band lines (dashed, lighter)
         let sd2_color =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-        super::utils::draw_dashed_line(
-            painter,
-            upper_2sd_start,
-            upper_2sd_end,
-            Stroke::new(stroke::HAIRLINE, sd2_color),
-            DESIGN_TOKENS.rounding.xl,
-            DESIGN_TOKENS.rounding.md,
-        );
-        super::utils::draw_dashed_line(
-            painter,
-            lower_2sd_start,
-            lower_2sd_end,
-            Stroke::new(stroke::HAIRLINE, sd2_color),
-            DESIGN_TOKENS.rounding.xl,
-            DESIGN_TOKENS.rounding.md,
-        );
+        for [from, to] in [upper_2sd, lower_2sd] {
+            super::utils::draw_dashed_line(
+                painter,
+                from,
+                to,
+                Stroke::new(stroke::HAIRLINE, sd2_color),
+                DESIGN_TOKENS.rounding.xl,
+                DESIGN_TOKENS.rounding.md,
+            );
+        }
 
         // Draw 1σ band lines (solid)
         let sd1_color =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180);
-        painter.line_segment(
-            [upper_1sd_start, upper_1sd_end],
-            Stroke::new(stroke::HAIRLINE, sd1_color),
-        );
-        painter.line_segment(
-            [lower_1sd_start, lower_1sd_end],
-            Stroke::new(stroke::HAIRLINE, sd1_color),
-        );
+        for band in [upper_1sd, lower_1sd] {
+            painter.line_segment(band, Stroke::new(stroke::HAIRLINE, sd1_color));
+        }
 
-        // Calculate R² (coefficient of determination) - simplified for 2 points
-        // For a true implementation, this would use actual price data
-        let r_squared = 0.95; // Placeholder - would calculate from actual data points
+        // Draw main regression line (thicker)
+        painter.line_segment(center, Stroke::new(self.stroke_width + 0.5, color));
 
-        // Draw info label with R²
-        let label_pos = Pos2::new(end.x + typography::XS, end.y - typography::XXL);
+        // Draw info label with R² and the slope per bar
+        let line_end = center[1];
+        let label_pos = Pos2::new(line_end.x + typography::XS, line_end.y - typography::XXL);
         let label_bg = DESIGN_TOKENS
             .semantic
             .extended
@@ -245,7 +181,7 @@ impl Drawing {
         painter.text(
             Pos2::new(label_pos.x + 35.0, label_pos.y + typography::XS),
             egui::Align2::CENTER_CENTER,
-            format!("R² = {r_squared:.2}"),
+            format!("R² = {:.2}", fit.r_squared),
             egui::FontId::proportional(typography::XS),
             color,
         );
@@ -254,23 +190,9 @@ impl Drawing {
         painter.text(
             Pos2::new(label_pos.x + 35.0, label_pos.y + typography::XXL),
             egui::Align2::CENTER_CENTER,
-            format!("m = {slope:.4}"),
+            format!("m = {:.4}", fit.slope),
             egui::FontId::proportional(typography::XS),
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180),
-        );
-
-        // Draw anchor points with white border
-        painter.circle_filled(start, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            start,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
-        );
-        painter.circle_filled(end, DESIGN_TOKENS.rounding.lg, color);
-        painter.circle_stroke(
-            end,
-            DESIGN_TOKENS.rounding.lg,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
         );
     }
 
@@ -603,5 +525,65 @@ impl Drawing {
             DESIGN_TOKENS.rounding.md,
             Stroke::new(stroke::HAIRLINE, Color32::WHITE),
         );
+    }
+}
+
+/// Least-squares line through the closes of a span of bars, against their
+/// position in the span.
+struct LinearFit {
+    /// Price change per bar.
+    slope: f64,
+    /// Fitted price at the first bar.
+    intercept: f64,
+    /// Standard deviation of the closes around the line (n - 1 denominator).
+    sigma: f64,
+    /// Share of the closes' variance the line explains.
+    r_squared: f64,
+}
+
+/// Fits the closes of `bars`; `None` for fewer than two bars.
+fn linear_fit(bars: &[Bar]) -> Option<LinearFit> {
+    if bars.len() < 2 {
+        return None;
+    }
+    let n = bars.len() as f64;
+    let mean_x = (n - 1.0) / 2.0;
+    let mean_y = bars.iter().map(|bar| bar.close).sum::<f64>() / n;
+    let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
+    for (i, bar) in bars.iter().enumerate() {
+        let (dx, dy) = (i as f64 - mean_x, bar.close - mean_y);
+        sxx += dx * dx;
+        sxy += dx * dy;
+        syy += dy * dy;
+    }
+    let slope = sxy / sxx;
+    let residual = (syy - slope * sxy).max(0.0);
+    Some(LinearFit {
+        slope,
+        intercept: mean_y - slope * mean_x,
+        sigma: (residual / (n - 1.0)).sqrt(),
+        // Flat closes are fitted exactly.
+        r_squared: if syy > 0.0 { 1.0 - residual / syy } else { 1.0 },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::rendering::sample_bars;
+
+    /// Reference: ordinary least squares of the closes of bars 0..=5 against
+    /// 0..=5, residual standard deviation over n - 1, R² = 1 - SSres / SStot.
+    #[test]
+    fn linear_fit_matches_reference() {
+        let fit = linear_fit(&sample_bars()[..6]).unwrap();
+        for (got, want) in [
+            (fit.slope, 0.45714285714285713),
+            (fit.intercept, 11.190476190476192),
+            (fit.sigma, 0.9139136147569393),
+            (fit.r_squared, 0.4668693009118541),
+        ] {
+            assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
+        }
     }
 }

@@ -17,6 +17,7 @@ mod selection;
 use crate::chart::cursor_modes::CursorModeState;
 use crate::drawings::DrawingInteractionMode;
 use crate::drawings::DrawingManager;
+use crate::drawings::rendering::ChartView;
 use crate::widget::Chart;
 use egui::{Painter, Rect, Response, Ui};
 
@@ -31,7 +32,6 @@ impl Chart {
     ///
     /// # Arguments
     /// - `cursor_modes` - Mutable reference to cursor mode state (passed separately to avoid borrow conflicts)
-    /// - `last_close_price` - The most recent close price (for position drawings P&L)
     pub fn handle_drawings(
         &self,
         ui: &mut Ui,
@@ -42,7 +42,6 @@ impl Chart {
         adjusted_min: f64,
         adjusted_max: f64,
         painter: &Painter,
-        last_close_price: Option<f64>,
         timescale: &crate::model::TimeScale,
     ) {
         let adjusted_range = (adjusted_max - adjusted_min).max(1e-12);
@@ -76,11 +75,6 @@ impl Chart {
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
         drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);
-
-        // Update real-time prices for position drawings
-        if let Some(price) = last_close_price {
-            drawing_manager.update_pos_prices(price);
-        }
 
         // Handle drawing interaction
         // Select converter based on tool type: freeform tools (ContinuousDraw) use precise,
@@ -124,8 +118,13 @@ impl Chart {
         // Handle keyboard shortcuts for drawing manipulation
         selection::handle_keyboard_shortcuts(ui, drawing_manager);
 
-        // Render existing drawings
-        drawing_manager.render_all(painter, price_rect);
+        // Render existing drawings against the chart's bars
+        let view = ChartView {
+            bars: &self.state.data().bars,
+            bar_to_x: &bar_to_x,
+            price_to_y: &price_to_y,
+        };
+        drawing_manager.render_all(painter, price_rect, &view);
     }
 
     /// Render eraser highlight for hovered drawing

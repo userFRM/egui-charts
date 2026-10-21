@@ -71,23 +71,9 @@ pub struct Drawing {
     /// Per-timeframe visibility
     pub timeframe_visibility: TimeframeVisibility,
 
-    // === Position tracking fields ===
+    // === Position fields ===
     /// Position quantity (e.g., 100 shares)
     pub quantity: Option<f32>,
-    /// Position status (open/closed)
-    pub is_closed: bool,
-    /// Real-time price for P&L calculation
-    pub curr_price: Option<f64>,
-
-    // === Forecast tracking fields ===
-    /// Price at forecast start
-    pub forecast_start_price: Option<f64>,
-    /// Predicted target price
-    pub forecast_target_price: Option<f64>,
-    /// Timestamp when forecast created
-    pub forecast_start_time: Option<i64>,
-    /// Predicted target time
-    pub forecast_target_time: Option<i64>,
 
     // === Fibonacci configuration ===
     /// Customizable Fibonacci levels for Fib tools
@@ -122,15 +108,8 @@ impl Drawing {
             arrow_start_style: ArrowStyle::None,
             arrow_end_style: ArrowStyle::Arrow,
             timeframe_visibility: TimeframeVisibility::all(),
-            // Position tracking defaults
+            // Position defaults
             quantity: Some(100.0),
-            is_closed: false,
-            curr_price: None,
-            // Forecast tracking defaults
-            forecast_start_price: None,
-            forecast_target_price: None,
-            forecast_start_time: None,
-            forecast_target_time: None,
             // Fibonacci config
             fib_config: None,
             // Z-order (default: 0, higher values render on top)
@@ -304,18 +283,6 @@ impl Drawing {
             u * u * p0.x + 2.0 * u * t * p1.x + t * t * p2.x,
             u * u * p0.y + 2.0 * u * t * p1.y + t * t * p2.y,
         )
-    }
-
-    /// Format Unix timestamp to readable date string
-    ///
-    /// Returns a formatted date string like "2024-01-15 14:30".
-    /// Used for displaying dates on drawings.
-    pub fn format_timestamp(ts: i64) -> String {
-        use chrono::{DateTime, Utc};
-        match DateTime::<Utc>::from_timestamp(ts, 0) {
-            Some(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
-            None => "N/A".to_string(),
-        }
     }
 }
 

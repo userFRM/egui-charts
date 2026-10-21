@@ -46,6 +46,7 @@ impl DrawingToolType {
             | Self::ArrowMarkUp
             | Self::ArrowMarkDown
             | Self::AnchoredVWAP
+            | Self::AnchoredVolumeProfile
             | Self::PriceNote
             | Self::Table
             | Self::Comment
@@ -72,7 +73,6 @@ impl DrawingToolType {
             | Self::ShortPos
             | Self::Forecast
             | Self::FixedRangeVolumeProfile
-            | Self::AnchoredVolumeProfile
             | Self::FibonacciRetracement
             | Self::FibonacciExtension
             | Self::FibonacciSpeedResistanceArcs

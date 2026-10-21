@@ -1,174 +1,136 @@
 //! Forecast tool rendering
 
-use crate::drawings::domain::Drawing;
-use crate::styles::{stroke, typography};
+use crate::drawings::domain::{ChartPoint, Drawing};
+use crate::drawings::rendering::{ChartView, bars_between};
+use crate::model::Bar;
+use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
 impl Drawing {
-    pub(crate) fn render_forecast(&self, painter: &egui::Painter, _chart_rect: Rect) {
-        if self.points.len() < 2 {
+    /// Renders a forecast from the start anchor to the target anchor, with the
+    /// predicted change and whether the price has reached the target in time.
+    pub(crate) fn render_forecast(&self, painter: &egui::Painter, view: &ChartView) {
+        let (&[start, end, ..], &[from, to, ..]) =
+            (self.points.as_slice(), self.chart_points.as_slice())
+        else {
             return;
-        }
-        let start = self.points[0];
-        let end = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
+        };
 
         // Trend line
-        painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
+        painter.line_segment([start, end], Stroke::new(self.stroke_width, self.color32()));
 
-        // Get forecast data for metrics calculation
-        let start_price = self.forecast_start_price.unwrap_or(0.0);
-        let target_price = self.forecast_target_price.unwrap_or(0.0);
-        let start_time = self.forecast_start_time.unwrap_or(0);
-        let target_time = self.forecast_target_time.unwrap_or(0);
-
-        // Calculate price change
-        let price_change = target_price - start_price;
-        let price_change_pct = if start_price != 0.0 {
-            (price_change / start_price) * 100.0
+        let price_change = to.price - from.price;
+        let price_change_pct = if from.price != 0.0 {
+            price_change / from.price * 100.0
         } else {
             0.0
         };
+        let bar_count = (to.bar_idx - from.bar_idx).round();
 
-        // Calculate time duration (in days)
-        let duration_secs = target_time - start_time;
-        let duration_days = duration_secs / 86400; // seconds to days
-
-        // Determine success status
-        let is_success = price_change > 0.0; // Positive price movement = success
-
-        // Draw curved forecast extension and info box
-        self.draw_forecast_curve(painter, start, end, color);
-        self.draw_forecast_info_box(
-            painter,
-            start,
-            end,
-            is_success,
-            price_change,
-            price_change_pct,
-            duration_days,
-            start_time,
-            target_time,
-        );
-    }
-
-    fn draw_forecast_curve(
-        &self,
-        painter: &egui::Painter,
-        start: Pos2,
-        end: Pos2,
-        _color: Color32,
-    ) {
-        let dx = end.x - start.x;
-        let dy = end.y - start.y;
-
-        // Create control point for smooth curve
-        let control_point = Pos2::new(end.x + dx * 0.5, end.y + dy * 0.5 - 50.0);
-        let forecast_end = Pos2::new(end.x + dx, end.y + dy);
-
-        // Draw dashed curved line
-        let dashed =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150);
-        let segments = 20;
-        for i in 0..segments {
-            if i % 2 == 0 {
-                let t1 = i as f32 / segments as f32;
-                let t2 = ((i + 1) as f32 / segments as f32).min(1.0);
-
-                // Quadratic bezier interpolation
-                let p1 = Self::quadratic_bezier(end, control_point, forecast_end, t1);
-                let p2 = Self::quadratic_bezier(end, control_point, forecast_end, t2);
-
-                painter.line_segment([p1, p2], Stroke::new(stroke::THICK, dashed));
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn draw_forecast_info_box(
-        &self,
-        painter: &egui::Painter,
-        start: Pos2,
-        end: Pos2,
-        is_success: bool,
-        price_change: f64,
-        price_change_pct: f64,
-        duration_days: i64,
-        start_time: i64,
-        target_time: i64,
-    ) {
-        let dx = end.x - start.x;
-        let dy = end.y - start.y;
-        let forecast_end = Pos2::new(end.x + dx, end.y + dy);
-
-        // Success indicator box (green/red background)
-        let success_color = if is_success {
-            DESIGN_TOKENS.semantic.extended.bullish
-        } else {
-            DESIGN_TOKENS.semantic.extended.bearish
+        let (status, status_color) = match forecast_outcome(view.bars, from, to) {
+            Some(true) => ("SUCCESS", DESIGN_TOKENS.semantic.extended.bullish),
+            Some(false) => ("FAILED", DESIGN_TOKENS.semantic.extended.bearish),
+            None => (
+                "PENDING",
+                DESIGN_TOKENS.semantic.extended.chart_text_secondary,
+            ),
         };
 
-        let box_width = 300.0;
-        let box_height = 75.0;
-        let box_rect = Rect::from_min_size(
-            Pos2::new(forecast_end.x - box_width / 2.0, forecast_end.y - 50.0),
-            egui::vec2(box_width, box_height),
-        );
+        // Info box above an upward target, below a downward one
+        let box_size = egui::vec2(220.0, 50.0);
+        let top = if price_change >= 0.0 {
+            end.y - DESIGN_TOKENS.spacing.md - box_size.y
+        } else {
+            end.y + DESIGN_TOKENS.spacing.md
+        };
+        let box_rect = Rect::from_min_size(Pos2::new(end.x - box_size.x / 2.0, top), box_size);
+        if !painter.clip_rect().intersects(box_rect) {
+            return;
+        }
 
-        // Green/Red header bar
-        let header_rect = Rect::from_min_size(box_rect.min, egui::vec2(box_width, 25.0));
-        painter.rect_filled(header_rect, DESIGN_TOKENS.rounding.md, success_color);
-
-        // Success text in header
+        // Status header bar
+        let header_rect = Rect::from_min_size(box_rect.min, egui::vec2(box_size.x, 25.0));
+        painter.rect_filled(header_rect, DESIGN_TOKENS.rounding.md, status_color);
         painter.text(
-            Pos2::new(box_rect.min.x + box_width / 2.0, box_rect.min.y + 12.0),
+            header_rect.center(),
             egui::Align2::CENTER_CENTER,
-            if is_success { "SUCCESS" } else { "FAILED" },
+            status,
             egui::FontId::proportional(typography::MD),
             Color32::WHITE,
         );
 
         // White info section
-        let info_rect = Rect::from_min_size(
-            Pos2::new(box_rect.min.x, box_rect.min.y + 25.0),
-            egui::vec2(box_width, 50.0),
-        );
+        let info_rect =
+            Rect::from_min_max(Pos2::new(box_rect.min.x, header_rect.max.y), box_rect.max);
         painter.rect_filled(info_rect, DESIGN_TOKENS.rounding.md, Color32::WHITE);
 
-        // Price and duration info (dark blue text on white)
-        let info_text = format!(
-            "{:.2} ({:.2}%) in {}d",
-            price_change.abs(),
-            price_change_pct.abs(),
-            duration_days
-        );
+        // Price change and duration (dark text on white)
         painter.text(
-            Pos2::new(box_rect.min.x + box_width / 2.0, box_rect.min.y + 42.0),
+            info_rect.center(),
             egui::Align2::CENTER_CENTER,
-            info_text,
+            format!("{price_change:+.2} ({price_change_pct:+.2}%) in {bar_count} bars"),
             egui::FontId::proportional(typography::LG),
             DESIGN_TOKENS.semantic.chart.bg, // Dark chart background color for contrast
         );
+    }
+}
 
-        // Timestamps at bottom (if available)
-        if start_time > 0 && target_time > 0 {
-            let timestamp_text = format!(
-                "{} -> {}",
-                Self::format_timestamp(start_time),
-                Self::format_timestamp(target_time)
-            );
-            painter.text(
-                Pos2::new(box_rect.min.x + box_width / 2.0, box_rect.min.y + 62.0),
-                egui::Align2::CENTER_CENTER,
-                timestamp_text,
-                egui::FontId::proportional(typography::XS),
-                DESIGN_TOKENS.semantic.extended.chart_text_secondary,
+/// Whether the price reached the target after the start bar and by the
+/// target bar: `Some(true)` once a bar trades at the target, `Some(false)`
+/// when the target bar has closed without that, `None` while it is still
+/// ahead (or the target is not after the start).
+fn forecast_outcome(bars: &[Bar], from: ChartPoint, to: ChartPoint) -> Option<bool> {
+    let (start, end) = (from.bar_idx.round(), to.bar_idx.round());
+    if end <= start {
+        return None;
+    }
+    let (_, window) = bars_between(bars, start + 1.0, end)?;
+    let up = to.price >= from.price;
+    let reached = window.iter().any(|bar| {
+        if up {
+            bar.high >= to.price
+        } else {
+            bar.low <= to.price
+        }
+    });
+    if reached {
+        Some(true)
+    } else {
+        (end < bars.len() as f32).then_some(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::rendering::sample_bars;
+
+    /// Expected verdicts read off the sample bars by hand.
+    #[test]
+    fn forecast_outcome_checks_bars_up_to_target() {
+        let bars = sample_bars();
+        let cases = [
+            // Up from bar 0: bar 3 (high 14) reaches 13.8 by bar 3.
+            ((0.0, 11.0), (3.0, 13.8), Some(true)),
+            // Up from bar 0: no high reaches 14.5 by bar 3.
+            ((0.0, 11.0), (3.0, 14.5), Some(false)),
+            // Target bar 9 is still ahead, but bar 4 (high 15) already reached 14.5.
+            ((0.0, 11.0), (9.0, 14.5), Some(true)),
+            // Target bar 9 is still ahead and no high reaches 16 yet.
+            ((0.0, 11.0), (9.0, 16.0), None),
+            // Down from bar 3: bar 5 (low 12) reaches 12.2.
+            ((3.0, 13.5), (5.0, 12.2), Some(true)),
+            // Down from bar 3: no low reaches 11.5 by bar 5.
+            ((3.0, 13.5), (5.0, 11.5), Some(false)),
+        ];
+        for ((from_bar, from_price), (to_bar, to_price), want) in cases {
+            let from = ChartPoint::new(from_bar, from_price);
+            let to = ChartPoint::new(to_bar, to_price);
+            assert_eq!(
+                forecast_outcome(&bars, from, to),
+                want,
+                "{from:?} -> {to:?}"
             );
         }
     }

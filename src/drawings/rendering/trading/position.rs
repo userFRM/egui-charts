@@ -1,87 +1,64 @@
 //! Long/short position tool rendering
 
 use crate::drawings::domain::Drawing;
+use crate::drawings::rendering::{ChartView, bars_between};
+use crate::model::Bar;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
 impl Drawing {
-    pub(crate) fn render_pos_tool(&self, painter: &egui::Painter, is_long: bool) {
-        if self.points.len() < 2 {
-            if !self.points.is_empty() {
-                painter.circle_filled(
-                    self.points[0],
-                    DESIGN_TOKENS.rounding.md,
-                    Color32::from_rgba_unmultiplied(
-                        self.color[0],
-                        self.color[1],
-                        self.color[2],
-                        self.color[3],
-                    ),
-                );
+    /// Renders a long or short position: entry, target and stop zones, and the
+    /// result of replaying the bars after the entry bar up to the right edge.
+    pub(crate) fn render_pos_tool(&self, painter: &egui::Painter, view: &ChartView, is_long: bool) {
+        let (&[entry, target, ..], &[entry_at, target_at, ..]) =
+            (self.points.as_slice(), self.chart_points.as_slice())
+        else {
+            if let Some(&point) = self.points.first() {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.md, self.color32());
             }
             return;
-        }
-
-        let entry = self.points[0];
-        let target = self.points[1];
+        };
 
         // Position colors
         let profit_color = DESIGN_TOKENS.semantic.extended.bullish;
         let loss_color = DESIGN_TOKENS.semantic.extended.bearish;
         let entry_color = DESIGN_TOKENS.semantic.extended.chart_text_secondary;
 
-        // Get actual price values from chart_points
-        let (entry_price, target_price) = if self.chart_points.len() >= 2 {
-            (self.chart_points[0].price, self.chart_points[1].price)
-        } else {
-            (0.0, 0.0)
-        };
+        let (entry_price, target_price) = (entry_at.price, target_at.price);
+        // The stop anchor is added when the tool is placed; until then (while
+        // it is dragged out) the stop mirrors the target around the entry.
+        let stop_price = self
+            .chart_points
+            .get(2)
+            .map_or(2.0 * entry_price - target_price, |stop| stop.price);
+        let stop_y = (view.price_to_y)(stop_price);
 
-        // Calculate target and stop prices based on position direction
-        let (target_price_actual, stop_price, target_y, stop_y) = if is_long {
-            // Long: target above entry, stop below entry
-            let tp = entry_price.max(target_price);
-            let sl = entry_price - (tp - entry_price); // Symmetric stop
-            let ty = entry.y.min(target.y);
-            let sy = entry.y + (entry.y - ty); // Symmetric stop y
-            (tp, sl, ty, sy)
-        } else {
-            // Short: target below entry, stop above entry
-            let tp = entry_price.min(target_price);
-            let sl = entry_price + (entry_price - tp); // Symmetric stop
-            let ty = entry.y.max(target.y);
-            let sy = entry.y - (ty - entry.y); // Symmetric stop y
-            (tp, sl, ty, sy)
+        // Returns are signed in the position's direction, so a level on the
+        // losing side of the entry reads as negative.
+        let side = if is_long { 1.0 } else { -1.0 };
+        let pct = |price: f64| {
+            if entry_price != 0.0 {
+                side * (price - entry_price) / entry_price * 100.0
+            } else {
+                0.0
+            }
         };
+        let risk = side * (entry_price - stop_price);
+        let risk_reward = (risk > 0.0).then(|| side * (target_price - entry_price) / risk);
 
-        // Calculate P&L percentages
-        let profit_pct = if entry_price != 0.0 {
-            ((target_price_actual - entry_price) / entry_price * 100.0).abs()
+        // The tool spans from the entry bar to the right edge.
+        let entry_bar = entry_at.bar_idx.round();
+        let span = (target_at.bar_idx - entry_at.bar_idx).abs().round();
+        let after_entry = if span >= 1.0 {
+            bars_between(view.bars, entry_bar + 1.0, entry_bar + span).map_or(&[][..], |(_, b)| b)
         } else {
-            0.0
+            &[]
         };
-        let loss_pct = if entry_price != 0.0 {
-            ((stop_price - entry_price) / entry_price * 100.0).abs()
-        } else {
-            0.0
-        };
-        let risk_reward = if loss_pct != 0.0 {
-            profit_pct / loss_pct
-        } else {
-            0.0
-        };
-
-        // Calculate real-time P&L
+        let (exit_price, closed) =
+            position_exit(after_entry, entry_price, target_price, stop_price, is_long);
         let qty = self.quantity.unwrap_or(100.0);
-        let curr_price = self.curr_price.unwrap_or(entry_price);
-
-        let pnl_per_unit = if is_long {
-            curr_price - entry_price
-        } else {
-            entry_price - curr_price
-        };
-        let total_pnl = pnl_per_unit * qty as f64;
+        let pnl = side * (exit_price - entry_price) * f64::from(qty);
 
         // Calculate width - extend across chart
         let width = (target.x - entry.x)
@@ -90,14 +67,14 @@ impl Drawing {
         let right = entry.x + width;
 
         // Draw filled zones
-        self.draw_profit_zone(painter, is_long, entry, target_y, right);
-        self.draw_loss_zone(painter, is_long, entry, stop_y, right);
+        self.draw_zone(painter, entry, target.y, right, profit_color);
+        self.draw_zone(painter, entry, stop_y, right, loss_color);
 
         // Draw horizontal lines (thicker)
         self.draw_position_lines(
             painter,
             entry,
-            target_y,
+            target.y,
             stop_y,
             right,
             entry_color,
@@ -109,7 +86,7 @@ impl Drawing {
         self.draw_position_handles(
             painter,
             entry,
-            target_y,
+            target.y,
             stop_y,
             right,
             entry_color,
@@ -118,79 +95,51 @@ impl Drawing {
         );
 
         // Draw labels
+        let risk_reward = risk_reward.map_or_else(|| "n/a".to_owned(), |rr| format!("{rr:.2}"));
+        let summary = format!(
+            "{} P&L: {pnl:.2} ({:.2}%)  •  Risk/Reward: {risk_reward}  •  Qty: {}",
+            if closed { "Closed" } else { "Open" },
+            pct(exit_price),
+            qty as i32
+        );
+        let target_label = format!(
+            "Target: {target_price:.2} ({:.2}%) {}",
+            pct(target_price),
+            qty as i32
+        );
+        let stop_label = format!(
+            "Stop: {stop_price:.2} ({:.2}%) {}",
+            pct(stop_price),
+            qty as i32
+        );
         self.draw_position_labels(
             painter,
             entry,
-            target_y,
+            target.y,
             stop_y,
             right,
-            entry_price,
-            target_price_actual,
-            stop_price,
-            profit_pct,
-            loss_pct,
-            risk_reward,
-            total_pnl,
-            qty as f64,
-            profit_color,
-            loss_color,
+            summary,
+            if pnl >= 0.0 { profit_color } else { loss_color },
+            target_label,
+            stop_label,
         );
     }
 
-    fn draw_profit_zone(
+    /// Fills the band between the entry line and `level_y`.
+    fn draw_zone(
         &self,
         painter: &egui::Painter,
-        is_long: bool,
         entry: Pos2,
-        target_y: f32,
+        level_y: f32,
         right: f32,
+        color: Color32,
     ) {
-        let profit_rect = if is_long {
-            Rect::from_min_max(Pos2::new(entry.x, target_y), Pos2::new(right, entry.y))
-        } else {
-            Rect::from_min_max(Pos2::new(entry.x, entry.y), Pos2::new(right, target_y))
-        };
+        let zone = Rect::from_two_pos(entry, Pos2::new(right, level_y));
         // Visibility check: skip rendering if rect is outside clip region
-        if !painter.clip_rect().intersects(profit_rect) {
+        if !painter.clip_rect().intersects(zone) {
             return;
         }
-        painter.rect_filled(
-            profit_rect,
-            0.0,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .bullish
-                .gamma_multiply(30_f32 / 255.0),
-        );
-    }
-
-    fn draw_loss_zone(
-        &self,
-        painter: &egui::Painter,
-        is_long: bool,
-        entry: Pos2,
-        stop_y: f32,
-        right: f32,
-    ) {
-        let loss_rect = if is_long {
-            Rect::from_min_max(Pos2::new(entry.x, entry.y), Pos2::new(right, stop_y))
-        } else {
-            Rect::from_min_max(Pos2::new(entry.x, stop_y), Pos2::new(right, entry.y))
-        };
-        // Visibility check: skip rendering if rect is outside clip region
-        if !painter.clip_rect().intersects(loss_rect) {
-            return;
-        }
-        painter.rect_filled(
-            loss_rect,
-            0.0,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .bearish
-                .gamma_multiply(30_f32 / 255.0),
-        );
+        painter.rect_filled(zone, 0.0, color.gamma_multiply(30_f32 / 255.0));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -281,16 +230,10 @@ impl Drawing {
         target_y: f32,
         stop_y: f32,
         right: f32,
-        entry_price: f64,
-        target_price_actual: f64,
-        stop_price: f64,
-        profit_pct: f64,
-        loss_pct: f64,
-        risk_reward: f64,
-        total_pnl: f64,
-        qty: f64,
-        profit_color: Color32,
-        loss_color: Color32,
+        summary: String,
+        summary_color: Color32,
+        target_label: String,
+        stop_label: String,
     ) {
         let font_small = egui::FontId::proportional(typography::SM);
         let font_large = egui::FontId::proportional(typography::MD);
@@ -322,34 +265,19 @@ impl Drawing {
             );
 
             // P&L and Risk/Reward in info box
-            let pnl_text = format!(
-                "P&L: {:.2} ({:.2}%)  •  Risk/Reward: {:.2}  •  Qty: {}",
-                total_pnl,
-                (total_pnl / (entry_price * qty) * 100.0),
-                risk_reward,
-                qty as i32
-            );
             painter.text(
                 Pos2::new(
                     entry.x + DESIGN_TOKENS.sizing.position_tool.text_offset_x,
                     info_y + DESIGN_TOKENS.spacing.xl,
                 ),
                 egui::Align2::LEFT_CENTER,
-                pnl_text,
+                summary,
                 font_large,
-                if total_pnl >= 0.0 {
-                    profit_color
-                } else {
-                    loss_color
-                },
+                summary_color,
             );
         }
 
         // Target label (on right side of line)
-        let target_label = format!(
-            "Target: {:.2} ({:.2}%) {}",
-            target_price_actual, profit_pct, qty as i32
-        );
         let target_bg = Rect::from_min_max(
             Pos2::new(
                 right + DESIGN_TOKENS.sizing.position_tool.label_offset_x,
@@ -387,7 +315,6 @@ impl Drawing {
         }
 
         // Stop label (on right side of line)
-        let stop_label = format!("Stop: {:.2} ({:.2}%) {}", stop_price, loss_pct, qty as i32);
         let stop_bg = Rect::from_min_max(
             Pos2::new(
                 right + DESIGN_TOKENS.sizing.position_tool.label_offset_x,
@@ -422,6 +349,57 @@ impl Drawing {
                 font_small,
                 Color32::WHITE,
             );
+        }
+    }
+}
+
+/// Price the position exits at and whether it has closed. The first bar that
+/// trades through the stop or the target closes it; when one bar reaches both,
+/// the stop is taken, since the order within a bar is unknown. Otherwise the
+/// position is open at the last close (at the entry when no bar follows it).
+fn position_exit(bars: &[Bar], entry: f64, target: f64, stop: f64, is_long: bool) -> (f64, bool) {
+    for bar in bars {
+        let (stop_hit, target_hit) = if is_long {
+            (bar.low <= stop, bar.high >= target)
+        } else {
+            (bar.high >= stop, bar.low <= target)
+        };
+        if stop_hit {
+            return (stop, true);
+        }
+        if target_hit {
+            return (target, true);
+        }
+    }
+    (bars.last().map_or(entry, |bar| bar.close), false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::rendering::sample_bars;
+
+    /// Expected exits read off the sample bars by hand.
+    #[test]
+    fn position_exit_replays_bars_after_entry() {
+        let bars = sample_bars();
+        let after_bar_0 = &bars[1..=5];
+        let cases = [
+            // Long from 11: bar 4 (high 15) reaches 14.2 before any low reaches 9.5.
+            (after_bar_0, 11.0, 14.2, 9.5, true, (14.2, true)),
+            // Long from 11: bar 1 (low 10) reaches the stop at 10.5 first.
+            (after_bar_0, 11.0, 14.2, 10.5, true, (10.5, true)),
+            // Bar 1 (low 10, high 13) reaches both 10.0 and 12.8: the stop is taken.
+            (after_bar_0, 11.0, 12.8, 10.0, true, (10.0, true)),
+            // Neither level is reached: open at the close of bar 5.
+            (after_bar_0, 11.0, 20.0, 5.0, true, (12.5, false)),
+            // Short from 13.5 at bar 3: bar 5 (low 12) reaches 12.2, no high reaches 15.5.
+            (&bars[4..=5], 13.5, 12.2, 15.5, false, (12.2, true)),
+            // No bar after the entry yet.
+            (&bars[..0], 13.0, 14.0, 12.0, true, (13.0, false)),
+        ];
+        for (after, entry, target, stop, is_long, want) in cases {
+            assert_eq!(position_exit(after, entry, target, stop, is_long), want);
         }
     }
 }

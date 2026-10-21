@@ -10,13 +10,25 @@ All notable changes to this project are documented in this file. The format is b
 - The documentation examples for the `ui` module use the current crate name and module paths, and they compile and run as doctests.
 - Dashed lines are clipped to the visible area before they are dashed, so a drawing anchored far off screen no longer hangs the UI thread or exhausts memory. Every dashed line in the crate (drawings, crosshair, order lines, last-price line, session breaks, indicator pane zones) now shares this routine.
 - Auto-scaling flat price or indicator data now centres the series in a range proportional to the price level instead of collapsing to a near-zero range.
+- The anchored VWAP drawing computes the volume-weighted average of the typical price from its anchor bar, with bands one and two volume-weighted standard deviations away.
+- The fixed range and anchored volume profiles are built from bar volume, spreading each bar's volume over its high-low range, with the point of control and a 70% value area. The anchored volume profile is placed with a single click and runs to the latest bar.
+- The regression trend fits the closes between its anchors by least squares and shows the resulting R² and slope.
+- Long and short position tools have a stop of their own that moves independently of the target, so risk/reward reflects the levels set; P&L replays the bars after the entry and shows the position as closed once the stop or the target trades.
+- The forecast drawing shows the predicted change over its bar span and resolves to success or failure against the bars up to its target bar.
+- The bars pattern projection draws shifted copies of the selected bars.
 - The chart watermark falls back to the chart symbol and is hidden when there is none, instead of showing a placeholder.
+
+### Changed
+
+- `Drawing::render`, `Drawing::render_original`, and `DrawingManager::render_all` take a `drawings::rendering::ChartView` holding the chart's bars and coordinate mapping. Migration: build `ChartView { bars, bar_to_x, price_to_y }` from the series and the closures passed to `update_all_screen_coords`, and pass it as the last argument.
+- `Chart::handle_drawings` no longer takes the last close price.
 
 ### Removed
 
 - The Volume Footprint and Session Volume chart types, which approximated per-price volume from bar totals, and the unused `model::footprint` module.
 - The `chart::series_api` module (`ISeriesApi`, `IPriceScaleApi`, `ITimeScaleApi`, `IStudyApi`, their implementations and option types), which nothing constructed.
 - `TradingChart::toggle_main_series_visibility` and the series context menu "Hide" entry (`SeriesContextMenuAction::Hide`), which had no effect.
+- `DrawingManager::update_pos_prices`, `Drawing::format_timestamp`, and the `Drawing` fields `is_closed`, `curr_price`, `forecast_start_price`, `forecast_target_price`, `forecast_start_time`, and `forecast_target_time`; position and forecast results come from the chart's bars.
 
 ## [0.2.0] - 2026-06-04
 

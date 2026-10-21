@@ -1,36 +1,46 @@
 //! Bars pattern rendering
 
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{ChartPoint, Drawing};
 use crate::drawings::rendering::utils::draw_dashed_line;
+use crate::drawings::rendering::{ChartView, bars_between};
+use crate::model::Bar;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
 impl Drawing {
-    /// Renders Bars Pattern for copying and projecting historical patterns.
-    /// Features: source selection, mirror option, scaling.
-    pub(crate) fn render_bars_pattern(&self, painter: &egui::Painter, _chart_rect: Rect) {
-        if self.points.len() < 2 {
+    /// Renders Bars Pattern: the bars between the first two anchors, copied
+    /// to start at the third anchor's bar and shifted by its price distance
+    /// from the first anchor.
+    pub(crate) fn render_bars_pattern(&self, painter: &egui::Painter, view: &ChartView) {
+        let (&[source_start, source_end, ..], &[from, to, ..]) =
+            (self.points.as_slice(), self.chart_points.as_slice())
+        else {
             return;
-        }
+        };
+        let color = self.color32();
 
-        let source_start = self.points[0];
-        let source_end = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
+        // Source region box around the selected bars
+        let source = bars_between(view.bars, from.bar_idx, to.bar_idx);
+        let source_rect = source.map_or_else(
+            || Rect::from_two_pos(source_start, source_end),
+            |(first, bars)| bars_rect(view, first as f32, bars),
         );
-
-        // Source region box
-        let source_rect = Rect::from_two_pos(source_start, source_end);
         self.draw_source_region(painter, source_rect, color);
 
         // If we have a third point, draw the projection
-        if self.points.len() >= 3 {
-            let proj_anchor = self.points[2];
-            self.draw_pattern_projection(painter, source_rect, proj_anchor, color);
+        if let (Some(&proj_anchor), Some(&at)) = (self.points.get(2), self.chart_points.get(2))
+            && let Some((start, projected)) = projected_bars(view.bars, [from, to, at])
+        {
+            self.draw_pattern_projection(
+                painter,
+                view,
+                source_rect,
+                proj_anchor,
+                start,
+                &projected,
+                color,
+            );
         }
 
         // Source anchor points
@@ -64,27 +74,49 @@ impl Drawing {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_pattern_projection(
         &self,
         painter: &egui::Painter,
+        view: &ChartView,
         source_rect: Rect,
         proj_anchor: Pos2,
+        start: f32,
+        projected: &[Bar],
         color: Color32,
     ) {
         let font = egui::FontId::proportional(typography::XS);
-
-        // Calculate projection rectangle (same size as source)
-        let proj_width = source_rect.width();
-        let proj_height = source_rect.height();
-        let proj_rect = Rect::from_min_size(proj_anchor, egui::vec2(proj_width, proj_height));
+        let proj_rect = bars_rect(view, start, projected);
 
         // Projected region (more transparent)
         let proj_fill =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 40);
         painter.rect_filled(proj_rect, 0.0, proj_fill);
 
-        // Draw pattern replication (simulated bars)
-        self.draw_simulated_bars(painter, proj_rect);
+        // Projected bars as OHLC bars: open tick left, close tick right
+        let bar_color =
+            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150);
+        let bar_stroke = Stroke::new(stroke::MEDIUM, bar_color);
+        let tick = ((view.bar_to_x)(1.0) - (view.bar_to_x)(0.0)).abs() * 0.3;
+        for (i, bar) in projected.iter().enumerate() {
+            let x = (view.bar_to_x)(start + i as f32);
+            let y = |price| (view.price_to_y)(price);
+            painter.line_segment(
+                [Pos2::new(x, y(bar.high)), Pos2::new(x, y(bar.low))],
+                bar_stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(x - tick, y(bar.open)), Pos2::new(x, y(bar.open))],
+                bar_stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(x, y(bar.close)),
+                    Pos2::new(x + tick, y(bar.close)),
+                ],
+                bar_stroke,
+            );
+        }
 
         // Dashed border for projection
         let proj_color =
@@ -115,30 +147,6 @@ impl Drawing {
 
         // Connection arrow from source to projection
         self.draw_connection_arrow(painter, source_rect, proj_rect);
-    }
-
-    fn draw_simulated_bars(&self, painter: &egui::Painter, proj_rect: Rect) {
-        let num_bars = 12;
-        let bar_width = proj_rect.width() / num_bars as f32;
-        for i in 0..num_bars {
-            let x = proj_rect.min.x + bar_width * i as f32 + bar_width / 2.0;
-            // Simulate OHLC pattern from source
-            let progress = i as f32 / num_bars as f32;
-            let height_factor = 0.3 + 0.4 * (progress * std::f32::consts::PI * 2.0).sin().abs();
-            let bar_height = proj_rect.height() * height_factor * 0.8;
-            let bar_y = proj_rect.center().y - bar_height / 2.0;
-
-            let bar_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150);
-            painter.rect_filled(
-                Rect::from_min_size(
-                    Pos2::new(x - bar_width * 0.3, bar_y),
-                    egui::vec2(bar_width * 0.6, bar_height),
-                ),
-                0.0,
-                bar_color,
-            );
-        }
     }
 
     fn draw_dashed_rect(&self, painter: &egui::Painter, rect: Rect, color: Color32) {
@@ -213,6 +221,73 @@ impl Drawing {
             source_end,
             DESIGN_TOKENS.rounding.lg,
             Stroke::new(stroke::MEDIUM, Color32::WHITE),
+        );
+    }
+}
+
+/// Screen rect around `bars` drawn from bar index `first` on.
+fn bars_rect(view: &ChartView, first: f32, bars: &[Bar]) -> Rect {
+    let high = bars
+        .iter()
+        .map(|bar| bar.high)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let low = bars.iter().map(|bar| bar.low).fold(f64::INFINITY, f64::min);
+    Rect::from_two_pos(
+        Pos2::new((view.bar_to_x)(first - 0.5), (view.price_to_y)(high)),
+        Pos2::new(
+            (view.bar_to_x)(first + bars.len() as f32 - 0.5),
+            (view.price_to_y)(low),
+        ),
+    )
+}
+
+/// The bars between the first two anchors, moved to start at the third
+/// anchor's bar and shifted by the third anchor's price minus the first's.
+/// Returns the first projected bar index and the shifted copies.
+fn projected_bars(bars: &[Bar], anchors: [ChartPoint; 3]) -> Option<(f32, Vec<Bar>)> {
+    let [from, to, at] = anchors;
+    let (_, source) = bars_between(bars, from.bar_idx, to.bar_idx)?;
+    let shift = at.price - from.price;
+    let projected = source
+        .iter()
+        .map(|bar| Bar {
+            open: bar.open + shift,
+            high: bar.high + shift,
+            low: bar.low + shift,
+            close: bar.close + shift,
+            ..*bar
+        })
+        .collect();
+    Some((at.bar_idx.round(), projected))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::rendering::sample_bars;
+
+    /// Anchors between bars snap to the nearest bar: bars 1..=3 of the sample
+    /// move to bars 8..=10 and up by 14 - 12 = 2 (values added by hand).
+    #[test]
+    fn projected_bars_copy_source_bars() {
+        let anchors = [
+            ChartPoint::new(0.6, 12.0),
+            ChartPoint::new(3.4, 13.0),
+            ChartPoint::new(8.4, 14.0),
+        ];
+        let (start, projected) = projected_bars(&sample_bars(), anchors).unwrap();
+        assert_eq!(start, 8.0);
+        let ohlc: Vec<_> = projected
+            .iter()
+            .map(|b| (b.open, b.high, b.low, b.close))
+            .collect();
+        assert_eq!(
+            ohlc,
+            [
+                (13.0, 15.0, 12.0, 14.0),
+                (14.0, 14.5, 13.0, 13.0),
+                (13.5, 16.0, 13.0, 15.5)
+            ]
         );
     }
 }

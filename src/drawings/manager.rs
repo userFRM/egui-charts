@@ -10,7 +10,8 @@
 //! application state. Then call [`DrawingManager::update_all_screen_coords`] to
 //! recompute screen positions from chart coordinates before rendering.
 
-use crate::drawings::domain::{Drawing, DrawingToolType, HandlePos};
+use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType, HandlePos};
+use crate::drawings::rendering::ChartView;
 use crate::drawings::services::{
     DrawingInteraction, HandleConfig, HandleService, HistoryService, SelectionService, SnapOptions,
     SnapService,
@@ -115,8 +116,8 @@ impl Default for DrawingManagerOptions {
 /// // 3. Handle user input (clicks, drags, keyboard)
 /// // ... (start_drawing_with_coords, add_point_with_coords, etc.)
 ///
-/// // 4. Render
-/// manager.render_all(&painter, price_rect);
+/// // 4. Render against the chart's bars and coordinate mapping
+/// manager.render_all(&painter, price_rect, &view);
 /// ```
 pub struct DrawingManager {
     /// All completed drawings on the chart.
@@ -638,8 +639,26 @@ impl DrawingManager {
 
     // === Compatibility methods for old DrawingManager API ===
 
-    /// Complete a drag-to-draw drawing (same as complete_curr_drawing)
+    /// Complete a drag-to-draw drawing (see [`Self::complete_curr_drawing`])
     pub fn complete_drag_drawing(&mut self) {
+        // A position's stop starts mirrored around the entry, as an anchor of
+        // its own so it can be moved without moving the target.
+        if let Some(drawing) = &mut self.curr_drawing
+            && matches!(
+                drawing.tool_type,
+                DrawingToolType::LongPos | DrawingToolType::ShortPos
+            )
+            && let (&[entry, target], &[entry_at, target_at]) =
+                (drawing.chart_points.as_slice(), drawing.points.as_slice())
+        {
+            let stop = 2.0 * entry.price - target.price;
+            drawing
+                .chart_points
+                .push(ChartPoint::new(target.bar_idx, stop));
+            drawing
+                .points
+                .push(Pos2::new(target_at.x, 2.0 * entry_at.y - target_at.y));
+        }
         self.complete_curr_drawing();
     }
 
@@ -667,13 +686,6 @@ impl DrawingManager {
         }
     }
 
-    /// Update real-time prices for position drawings (P&L calculation)
-    pub fn update_pos_prices(&mut self, price: f64) {
-        for drawing in &mut self.drawings {
-            drawing.curr_price = Some(price);
-        }
-    }
-
     /// Add a drawing from another source (for multi-chart sync)
     pub fn add_synced_drawing(&mut self, mut drawing: Drawing) {
         // Assign a new ID to avoid conflicts
@@ -682,18 +694,18 @@ impl DrawingManager {
         self.drawings.push(drawing);
     }
 
-    /// Render all drawings
-    pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect) {
+    /// Render all drawings against the chart's bars and coordinate mapping
+    pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
         // Render completed drawings
         for drawing in &self.drawings {
             if drawing.visible {
-                drawing.render(painter, price_rect);
+                drawing.render(painter, price_rect, view);
             }
         }
 
         // Render current drawing being created
         if let Some(ref drawing) = self.curr_drawing {
-            drawing.render(painter, price_rect);
+            drawing.render(painter, price_rect, view);
         }
 
         // Render handles for selected drawing
@@ -799,5 +811,31 @@ mod tests {
         // A pointer near the first anchor snaps to it under magnet mode.
         let snapped = manager.snap_point(Pos2::new(103.0, 102.0), &drawings);
         assert_eq!(snapped, Pos2::new(100.0, 100.0));
+    }
+
+    /// A position's stop is an anchor of its own: it starts mirrored around
+    /// the entry and moves without dragging the target along.
+    #[test]
+    fn position_stop_moves_independently_of_target() {
+        let mut manager = DrawingManager::new();
+        let x_to_bar = |x: f32| x;
+        let y_to_price = |y: f32| f64::from(200.0 - y);
+        manager.start_drawing_with_coords(
+            DrawingToolType::LongPos,
+            Pos2::new(10.0, 100.0),
+            x_to_bar,
+            y_to_price,
+        );
+        manager.update_last_point_with_coords(Pos2::new(30.0, 90.0), x_to_bar, y_to_price);
+        manager.complete_drag_drawing();
+        let id = manager.drawings[0].id;
+        assert_eq!(manager.drawings[0].chart_points[2].price, 90.0);
+
+        manager.start_drag_handle(id, HandlePos::Point(2));
+        manager.update_drag_handle(Pos2::new(30.0, 105.0), x_to_bar, y_to_price);
+        manager.end_drag_handle();
+
+        let points = &manager.drawings[0].chart_points;
+        assert_eq!((points[1].price, points[2].price), (110.0, 95.0));
     }
 }

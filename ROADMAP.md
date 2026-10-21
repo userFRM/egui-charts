@@ -83,7 +83,7 @@ Each item is marked as complete, partial, or missing.
 
 ---
 
-## Drawing Tools (80/88 real implementations, 3 placeholders)
+## Drawing Tools (84/88 real implementations, 3 placeholders)
 
 ### Lines (9/9)
 - [x] Trend Line — Segment distance hit test, start/end/middle handles
@@ -96,11 +96,11 @@ Each item is marked as complete, partial, or missing.
 - [x] Trend Angle — Line + dashed reference + arc + angle/slope label
 - [x] Measure — Colored rect + arrows + info box (price%, pips, bars, time)
 
-### Channels (3/4)
+### Channels (4/4)
 - [x] Parallel Channel — Two parallel lines + connectors, explicit hit test
 - [x] Flat Top/Bottom — Trend line + horizontal + Support/Resistance labels
 - [x] Disjoint Channel — Two parallel segments + dashed connectors + width label
-- [ ] **Regression Trend** — Renders regression line + bands, but R-squared is hardcoded `0.95` (no actual regression from data)
+- [x] Regression Trend: least-squares line through the closes between the anchors, 1σ and 2σ bands, R² and slope label
 
 ### Pitchforks (4/4)
 - [x] Pitchfork (Andrews)
@@ -148,17 +148,17 @@ Each item is marked as complete, partial, or missing.
 - [x] Sine Line — Full sine wave with amplitude guides
 
 ### Projection / Trading (6/6)
-- [x] Long Position — Entry/target/stop zones, P&L calculation
+- [x] Long Position: entry, target and independent stop zones; P&L and risk/reward from the bars after the entry
 - [x] Short Position
-- [x] Forecast — Projected price trajectory
+- [x] Forecast: price change over the bar span, resolved against the bars up to the target bar
 - [x] Ghost Feed — Projected future bars
-- [x] Bars Pattern — Source region + pattern projection
+- [x] Bars Pattern: copies the selected bars to the projection anchor
 - [x] Projection Tool
 
-### Volume / VWAP (0/3 accurate)
-- [ ] **Anchored VWAP** — Renders line + bands, but std_dev is a visual approximation (`chart_rect.height() * 0.1 * 0.15`), not computed from actual price/volume data
-- [ ] **Fixed Range Volume Profile** — Horizontal bars approximated, not driven by real volume data
-- [ ] **Anchored Volume Profile** — Same approximation issue
+### Volume / VWAP (3/3)
+- [x] Anchored VWAP: VWAP of the typical price from the anchor bar, with 1σ and 2σ volume-weighted bands
+- [x] Fixed Range Volume Profile: each bar's volume spread over its high-low range, POC and 70% value area
+- [x] Anchored Volume Profile: the same profile from the anchor bar to the latest bar
 
 ### Measurements (4/4)
 - [x] Price Range — Two hlines + vertical connector + price diff label
@@ -548,9 +548,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 
 | Priority | Issue | Location |
 |----------|-------|----------|
-| High | Regression Trend R-squared hardcoded to 0.95 | `drawings/rendering/channels.rs` |
-| High | Anchored VWAP std_dev is visual approximation | `drawings/rendering/trading/volume_profile.rs` |
-| High | Volume profile tools use approximate bar lengths | `drawings/rendering/trading/volume_profile.rs` |
 | Medium | MACD histogram renders as line, not bars | `chart/renderers/indicator.rs` |
 | Medium | Ichimoku cloud renders as lines, not filled regions | `chart/renderers/indicator.rs` |
 | Medium | Parabolic SAR renders as line, not dots | `chart/renderers/indicator.rs` |
@@ -571,7 +568,7 @@ All ui_kit components are **fully implemented** generic building blocks:
 ### What's built (ready to ship)
 - 17 of 18 chart types with full rendering
 - Complete pan/zoom/crosshair/scale system
-- 80 of 88 drawing tools with real geometry (95 total incl. 4 cursor modes + 3 placeholders)
+- 84 of 88 drawing tools with real geometry (95 total incl. 4 cursor modes + 3 placeholders)
 - ~130 technical indicators with complete calculation logic
 - Full UI component library (toolbars, dialogs, panels, controls)
 - 24 reusable ui_kit building blocks
@@ -582,9 +579,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 ### What needs work (P1 — core functionality gaps)
 - [ ] Wire TPO full renderer into chart type dispatch
 - [ ] Implement proper Volume Footprint with bid/ask data support
-- [ ] Fix Regression Trend to compute actual R-squared from data
-- [ ] Fix Anchored VWAP to compute std_dev from price/volume data
-- [ ] Fix Volume Profile drawing tools to use real volume data
 - [ ] Add indicator-specific rendering (histograms, filled clouds, dot plots)
 - [ ] Register all ~130 indicators in `IndicatorFactory`
 - [ ] Build multi-pane layout manager (`PaneManager`)
