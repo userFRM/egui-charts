@@ -20,7 +20,7 @@ pub struct EaseOfMovement {
 impl EaseOfMovement {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             divisor: 1_000_000.0,
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.warning, // Orange

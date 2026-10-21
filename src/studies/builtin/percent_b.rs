@@ -20,7 +20,7 @@ pub struct PercentB {
 impl PercentB {
     pub fn new(period: usize, multiplier: f64) -> Self {
         Self {
-            period,
+            period: period.max(1),
             multiplier,
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan

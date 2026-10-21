@@ -20,8 +20,8 @@ pub struct DoubleStochastic {
 impl DoubleStochastic {
     pub fn new(period: usize, smooth: usize) -> Self {
         Self {
-            period,
-            smooth,
+            period: period.max(1),
+            smooth: smooth.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
@@ -67,7 +67,7 @@ impl Indicator for DoubleStochastic {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let min_period = self.period + self.smooth * 2;
+        let min_period = self.period.saturating_add(self.smooth.saturating_mul(2));
         if data.len() < min_period {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

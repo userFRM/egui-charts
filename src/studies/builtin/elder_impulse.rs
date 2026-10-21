@@ -36,10 +36,10 @@ pub struct ElderImpulseSystem {
 impl ElderImpulseSystem {
     pub fn new(ema_period: usize, macd_fast: usize, macd_slow: usize, macd_signal: usize) -> Self {
         Self {
-            ema_period,
-            macd_fast,
-            macd_slow,
-            macd_signal,
+            ema_period: ema_period.max(1),
+            macd_fast: macd_fast.max(1),
+            macd_slow: macd_slow.max(1),
+            macd_signal: macd_signal.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Bullish
@@ -91,7 +91,10 @@ impl Indicator for ElderImpulseSystem {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let min_period = self.macd_slow.max(self.ema_period) + self.macd_signal;
+        let min_period = self
+            .macd_slow
+            .max(self.ema_period)
+            .saturating_add(self.macd_signal);
         if data.len() < min_period {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

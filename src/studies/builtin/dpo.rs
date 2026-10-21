@@ -18,7 +18,7 @@ pub struct DetrendedPriceOscillator {
 impl DetrendedPriceOscillator {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.deep_purple,
             visible: true,
@@ -53,7 +53,7 @@ impl Indicator for DetrendedPriceOscillator {
         // DPO requires period + displacement
         // Displacement = period / 2 + 1
         let displacement = self.period / 2 + 1;
-        let required = self.period + displacement;
+        let required = self.period.saturating_add(displacement);
 
         if data.len() < required {
             for _ in 0..data.len() {

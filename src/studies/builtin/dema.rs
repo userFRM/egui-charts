@@ -96,7 +96,7 @@ impl Indicator for DEMA {
         }
 
         // Need 2 * period - 1 bars for valid DEMA
-        let min_period = 2 * self.period - 1;
+        let min_period = self.period.saturating_mul(2) - 1;
 
         // Extract close prices
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();

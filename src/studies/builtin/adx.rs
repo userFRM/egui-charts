@@ -97,7 +97,7 @@ impl Indicator for ADX {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.period * 2 {
+        if data.len() < self.period.saturating_mul(2) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }

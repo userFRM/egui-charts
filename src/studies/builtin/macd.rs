@@ -69,9 +69,9 @@ impl MACD {
     /// * `signal_period` -- Period for the signal-line EMA (default: 9).
     pub fn new(fast_period: usize, slow_period: usize, signal_period: usize) -> Self {
         Self {
-            fast_period,
-            slow_period,
-            signal_period,
+            fast_period: fast_period.max(1),
+            slow_period: slow_period.max(1),
+            signal_period: signal_period.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.indicators.macd_line, // MACD line
@@ -103,6 +103,7 @@ impl Indicator for MACD {
         self.values.clear();
 
         if data.len() < self.slow_period {
+            self.values.resize(data.len(), IndicatorValue::None);
             return;
         }
 
@@ -135,6 +136,7 @@ impl Indicator for MACD {
 
         // Calculate signal line (EMA of MACD)
         if macd_line.len() < self.signal_period {
+            self.values.resize(data.len(), IndicatorValue::None);
             return;
         }
 

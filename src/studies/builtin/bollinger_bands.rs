@@ -62,7 +62,7 @@ pub struct BollingerBands {
 impl BollingerBands {
     pub fn new(period: usize, std_dev: f64) -> Self {
         Self {
-            period,
+            period: period.max(1),
             std_dev,
             values: Vec::new(),
             colors: vec![
@@ -93,10 +93,6 @@ impl Indicator for BollingerBands {
 
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
-
-        if data.len() < self.period {
-            return;
-        }
 
         for i in 0..data.len() {
             if i < self.period - 1 {

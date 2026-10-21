@@ -19,7 +19,7 @@ pub struct PriceChannel {
 impl PriceChannel {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Upper

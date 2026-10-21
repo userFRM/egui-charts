@@ -44,7 +44,7 @@ impl LSMA {
     /// * `period` -- Number of bars in the regression window (e.g. 25).
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             offset: 0,
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber
@@ -120,10 +120,6 @@ impl Indicator for LSMA {
 
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
-
-        if data.len() < self.period {
-            return;
-        }
 
         for i in 0..data.len() {
             if i < self.period - 1 {

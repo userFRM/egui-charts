@@ -17,7 +17,7 @@ pub struct Envelopes {
 impl Envelopes {
     pub fn new(period: usize, percent: f64, ma_type: &str) -> Self {
         Self {
-            period,
+            period: period.max(1),
             percent,
             ma_type: ma_type.to_string(),
             values: Vec::new(),

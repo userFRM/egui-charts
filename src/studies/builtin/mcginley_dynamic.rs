@@ -18,7 +18,7 @@ pub struct McGinleyDynamic {
 impl McGinleyDynamic {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.pink, // Pink
             visible: true,

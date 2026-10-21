@@ -29,8 +29,8 @@ impl MassIndex {
     }
 
     pub fn with_periods(mut self, ema_period: usize, sum_period: usize) -> Self {
-        self.ema_period = ema_period;
-        self.sum_period = sum_period;
+        self.ema_period = ema_period.max(1);
+        self.sum_period = sum_period.max(1);
         self
     }
 
@@ -101,7 +101,10 @@ impl Indicator for MassIndex {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let required = self.ema_period * 2 + self.sum_period;
+        let required = self
+            .ema_period
+            .saturating_mul(2)
+            .saturating_add(self.sum_period);
         if data.len() < required {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

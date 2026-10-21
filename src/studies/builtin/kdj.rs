@@ -23,9 +23,9 @@ pub struct KDJ {
 impl KDJ {
     pub fn new(period: usize, k_smooth: usize, d_smooth: usize) -> Self {
         Self {
-            period,
-            k_smooth,
-            d_smooth,
+            period: period.max(1),
+            k_smooth: k_smooth.max(1),
+            d_smooth: d_smooth.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - K

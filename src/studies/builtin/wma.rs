@@ -73,7 +73,7 @@ impl Indicator for WMA {
         }
 
         // Weight sum: n*(n+1)/2
-        let weight_sum = (self.period * (self.period + 1)) / 2;
+        let weight_sum = self.period as f64 * (self.period as f64 + 1.0) / 2.0;
 
         for i in 0..data.len() {
             if i < self.period - 1 {
@@ -84,7 +84,7 @@ impl Indicator for WMA {
                     let weight = (self.period - j) as f64;
                     weighted_sum += data[i - j].close * weight;
                 }
-                let wma = weighted_sum / weight_sum as f64;
+                let wma = weighted_sum / weight_sum;
                 self.values.push(IndicatorValue::Single(wma));
             }
         }

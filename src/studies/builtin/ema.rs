@@ -62,7 +62,7 @@ impl EMA {
     /// * `period` -- The smoothing period (e.g. 12, 26, 50).
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.indicators.ema, // Blue
             visible: true,

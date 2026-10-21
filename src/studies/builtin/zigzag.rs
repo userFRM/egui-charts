@@ -35,7 +35,7 @@ impl ZigZag {
     pub fn new(deviation_percent: f64, depth: usize) -> Self {
         Self {
             deviation_percent,
-            depth,
+            depth: depth.max(1),
             mode: ZigZagMode::HighLow,
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.info,
@@ -88,7 +88,7 @@ impl Indicator for ZigZag {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.depth + 1 {
+        if data.len() < self.depth.saturating_add(1) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }

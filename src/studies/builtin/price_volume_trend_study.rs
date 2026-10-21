@@ -16,7 +16,7 @@ pub struct PriceVolumeTrendStudy {
 impl PriceVolumeTrendStudy {
     pub fn new(signal_period: usize) -> Self {
         Self {
-            signal_period,
+            signal_period: signal_period.max(1),
             values: Vec::new(),
             colors: vec![
                 Color32::from_rgb(38, 166, 154), // PVT line (teal)

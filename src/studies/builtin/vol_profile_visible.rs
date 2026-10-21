@@ -13,9 +13,11 @@ pub struct VolProfileVisible {
 }
 
 impl VolProfileVisible {
+    /// Create a profile with `row_count` price rows. Every bar carries all rows,
+    /// so a row count above 10,000 is refused and yields `None` for every bar.
     pub fn new(row_count: usize) -> Self {
         Self {
-            row_count,
+            row_count: row_count.max(1),
             values: Vec::new(),
             colors: vec![Color32::from_rgb(41, 98, 255)], // Accent blue
             visible: true,
@@ -42,6 +44,10 @@ impl Indicator for VolProfileVisible {
         self.values.clear();
 
         if data.is_empty() || self.row_count == 0 {
+            return;
+        }
+        if self.row_count > super::MAX_PROFILE_ROWS {
+            self.values.resize(data.len(), IndicatorValue::None);
             return;
         }
 

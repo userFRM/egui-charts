@@ -68,7 +68,7 @@ impl StopRunIndicator {
     /// Create a new stop run indicator
     pub fn new(swing_period: usize) -> Self {
         Self {
-            swing_period,
+            swing_period: swing_period.max(1),
             break_threshold: 0.5, // 0.5 ATR minimum break
             reversal_window: 3,
             require_volume_confirmation: true,
@@ -89,7 +89,7 @@ impl StopRunIndicator {
 
     /// Set reversal window
     pub fn with_reversal_window(mut self, window: usize) -> Self {
-        self.reversal_window = window;
+        self.reversal_window = window.max(1);
         self
     }
 
@@ -225,7 +225,7 @@ impl Indicator for StopRunIndicator {
         self.values.clear();
         self.detections.clear();
 
-        if data.len() < self.swing_period + self.reversal_window {
+        if data.len() < self.swing_period.saturating_add(self.reversal_window) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }

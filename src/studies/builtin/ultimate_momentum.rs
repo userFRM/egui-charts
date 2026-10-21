@@ -22,9 +22,9 @@ pub struct UltimateMomentum {
 impl UltimateMomentum {
     pub fn new(short: usize, medium: usize, long: usize) -> Self {
         Self {
-            short_period: short,
-            medium_period: medium,
-            long_period: long,
+            short_period: short.max(1),
+            medium_period: medium.max(1),
+            long_period: long.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.purple,
             visible: true,

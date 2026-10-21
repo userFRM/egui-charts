@@ -20,7 +20,7 @@ pub struct HistoricalVolatility {
 impl HistoricalVolatility {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             trading_days: 252.0, // Default for stocks
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.warning, // Deep Orange
@@ -63,7 +63,7 @@ impl Indicator for HistoricalVolatility {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.period + 1 {
+        if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }

@@ -52,9 +52,9 @@ impl VolumeWeightedMACD {
     /// Create a new VW-MACD with specified periods
     pub fn new(fast_period: usize, slow_period: usize, signal_period: usize) -> Self {
         Self {
-            fast_period,
-            slow_period,
-            signal_period,
+            fast_period: fast_period.max(1),
+            slow_period: slow_period.max(1),
+            signal_period: signal_period.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.indicators.macd_line, // MACD line
@@ -107,6 +107,7 @@ impl Indicator for VolumeWeightedMACD {
         self.values.clear();
 
         if data.len() < self.slow_period {
+            self.values.resize(data.len(), IndicatorValue::None);
             return;
         }
 
@@ -142,6 +143,7 @@ impl Indicator for VolumeWeightedMACD {
 
         // Calculate signal line (EMA of MACD)
         if macd_line.len() < self.signal_period {
+            self.values.resize(data.len(), IndicatorValue::None);
             return;
         }
 
@@ -320,17 +322,6 @@ mod tests {
 
         // Should have values after calculation
         assert!(!vw_macd.values().is_empty());
-    }
-
-    #[test]
-    fn test_vw_macd_insufficient_data() {
-        let mut vw_macd = VolumeWeightedMACD::new(12, 26, 9);
-        let bars = make_test_bars(); // Only 10 bars, need 26 for slow period
-
-        vw_macd.calculate(&bars);
-
-        // Should have no values with insufficient data
-        assert!(vw_macd.values().is_empty());
     }
 
     #[test]

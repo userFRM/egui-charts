@@ -13,9 +13,11 @@ pub struct VolProfileFixed {
 }
 
 impl VolProfileFixed {
+    /// Create a profile with `row_count` price rows. Every bar carries all rows,
+    /// so a row count above 10,000 is refused and yields `None` for every bar.
     pub fn new(row_count: usize) -> Self {
         Self {
-            row_count,
+            row_count: row_count.max(1),
             values: Vec::new(),
             colors: vec![Color32::from_rgb(41, 98, 255)], // Accent blue
             visible: true,
@@ -42,6 +44,10 @@ impl Indicator for VolProfileFixed {
         self.values.clear();
 
         if data.is_empty() || self.row_count == 0 {
+            return;
+        }
+        if self.row_count > super::MAX_PROFILE_ROWS {
+            self.values.resize(data.len(), IndicatorValue::None);
             return;
         }
 
@@ -78,7 +84,8 @@ impl Indicator for VolProfileFixed {
             let lo_bin = lo_bin.min(self.row_count - 1);
             let hi_bin = hi_bin.min(self.row_count - 1);
 
-            let covered = (hi_bin - lo_bin + 1) as f64;
+            // A NaN or inverted bar has hi_bin < lo_bin and covers no bins.
+            let covered = (hi_bin.saturating_sub(lo_bin) + 1) as f64;
             let vol_per_bin = bar.volume / covered;
 
             for bin in lo_bin..=hi_bin {

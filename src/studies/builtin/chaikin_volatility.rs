@@ -20,8 +20,8 @@ pub struct ChaikinVolatility {
 impl ChaikinVolatility {
     pub fn new(ema_period: usize, roc_period: usize) -> Self {
         Self {
-            ema_period,
-            roc_period,
+            ema_period: ema_period.max(1),
+            roc_period: roc_period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.deep_orange,
             visible: true,
@@ -69,7 +69,7 @@ impl Indicator for ChaikinVolatility {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let min_period = self.ema_period + self.roc_period;
+        let min_period = self.ema_period.saturating_add(self.roc_period);
         if data.len() < min_period {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

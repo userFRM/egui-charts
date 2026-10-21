@@ -25,10 +25,10 @@ pub struct StochasticMomentumIndex {
 impl StochasticMomentumIndex {
     pub fn new(period: usize, smooth1: usize, smooth2: usize, signal_period: usize) -> Self {
         Self {
-            period,
-            smooth1,
-            smooth2,
-            signal_period,
+            period: period.max(1),
+            smooth1: smooth1.max(1),
+            smooth2: smooth2.max(1),
+            signal_period: signal_period.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - SMI

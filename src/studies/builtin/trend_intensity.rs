@@ -18,7 +18,7 @@ pub struct TrendIntensityIndex {
 impl TrendIntensityIndex {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.info, // Indigo/Blue
             visible: true,
@@ -139,7 +139,7 @@ pub struct Qstick {
 impl Qstick {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.purple, // Purple
             visible: true,

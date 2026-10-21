@@ -114,7 +114,7 @@ impl Indicator for Stochastic {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let min_period = self.k_period + self.k_smooth - 1;
+        let min_period = self.k_period.saturating_add(self.k_smooth) - 1;
         if data.len() < min_period {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
@@ -147,7 +147,7 @@ impl Indicator for Stochastic {
             if i < self.k_period + self.k_smooth - 2 || raw_k[i].is_nan() {
                 smooth_k.push(f64::NAN);
             } else {
-                let start = i - self.k_smooth + 1;
+                let start = i + 1 - self.k_smooth;
                 let valid_values: Vec<f64> = raw_k[start..=i]
                     .iter()
                     .filter(|v| !v.is_nan())
@@ -168,7 +168,7 @@ impl Indicator for Stochastic {
             if i < self.k_period + self.k_smooth + self.d_period - 3 || smooth_k[i].is_nan() {
                 d_values.push(f64::NAN);
             } else {
-                let start = i - self.d_period + 1;
+                let start = i + 1 - self.d_period;
                 let valid_values: Vec<f64> = smooth_k[start..=i]
                     .iter()
                     .filter(|v| !v.is_nan())

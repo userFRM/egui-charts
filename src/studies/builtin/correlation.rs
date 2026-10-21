@@ -18,7 +18,7 @@ pub struct CorrelationCoefficient {
 impl CorrelationCoefficient {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.deep_purple, // Deep Purple
             visible: true,

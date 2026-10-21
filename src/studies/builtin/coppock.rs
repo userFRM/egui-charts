@@ -32,9 +32,9 @@ impl CoppockCurve {
     }
 
     pub fn with_periods(mut self, long_roc: usize, short_roc: usize, wma: usize) -> Self {
-        self.long_roc = long_roc;
-        self.short_roc = short_roc;
-        self.wma_period = wma;
+        self.long_roc = long_roc.max(1);
+        self.short_roc = short_roc.max(1);
+        self.wma_period = wma.max(1);
         self
     }
 
@@ -110,7 +110,10 @@ impl Indicator for CoppockCurve {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let required = self.long_roc.max(self.short_roc) + self.wma_period;
+        let required = self
+            .long_roc
+            .max(self.short_roc)
+            .saturating_add(self.wma_period);
         if data.len() < required {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

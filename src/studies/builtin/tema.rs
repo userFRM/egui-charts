@@ -100,7 +100,7 @@ impl Indicator for TEMA {
         }
 
         // Need 3 * period - 2 bars for valid TEMA
-        let min_period = 3 * self.period - 2;
+        let min_period = self.period.saturating_mul(3) - 2;
 
         // Extract close prices
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();

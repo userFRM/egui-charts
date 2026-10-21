@@ -14,6 +14,9 @@ use std::collections::HashMap;
 /// - High liquidity price levels (accumulated volume)
 /// - Liquidity sweeps (price moves through liquidity zones)
 /// - Liquidity imbalances
+///
+/// Bars with a non-finite price, an inverted range, or a range spanning more
+/// than 100,000 levels of the tick size are not tracked: they add no volume.
 #[derive(Clone)]
 pub struct LiquidityTracker {
     /// Period for analysis
@@ -117,7 +120,7 @@ impl LiquidityTracker {
     /// Create a new liquidity tracker
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             tick_size: 1.0,
             volume_threshold: 2.0, // Multiple of average
             values: Vec::new(),
@@ -262,7 +265,7 @@ impl LiquidityTracker {
             .cloned()
             .collect();
 
-        significant.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
+        significant.sort_by(|a, b| a.price.total_cmp(&b.price));
 
         if significant.is_empty() {
             return;
@@ -354,20 +357,23 @@ impl Indicator for LiquidityTracker {
             let is_bullish = bar.close >= bar.open;
             let range = bar.high - bar.low;
 
-            if range > 0.0 {
-                // Distribute volume across price levels touched
-                let low_key = self.price_to_key(bar.low);
-                let high_key = self.price_to_key(bar.high);
-                let levels_count = (high_key - low_key + 1) as f64;
-                let vol_per_level = bar.volume / levels_count;
+            match super::bar_level_keys(bar, self.tick_size) {
+                Some((low_key, high_key)) if range > 0.0 => {
+                    // Distribute volume across price levels touched
+                    let levels_count = (high_key - low_key + 1) as f64;
+                    let vol_per_level = bar.volume / levels_count;
 
-                for key in low_key..=high_key {
-                    let price = self.key_to_price(key);
-                    self.add_volume(price, vol_per_level, idx, is_bullish);
+                    for key in low_key..=high_key {
+                        let price = self.key_to_price(key);
+                        self.add_volume(price, vol_per_level, idx, is_bullish);
+                    }
                 }
-            } else {
                 // Doji - all volume at close
-                self.add_volume(bar.close, bar.volume, idx, is_bullish);
+                Some(_) if bar.close.is_finite() => {
+                    self.add_volume(bar.close, bar.volume, idx, is_bullish)
+                }
+                // Untracked bar (see the type docs): no volume added
+                _ => {}
             }
 
             // Check for liquidity sweep

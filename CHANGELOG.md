@@ -28,6 +28,11 @@ All notable changes to this project are documented in this file. The format is b
 - The chart watermark falls back to the chart symbol and is hidden when there is none, instead of showing a placeholder.
 - Zooming the price axis in by hand stops at a span of one millionth of the price level instead of narrowing to a few nanounits, and repeated zooming out can no longer overflow the price range to infinite or NaN bounds.
 - `Timeframe::duration_ms` saturates at `i64::MAX` for custom timeframes too large to represent instead of overflowing into a panic or a negative duration, and parsing a custom timeframe whose second count overflows is rejected.
+- Built-in studies raise a length of 0 to 1 and treat a length longer than the data as warm-up, so a zero or huge period no longer panics, exhausts memory or yields only NaN (for example `KAMA::new(0)` and `SmoothedMA::new(0)`).
+- SMA, VWMA, LSMA, Bollinger Bands, RSI, MACD and VW-MACD return one `None` per bar instead of no values when there are fewer bars than their period.
+- Stochastic no longer panics when all its periods are 1, and Volume Profile Fixed Range no longer panics on a bar with a NaN price.
+- Volume profiles refuse a row count above 10,000 and yield `None` for every bar instead of allocating the rows for each bar.
+- Iceberg and Liquidity no longer track bars with a non-finite price, an inverted range or a range spanning more than 100,000 tick levels, so an infinite or 1e12 print no longer hangs the chart or exhausts memory.
 
 ### Changed
 

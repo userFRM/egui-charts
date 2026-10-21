@@ -37,9 +37,9 @@ impl ConnorsRSI {
     }
 
     pub fn with_periods(mut self, rsi: usize, streak: usize, rank: usize) -> Self {
-        self.rsi_period = rsi;
-        self.streak_period = streak;
-        self.rank_period = rank;
+        self.rsi_period = rsi.max(1);
+        self.streak_period = streak.max(1);
+        self.rank_period = rank.max(1);
         self
     }
 
@@ -179,7 +179,7 @@ impl Indicator for ConnorsRSI {
             .rsi_period
             .max(self.streak_period)
             .max(self.rank_period)
-            + 1;
+            .saturating_add(1);
         if data.len() < required {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

@@ -16,8 +16,8 @@ pub struct MACross {
 impl MACross {
     pub fn new(fast_period: usize, slow_period: usize) -> Self {
         Self {
-            fast_period,
-            slow_period,
+            fast_period: fast_period.max(1),
+            slow_period: slow_period.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Fast

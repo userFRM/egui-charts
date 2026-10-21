@@ -41,9 +41,9 @@ impl KnowSureThing {
         sma_periods: [usize; 4],
         signal_period: usize,
     ) -> Self {
-        self.roc_periods = roc_periods;
-        self.sma_periods = sma_periods;
-        self.signal_period = signal_period;
+        self.roc_periods = roc_periods.map(|p| p.max(1));
+        self.sma_periods = sma_periods.map(|p| p.max(1));
+        self.signal_period = signal_period.max(1);
         self
     }
 
@@ -110,8 +110,12 @@ impl Indicator for KnowSureThing {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let max_period =
-            self.roc_periods.iter().max().unwrap() + self.sma_periods.iter().max().unwrap();
+        let max_period = self
+            .roc_periods
+            .iter()
+            .max()
+            .unwrap()
+            .saturating_add(*self.sma_periods.iter().max().unwrap());
         if data.len() < max_period {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

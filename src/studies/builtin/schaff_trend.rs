@@ -32,9 +32,9 @@ impl SchaffTrendCycle {
     }
 
     pub fn with_periods(mut self, short: usize, long: usize, cycle: usize) -> Self {
-        self.macd_short = short;
-        self.macd_long = long;
-        self.cycle = cycle;
+        self.macd_short = short.max(1);
+        self.macd_long = long.max(1);
+        self.cycle = cycle.max(1);
         self
     }
 
@@ -140,7 +140,7 @@ impl Indicator for SchaffTrendCycle {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.macd_long + self.cycle {
+        if data.len() < self.macd_long.saturating_add(self.cycle) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }

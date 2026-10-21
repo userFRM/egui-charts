@@ -55,7 +55,7 @@ impl SMA {
     /// * `period` -- The number of bars in the averaging window (e.g. 20, 50, 200).
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.indicators.ma, // Orange for MA
             visible: true,
@@ -87,10 +87,6 @@ impl Indicator for SMA {
 
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
-
-        if data.len() < self.period {
-            return;
-        }
 
         for i in 0..data.len() {
             if i + 1 < self.period {

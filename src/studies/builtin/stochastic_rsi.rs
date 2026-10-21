@@ -159,7 +159,11 @@ impl Indicator for StochasticRSI {
             return;
         }
 
-        let min_period = self.rsi_period + self.stoch_period + self.smooth_k + self.smooth_d;
+        let min_period = self
+            .rsi_period
+            .saturating_add(self.stoch_period)
+            .saturating_add(self.smooth_k)
+            .saturating_add(self.smooth_d);
         if data.len() < min_period {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

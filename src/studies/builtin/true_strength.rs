@@ -23,9 +23,9 @@ pub struct TrueStrengthIndex {
 impl TrueStrengthIndex {
     pub fn new(long_period: usize, short_period: usize, signal_period: usize) -> Self {
         Self {
-            long_period,
-            short_period,
-            signal_period,
+            long_period: long_period.max(1),
+            short_period: short_period.max(1),
+            signal_period: signal_period.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,        // Blue - TSI
@@ -76,7 +76,10 @@ impl Indicator for TrueStrengthIndex {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let min_period = self.long_period + self.short_period + 1;
+        let min_period = self
+            .long_period
+            .saturating_add(self.short_period)
+            .saturating_add(1);
         if data.len() < min_period {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

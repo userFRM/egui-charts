@@ -16,7 +16,7 @@ pub struct OhlcVolatility {
 impl OhlcVolatility {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             colors: vec![Color32::from_rgb(233, 30, 99)], // Pink
             visible: true,

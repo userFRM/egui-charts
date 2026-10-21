@@ -55,7 +55,7 @@ impl HMA {
             return wma;
         }
 
-        let weight_sum = (period * (period + 1)) / 2;
+        let weight_sum = period as f64 * (period as f64 + 1.0) / 2.0;
 
         for i in (period - 1)..data.len() {
             let mut weighted_sum = 0.0;
@@ -63,7 +63,7 @@ impl HMA {
                 let weight = (period - j) as f64;
                 weighted_sum += data[i - j] * weight;
             }
-            wma[i] = weighted_sum / weight_sum as f64;
+            wma[i] = weighted_sum / weight_sum;
         }
 
         wma
@@ -118,7 +118,7 @@ impl Indicator for HMA {
         let hma = Self::calculate_wma(&raw_hma, sqrt_period);
 
         // Build output
-        let min_period = self.period + sqrt_period - 1;
+        let min_period = self.period.saturating_add(sqrt_period) - 1;
         for i in 0..data.len() {
             if i < min_period - 1 || hma[i].is_nan() {
                 self.values.push(IndicatorValue::None);

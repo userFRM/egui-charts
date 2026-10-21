@@ -16,7 +16,7 @@ pub struct MAChannel {
 impl MAChannel {
     pub fn new(period: usize, offset_percent: f64) -> Self {
         Self {
-            period,
+            period: period.max(1),
             offset_percent,
             values: Vec::new(),
             colors: vec![

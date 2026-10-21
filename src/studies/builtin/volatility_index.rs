@@ -16,7 +16,7 @@ pub struct VolatilityIndex {
 impl VolatilityIndex {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             colors: vec![Color32::from_rgb(255, 152, 0)], // Orange
             visible: true,

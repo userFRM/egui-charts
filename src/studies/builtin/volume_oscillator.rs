@@ -20,8 +20,8 @@ pub struct VolumeOscillator {
 impl VolumeOscillator {
     pub fn new(short_period: usize, long_period: usize) -> Self {
         Self {
-            short_period,
-            long_period,
+            short_period: short_period.max(1),
+            long_period: long_period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.info, // Blue
             visible: true,

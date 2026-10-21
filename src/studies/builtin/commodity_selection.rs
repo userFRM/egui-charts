@@ -20,7 +20,7 @@ pub struct CommoditySelectionIndex {
 impl CommoditySelectionIndex {
     pub fn new(period: usize, cost: f64) -> Self {
         Self {
-            period,
+            period: period.max(1),
             cost,
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.brown, // Brown
@@ -119,7 +119,7 @@ impl Indicator for CommoditySelectionIndex {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let min_period = self.period * 2;
+        let min_period = self.period.saturating_mul(2);
         if data.len() < min_period {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
@@ -196,7 +196,7 @@ pub struct TrendDetectionIndex {
 impl TrendDetectionIndex {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.info, // Indigo (using INFO blue as closest match)
             visible: true,
@@ -227,7 +227,7 @@ impl Indicator for TrendDetectionIndex {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.period + 1 {
+        if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }

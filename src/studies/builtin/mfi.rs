@@ -81,7 +81,7 @@ impl Indicator for MoneyFlowIndex {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.period + 1 {
+        if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }

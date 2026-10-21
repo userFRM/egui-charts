@@ -19,7 +19,7 @@ pub struct TRIX {
 impl TRIX {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             signal_period: 9,
             values: Vec::new(),
             colors: vec![
@@ -31,7 +31,7 @@ impl TRIX {
     }
 
     pub fn with_signal(mut self, signal_period: usize) -> Self {
-        self.signal_period = signal_period;
+        self.signal_period = signal_period.max(1);
         self
     }
 
@@ -109,7 +109,7 @@ impl Indicator for TRIX {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let required = self.period * 3 + 1;
+        let required = self.period.saturating_mul(3).saturating_add(1);
         if data.len() < required {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);

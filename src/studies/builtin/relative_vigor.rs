@@ -19,7 +19,7 @@ pub struct RelativeVigorIndex {
 impl RelativeVigorIndex {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - RVI
@@ -93,7 +93,7 @@ impl Indicator for RelativeVigorIndex {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.period + 4 {
+        if data.len() < self.period.saturating_add(4) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }

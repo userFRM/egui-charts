@@ -21,7 +21,7 @@ pub struct ChandelierExit {
 impl ChandelierExit {
     pub fn new(period: usize, multiplier: f64) -> Self {
         Self {
-            period,
+            period: period.max(1),
             multiplier,
             values: Vec::new(),
             colors: vec![

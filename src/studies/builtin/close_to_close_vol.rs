@@ -15,7 +15,7 @@ pub struct CloseToCloseVol {
 impl CloseToCloseVol {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             colors: vec![Color32::from_rgb(156, 39, 176)], // Purple
             visible: true,

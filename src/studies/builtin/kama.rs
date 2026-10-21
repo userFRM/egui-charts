@@ -57,7 +57,7 @@ impl KAMA {
     /// [`with_periods`](Self::with_periods) to customise.
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             fast_period: 2,
             slow_period: 30,
             values: Vec::new(),
@@ -68,8 +68,8 @@ impl KAMA {
 
     /// Set custom fast and slow EMA periods.
     pub fn with_periods(mut self, fast: usize, slow: usize) -> Self {
-        self.fast_period = fast;
-        self.slow_period = slow;
+        self.fast_period = fast.max(1);
+        self.slow_period = slow.max(1);
         self
     }
 

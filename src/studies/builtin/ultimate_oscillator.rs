@@ -92,7 +92,7 @@ impl Indicator for UltimateOscillator {
         }
 
         let max_period = self.period1.max(self.period2).max(self.period3);
-        if data.len() < max_period + 1 {
+        if data.len() < max_period.saturating_add(1) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }

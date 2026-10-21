@@ -36,9 +36,9 @@ impl KlingerOscillator {
     }
 
     pub fn with_periods(mut self, short: usize, long: usize, signal: usize) -> Self {
-        self.short_period = short;
-        self.long_period = long;
-        self.signal_period = signal;
+        self.short_period = short.max(1);
+        self.long_period = long.max(1);
+        self.signal_period = signal.max(1);
         self
     }
 

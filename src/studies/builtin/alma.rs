@@ -35,8 +35,6 @@ pub struct ALMA {
     values: Vec<IndicatorValue>,
     color: Color32,
     visible: bool,
-    weights: Vec<f64>,
-    weight_sum: f64,
 }
 
 impl ALMA {
@@ -51,19 +49,6 @@ impl ALMA {
         let offset = offset.clamp(0.0, 1.0);
         let sigma = sigma.max(0.001);
 
-        // Pre-calculate weights
-        let m = offset * (period - 1) as f64;
-        let s = period as f64 / sigma;
-
-        let mut weights = Vec::with_capacity(period);
-        let mut weight_sum = 0.0;
-
-        for i in 0..period {
-            let w = (-((i as f64 - m).powi(2)) / (2.0 * s * s)).exp();
-            weights.push(w);
-            weight_sum += w;
-        }
-
         Self {
             period,
             offset,
@@ -71,8 +56,6 @@ impl ALMA {
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange
             visible: true,
-            weights,
-            weight_sum,
         }
     }
 
@@ -107,9 +90,18 @@ impl Indicator for ALMA {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.is_empty() {
+        if data.len() < self.period {
+            self.values.resize(data.len(), IndicatorValue::None);
             return;
         }
+
+        // Gaussian weights, computed here so their size is bounded by the data
+        let m = self.offset * (self.period - 1) as f64;
+        let s = self.period as f64 / self.sigma;
+        let weights: Vec<f64> = (0..self.period)
+            .map(|i| (-((i as f64 - m).powi(2)) / (2.0 * s * s)).exp())
+            .collect();
+        let weight_sum: f64 = weights.iter().sum();
 
         for i in 0..data.len() {
             if i + 1 < self.period {
@@ -118,9 +110,9 @@ impl Indicator for ALMA {
                 let mut weighted_sum = 0.0;
                 for j in 0..self.period {
                     let idx = i + 1 - self.period + j;
-                    weighted_sum += self.weights[j] * data[idx].close;
+                    weighted_sum += weights[j] * data[idx].close;
                 }
-                let alma = weighted_sum / self.weight_sum;
+                let alma = weighted_sum / weight_sum;
                 self.values.push(IndicatorValue::Single(alma));
             }
         }

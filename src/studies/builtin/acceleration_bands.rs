@@ -21,7 +21,7 @@ pub struct AccelerationBands {
 impl AccelerationBands {
     pub fn new(period: usize, factor: f64) -> Self {
         Self {
-            period,
+            period: period.max(1),
             factor,
             values: Vec::new(),
             colors: vec![

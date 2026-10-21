@@ -16,7 +16,7 @@ pub struct ZeroTrendVol {
 impl ZeroTrendVol {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             colors: vec![Color32::from_rgb(103, 58, 183)], // Deep purple
             visible: true,

@@ -15,7 +15,7 @@ pub struct SmoothedMA {
 impl SmoothedMA {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.indicators.ma,
             visible: true,

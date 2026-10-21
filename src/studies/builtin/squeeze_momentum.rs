@@ -44,13 +44,13 @@ impl SqueezeMomentum {
     }
 
     pub fn with_bb_params(mut self, period: usize, mult: f64) -> Self {
-        self.bb_period = period;
+        self.bb_period = period.max(1);
         self.bb_mult = mult;
         self
     }
 
     pub fn with_kc_params(mut self, period: usize, mult: f64) -> Self {
-        self.kc_period = period;
+        self.kc_period = period.max(1);
         self.kc_mult = mult;
         self
     }

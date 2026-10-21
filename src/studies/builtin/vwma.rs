@@ -16,7 +16,7 @@ pub struct VWMA {
 impl VWMA {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.success, // Green
             visible: true,
@@ -47,10 +47,6 @@ impl Indicator for VWMA {
 
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
-
-        if data.len() < self.period {
-            return;
-        }
 
         for i in 0..data.len() {
             if i < self.period - 1 {

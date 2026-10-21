@@ -19,7 +19,7 @@ pub struct FisherTransform {
 impl FisherTransform {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - Fisher

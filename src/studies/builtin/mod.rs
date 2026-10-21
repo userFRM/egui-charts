@@ -627,3 +627,19 @@ pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
         ),
     ]
 }
+
+/// Most price rows a volume profile computes.
+const MAX_PROFILE_ROWS: usize = 10_000;
+
+/// Most tick levels a level-keyed study (Iceberg, Liquidity) spreads one bar over.
+const MAX_LEVELS_PER_BAR: i64 = 100_000;
+
+/// Tick keys of a bar's low and high, or `None` when the bar is not tracked:
+/// a non-finite low or high, an inverted range, or a range spanning more than
+/// [`MAX_LEVELS_PER_BAR`] levels. This bounds the per-bar level loops.
+fn bar_level_keys(bar: &crate::model::Bar, tick: f64) -> Option<(i64, i64)> {
+    let key = |price: f64| (price / tick).round() as i64;
+    let (low, high) = (key(bar.low), key(bar.high));
+    let spanned = (0..=MAX_LEVELS_PER_BAR).contains(&high.saturating_sub(low));
+    (bar.low.is_finite() && bar.high.is_finite() && spanned).then_some((low, high))
+}

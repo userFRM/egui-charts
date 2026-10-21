@@ -63,7 +63,7 @@ impl RSI {
     /// * `period` -- The lookback period (default convention: 14).
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.indicators.rsi, // Purple
             visible: true,
@@ -96,7 +96,8 @@ impl Indicator for RSI {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.period + 1 {
+        if data.len() < self.period.saturating_add(1) {
+            self.values.resize(data.len(), IndicatorValue::None);
             return;
         }
 
@@ -244,15 +245,5 @@ mod tests {
             IndicatorValue::Single(v) => assert!((v - 100.0).abs() < 1e-6),
             _ => panic!("expected first RSI at index 14"),
         }
-    }
-
-    /// Below the minimum sample size the indicator yields no values rather than
-    /// an under-warmed series.
-    #[test]
-    fn insufficient_data_yields_empty() {
-        let bars = bars_from_closes(&[100.0, 101.0, 102.0]);
-        let mut rsi = RSI::new(14);
-        rsi.calculate(&bars);
-        assert!(rsi.values().is_empty());
     }
 }

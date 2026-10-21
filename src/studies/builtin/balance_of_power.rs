@@ -18,7 +18,7 @@ pub struct BalanceOfPower {
 impl BalanceOfPower {
     pub fn new(smooth_period: usize) -> Self {
         Self {
-            smooth_period,
+            smooth_period: smooth_period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
             visible: true,

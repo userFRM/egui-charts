@@ -59,7 +59,7 @@ impl PivotPoints {
     pub fn new(period: usize) -> Self {
         Self {
             method: PivotMethod::Standard,
-            period,
+            period: period.max(1),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.favorite_gold, // Pivot - Amber

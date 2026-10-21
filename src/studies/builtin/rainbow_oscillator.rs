@@ -20,8 +20,8 @@ pub struct RainbowOscillator {
 impl RainbowOscillator {
     pub fn new(levels: usize, base_period: usize) -> Self {
         Self {
-            levels,
-            base_period,
+            levels: levels.max(1),
+            base_period: base_period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.purple,
             visible: true,
@@ -80,6 +80,10 @@ impl Indicator for RainbowOscillator {
 
         for i in 1..self.levels {
             let prev_sma = &all_smas[i - 1];
+            // A level with no values leaves every deeper level, and so the oscillator, empty
+            if prev_sma.iter().all(|v| v.is_nan()) {
+                break;
+            }
             let smoothed = Self::calculate_sma(prev_sma, self.base_period);
             all_smas.push(smoothed);
         }

@@ -18,7 +18,7 @@ pub struct VIDYA {
 impl VIDYA {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.deep_purple, // Deep Purple
             visible: true,
@@ -49,7 +49,7 @@ impl Indicator for VIDYA {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.period + 1 {
+        if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }
@@ -145,7 +145,7 @@ pub struct ZLEMA {
 impl ZLEMA {
     pub fn new(period: usize) -> Self {
         Self {
-            period,
+            period: period.max(1),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
             visible: true,
