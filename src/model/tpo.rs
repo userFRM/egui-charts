@@ -542,10 +542,10 @@ impl TPOProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
+    use chrono::{Duration, TimeZone};
 
     fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
         vec![
             Bar {
                 time: start,
@@ -680,7 +680,7 @@ mod tests {
     fn bin_assignment_covers_every_touched_tick() {
         // A single 30-minute bar spanning 100..=104 with tick 1.0 must register
         // exactly one TPO at each of the five integer price levels it touches.
-        let start = Utc::now();
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
         let bars = vec![bar_at(start, 0, 100.0, 104.0, 100.0, 103.0)];
         let config = TPOConfig {
             tick_size: 1.0,
@@ -704,7 +704,7 @@ mod tests {
     fn poc_is_the_highest_count_bin() {
         // Three periods all overlap 102.0, fewer overlap the extremes, so 102.0
         // must accumulate the most TPOs and become the POC.
-        let start = Utc::now();
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
         let bars = vec![
             bar_at(start, 0, 100.0, 102.0, 100.0, 101.0),
             bar_at(start, 30, 101.0, 103.0, 101.0, 102.0),
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     fn value_area_is_contiguous_and_covers_about_seventy_percent() {
         // Stack many overlapping periods to build a tall, well-populated profile.
-        let start = Utc::now();
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
         let mut bars = Vec::new();
         for p in 0..10 {
             // Each period drifts upward by one tick, all sharing the mid-band.
@@ -793,7 +793,7 @@ mod tests {
     fn single_bar_zero_range_does_not_panic_and_yields_a_poc() {
         // A flat bar (high == low) is the degenerate edge: one price level, one
         // TPO. The profile must still build with that level as the POC.
-        let start = Utc::now();
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
         let bars = vec![bar_at(start, 0, 100.0, 100.0, 100.0, 100.0)];
         let config = TPOConfig {
             tick_size: 1.0,
