@@ -3,6 +3,7 @@
 //! Includes: cyclic lines, time cycles, and sine line.
 
 use crate::drawings::domain::Drawing;
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -422,31 +423,28 @@ impl Drawing {
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 80);
         let dash_len = DESIGN_TOKENS.spacing.lg;
         let gap_len = DESIGN_TOKENS.spacing.md + DESIGN_TOKENS.spacing.xs;
-        let mut x = chart_rect.min.x;
-        while x < chart_rect.max.x {
-            let end = (x + dash_len).min(chart_rect.max.x);
-            painter.line_segment(
-                [Pos2::new(x, center_y), Pos2::new(end, center_y)],
-                Stroke::new(stroke::HAIRLINE, zero_color),
-            );
-            x += dash_len + gap_len;
-        }
+        let (left, right) = (chart_rect.min.x, chart_rect.max.x);
+        draw_dashed_line(
+            painter,
+            Pos2::new(left, center_y),
+            Pos2::new(right, center_y),
+            Stroke::new(stroke::HAIRLINE, zero_color),
+            dash_len,
+            gap_len,
+        );
 
         // Draw amplitude guides (dashed horizontal lines at peaks)
         let peak_y = center_y - amplitude;
         let trough_y = center_y + amplitude;
-        x = chart_rect.min.x;
-        while x < chart_rect.max.x {
-            let end = (x + dash_len).min(chart_rect.max.x);
-            painter.line_segment(
-                [Pos2::new(x, peak_y), Pos2::new(end, peak_y)],
+        for y in [peak_y, trough_y] {
+            draw_dashed_line(
+                painter,
+                Pos2::new(left, y),
+                Pos2::new(right, y),
                 Stroke::new(DESIGN_TOKENS.stroke.extra_thin, zero_color),
+                dash_len,
+                gap_len,
             );
-            painter.line_segment(
-                [Pos2::new(x, trough_y), Pos2::new(end, trough_y)],
-                Stroke::new(DESIGN_TOKENS.stroke.extra_thin, zero_color),
-            );
-            x += dash_len + gap_len;
         }
 
         // Draw anchor points

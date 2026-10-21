@@ -105,6 +105,22 @@ impl Default for PriceScaleMargins {
     }
 }
 
+/// Span to auto-scale data covering `[min, max]` to.
+///
+/// Flat data (no movement beyond float noise) gets 1% of the price level, or 1.0 at
+/// zero, so other prices such as drawing anchors stay within a sane pixel distance.
+pub(crate) fn auto_scale_span(min: f64, max: f64) -> f64 {
+    let range = max - min;
+    let level = min.abs().max(max.abs());
+    if range > level * 1e-9 {
+        range
+    } else if level > 0.0 {
+        level * 0.01
+    } else {
+        1.0
+    }
+}
+
 /// Configuration options for a [`PriceScale`].
 #[derive(Debug, Clone, Copy)]
 pub struct PriceScaleOptions {
@@ -223,7 +239,7 @@ impl PriceScale {
             }
         }
 
-        let range = (data_max - data_min).max(1e-12);
+        let range = auto_scale_span(data_min, data_max);
         let top_margin = range * self.options.scale_margins.top as f64;
         let bottom_margin = range * self.options.scale_margins.bottom as f64;
 

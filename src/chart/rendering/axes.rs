@@ -1,5 +1,6 @@
 //! Price and time axis rendering
 
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke, Vec2};
@@ -27,17 +28,14 @@ pub fn render_last_price_line(
     };
 
     // Draw dashed horizontal line at last price
-    let dash_len = 4.0;
-    let gap_len = 3.0;
-    let mut x = price_rect.min.x;
-    while x < price_rect.max.x {
-        let end_x = (x + dash_len).min(price_rect.max.x);
-        painter.line_segment(
-            [Pos2::new(x, y), Pos2::new(end_x, y)],
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, price_color),
-        );
-        x += dash_len + gap_len;
-    }
+    draw_dashed_line(
+        painter,
+        Pos2::new(price_rect.min.x, y),
+        Pos2::new(price_rect.max.x, y),
+        Stroke::new(DESIGN_TOKENS.stroke.hairline, price_color),
+        4.0,
+        3.0,
+    );
 
     // Draw price label on the right with colored background
     if show_right_axis {

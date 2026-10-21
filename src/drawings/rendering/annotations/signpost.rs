@@ -1,6 +1,7 @@
 //! Signpost rendering
 
 use crate::drawings::domain::Drawing;
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -23,14 +24,15 @@ impl Drawing {
         // Draw vertical line from point to top of chart (dashed)
         let dash = DESIGN_TOKENS.sizing.annotation.signpost_padding_x;
         let gap = DESIGN_TOKENS.sizing.annotation.signpost_padding_y;
-        let mut y = rect.min.y;
-        while y < pos.y {
-            let end_y = (y + dash).min(pos.y);
-            painter.line_segment(
-                [Pos2::new(pos.x, y), Pos2::new(pos.x, end_y)],
+        if rect.min.y < pos.y {
+            draw_dashed_line(
+                painter,
+                Pos2::new(pos.x, rect.min.y),
+                pos,
                 Stroke::new(stroke::THICK, color),
+                dash,
+                gap,
             );
-            y += dash + gap;
         }
 
         // Draw sign plate at top

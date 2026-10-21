@@ -24,6 +24,7 @@
 //! right offset, and base index so that indicator panes draw their data points
 //! at exactly the same x-coordinates as the corresponding candlesticks above.
 
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::ext::HasDesignTokens;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
@@ -537,8 +538,7 @@ impl IndicatorPane {
             (0.0, 100.0) // Default fallback
         } else {
             // Add 10% padding
-            let range = max_val - min_val;
-            let padding = range * 0.1;
+            let padding = crate::scales::auto_scale_span(min_val, max_val) * 0.1;
             (min_val - padding, max_val + padding)
         }
     }
@@ -613,12 +613,11 @@ impl IndicatorPane {
                 let y = self.value_to_y(*level, rect, y_min, y_max);
                 if y >= rect.min.y && y <= rect.max.y {
                     // Draw dashed line
-                    self.draw_dashed_line(
+                    draw_dashed_line(
                         painter,
                         Pos2::new(rect.min.x, y),
                         Pos2::new(rect.max.x, y),
-                        live_color,
-                        1.0,
+                        Stroke::new(1.0_f32, live_color),
                         5.0,
                         3.0,
                     );
@@ -997,34 +996,5 @@ impl IndicatorPane {
         };
 
         nice * magnitude
-    }
-
-    fn draw_dashed_line(
-        &self,
-        painter: &egui::Painter,
-        from: Pos2,
-        to: Pos2,
-        color: Color32,
-        width: f32,
-        dash_length: f32,
-        gap_length: f32,
-    ) {
-        let dir = to - from;
-        let len = dir.length();
-        if len == 0.0 {
-            return;
-        }
-        let dir = dir / len;
-
-        let mut pos = 0.0;
-        let stroke = Stroke::new(width, color);
-
-        while pos < len {
-            let start = from + dir * pos;
-            let end_pos = (pos + dash_length).min(len);
-            let end = from + dir * end_pos;
-            painter.line_segment([start, end], stroke);
-            pos += dash_length + gap_length;
-        }
     }
 }

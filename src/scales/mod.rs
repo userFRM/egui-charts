@@ -33,6 +33,7 @@ pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
 };
+pub(crate) use pricescale::auto_scale_span;
 pub use pricescale::{
     PriceRange, PriceScale, PriceScaleMargins, PriceScaleMode, PriceScaleOptions,
 };

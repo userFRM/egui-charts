@@ -232,7 +232,7 @@ impl ChartState {
             .unwrap();
 
         // Apply 10% margin
-        let range = (vmax - vmin).max(1e-12);
+        let range = crate::scales::auto_scale_span(vmin, vmax);
         let margin = range * 0.1;
         (vmin - margin, vmax + margin)
     }
@@ -273,5 +273,30 @@ impl ChartState {
     /// Check if there are zoom states to restore
     pub fn has_zoom_history(&self) -> bool {
         !self.zoom_history.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Bar;
+    use chrono::{TimeZone, Utc};
+
+    /// Flat visible data must not collapse the auto range to a near-zero span,
+    /// which would put any other price (a drawing anchor) ~1e14 px away.
+    #[test]
+    fn flat_data_auto_scales_relative_to_price_level() {
+        let bars = (0..50)
+            .map(|i| {
+                let t = Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap();
+                Bar::new(t, 100.0, 100.0, 100.0, 100.0, 1.0)
+            })
+            .collect();
+        let mut state = ChartState::new(BarData::from_bars(bars));
+        state.time_scale_mut().set_width(800.0);
+        let (min, max) = state.price_range();
+        assert!(min < 100.0 && 100.0 < max, "({min}, {max})");
+        // At least one cent at a price of 100, at most the price itself.
+        assert!((0.01..=100.0).contains(&(max - min)), "({min}, {max})");
     }
 }

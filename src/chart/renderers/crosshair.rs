@@ -1,5 +1,6 @@
 use super::context::{ChartMapping, LinearPriceMap, RenderContext};
 use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairStyle};
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::model::Bar;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
@@ -80,45 +81,32 @@ pub fn render_crosshair_full(
                         Stroke::new(line_width, crosshair_color),
                     );
                 }
-                CrosshairLineStyle::Dashed => {
-                    let dash_pattern = [
-                        DESIGN_TOKENS.spacing.sm + 1.0,
-                        DESIGN_TOKENS.spacing.xs + 1.0,
-                    ];
-                    draw_dashed_vline(
+                CrosshairLineStyle::Dashed | CrosshairLineStyle::Dotted => {
+                    let (dash, gap) = if line_style == CrosshairLineStyle::Dashed {
+                        (
+                            DESIGN_TOKENS.spacing.sm + 1.0,
+                            DESIGN_TOKENS.spacing.xs + 1.0,
+                        )
+                    } else {
+                        (DESIGN_TOKENS.spacing.xs, DESIGN_TOKENS.spacing.xs)
+                    };
+                    let stroke = Stroke::new(line_width, crosshair_color);
+                    let rect = context.rect;
+                    draw_dashed_line(
                         context.painter,
-                        actual_pos.x,
-                        context.rect.y_range(),
-                        crosshair_color,
-                        line_width,
-                        &dash_pattern,
+                        Pos2::new(actual_pos.x, rect.min.y),
+                        Pos2::new(actual_pos.x, rect.max.y),
+                        stroke,
+                        dash,
+                        gap,
                     );
-                    draw_dashed_hline(
+                    draw_dashed_line(
                         context.painter,
-                        context.rect.x_range(),
-                        actual_pos.y,
-                        crosshair_color,
-                        line_width,
-                        &dash_pattern,
-                    );
-                }
-                CrosshairLineStyle::Dotted => {
-                    let dotted_pattern = [DESIGN_TOKENS.spacing.xs, DESIGN_TOKENS.spacing.xs];
-                    draw_dashed_vline(
-                        context.painter,
-                        actual_pos.x,
-                        context.rect.y_range(),
-                        crosshair_color,
-                        line_width,
-                        &dotted_pattern,
-                    );
-                    draw_dashed_hline(
-                        context.painter,
-                        context.rect.x_range(),
-                        actual_pos.y,
-                        crosshair_color,
-                        line_width,
-                        &dotted_pattern,
+                        Pos2::new(rect.min.x, actual_pos.y),
+                        Pos2::new(rect.max.x, actual_pos.y),
+                        stroke,
+                        dash,
+                        gap,
                     );
                 }
             }
@@ -280,66 +268,4 @@ fn snap_to_nearest_ohlc(
     }
 
     nearest_price
-}
-
-/// Draw dashed vertical line
-fn draw_dashed_vline(
-    painter: &egui::Painter,
-    x: f32,
-    y_range: egui::Rangef,
-    color: Color32,
-    width: f32,
-    pattern: &[f32], // [dash_len, gap_len, ...]
-) {
-    let mut y = y_range.min;
-    let y_end = y_range.max;
-    let mut pattern_idx = 0;
-    let mut is_dash = true;
-
-    while y < y_end {
-        let segment_len = pattern[pattern_idx % pattern.len()];
-        let next_y = (y + segment_len).min(y_end);
-
-        if is_dash {
-            painter.line_segment(
-                [Pos2::new(x, y), Pos2::new(x, next_y)],
-                Stroke::new(width, color),
-            );
-        }
-
-        y = next_y;
-        pattern_idx += 1;
-        is_dash = !is_dash;
-    }
-}
-
-/// Draw dashed horizontal line
-fn draw_dashed_hline(
-    painter: &egui::Painter,
-    x_range: egui::Rangef,
-    y: f32,
-    color: Color32,
-    width: f32,
-    pattern: &[f32],
-) {
-    let mut x = x_range.min;
-    let x_end = x_range.max;
-    let mut pattern_idx = 0;
-    let mut is_dash = true;
-
-    while x < x_end {
-        let segment_len = pattern[pattern_idx % pattern.len()];
-        let next_x = (x + segment_len).min(x_end);
-
-        if is_dash {
-            painter.line_segment(
-                [Pos2::new(x, y), Pos2::new(next_x, y)],
-                Stroke::new(width, color),
-            );
-        }
-
-        x = next_x;
-        pattern_idx += 1;
-        is_dash = !is_dash;
-    }
 }

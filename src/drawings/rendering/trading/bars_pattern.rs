@@ -1,6 +1,7 @@
 //! Bars pattern rendering
 
 use crate::drawings::domain::Drawing;
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
@@ -144,48 +145,15 @@ impl Drawing {
         let dash = 6.0;
         let gap = 4.0;
 
-        // Top edge
-        let mut x = rect.min.x;
-        while x < rect.max.x {
-            let end_x = (x + dash).min(rect.max.x);
-            painter.line_segment(
-                [Pos2::new(x, rect.min.y), Pos2::new(end_x, rect.min.y)],
-                Stroke::new(stroke::HAIRLINE, color),
-            );
-            x += dash + gap;
-        }
-
-        // Bottom edge
-        x = rect.min.x;
-        while x < rect.max.x {
-            let end_x = (x + dash).min(rect.max.x);
-            painter.line_segment(
-                [Pos2::new(x, rect.max.y), Pos2::new(end_x, rect.max.y)],
-                Stroke::new(stroke::HAIRLINE, color),
-            );
-            x += dash + gap;
-        }
-
-        // Left edge
-        let mut y = rect.min.y;
-        while y < rect.max.y {
-            let end_y = (y + dash).min(rect.max.y);
-            painter.line_segment(
-                [Pos2::new(rect.min.x, y), Pos2::new(rect.min.x, end_y)],
-                Stroke::new(stroke::HAIRLINE, color),
-            );
-            y += dash + gap;
-        }
-
-        // Right edge
-        y = rect.min.y;
-        while y < rect.max.y {
-            let end_y = (y + dash).min(rect.max.y);
-            painter.line_segment(
-                [Pos2::new(rect.max.x, y), Pos2::new(rect.max.x, end_y)],
-                Stroke::new(stroke::HAIRLINE, color),
-            );
-            y += dash + gap;
+        let stroke = Stroke::new(stroke::HAIRLINE, color);
+        let corners = [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+        ];
+        for (i, &corner) in corners.iter().enumerate() {
+            draw_dashed_line(painter, corner, corners[(i + 1) % 4], stroke, dash, gap);
         }
     }
 
@@ -198,17 +166,15 @@ impl Drawing {
         // Dashed arrow line
         let dash = 6.0;
         let gap = 4.0;
-        let mut ax = arrow_start.x;
-        while ax < arrow_end.x - 10.0 {
-            let end_ax = (ax + dash).min(arrow_end.x - 10.0);
-            painter.line_segment(
-                [
-                    Pos2::new(ax, arrow_start.y),
-                    Pos2::new(end_ax, arrow_start.y),
-                ],
+        if arrow_start.x < arrow_end.x - 10.0 {
+            draw_dashed_line(
+                painter,
+                arrow_start,
+                Pos2::new(arrow_end.x - 10.0, arrow_start.y),
                 Stroke::new(stroke::HAIRLINE, arrow_color),
+                dash,
+                gap,
             );
-            ax += dash + gap;
         }
 
         // Arrow head

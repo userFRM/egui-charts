@@ -7,6 +7,7 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
 };
 
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::ext::HasDesignTokens;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
@@ -342,18 +343,15 @@ fn render_order_line(ui: &mut Ui, chart_rect: Rect, y: f32, line: &OrderLine) ->
     let painter = ui.painter();
 
     // Draw dashed line across chart
-    let dash_length = 6.0;
-    let gap_length = 4.0;
-    let mut x = chart_rect.left();
-
-    while x < chart_rect.right() - 100.0 {
-        let segment_end = (x + dash_length).min(chart_rect.right() - 100.0);
-        painter.line_segment(
-            [Pos2::new(x, y), Pos2::new(segment_end, y)],
-            Stroke::new(line_width, line_color),
-        );
-        x += dash_length + gap_length;
-    }
+    let line_end = (chart_rect.right() - 100.0).max(chart_rect.left());
+    draw_dashed_line(
+        painter,
+        Pos2::new(chart_rect.left(), y),
+        Pos2::new(line_end, y),
+        Stroke::new(line_width, line_color),
+        6.0,
+        4.0,
+    );
 
     // Label background
     painter.rect_filled(label_rect, CornerRadius::same(3), label_bg);

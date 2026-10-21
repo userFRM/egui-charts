@@ -15,6 +15,7 @@
 
 use super::context::{ChartMapping, RenderContext};
 use crate::config::SessionBreakStyle;
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::model::{Bar, SessionBreakType, SessionProvider, Timeframe, find_session_breaks};
 use egui::{Color32, Pos2, Stroke};
 
@@ -131,12 +132,7 @@ impl SessionBreakRenderer {
                         .line_segment([from, to], Stroke::new(width, color));
                 }
                 Some((dash, gap)) => {
-                    ctx.painter.add(egui::Shape::dashed_line(
-                        &[from, to],
-                        Stroke::new(width, color),
-                        dash,
-                        gap,
-                    ));
+                    draw_dashed_line(ctx.painter, from, to, Stroke::new(width, color), dash, gap);
                 }
             }
         }

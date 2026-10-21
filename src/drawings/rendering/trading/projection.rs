@@ -1,6 +1,7 @@
 //! Projection tool rendering
 
 use crate::drawings::domain::Drawing;
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
@@ -37,10 +38,17 @@ impl Drawing {
         let dashed_color =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150);
 
-        self.draw_projection_dashed_line(painter, proj_point, dx, dy, dashed_color);
+        let proj_end = Pos2::new(proj_point.x + dx, proj_point.y + dy);
+        draw_dashed_line(
+            painter,
+            proj_point,
+            proj_end,
+            Stroke::new(self.stroke_width, dashed_color),
+            8.0,
+            5.0,
+        );
 
         // Target zone (shaded rectangle at projection end)
-        let proj_end = Pos2::new(proj_point.x + dx, proj_point.y + dy);
         self.draw_projection_target_zone(painter, proj_end, dy, dashed_color);
 
         // Anchor points with white stroke
@@ -76,36 +84,6 @@ impl Drawing {
         );
         painter.line_segment([end, p1], Stroke::new(stroke::THICK, color));
         painter.line_segment([end, p2], Stroke::new(stroke::THICK, color));
-    }
-
-    fn draw_projection_dashed_line(
-        &self,
-        painter: &egui::Painter,
-        proj_point: Pos2,
-        dx: f32,
-        dy: f32,
-        dashed_color: Color32,
-    ) {
-        let proj_end = Pos2::new(proj_point.x + dx, proj_point.y + dy);
-        let dash = 8.0;
-        let gap = 5.0;
-        let proj_dx = proj_end.x - proj_point.x;
-        let proj_dy = proj_end.y - proj_point.y;
-        let proj_len = (proj_dx * proj_dx + proj_dy * proj_dy).sqrt();
-        let steps = (proj_len / (dash + gap)) as i32;
-
-        for i in 0..steps {
-            let t1 = (i as f32 * (dash + gap)) / proj_len;
-            let t2 = ((i as f32 * (dash + gap)) + dash) / proj_len;
-            if t2 <= 1.0 {
-                let p1 = Pos2::new(proj_point.x + proj_dx * t1, proj_point.y + proj_dy * t1);
-                let p2 = Pos2::new(
-                    proj_point.x + proj_dx * t2.min(1.0),
-                    proj_point.y + proj_dy * t2.min(1.0),
-                );
-                painter.line_segment([p1, p2], Stroke::new(self.stroke_width, dashed_color));
-            }
-        }
     }
 
     fn draw_projection_target_zone(

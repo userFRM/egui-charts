@@ -1,6 +1,7 @@
 //! Ghost feed rendering
 
 use crate::drawings::domain::Drawing;
+use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -129,15 +130,14 @@ impl Drawing {
             let proj_end = Pos2::new(last.x + 50.0, last.y);
             let dash = 6.0;
             let gap = 4.0;
-            let mut x = last.x;
-            while x < proj_end.x {
-                let seg_end = (x + dash).min(proj_end.x);
-                painter.line_segment(
-                    [Pos2::new(x, last.y), Pos2::new(seg_end, last.y)],
-                    Stroke::new(stroke::HAIRLINE, ghost_color),
-                );
-                x += dash + gap;
-            }
+            draw_dashed_line(
+                painter,
+                last,
+                proj_end,
+                Stroke::new(stroke::HAIRLINE, ghost_color),
+                dash,
+                gap,
+            );
         }
     }
 }
