@@ -164,7 +164,7 @@ impl ChartTypeSelector {
         );
 
         // Icon
-        let icon_size = DESIGN_TOKENS.sizing.button_md;
+        let icon_size = DESIGN_TOKENS.sizing.icon_lg;
         let icon_pos = Pos2::new(
             rect.min.x + DESIGN_TOKENS.spacing.md,
             rect.center().y - icon_size / 2.0,
@@ -299,7 +299,7 @@ impl ChartTypeSelector {
         }
 
         // Icon
-        let icon_size = DESIGN_TOKENS.sizing.button_md;
+        let icon_size = DESIGN_TOKENS.sizing.icon_lg;
         let icon_rect = Rect::from_min_size(
             Pos2::new(
                 rect.min.x + DESIGN_TOKENS.spacing.md,

@@ -169,7 +169,7 @@ pub fn draw_tool_button(ui: &mut Ui, icon: &Icon, tooltip: &str, is_selected: bo
     let margin_h = tokens.hover_margin_h; // 9px
     let margin_v = tokens.hover_margin_v; // 2px
     let inner_rounding = tokens.inner_rounding; // 6px
-    let icon_size = tokens.icon_size; // 28px
+    let icon_size = tokens.icon_size; // 24px
 
     let (rect, response) = ui.allocate_exact_size(Vec2::new(btn_width, btn_height), Sense::click());
 

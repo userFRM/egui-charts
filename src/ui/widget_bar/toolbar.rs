@@ -59,7 +59,7 @@ pub struct WidgetBarConfig {
     pub width: f32,
     /// Button size - 44x44 buttons
     pub btn_size: f32,
-    /// Icon size - 44x44 native viewBox
+    /// Icon size inside the button
     pub icon_size: f32,
     /// Button spacing - 2px gap between buttons
     pub btn_spacing: f32,
@@ -77,7 +77,7 @@ impl Default for WidgetBarConfig {
             // Exact dimensions
             width: DESIGN_TOKENS.sizing.toolbar.right_sidebar_width, // 52px
             btn_size: DESIGN_TOKENS.sizing.toolbar.right_btn_size,   // 44px
-            icon_size: DESIGN_TOKENS.sizing.toolbar.right_icon_size, // 44px
+            icon_size: DESIGN_TOKENS.sizing.toolbar.right_icon_size, // 24px
             btn_spacing: DESIGN_TOKENS.sizing.toolbar.right_btn_spacing, // 2px
             hover_margin: DESIGN_TOKENS.sizing.toolbar.right_hover_margin, // 3px
             hover_rounding: DESIGN_TOKENS.sizing.toolbar.right_hover_rounding, // 8px

@@ -567,14 +567,14 @@
             hover_margin_h: 9.0,                // Horizontal margin for inner hover rect
             hover_margin_v: 2.0,                // Vertical margin for inner hover rect
             inner_rounding: 6.0,                // Inner hover rect corner radius
-            icon_size: 28.0,                    // Icon size in toolbar buttons
+            icon_size: 24.0,                    // Icon size in toolbar buttons (the icon grid)
             separator_margin: 8.0,              // Separator margin from toolbar edges
             separator_gap: 6.0,                 // Gap above/below separators
 
             // Right sidebar (widget bar) exact dimensions
             right_sidebar_width: 52.0,
             right_btn_size: 44.0,               // 44×44 buttons
-            right_icon_size: 44.0,              // Icons match button size (native viewBox)
+            right_icon_size: 24.0,              // Icon size inside the 44px buttons (the icon grid)
             right_btn_spacing: 2.0,             // 2px gap between buttons
             right_hover_margin: 3.0,            // 3px inset for hover rect
             right_hover_rounding: 8.0,          // 8px corners on hover
