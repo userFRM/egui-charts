@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- The crate builds warning-free on current stable Rust: float literals that relied on the deprecated `f32` inference fallback are now explicitly typed.
+- The documentation examples for the `ui` module use the current crate name and module paths, and they compile and run as doctests.
+
 ## [0.2.0] - 2026-06-04
 
 ### Added
