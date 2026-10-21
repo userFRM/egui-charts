@@ -43,8 +43,6 @@ pub enum SeriesContextMenuAction {
     MoveTo,
     /// Pin series to a specific price scale
     PinToScale,
-    /// Hide the series
-    Hide,
     /// Add symbol to a watchlist
     AddToWatchlist,
     /// Add a text note for the symbol
@@ -270,10 +268,6 @@ impl SeriesContextMenu {
                     SeriesContextMenuAction::PinToScale,
                 )
                 .submenu(),
-            ),
-            MenuEntry::Item(
-                MenuItem::new("Hide", SeriesContextMenuAction::Hide)
-                    .with_icon(&embedded_icons::EYE_HIDE),
             ),
             MenuEntry::Separator,
             // Watchlist & notes section

@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - The Volume Footprint and Session Volume chart types, which approximated per-price volume from bar totals, and the unused `model::footprint` module.
 - The `chart::series_api` module (`ISeriesApi`, `IPriceScaleApi`, `ITimeScaleApi`, `IStudyApi`, their implementations and option types), which nothing constructed.
+- `TradingChart::toggle_main_series_visibility` and the series context menu "Hide" entry (`SeriesContextMenuAction::Hide`), which had no effect.
 
 ## [0.2.0] - 2026-06-04
 

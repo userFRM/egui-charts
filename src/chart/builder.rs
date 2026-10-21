@@ -1162,15 +1162,4 @@ impl TradingChart {
     pub fn clear_selection(&mut self) {
         self.chart.clear_selection();
     }
-
-    /// Toggle main series visibility
-    ///
-    /// This is used by the series context menu to hide/show the main price series.
-    /// Currently logs the action; full implementation requires visibility infrastructure.
-    pub fn toggle_main_series_visibility(&mut self) {
-        // TODO(P2): Add a `visible: bool` field to the main series state and toggle it here.
-        // Renderers (candlestick, line, area) must check this flag before painting.
-        // Also update the series context menu eye-icon to reflect current visibility.
-        log::info!("Toggle main series visibility requested (infrastructure pending)");
-    }
 }

@@ -1157,7 +1157,6 @@ impl DemoApp {
             SeriesContextMenuAction::OpenSettings => self.open_series_settings_dialog(),
             SeriesContextMenuAction::AddIndicator => self.indicator_dialog.open(),
             SeriesContextMenuAction::AddAlert => self.alert_dialog.open(self.state.symbol.clone()),
-            SeriesContextMenuAction::Hide => self.trading_chart.toggle_main_series_visibility(),
             _ => {}
         }
     }
