@@ -553,13 +553,14 @@ impl Chart {
             return;
         }
 
-        let text = self.config.watermark_text.as_deref().unwrap_or_else(|| {
-            if self.symbol.is_empty() {
-                "SYMBOL"
-            } else {
-                &self.symbol
-            }
-        });
+        let text = self
+            .config
+            .watermark_text
+            .as_deref()
+            .unwrap_or(&self.symbol);
+        if text.is_empty() {
+            return;
+        }
 
         let font_id = egui::FontId::proportional(self.config.watermark_font_size);
 
