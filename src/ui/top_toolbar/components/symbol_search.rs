@@ -6,8 +6,10 @@
 //! # Example - Symbol Search
 //!
 //! ```no_run
-//! use egui_open_trading_charts_rs::{SymbolSearchDialog, Symbol};
+//! use egui_charts::model::Symbol;
+//! use egui_charts::ui::top_toolbar::SymbolSearchDialog;
 //!
+//! # fn update(ctx: &egui::Context) {
 //! let mut dialog = SymbolSearchDialog::new();
 //! let symbols = vec![
 //!     Symbol::new("BTCUSDT", "Bitcoin / Tether"),
@@ -18,13 +20,15 @@
 //! if let Some(selected) = dialog.show(ctx, &symbols) {
 //!     println!("Selected: {}", selected.name);
 //! }
+//! # }
 //! ```
 //!
 //! # Example - Compare Symbols
 //!
 //! ```no_run
-//! use egui_open_trading_charts_rs::{CompareSymbolsDialog, CompareAction};
+//! use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbolsDialog};
 //!
+//! # fn update(ctx: &egui::Context) {
 //! let mut compare = CompareSymbolsDialog::new();
 //! compare.open();
 //!
@@ -33,6 +37,7 @@
 //!     CompareAction::RemoveSymbol(sym) => println!("Remove: {}", sym),
 //!     _ => {}
 //! }
+//! # }
 //! ```
 
 use crate::ext::UiExt;
@@ -52,7 +57,7 @@ use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2, Window};
 /// # Example
 ///
 /// ```
-/// use egui_open_trading_charts_rs::SymbolSearchConfig;
+/// use egui_charts::ui::top_toolbar::SymbolSearchConfig;
 ///
 /// let config = SymbolSearchConfig {
 ///     show_exchange: true,
@@ -95,8 +100,10 @@ impl Default for SymbolSearchConfig {
 /// # Example
 ///
 /// ```no_run
-/// use egui_open_trading_charts_rs::{SymbolSearchDialog, SymbolSearchConfig, Symbol};
+/// use egui_charts::model::Symbol;
+/// use egui_charts::ui::top_toolbar::{SymbolSearchConfig, SymbolSearchDialog};
 ///
+/// # fn update(ctx: &egui::Context) {
 /// let mut dialog = SymbolSearchDialog::new()
 ///     .with_config(SymbolSearchConfig {
 ///         max_results: 20,
@@ -112,6 +119,7 @@ impl Default for SymbolSearchConfig {
 ///     // User selected a symbol
 ///     println!("Switching to: {}", symbol.name);
 /// }
+/// # }
 /// ```
 pub struct SymbolSearchDialog {
     is_open: bool,
@@ -144,7 +152,7 @@ impl SymbolSearchDialog {
     /// # Example
     ///
     /// ```
-    /// use egui_open_trading_charts_rs::{SymbolSearchDialog, SymbolSearchConfig};
+    /// use egui_charts::ui::top_toolbar::{SymbolSearchConfig, SymbolSearchDialog};
     ///
     /// let dialog = SymbolSearchDialog::new()
     ///     .with_config(SymbolSearchConfig {
@@ -201,9 +209,9 @@ impl SymbolSearchDialog {
     /// # Example
     ///
     /// ```no_run
-    /// # use egui_open_trading_charts_rs::{SymbolSearchDialog, Symbol};
-    /// # let ctx = todo!();
-    /// # let mut dialog = SymbolSearchDialog::new();
+    /// # use egui_charts::model::Symbol;
+    /// # use egui_charts::ui::top_toolbar::SymbolSearchDialog;
+    /// # fn update(ctx: &egui::Context, dialog: &mut SymbolSearchDialog) {
     /// let symbols = vec![
     ///     Symbol::new("BTCUSDT", "Bitcoin / Tether"),
     ///     Symbol::new("ETHUSDT", "Ethereum / Tether"),
@@ -212,6 +220,7 @@ impl SymbolSearchDialog {
     /// if let Some(symbol) = dialog.show(ctx, &symbols) {
     ///     println!("User selected: {}", symbol.name);
     /// }
+    /// # }
     /// ```
     #[must_use = "Symbol selection should be handled"]
     pub fn show(&mut self, ctx: &Context, all_symbols: &[Symbol]) -> Option<Symbol> {
@@ -535,8 +544,9 @@ pub enum CompareAction {
 /// # Example
 ///
 /// ```no_run
-/// use egui_open_trading_charts_rs::{CompareSymbolsDialog, CompareAction};
+/// use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbolsDialog};
 ///
+/// # fn update(ctx: &egui::Context) {
 /// let mut compare = CompareSymbolsDialog::new();
 /// compare.open();
 ///
@@ -549,6 +559,7 @@ pub enum CompareAction {
 ///     }
 ///     _ => {}
 /// }
+/// # }
 /// ```
 pub struct CompareSymbolsDialog {
     /// Is dialog open

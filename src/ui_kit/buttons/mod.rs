@@ -11,7 +11,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use egui_open_trading_charts_rs::ui_kit::buttons::IconButton;
+//! use egui_charts::ui_kit::buttons::IconButton;
 //!
 //! // Simple icon button
 //! let response = IconButton::new(icon)

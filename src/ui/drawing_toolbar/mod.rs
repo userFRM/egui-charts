@@ -46,7 +46,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use egui_open_trading_charts_rs::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarConfig};
+//! use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarConfig};
 //!
 //! let mut toolbar = DrawingToolbar::default();
 //!

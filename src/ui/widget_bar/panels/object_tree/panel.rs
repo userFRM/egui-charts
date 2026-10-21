@@ -28,16 +28,16 @@ use crate::ext::UiExt;
 /// # Example
 ///
 /// ```no_run
-/// use egui_open_trading_charts_rs::ui::widget_bar::panels::object_tree::{
-///     ObjectTreePanel, ObjectTreeAction, SourceItem, DataWindowInfo
-/// };
+/// use egui_charts::ui::widget_bar::panels::object_tree::{ObjectTreePanel, SourceItem};
 ///
+/// # fn side_panel(ui: &mut egui::Ui) {
 /// let mut panel = ObjectTreePanel::new();
 /// let mut sources = vec![
 ///     SourceItem::indicator(1, "SMA(20)", egui::Color32::YELLOW),
 /// ];
 ///
 /// let action = panel.show(ui, None, &mut sources);
+/// # }
 /// ```
 pub struct ObjectTreePanel {
     /// Configuration

@@ -24,22 +24,25 @@
 //! # Example
 //!
 //! ```no_run
-//! use egui_open_trading_charts_rs::ui::widget_bar::panels::object_tree::{
+//! use egui_charts::drawings::DrawingToolType;
+//! use egui_charts::ui::widget_bar::panels::object_tree::{
 //!     ObjectTreePanel, ObjectTreeAction, SourceItem, DataWindowInfo
 //! };
 //!
+//! # fn side_panel(ui: &mut egui::Ui, data_window_info: &DataWindowInfo) {
 //! let mut panel = ObjectTreePanel::new();
 //! let mut sources = vec![
 //!     SourceItem::indicator(1, "SMA(20)", egui::Color32::YELLOW),
 //!     SourceItem::drawing(2, DrawingToolType::TrendLine, egui::Color32::BLUE),
 //! ];
 //!
-//! let action = panel.show(ui, Some(&data_window_info), &mut sources);
+//! let action = panel.show(ui, Some(data_window_info), &mut sources);
 //! match action {
 //!     ObjectTreeAction::Delete(id) => { /* Handle delete */ }
 //!     ObjectTreeAction::ToggleVisibility(id) => { /* Handle visibility */ }
 //!     _ => {}
 //! }
+//! # }
 //! ```
 //!
 //! Feature-complete object tree panel.

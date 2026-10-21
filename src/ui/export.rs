@@ -8,8 +8,9 @@
 //! # Example
 //!
 //! ```no_run
-//! use egui_open_trading_charts_rs::{ExportDialog, ExportResponse, ExportFormat};
+//! use egui_charts::ui::export::{ExportDialog, ExportResponse};
 //!
+//! # fn update(ctx: &egui::Context) {
 //! let mut export_dialog = ExportDialog::new();
 //!
 //! // In your egui update loop
@@ -25,6 +26,7 @@
 //!         // Dialog is not open or no action taken
 //!     }
 //! }
+//! # }
 //! ```
 
 use crate::ext::UiExt;
@@ -95,7 +97,7 @@ pub enum ExportResponse {
 /// # Example
 ///
 /// ```
-/// use egui_open_trading_charts_rs::{ExportConfig, ExportFormat};
+/// use egui_charts::ui::export::{ExportConfig, ExportFormat};
 ///
 /// let config = ExportConfig {
 ///     format: ExportFormat::Png,
@@ -150,8 +152,9 @@ impl Default for ExportConfig {
 /// # Example
 ///
 /// ```no_run
-/// use egui_open_trading_charts_rs::{ExportDialog, ExportResponse};
+/// use egui_charts::ui::export::{ExportDialog, ExportResponse};
 ///
+/// # fn update(ctx: &egui::Context) {
 /// let mut export_dialog = ExportDialog::new();
 ///
 /// // Open the dialog
@@ -168,6 +171,7 @@ impl Default for ExportConfig {
 ///     }
 ///     ExportResponse::None => {}
 /// }
+/// # }
 /// ```
 pub struct ExportDialog {
     is_open: bool,
@@ -232,8 +236,8 @@ impl ExportDialog {
     /// # Example
     ///
     /// ```no_run
-    /// # use egui_open_trading_charts_rs::{ExportDialog, ExportResponse};
-    /// # let ctx = todo!();
+    /// # use egui_charts::ui::export::{ExportDialog, ExportResponse};
+    /// # fn update(ctx: &egui::Context) {
     /// let mut dialog = ExportDialog::new();
     /// dialog.open();
     ///
@@ -244,6 +248,7 @@ impl ExportDialog {
     ///     ExportResponse::Closed => {}
     ///     ExportResponse::None => {}
     /// }
+    /// # }
     /// ```
     #[must_use = "Export dialog response should be handled"]
     pub fn show(&mut self, ctx: &Context) -> ExportResponse {
@@ -428,12 +433,13 @@ impl ExportDialog {
 /// # Example
 ///
 /// ```no_run
-/// # use egui_open_trading_charts_rs::{ExportButton, ExportFormat};
-/// # let ui = todo!();
+/// # use egui_charts::ui::export::{ExportButton, ExportFormat};
+/// # fn toolbar(ui: &mut egui::Ui) {
 /// if ExportButton::new(ExportFormat::Png).show(ui) {
 ///     // Trigger PNG export
 ///     println!("Export PNG clicked");
 /// }
+/// # }
 /// ```
 pub struct ExportButton {
     format: ExportFormat,
@@ -463,7 +469,7 @@ impl ExportButton {
 /// # Example
 ///
 /// ```no_run
-/// use egui_open_trading_charts_rs::{Exportable, ExportConfig, ExportFormat};
+/// use egui_charts::ui::export::{Exportable, ExportConfig, ExportFormat};
 ///
 /// struct MyChart {
 ///     // chart data

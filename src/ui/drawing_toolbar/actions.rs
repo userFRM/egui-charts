@@ -9,8 +9,8 @@ use crate::drawings::DrawingToolType;
 /// # Examples
 ///
 /// ```
-/// use egui_open_trading_charts_rs::ui::drawing_toolbar::DrawingToolbarAction;
-/// use egui_open_trading_charts_rs::drawing::DrawingToolType;
+/// use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
+/// use egui_charts::drawings::DrawingToolType;
 ///
 /// let action = DrawingToolbarAction::SelectTool(DrawingToolType::TrendLine);
 /// match action {

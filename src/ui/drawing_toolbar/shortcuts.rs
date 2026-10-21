@@ -8,8 +8,8 @@ use egui::{Context, Key, KeyboardShortcut, Modifiers};
 /// # Examples
 ///
 /// ```
-/// use egui_open_trading_charts_rs::ui::drawing_toolbar::DrawingToolShortcuts;
-/// use egui_open_trading_charts_rs::drawing::DrawingToolType;
+/// use egui_charts::ui::drawing_toolbar::DrawingToolShortcuts;
+/// use egui_charts::drawings::DrawingToolType;
 /// use egui::{KeyboardShortcut, Key, Modifiers};
 ///
 /// let mut shortcuts = DrawingToolShortcuts::new();
@@ -71,13 +71,26 @@ impl DrawingToolShortcuts {
     /// # Examples
     ///
     /// ```
-    /// # use egui_open_trading_charts_rs::ui::drawing_toolbar::DrawingToolShortcuts;
-    /// # use egui::Context;
+    /// use egui::{Event, Key, Modifiers, RawInput};
+    /// use egui_charts::drawings::DrawingToolType;
+    /// use egui_charts::ui::drawing_toolbar::DrawingToolShortcuts;
+    ///
     /// let shortcuts = DrawingToolShortcuts::new();
-    /// // In your UI update loop:
-    /// // if let Some(tool) = shortcuts.check(&ctx) {
-    /// //     println!("Shortcut triggered: {:?}", tool);
-    /// // }
+    /// let ctx = egui::Context::default();
+    ///
+    /// // A frame in which the user pressed Alt+T.
+    /// let mut input = RawInput::default();
+    /// input.events.push(Event::Key {
+    ///     key: Key::T,
+    ///     physical_key: None,
+    ///     pressed: true,
+    ///     repeat: false,
+    ///     modifiers: Modifiers::ALT,
+    /// });
+    ///
+    /// let mut triggered = None;
+    /// let _ = ctx.run(input, |ctx| triggered = shortcuts.check(ctx));
+    /// assert_eq!(triggered, Some(DrawingToolType::TrendLine));
     /// ```
     pub fn check(&self, ctx: &Context) -> Option<DrawingToolType> {
         for (shortcut, tool) in &self.shortcuts {
@@ -93,8 +106,8 @@ impl DrawingToolShortcuts {
     /// # Examples
     ///
     /// ```
-    /// # use egui_open_trading_charts_rs::ui::drawing_toolbar::DrawingToolShortcuts;
-    /// # use egui_open_trading_charts_rs::drawing::DrawingToolType;
+    /// # use egui_charts::ui::drawing_toolbar::DrawingToolShortcuts;
+    /// # use egui_charts::drawings::DrawingToolType;
     /// # use egui::{KeyboardShortcut, Key, Modifiers};
     /// let mut shortcuts = DrawingToolShortcuts::new();
     /// shortcuts.add_shortcut(
@@ -113,7 +126,7 @@ impl DrawingToolShortcuts {
     /// # Examples
     ///
     /// ```
-    /// # use egui_open_trading_charts_rs::ui::drawing_toolbar::DrawingToolShortcuts;
+    /// # use egui_charts::ui::drawing_toolbar::DrawingToolShortcuts;
     /// let shortcuts = DrawingToolShortcuts::new();
     /// for (key, tool) in shortcuts.help_text() {
     ///     println!("{}: {}", key, tool);

@@ -13,18 +13,25 @@
 //! ## Usage
 //!
 //! ```rust
-//! use submenu_builder::SubmenuBuilder;
+//! use egui::{Rect, Ui};
+//! use egui_charts::icons::icons;
+//! use egui_charts::ui::drawing_toolbar::{SubmenuBuilder, ToggleConfig};
 //!
-//! let action = SubmenuBuilder::new(ui, sidebar_rect)
-//!     .with_category_rect(category_rect)
-//!     .with_width(240.0)
-//!     .add_icon_item(&icons::ERASER, "Cross", "Cross cursor")
-//!     .add_icon_item(&icons::DOT, "Dot", "Dot cursor")
-//!     .add_toggle(ToggleConfig {
-//!         label: "Enable feature".to_string(),
-//!         value: &mut state.feature_enabled,
-//!     })
-//!     .show();
+//! fn cursor_menu(ui: &mut Ui, sidebar_rect: Rect, category_rect: Rect, feature_enabled: &mut bool) {
+//!     let action = SubmenuBuilder::new(ui, sidebar_rect)
+//!         .with_category_rect(category_rect)
+//!         .with_width(240.0)
+//!         .add_icon_item(&icons::CROSSHAIR, "Cross", "Cross cursor")
+//!         .add_icon_item(&icons::DOT, "Dot", "Dot cursor")
+//!         .add_toggle(ToggleConfig {
+//!             label: "Enable feature".to_string(),
+//!             value: feature_enabled,
+//!         })
+//!         .show();
+//!     if let Some(action) = action {
+//!         println!("{action:?}");
+//!     }
+//! }
 //! ```
 
 use super::actions::DrawingToolbarAction;
