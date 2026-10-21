@@ -207,7 +207,7 @@ mod tests {
                 IndicatorValue::None => continue,
             };
             // Fisher values are typically between -2 and 2
-            assert!(v.abs() < 10.0, "Fisher value {} out of expected range", v);
+            assert!(v.abs() < 10.0, "Fisher value {v} out of expected range");
         }
     }
 }

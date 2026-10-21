@@ -319,7 +319,7 @@ mod tests {
         // CRSI should be bounded between 0 and 100
         for value in &crsi.values {
             if let IndicatorValue::Single(v) = value {
-                assert!(*v >= 0.0 && *v <= 100.0, "CRSI {} out of range", v);
+                assert!(*v >= 0.0 && *v <= 100.0, "CRSI {v} out of range");
             }
         }
     }

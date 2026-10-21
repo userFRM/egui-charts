@@ -220,7 +220,7 @@ impl SyncButton {
                 ui.painter().rect_stroke(
                     checkbox_rect,
                     2.0,
-                    Stroke::new(1.0, border_color),
+                    Stroke::new(1.0_f32, border_color),
                     StrokeKind::Inside,
                 );
             }
@@ -275,8 +275,10 @@ mod tests {
     #[test]
     fn test_set_options() {
         let mut btn = SyncButton::new();
-        let mut opts = ChartSyncOptions::default();
-        opts.sync_drawings = true;
+        let opts = ChartSyncOptions {
+            sync_drawings: true,
+            ..Default::default()
+        };
         btn.set_options(opts.clone());
         assert!(btn.options().sync_drawings);
     }

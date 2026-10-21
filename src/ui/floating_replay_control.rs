@@ -333,7 +333,7 @@ impl FloatingReplayControl {
 
         egui::Frame::new()
             .fill(bg_color)
-            .stroke(egui::Stroke::new(1.0, border_color))
+            .stroke(egui::Stroke::new(1.0_f32, border_color))
             .corner_radius(DESIGN_TOKENS.rounding.md)
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {

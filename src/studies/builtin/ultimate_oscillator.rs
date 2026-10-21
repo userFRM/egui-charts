@@ -228,8 +228,7 @@ mod tests {
             if let IndicatorValue::Single(val) = value {
                 assert!(
                     *val >= 0.0 && *val <= 100.0,
-                    "UO should be 0-100, got {}",
-                    val
+                    "UO should be 0-100, got {val}"
                 );
             }
         }

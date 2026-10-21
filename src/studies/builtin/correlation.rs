@@ -159,7 +159,7 @@ mod tests {
 
         // Correlation should be close to 1.0 in perfect uptrend
         if let IndicatorValue::Single(r) = corr.values.last().unwrap() {
-            assert!(*r > 0.99, "Correlation should be ~1.0, got {}", r);
+            assert!(*r > 0.99, "Correlation should be ~1.0, got {r}");
         }
     }
 
@@ -174,7 +174,7 @@ mod tests {
 
         // Correlation should be close to -1.0 in perfect downtrend
         if let IndicatorValue::Single(r) = corr.values.last().unwrap() {
-            assert!(*r < -0.99, "Correlation should be ~-1.0, got {}", r);
+            assert!(*r < -0.99, "Correlation should be ~-1.0, got {r}");
         }
     }
 }

@@ -134,7 +134,7 @@ pub fn render_tool_submenu(
             egui::Frame::new()
                 .fill(ui.style().visuals.window_fill)
                 .stroke(egui::Stroke::new(
-                    1.0,
+                    1.0_f32,
                     ui.style().visuals.widgets.noninteractive.bg_stroke.color,
                 ))
                 .corner_radius(DESIGN_TOKENS.rounding.md)

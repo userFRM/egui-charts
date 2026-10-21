@@ -234,7 +234,7 @@ impl Indicator for Stochastic {
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("%K({},{},{})", self.k_period, self.k_smooth, self.d_period),
-            format!("%D"),
+            "%D".to_string(),
         ]
     }
 }

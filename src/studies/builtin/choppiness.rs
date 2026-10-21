@@ -180,8 +180,7 @@ mod tests {
             if let IndicatorValue::Single(v) = value {
                 assert!(
                     *v >= 0.0 && *v <= 100.0,
-                    "CHOP should be between 0-100, got {}",
-                    v
+                    "CHOP should be between 0-100, got {v}"
                 );
             }
         }
@@ -206,7 +205,7 @@ mod tests {
 
         // In a strong trend, CHOP should be relatively low (< 50)
         if let IndicatorValue::Single(v) = chop.values.last().unwrap() {
-            assert!(*v < 50.0, "CHOP should be low in strong trend, got {}", v);
+            assert!(*v < 50.0, "CHOP should be low in strong trend, got {v}");
         }
     }
 }

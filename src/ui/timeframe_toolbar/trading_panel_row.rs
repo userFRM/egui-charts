@@ -111,7 +111,7 @@ impl TradingPanelRow {
             painter.hline(
                 rect.x_range(),
                 rect.min.y,
-                egui::Stroke::new(1.0, separator_color),
+                egui::Stroke::new(1.0_f32, separator_color),
             );
 
             // "Trading Panel" text on the left

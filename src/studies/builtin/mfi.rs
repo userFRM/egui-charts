@@ -202,7 +202,7 @@ mod tests {
 
         for value in mfi.values() {
             if let IndicatorValue::Single(v) = value {
-                assert!(*v >= 0.0 && *v <= 100.0, "MFI should be 0-100, got {}", v);
+                assert!(*v >= 0.0 && *v <= 100.0, "MFI should be 0-100, got {v}");
             }
         }
     }

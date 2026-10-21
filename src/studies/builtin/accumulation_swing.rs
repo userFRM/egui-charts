@@ -39,20 +39,19 @@ impl AccumulationSwingIndex {
         let oy = prev.open;
 
         let k = (h - cy).abs().max((l - cy).abs());
-        let r;
 
         let h_cy = (h - cy).abs();
         let l_cy = (l - cy).abs();
         let h_l = h - l;
         let cy_oy = (cy - oy).abs();
 
-        if h_cy >= l_cy && h_cy >= h_l {
-            r = h_cy - 0.5 * l_cy + 0.25 * cy_oy;
+        let r = if h_cy >= l_cy && h_cy >= h_l {
+            h_cy - 0.5 * l_cy + 0.25 * cy_oy
         } else if l_cy >= h_cy && l_cy >= h_l {
-            r = l_cy - 0.5 * h_cy + 0.25 * cy_oy;
+            l_cy - 0.5 * h_cy + 0.25 * cy_oy
         } else {
-            r = h_l + 0.25 * cy_oy;
-        }
+            h_l + 0.25 * cy_oy
+        };
 
         if r == 0.0 {
             return 0.0;

@@ -139,7 +139,7 @@ impl<'a> PairButton<'a> {
         // Draw arrow (with visibility check)
         if ui.is_rect_visible(arrow_rect) {
             let arrow_stroke = Stroke::new(
-                1.2,
+                1.2_f32,
                 if arrow_res.hovered() {
                     theming::active_icon_color(ui)
                 } else {
@@ -256,7 +256,7 @@ impl<'a> PairButton<'a> {
         // Draw arrow at right edge (with visibility check)
         if ui.is_rect_visible(arrow_rect) {
             let arrow_stroke = Stroke::new(
-                1.2,
+                1.2_f32,
                 if arrow_hovered {
                     theming::active_icon_color(ui)
                 } else {

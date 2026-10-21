@@ -224,8 +224,7 @@ mod tests {
             if let IndicatorValue::Single(val) = value {
                 assert!(
                     val.abs() < 0.001,
-                    "StdDev should be ~0 for flat prices, got {}",
-                    val
+                    "StdDev should be ~0 for flat prices, got {val}"
                 );
             }
         }

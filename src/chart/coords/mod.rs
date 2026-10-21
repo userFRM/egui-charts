@@ -263,11 +263,7 @@ mod tests {
         for idx in [50, 75, 100, 105] {
             let x = mapping.idx_to_x(idx);
             let recovered = mapping.x_to_idx(x);
-            assert_eq!(
-                recovered, idx,
-                "idx {} -> x {} -> idx {}",
-                idx, x, recovered
-            );
+            assert_eq!(recovered, idx, "idx {idx} -> x {x} -> idx {recovered}");
         }
     }
 
@@ -409,10 +405,7 @@ mod tests {
             let recovered = mapping.y_to_price(y);
             assert!(
                 (recovered - price).abs() < 0.001,
-                "price {} -> y {} -> price {}",
-                price,
-                y,
-                recovered
+                "price {price} -> y {y} -> price {recovered}"
             );
         }
     }

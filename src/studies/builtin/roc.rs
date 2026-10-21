@@ -162,7 +162,7 @@ mod tests {
 
         // Check ROC at index 5: ((105 - 100) / 100) * 100 = 5%
         if let IndicatorValue::Single(v) = roc.values()[5] {
-            assert!((v - 5.0).abs() < 0.01, "Expected ROC of 5%, got {}", v);
+            assert!((v - 5.0).abs() < 0.01, "Expected ROC of 5%, got {v}");
         }
     }
 

@@ -239,11 +239,7 @@ mod tests {
 
         // High volatility should produce large HV values
         if let IndicatorValue::Single(v) = hv.values.last().unwrap() {
-            assert!(
-                *v > 100.0,
-                "HV should be high for volatile prices, got {}",
-                v
-            );
+            assert!(*v > 100.0, "HV should be high for volatile prices, got {v}");
         }
     }
 }

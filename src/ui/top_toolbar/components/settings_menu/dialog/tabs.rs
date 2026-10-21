@@ -686,7 +686,7 @@ pub(super) fn configure_dialog_visuals(ui: &mut Ui, style: &SettingsDialogStyle)
 
     // Selection colors for dropdowns
     visuals.selection.bg_fill = style.tab_bg_active;
-    visuals.selection.stroke = Stroke::new(0.0, Color32::TRANSPARENT);
+    visuals.selection.stroke = Stroke::NONE;
 
     // Text input (TextEdit)
     visuals.extreme_bg_color = style.input_bg;

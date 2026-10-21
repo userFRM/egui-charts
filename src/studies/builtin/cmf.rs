@@ -217,8 +217,7 @@ mod tests {
             if let IndicatorValue::Single(val) = value {
                 assert!(
                     *val >= -1.0 && *val <= 1.0,
-                    "CMF should be between -1 and +1, got {}",
-                    val
+                    "CMF should be between -1 and +1, got {val}"
                 );
             }
         }

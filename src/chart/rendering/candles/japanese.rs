@@ -244,8 +244,8 @@ fn draw_kagi_segments(
         let (p2, _) = points[i + 1];
 
         let (stroke_width, color) = match thickness {
-            KagiThickness::Thick => (2.5, bullish_color),
-            KagiThickness::Thin => (1.5, bearish_color),
+            KagiThickness::Thick => (2.5_f32, bullish_color),
+            KagiThickness::Thin => (1.5_f32, bearish_color),
         };
         let stroke = Stroke::new(stroke_width, color);
 

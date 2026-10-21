@@ -266,9 +266,7 @@ mod tests {
             let last_price = data.last().unwrap().close;
             assert!(
                 (v - last_price).abs() < 2.0,
-                "LinReg {} should be close to price {}",
-                v,
-                last_price
+                "LinReg {v} should be close to price {last_price}"
             );
         }
     }

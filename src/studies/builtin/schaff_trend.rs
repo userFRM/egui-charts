@@ -250,7 +250,7 @@ mod tests {
         // Check that valid values are between 0 and 100
         for value in &stc.values {
             if let IndicatorValue::Single(v) = value {
-                assert!(*v >= 0.0 && *v <= 100.0, "STC should be 0-100, got {}", v);
+                assert!(*v >= 0.0 && *v <= 100.0, "STC should be 0-100, got {v}");
             }
         }
     }
@@ -266,7 +266,7 @@ mod tests {
 
         // In uptrend, STC should be high (close to 100)
         if let IndicatorValue::Single(v) = stc.values.last().unwrap() {
-            assert!(*v > 50.0, "STC should be high in uptrend, got {}", v);
+            assert!(*v > 50.0, "STC should be high in uptrend, got {v}");
         }
     }
 }

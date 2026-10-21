@@ -183,8 +183,7 @@ mod tests {
             if let IndicatorValue::Single(v) = value {
                 assert!(
                     *v >= -100.0 && *v <= 0.0,
-                    "Williams %R should be -100 to 0, got {}",
-                    v
+                    "Williams %R should be -100 to 0, got {v}"
                 );
             }
         }

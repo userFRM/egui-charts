@@ -169,7 +169,7 @@ mod tests {
         let result = ta_rsi(&[Value::Number(102.0), Value::Number(14.0)], &ctx).unwrap();
 
         if let Value::Number(n) = result {
-            assert!(n >= 0.0 && n <= 100.0);
+            assert!((0.0..=100.0).contains(&n));
         } else {
             panic!("Expected number");
         }
@@ -317,7 +317,7 @@ mod tests {
         )
         .unwrap();
         if let Value::Number(n) = result {
-            assert!(n >= 0.0 && n <= 100.0);
+            assert!((0.0..=100.0).contains(&n));
         } else {
             panic!("Expected number");
         }
@@ -406,8 +406,8 @@ mod tests {
     #[test]
     fn test_str_tonumber() {
         let ctx = create_test_ctx();
-        let result = str_tonumber(&[Value::String("3.14".to_string())], &ctx).unwrap();
-        assert!(matches!(result, Value::Number(n) if (n - 3.14).abs() < f64::EPSILON));
+        let result = str_tonumber(&[Value::String("2.5".to_string())], &ctx).unwrap();
+        assert!(matches!(result, Value::Number(n) if (n - 2.5).abs() < f64::EPSILON));
         let result2 = str_tonumber(&[Value::String("not_a_number".to_string())], &ctx).unwrap();
         assert!(matches!(result2, Value::Number(n) if n.is_nan()));
     }
@@ -527,7 +527,7 @@ mod tests {
         let result = ta_percentrank(&[Value::Number(102.0), Value::Number(10.0)], &ctx).unwrap();
         if let Value::Number(n) = result {
             assert!(!n.is_nan());
-            assert!(n >= 0.0 && n <= 100.0);
+            assert!((0.0..=100.0).contains(&n));
         } else {
             panic!("Expected number");
         }
@@ -547,7 +547,7 @@ mod tests {
         .unwrap();
         if let Value::Number(n) = result {
             // Correlation is between -1 and 1 (or NaN for degenerate cases)
-            assert!(n.is_nan() || (n >= -1.0 && n <= 1.0));
+            assert!(n.is_nan() || (-1.0..=1.0).contains(&n));
         } else {
             panic!("Expected number");
         }
@@ -593,7 +593,7 @@ mod tests {
         let result = ta_wpr(&[Value::Number(14.0)], &ctx).unwrap();
         if let Value::Number(n) = result {
             assert!(!n.is_nan());
-            assert!(n >= -100.0 && n <= 0.0);
+            assert!((-100.0..=0.0).contains(&n));
         } else {
             panic!("Expected number");
         }
@@ -605,7 +605,7 @@ mod tests {
         let result = ta_cmo(&[Value::Number(102.0), Value::Number(14.0)], &ctx).unwrap();
         if let Value::Number(n) = result {
             assert!(!n.is_nan());
-            assert!(n >= -100.0 && n <= 100.0);
+            assert!((-100.0..=100.0).contains(&n));
         } else {
             panic!("Expected number");
         }
@@ -617,7 +617,7 @@ mod tests {
         let result = ta_mfi(&[Value::Number(14.0)], &ctx).unwrap();
         if let Value::Number(n) = result {
             assert!(!n.is_nan());
-            assert!(n >= 0.0 && n <= 100.0);
+            assert!((0.0..=100.0).contains(&n));
         } else {
             panic!("Expected number");
         }
@@ -653,7 +653,7 @@ mod tests {
         let result = ta_adx(&[Value::Number(10.0)], &ctx).unwrap();
         if let Value::Number(n) = result {
             assert!(!n.is_nan());
-            assert!(n >= 0.0 && n <= 100.0);
+            assert!((0.0..=100.0).contains(&n));
         } else {
             panic!("Expected number");
         }
