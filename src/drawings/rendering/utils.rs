@@ -15,7 +15,11 @@ pub(crate) fn draw_dashed_line(
     dash_len: f32,
     gap_len: f32,
 ) {
-    let clip = painter.clip_rect();
+    // A painter may carry an unbounded clip (Rect::EVERYTHING); the viewport keeps the dash count finite.
+    let clip = painter.clip_rect().intersect(painter.ctx().viewport_rect());
+    if !clip.is_finite() {
+        return;
+    }
     let (x0, y0) = (f64::from(start.x), f64::from(start.y));
     let (dx, dy) = (f64::from(end.x) - x0, f64::from(end.y) - y0);
     let total_len = dx.hypot(dy);
@@ -74,28 +78,41 @@ mod tests {
     use egui::{Color32, Context, LayerId, Painter, RawInput, Rect};
 
     /// An endpoint far off screen (a drawing anchored outside a collapsed
-    /// price range) must not make the dash loop walk its full length.
+    /// price range) must not make the dash loop walk its full length, even
+    /// when the painter's clip rect is unbounded.
     #[test]
     fn dashes_only_the_visible_part_of_a_huge_segment() {
-        let clip = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000.0, 1000.0));
         let (dash, gap) = (6.0, 4.0);
-        let ctx = Context::default();
-        let output = ctx.run(RawInput::default(), |ctx| {
-            let painter = Painter::new(ctx.clone(), LayerId::background(), clip);
-            draw_dashed_line(
-                &painter,
-                Pos2::new(0.0, 500.0),
-                Pos2::new(1e14, 500.0),
-                Stroke::new(1.0_f32, Color32::WHITE),
-                dash,
-                gap,
+        let viewport = Rect::from_min_size(Pos2::ZERO, egui::vec2(2000.0, 1000.0));
+        for (clip, visible_width) in [
+            (
+                Rect::from_min_size(Pos2::ZERO, egui::vec2(1000.0, 1000.0)),
+                1000.0,
+            ),
+            (Rect::EVERYTHING, 2000.0),
+        ] {
+            let ctx = Context::default();
+            let input = RawInput {
+                screen_rect: Some(viewport),
+                ..Default::default()
+            };
+            let output = ctx.run(input, |ctx| {
+                let painter = Painter::new(ctx.clone(), LayerId::background(), clip);
+                draw_dashed_line(
+                    &painter,
+                    Pos2::new(0.0, 500.0),
+                    Pos2::new(1e14, 500.0),
+                    Stroke::new(1.0_f32, Color32::WHITE),
+                    dash,
+                    gap,
+                );
+            });
+            let n = output.shapes.len();
+            assert!(n > 0, "the visible part must still be drawn");
+            assert!(
+                n <= (visible_width / (dash + gap)) as usize + 2,
+                "{n} dashes for a {visible_width} px visible span"
             );
-        });
-        let n = output.shapes.len();
-        assert!(n > 0, "the visible part must still be drawn");
-        assert!(
-            n <= (clip.width() / (dash + gap)) as usize + 2,
-            "{n} dashes for a 1000 px visible span"
-        );
+        }
     }
 }
