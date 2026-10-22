@@ -38,6 +38,9 @@ impl LogicalRange {
     }
 }
 
+/// The minimum bar spacing used when the configured one is not a finite number.
+const DEFAULT_MIN_BAR_SPACING: f32 = 0.5;
+
 /// Time-scale coordinate engine -- pure logic, no UI dependencies.
 ///
 /// Manages the horizontal mapping between logical bar indices and pixel
@@ -86,7 +89,7 @@ impl TimeScale {
             right_offset: 5.0, // Default: 5 bars of whitespace on the right
             width: 800.0,
             bar_cnt: 0,
-            min_bar_spacing: 0.5,
+            min_bar_spacing: DEFAULT_MIN_BAR_SPACING,
             max_bar_spacing: 0.0, // unlimited
             fix_left_edge: true,
             fix_right_edge: false, // Allow scrolling past latest bar
@@ -140,12 +143,7 @@ impl TimeScale {
 
     /// Set bar spacing (with clamping to constraints)
     pub fn set_bar_spacing(&mut self, spacing: f32) {
-        let clamped = if self.max_bar_spacing > 0.0 {
-            spacing.clamp(self.min_bar_spacing, self.max_bar_spacing)
-        } else {
-            spacing.max(self.min_bar_spacing)
-        };
-        self.bar_spacing = clamped;
+        self.bar_spacing = self.clamp_spacing(spacing);
         // CRITICAL: Changing bar_spacing changes visible_bars calculation,
         // which affects edge constraints. Must re-apply constraints!
         self.apply_constraints();
@@ -280,13 +278,7 @@ impl TimeScale {
         let zoom_scale = delta;
         let new_spacing = old_spacing + zoom_scale * (old_spacing / 10.0);
 
-        // Clamp bar spacing to constraints
-        let clamped = if self.max_bar_spacing > 0.0 {
-            new_spacing.clamp(self.min_bar_spacing, self.max_bar_spacing)
-        } else {
-            new_spacing.max(self.min_bar_spacing)
-        };
-        self.bar_spacing = clamped;
+        self.bar_spacing = self.clamp_spacing(new_spacing);
 
         // DIRECT CALCULATION: Calculate right_offset needed to keep anchor_bar_idx at anchor_x
         // Formula derived from idx_to_coord_precise:
@@ -395,7 +387,30 @@ impl TimeScale {
             // Allow scrolling into future whitespace
             // Use a generous bound based on visible bars at minimum zoom
 
-            self.width / self.min_bar_spacing
+            self.width / self.spacing_bounds().0
+        }
+    }
+
+    /// The spacing bounds in a form `clamp` accepts: a NaN or infinite minimum is the default, a NaN
+    /// or infinite maximum is unlimited (0), and a minimum above a set maximum is that maximum.
+    fn spacing_bounds(&self) -> (f32, f32) {
+        let max = if self.max_bar_spacing.is_finite() {
+            self.max_bar_spacing.max(0.0)
+        } else {
+            0.0
+        };
+        let min = if self.min_bar_spacing.is_finite() {
+            self.min_bar_spacing.max(0.0)
+        } else {
+            DEFAULT_MIN_BAR_SPACING
+        };
+        (if max > 0.0 { min.min(max) } else { min }, max)
+    }
+
+    fn clamp_spacing(&self, spacing: f32) -> f32 {
+        match self.spacing_bounds() {
+            (min, max) if max > 0.0 => spacing.clamp(min, max),
+            (min, _) => spacing.max(min),
         }
     }
 
@@ -408,5 +423,43 @@ impl TimeScale {
 impl Default for TimeScale {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inconsistent_spacing_bounds_clamp_without_panicking() {
+        // zoom(-100) asks for -9 times the spacing, so each row ends at its effective minimum.
+        type Setup = fn(&mut TimeScale);
+        let rows: [(&str, Setup, f32); 3] = [
+            (
+                "minimum above maximum",
+                |ts| ts.apply_options(6.0, 10.0, 5.0, false, false, 2.0, None),
+                5.0,
+            ),
+            (
+                "NaN minimum",
+                |ts| ts.apply_options(6.0, f32::NAN, 0.0, false, false, 2.0, None),
+                0.5,
+            ),
+            (
+                "minimum set above maximum",
+                |ts| {
+                    ts.set_max_bar_spacing(5.0);
+                    ts.set_min_bar_spacing(10.0);
+                },
+                5.0,
+            ),
+        ];
+        for (name, setup, expected) in rows {
+            let mut ts = TimeScale::new();
+            ts.set_bar_cnt(100);
+            setup(&mut ts);
+            ts.zoom(-100.0, 400.0, 0.0, 800.0);
+            assert_eq!(ts.bar_spacing(), expected, "{name}");
+        }
     }
 }

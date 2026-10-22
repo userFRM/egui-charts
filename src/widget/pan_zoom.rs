@@ -521,20 +521,11 @@ impl Chart {
         let num_bars = right_idx.max(left_idx) - right_idx.min(left_idx) + 1.0;
         if num_bars > 0.0 {
             let new_spacing = (right_x_relative - left_x_relative) / num_bars;
-
-            let min_spacing = self.chart_options.time_scale.min_bar_spacing;
-            let max_spacing = self.chart_options.time_scale.max_bar_spacing;
-            let clamped_spacing = if max_spacing > 0.0 {
-                new_spacing.clamp(min_spacing, max_spacing)
-            } else {
-                new_spacing.max(min_spacing)
-            };
-
-            self.state.time_scale_mut().set_bar_spacing(clamped_spacing);
+            self.state.time_scale_mut().set_bar_spacing(new_spacing);
 
             let center_idx = (left_idx + right_idx) / 2.0;
             let base_idx = self.state.time_scale().base_idx() as f32;
-            let visible_bars = chart_width / clamped_spacing;
+            let visible_bars = chart_width / self.state.time_scale().bar_spacing();
             let target_right_offset = center_idx + (visible_bars / 2.0) - base_idx;
             self.state
                 .time_scale_mut()
@@ -587,14 +578,7 @@ impl Chart {
             if let Some(desired) = self.desired_visible_bars
                 && desired > 0
             {
-                let mut spacing = self.calculate_bar_spacing(chart_width, desired);
-                let min = self.chart_options.time_scale.min_bar_spacing;
-                let max = self.chart_options.time_scale.max_bar_spacing;
-                spacing = if max > 0.0 {
-                    spacing.clamp(min, max)
-                } else {
-                    spacing.max(min)
-                };
+                let spacing = self.calculate_bar_spacing(chart_width, desired);
                 self.state.time_scale_mut().set_bar_spacing(spacing);
             }
             self.apply_visible_bars_once = false;
@@ -611,14 +595,7 @@ impl Chart {
             {
                 let prev_visible_bars = self.calculate_visible_bars(prev_width);
                 if prev_visible_bars > 0 {
-                    let mut spacing = chart_width / prev_visible_bars as f32;
-                    let min = self.chart_options.time_scale.min_bar_spacing;
-                    let max = self.chart_options.time_scale.max_bar_spacing;
-                    spacing = if max > 0.0 {
-                        spacing.clamp(min, max)
-                    } else {
-                        spacing.max(min)
-                    };
+                    let spacing = chart_width / prev_visible_bars as f32;
                     self.state.time_scale_mut().set_bar_spacing(spacing);
                 }
             }
