@@ -127,6 +127,7 @@ All notable changes to this project are documented in this file. The format is b
 - The Gann fan draws each angle at its labelled ratio: an NxM line has N/M times the slope of the 1x1 line, so 8x1 is the steepest and 1x8 the flattest. They were drawn the other way round, so the drawn lines did not match the lines a click selects, and 1x3 used 0.333 instead of one third.
 - The sine line passes through both anchors, a peak and a trough half a period apart, with the centre guide midway between them and the amplitude label at half their price distance. It crossed the centre line at the first anchor and returned to it at the second, so it missed the second anchor unless both had the same price. Migration: a saved sine line keeps its anchors, and its first anchor is now a peak or trough instead of a crossing of the centre line.
 - `to_renko_bricks` reverses only after a two-brick move: a close must move one brick beyond the open of the last brick, and the reversal brick starts at that open. A one-brick move against the trend drew a reversal brick over the last brick. Renko charts now show fewer reversal bricks.
+- `parse_date_range("MTD")` starts at 00:00 UTC on the first day of the current month, as `YTD` starts on the first day of the year, instead of 30 days before now. `1M` still covers the last 30 days.
 
 ### Changed
 
