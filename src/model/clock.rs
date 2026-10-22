@@ -65,7 +65,7 @@ mod tests {
             (Timeframe::Min1, "2024-03-15T10:07:42.5Z", "2024-03-15T10:07:00Z"),
             (Timeframe::Hour4, "2024-03-15T23:30:00Z", "2024-03-15T20:00:00Z"),
             // Seven-minute bars restart at midnight, so the last one of the day is short.
-            (Timeframe::Custom(420), "2024-03-15T23:58:00Z", "2024-03-15T23:55:00Z"),
+            ("7min".parse().unwrap(), "2024-03-15T23:58:00Z", "2024-03-15T23:55:00Z"),
             (Timeframe::Day1, "2024-03-15T23:59:59Z", "2024-03-15T00:00:00Z"),
             (Timeframe::Day1, "1969-07-20T20:17:40Z", "1969-07-20T00:00:00Z"),
             // A Sunday belongs to the week that opened on the Monday before.

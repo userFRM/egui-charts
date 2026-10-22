@@ -22,6 +22,7 @@ use chrono::Duration;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt;
+use std::num::NonZeroU64;
 use std::str::FromStr;
 
 /// Timeframe for bar aggregation.
@@ -96,8 +97,8 @@ pub enum Timeframe {
     Month1,
 
     /// Custom timeframe defined in seconds.
-    /// Allows user-defined intervals (e.g., 45s, 3min, 2h).
-    Custom(u64),
+    /// Allows user-defined intervals (e.g., 45s, 3min, 2h). The interval is never zero.
+    Custom(NonZeroU64),
 }
 
 impl Timeframe {
@@ -121,7 +122,7 @@ impl Timeframe {
             Timeframe::Day1 => Cow::Borrowed("1D"),
             Timeframe::Week1 => Cow::Borrowed("1W"),
             Timeframe::Month1 => Cow::Borrowed("1M"),
-            Timeframe::Custom(seconds) => Cow::Owned(format_custom_seconds(*seconds)),
+            Timeframe::Custom(seconds) => Cow::Owned(format_custom_seconds(seconds.get())),
         }
     }
 
@@ -168,7 +169,9 @@ impl Timeframe {
             Timeframe::Day1 => 86_400_000,
             Timeframe::Week1 => 604_800_000,
             Timeframe::Month1 => 2_592_000_000, // Approximation: 30 days
-            Timeframe::Custom(seconds) => seconds.saturating_mul(1000).min(i64::MAX as u64) as i64,
+            Timeframe::Custom(seconds) => {
+                seconds.get().saturating_mul(1000).min(i64::MAX as u64) as i64
+            }
         }
     }
 
@@ -217,9 +220,6 @@ impl Timeframe {
 /// Format a custom seconds value into a human-readable label.
 /// Chooses the largest clean unit: days > hours > minutes > seconds.
 fn format_custom_seconds(seconds: u64) -> String {
-    if seconds == 0 {
-        return "0s".to_string();
-    }
     if seconds >= 86400 && seconds.is_multiple_of(86400) {
         format!("{}D", seconds / 86400)
     } else if seconds >= 3600 && seconds.is_multiple_of(3600) {
@@ -273,10 +273,9 @@ impl FromStr for Timeframe {
         // Try parsing as custom timeframe: "<number><unit>"
         let lower = s.to_lowercase();
         if let Some(seconds) = parse_custom_timeframe(&lower) {
-            if seconds == 0 {
-                return Err("Custom timeframe must be greater than zero".to_string());
-            }
-            return Ok(Timeframe::Custom(seconds));
+            return NonZeroU64::new(seconds)
+                .map(Timeframe::Custom)
+                .ok_or_else(|| "Custom timeframe must be greater than zero".to_string());
         }
 
         Err(format!(
@@ -319,6 +318,10 @@ fn parse_custom_timeframe(s: &str) -> Option<u64> {
 mod tests {
     use super::*;
 
+    fn custom(seconds: u64) -> Timeframe {
+        Timeframe::Custom(NonZeroU64::new(seconds).unwrap())
+    }
+
     #[test]
     fn test_preset_as_str() {
         assert_eq!(&*Timeframe::Min1.as_str(), "1min");
@@ -328,24 +331,21 @@ mod tests {
 
     #[test]
     fn test_custom_as_str() {
-        assert_eq!(&*Timeframe::Custom(45).as_str(), "45s");
-        assert_eq!(&*Timeframe::Custom(180).as_str(), "3min");
-        assert_eq!(&*Timeframe::Custom(7200).as_str(), "2h");
-        assert_eq!(&*Timeframe::Custom(172800).as_str(), "2D");
+        assert_eq!(&*custom(45).as_str(), "45s");
+        assert_eq!(&*custom(180).as_str(), "3min");
+        assert_eq!(&*custom(7200).as_str(), "2h");
+        assert_eq!(&*custom(172800).as_str(), "2D");
     }
 
     #[test]
     fn test_custom_duration_ms() {
-        assert_eq!(Timeframe::Custom(45).duration_ms(), 45_000);
-        assert_eq!(Timeframe::Custom(180).duration_ms(), 180_000);
-        assert_eq!(Timeframe::Custom(7200).duration_ms(), 7_200_000);
+        assert_eq!(custom(45).duration_ms(), 45_000);
+        assert_eq!(custom(180).duration_ms(), 180_000);
+        assert_eq!(custom(7200).duration_ms(), 7_200_000);
         // Too large for i64 milliseconds: saturate rather than overflow or wrap negative.
+        assert_eq!(custom(10_000_000_000_000_000).duration_ms(), i64::MAX);
         assert_eq!(
-            Timeframe::Custom(10_000_000_000_000_000).duration_ms(),
-            i64::MAX
-        );
-        assert_eq!(
-            Timeframe::Custom(u64::MAX).duration(),
+            custom(u64::MAX).duration(),
             Duration::milliseconds(i64::MAX)
         );
         assert!("40000000000000w".parse::<Timeframe>().is_err());
@@ -355,8 +355,8 @@ mod tests {
     fn test_is_custom() {
         assert!(!Timeframe::Min1.is_custom());
         assert!(!Timeframe::Day1.is_custom());
-        assert!(Timeframe::Custom(45).is_custom());
-        assert!(Timeframe::Custom(180).is_custom());
+        assert!(custom(45).is_custom());
+        assert!(custom(180).is_custom());
     }
 
     #[test]
@@ -370,13 +370,13 @@ mod tests {
 
     #[test]
     fn test_from_str_custom() {
-        assert_eq!("45s".parse::<Timeframe>(), Ok(Timeframe::Custom(45)));
-        assert_eq!("45sec".parse::<Timeframe>(), Ok(Timeframe::Custom(45)));
-        assert_eq!("3min".parse::<Timeframe>(), Ok(Timeframe::Custom(180)));
-        assert_eq!("2h".parse::<Timeframe>(), Ok(Timeframe::Custom(7200)));
-        assert_eq!("2hour".parse::<Timeframe>(), Ok(Timeframe::Custom(7200)));
-        assert_eq!("2d".parse::<Timeframe>(), Ok(Timeframe::Custom(172800)));
-        assert_eq!("2day".parse::<Timeframe>(), Ok(Timeframe::Custom(172800)));
+        assert_eq!("45s".parse::<Timeframe>(), Ok(custom(45)));
+        assert_eq!("45sec".parse::<Timeframe>(), Ok(custom(45)));
+        assert_eq!("3min".parse::<Timeframe>(), Ok(custom(180)));
+        assert_eq!("2h".parse::<Timeframe>(), Ok(custom(7200)));
+        assert_eq!("2hour".parse::<Timeframe>(), Ok(custom(7200)));
+        assert_eq!("2d".parse::<Timeframe>(), Ok(custom(172800)));
+        assert_eq!("2day".parse::<Timeframe>(), Ok(custom(172800)));
     }
 
     #[test]
@@ -393,24 +393,16 @@ mod tests {
 
     #[test]
     fn test_custom_display() {
-        assert_eq!(Timeframe::Custom(45).to_string(), "45s");
-        assert_eq!(Timeframe::Custom(180).to_string(), "3min");
-        assert_eq!(Timeframe::Custom(7200).to_string(), "2h");
+        assert_eq!(custom(45).to_string(), "45s");
+        assert_eq!(custom(180).to_string(), "3min");
+        assert_eq!(custom(7200).to_string(), "2h");
     }
 
     #[test]
     fn test_total_seconds() {
         assert_eq!(Timeframe::Min1.total_seconds(), 60);
         assert_eq!(Timeframe::Hour1.total_seconds(), 3600);
-        assert_eq!(Timeframe::Custom(45).total_seconds(), 45);
-    }
-
-    #[test]
-    fn test_custom_equality() {
-        assert_eq!(Timeframe::Custom(60), Timeframe::Custom(60));
-        assert_ne!(Timeframe::Custom(60), Timeframe::Custom(120));
-        // Custom(60) is NOT equal to Min1 - they are different variants
-        assert_ne!(Timeframe::Custom(60), Timeframe::Min1);
+        assert_eq!(custom(45).total_seconds(), 45);
     }
 
     #[test]
@@ -419,5 +411,12 @@ mod tests {
         assert_eq!("1s".parse::<Timeframe>(), Ok(Timeframe::Sec1));
         assert_eq!("5min".parse::<Timeframe>(), Ok(Timeframe::Min5));
         assert_eq!("1h".parse::<Timeframe>(), Ok(Timeframe::Hour1));
+    }
+
+    #[test]
+    fn deserialize_rejects_zero_length_custom_timeframe() {
+        assert!(serde_json::from_str::<Timeframe>(r#"{"Custom":0}"#).is_err());
+        let tf: Timeframe = serde_json::from_str(r#"{"Custom":45}"#).unwrap();
+        assert_eq!(tf.duration_ms(), 45_000);
     }
 }
