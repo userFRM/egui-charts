@@ -1,4 +1,4 @@
-//! Strategy types and state management for Pine Script backtesting
+//! Strategy types and state management for script backtesting
 //!
 //! Contains trade tracking, position management, and performance metrics.
 

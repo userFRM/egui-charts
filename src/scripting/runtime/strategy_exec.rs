@@ -1,4 +1,4 @@
-//! Strategy execution methods for Pine Script runtime
+//! Strategy execution methods for the script runtime
 //!
 //! Handles strategy.* methods for backtesting functionality.
 

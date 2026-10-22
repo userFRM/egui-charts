@@ -4,8 +4,7 @@
 //! scrolling with decaying velocity, giving a "momentum" feel similar to
 //! mobile OS list scrolling.
 
-/// Kinetic scroll animation params.
-/// From lightweight-charts: gui/pane-widget.ts lines 37-42.
+/// Kinetic scroll animation parameters.
 #[derive(Debug, Clone, Copy)]
 pub struct KineticScrollOptions {
     /// Enable kinetic scrolling (inertial scrolling)

@@ -1,4 +1,4 @@
-/// Pine Script parser - converts tokens into AST
+/// Script parser - converts tokens into AST
 use super::ast::*;
 use super::lexer::{Lexer, Token, TokenKind};
 use std::fmt;

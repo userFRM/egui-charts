@@ -1,11 +1,10 @@
-//! Pine Script interpreter module
+//! Script interpreter module
 //!
-//! Provides a Pine Script v5-compatible interpreter for creating custom indicators
+//! Provides an interpreter for the crate's scripting language, used to write custom indicators
 //! and strategies.
 //!
-//! # Example Pine Script
-//! ```pine
-//! //@version=5
+//! # Example script
+//! ```text
 //! indicator("My SMA", overlay=true)
 //!
 //! length = input.int(20, "Length")
@@ -34,11 +33,11 @@ pub use types::{RuntimeError, TradeDirection, Value};
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 
-/// Pine Script indicator wrapper
+/// Indicator backed by a script
 ///
-/// Wraps a Pine Script program and provides the Indicator trait implementation
+/// Wraps a parsed script and provides the Indicator trait implementation
 #[derive(Clone)]
-pub struct PineScriptIndicator {
+pub struct ScriptIndicator {
     name: String,
     script: String,
     runtime: Runtime,
@@ -48,8 +47,8 @@ pub struct PineScriptIndicator {
     visible: bool,
 }
 
-impl PineScriptIndicator {
-    /// Create a new Pine Script indicator
+impl ScriptIndicator {
+    /// Parse `script` and create an indicator from it
     pub fn new(script: String) -> Result<Self, ParseError> {
         // Parse the script
         let lexer = Lexer::new(&script);
@@ -61,7 +60,7 @@ impl PineScriptIndicator {
         register_builtins(&mut runtime);
 
         // Extract metadata from script (indicator name, overlay, etc.)
-        let name = Self::extract_name(&program).unwrap_or_else(|| "Pine Script".to_string());
+        let name = Self::extract_name(&program).unwrap_or_else(|| "Script".to_string());
         let overlay = Self::extract_overlay(&program);
 
         Ok(Self {
@@ -75,7 +74,7 @@ impl PineScriptIndicator {
         })
     }
 
-    /// Extract indicator name from Pine Script
+    /// Extract the indicator name from the script
     fn extract_name(program: &Program) -> Option<String> {
         // Look for indicator() or strategy() calls
         for stmt in &program.statements {
@@ -90,7 +89,7 @@ impl PineScriptIndicator {
         None
     }
 
-    /// Extract overlay setting from Pine Script
+    /// Extract the overlay setting from the script
     fn extract_overlay(program: &Program) -> bool {
         // Look for overlay=true in indicator() call
         for stmt in &program.statements {
@@ -100,7 +99,7 @@ impl PineScriptIndicator {
             {
                 // TODO(P1): Parse named keyword arguments in indicator() calls
                 // (e.g., `indicator("RSI", overlay=true)`). Requires extending the
-                // Pine Script parser to handle `name=expr` pairs in FunctionCall args,
+                // script parser to handle `name=expr` pairs in FunctionCall args,
                 // then checking for the `overlay` key here to return its bool value.
                 return true;
             }
@@ -108,7 +107,7 @@ impl PineScriptIndicator {
         false
     }
 
-    /// Execute the Pine Script with bar data
+    /// Execute the script with bar data
     pub fn execute(&mut self, bars: &[Bar]) -> Result<(), RuntimeError> {
         self.values.clear();
 
@@ -125,14 +124,14 @@ impl PineScriptIndicator {
     }
 }
 
-impl Indicator for PineScriptIndicator {
+impl Indicator for ScriptIndicator {
     fn name(&self) -> &str {
         &self.name
     }
 
     fn calculate(&mut self, bars: &[Bar]) {
         if let Err(e) = self.execute(bars) {
-            eprintln!("Pine Script error: {e}");
+            eprintln!("Script error: {e}");
         }
     }
 
@@ -176,7 +175,6 @@ mod tests {
     #[test]
     fn test_simple_sma_script() {
         let script = r#"
-//@version=5
 indicator("My SMA", overlay=true)
 
 length = 20
@@ -184,7 +182,7 @@ sma_val = ta.sma(close, length)
 plot(sma_val)
 "#;
 
-        let result = PineScriptIndicator::new(script.to_string());
+        let result = ScriptIndicator::new(script.to_string());
         assert!(result.is_ok());
 
         let indicator = result.unwrap();

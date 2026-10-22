@@ -217,7 +217,7 @@ pub struct LibrarySymbolInfo {
     /// Price display format
     pub format: SymbolFormat,
 
-    // ── Additional Fields for 100% TV Compatibility ───────────
+    // ── Additional Fields ───────────
     /// Array of base symbol names for spreads and composite symbols
     pub base_name: Option<Vec<String>>,
 
@@ -313,7 +313,7 @@ impl Default for LibrarySymbolInfo {
             visible_plots_set: None,
             format: SymbolFormat::default(),
 
-            // Additional fields for 100% TV compatibility
+            // Additional fields
             base_name: None,
             build_seconds_from_ticks: None,
             library_custom_fields: None,

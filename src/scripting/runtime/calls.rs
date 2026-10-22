@@ -1,4 +1,4 @@
-//! Function and method calling for Pine Script runtime
+//! Function and method calling for the script runtime
 //!
 //! Handles call_function, call_method, and call_array_method.
 
@@ -107,7 +107,7 @@ impl Runtime {
         Err(RuntimeError::FunctionNotFound(full_name))
     }
 
-    /// Handle array.* methods for Pine Script array support
+    /// Handle array.* methods for script array support
     pub(crate) fn call_array_method(
         &mut self,
         method: &str,

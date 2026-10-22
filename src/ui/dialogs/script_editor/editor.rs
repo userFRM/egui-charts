@@ -1,7 +1,7 @@
-//! Pine Script editor dialog implementation.
+//! Script editor dialog implementation.
 //!
 //! Provides a code text area, compile/run button, output panel, and error display
-//! with basic syntax highlighting for the Pine-like scripting language.
+//! with basic syntax highlighting for the crate's scripting language.
 
 use egui::{Context, RichText, ScrollArea, TextEdit, Vec2};
 
@@ -11,9 +11,9 @@ use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::{DialogFrame, dialog_header};
 
-/// Action returned by the Pine editor dialog
+/// Action returned by the script editor dialog
 #[derive(Debug, Clone, PartialEq)]
-pub enum PineEditorAction {
+pub enum ScriptEditorAction {
     /// No action
     None,
     /// Dialog was closed
@@ -39,8 +39,8 @@ enum EditorResult {
     Success(Vec<String>),
 }
 
-/// Pine Script editor dialog
-pub struct PineEditor {
+/// Script editor dialog
+pub struct ScriptEditor {
     /// Whether the dialog is currently open
     pub is_open: bool,
     /// Source code in the editor
@@ -51,13 +51,13 @@ pub struct PineEditor {
     output_expanded: bool,
 }
 
-impl Default for PineEditor {
+impl Default for ScriptEditor {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PineEditor {
+impl ScriptEditor {
     pub fn new() -> Self {
         Self {
             is_open: false,
@@ -69,8 +69,7 @@ impl PineEditor {
 
     /// Default example script shown when the editor opens
     fn default_script() -> &'static str {
-        r#"//@version=5
-indicator("My Script", overlay=true)
+        r#"indicator("My Script", overlay=true)
 
 length = 20
 sma_val = ta.sma(close, length)
@@ -88,15 +87,15 @@ plot(sma_val)"#
     }
 
     /// Show the dialog. Returns the action taken.
-    pub fn show(&mut self, ctx: &Context) -> PineEditorAction {
+    pub fn show(&mut self, ctx: &Context) -> ScriptEditorAction {
         if !self.is_open {
-            return PineEditorAction::None;
+            return ScriptEditorAction::None;
         }
 
-        let mut action = PineEditorAction::None;
+        let mut action = ScriptEditorAction::None;
 
         DialogFrame::new(
-            "Pine Script Editor",
+            "Script Editor",
             Vec2::new(
                 DESIGN_TOKENS.sizing.dialog.default_width.max(560.0),
                 DESIGN_TOKENS.sizing.dialog.default_height.max(480.0),
@@ -109,18 +108,18 @@ plot(sma_val)"#
         // Close on Escape
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.is_open = false;
-            action = PineEditorAction::Close;
+            action = ScriptEditorAction::Close;
         }
 
         action
     }
 
-    fn render_contents(&mut self, ui: &mut egui::Ui) -> PineEditorAction {
-        let mut action = PineEditorAction::None;
+    fn render_contents(&mut self, ui: &mut egui::Ui) -> ScriptEditorAction {
+        let mut action = ScriptEditorAction::None;
 
         // Title bar
-        if dialog_header(ui, "Pine Script Editor") {
-            action = PineEditorAction::Close;
+        if dialog_header(ui, "Script Editor") {
+            action = ScriptEditorAction::Close;
             self.is_open = false;
         }
         ui.separator();
@@ -135,7 +134,7 @@ plot(sma_val)"#
             {
                 self.compile_and_run();
                 if matches!(self.result, EditorResult::Success(_)) {
-                    action = PineEditorAction::Executed;
+                    action = ScriptEditorAction::Executed;
                 }
             }
             ui.space_md();
@@ -167,7 +166,7 @@ plot(sma_val)"#
         };
 
         ScrollArea::vertical()
-            .id_salt("pine_code_area")
+            .id_salt("script_code_area")
             .max_height(editor_height)
             .show(ui, |ui| {
                 self.render_code_editor(ui);
@@ -198,7 +197,7 @@ plot(sma_val)"#
             job.wrap.max_width = wrap_width;
 
             // Tokenize for syntax highlighting
-            highlight_pine_source(
+            highlight_script_source(
                 text_str,
                 &mut job,
                 ui,
@@ -261,7 +260,7 @@ plot(sma_val)"#
         let output_height = DESIGN_TOKENS.sizing.dialog.default_height.max(480.0) * 0.25;
 
         ScrollArea::vertical()
-            .id_salt("pine_output_area")
+            .id_salt("script_output_area")
             .max_height(output_height)
             .show(ui, |ui| {
                 ui.space_xs();
@@ -409,8 +408,8 @@ fn extract_parse_error_location(err: &ParseError) -> (usize, usize) {
     }
 }
 
-/// Basic Pine Script syntax highlighting applied to a LayoutJob
-fn highlight_pine_source(
+/// Basic script syntax highlighting applied to a LayoutJob
+fn highlight_script_source(
     text: &str,
     job: &mut egui::text::LayoutJob,
     _ui: &egui::Ui,

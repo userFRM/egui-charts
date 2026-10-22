@@ -1,7 +1,7 @@
-/// Abstract Syntax Tree for Pine Script
+/// Abstract Syntax Tree for scripts
 use std::fmt;
 
-/// Pine Script program - collection of statements
+/// Script program - collection of statements
 #[derive(Debug, Clone)]
 pub struct Program {
     pub statements: Vec<Stmt>,
@@ -21,7 +21,7 @@ impl Default for Program {
     }
 }
 
-/// Statement types in Pine Script
+/// Statement types in scripts
 #[derive(Debug, Clone)]
 pub enum Stmt {
     /// Variable declaration: var x = expr
@@ -59,7 +59,7 @@ pub enum Stmt {
     },
 }
 
-/// Expression types in Pine Script
+/// Expression types in scripts
 #[derive(Debug, Clone)]
 pub enum Expr {
     /// Numeric literal
@@ -114,7 +114,7 @@ pub enum Expr {
     ArrayLiteral(Vec<Expr>),
 }
 
-/// Built-in variables in Pine Script
+/// Built-in variables in scripts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinVar {
     Open,

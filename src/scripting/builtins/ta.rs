@@ -330,7 +330,7 @@ pub(crate) fn ta_stoch(args: &[Value], ctx: &SeriesContext) -> Result<Value, Run
         ));
     }
 
-    // In Pine, ta.stoch(close, high, low, k_period)
+    // In scripts, ta.stoch(close, high, low, k_period)
     let length = if args.len() >= 4 {
         args[3].as_num()? as usize
     } else {

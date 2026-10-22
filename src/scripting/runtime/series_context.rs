@@ -1,4 +1,4 @@
-//! Series context for Pine Script runtime
+//! Series context for the script runtime
 //!
 //! Manages bar data and series caching for builtin functions.
 
@@ -30,7 +30,7 @@ impl SeriesContext {
             bars.iter().map(|b| b.volume).collect(),
         );
 
-        // HL2, HLC3, OHLC4 for Pine Script compatibility
+        // HL2, HLC3, OHLC4 price sources
         series_cache.insert(
             "hl2".to_string(),
             bars.iter().map(|b| (b.high + b.low) / 2.0).collect(),

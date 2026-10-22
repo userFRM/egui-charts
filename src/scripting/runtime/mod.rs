@@ -1,4 +1,4 @@
-//! Pine Script runtime - executes parsed AST
+//! Script runtime - executes parsed AST
 //!
 //! The runtime is split into several modules:
 //! - `series_context`: Bar data and series caching

@@ -1,4 +1,4 @@
-/// Pine Script lexer - tokenizes Pine Script source code
+/// Script lexer - tokenizes script source code
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]

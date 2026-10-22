@@ -124,7 +124,7 @@ pub(crate) fn math_sign(args: &[Value], _ctx: &SeriesContext) -> Result<Value, R
         ));
     }
     let n = args[0].as_num()?;
-    // Pine Script semantics: sign(0) = 0 (unlike Rust's signum which returns 1.0 for +0.0)
+    // Script semantics: sign(0) = 0 (unlike Rust's signum which returns 1.0 for +0.0)
     let sign = if n > 0.0 {
         1.0
     } else if n < 0.0 {

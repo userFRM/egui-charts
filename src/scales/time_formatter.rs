@@ -8,8 +8,6 @@
 //! Use [`TimeFormatterBuilder`] for a fluent construction API.
 
 use super::timescale_marks::TickMarkType;
-/// Time formatting trait for customizable time axis labels.
-/// Reference: lightweight-charts TimeFormatterFn.
 use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use std::sync::Arc;

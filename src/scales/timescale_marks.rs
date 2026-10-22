@@ -7,8 +7,6 @@
 //! significant boundaries (year, month changes) always remain visible.
 
 use super::time_formatter::{DefaultTimeFormatter, TimeFormatter};
-/// Smart time axis mark generation.
-/// Reference: lightweight-charts TickMarkType.
 use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 

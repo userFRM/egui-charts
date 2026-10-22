@@ -1,4 +1,4 @@
-//! Expression evaluation for Pine Script runtime
+//! Expression evaluation for the script runtime
 //!
 //! Contains methods for evaluating expressions, binary operations, and unary operations.
 

@@ -1,4 +1,4 @@
-//! Pine Script type definitions
+//! Script type definitions
 //!
 //! Contains core value types and error definitions for the runtime.
 
@@ -30,7 +30,7 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-/// Pine Script value types
+/// Script value types
 #[derive(Debug, Clone)]
 pub enum Value {
     Number(f64),

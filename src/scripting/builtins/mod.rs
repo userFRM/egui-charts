@@ -1,4 +1,4 @@
-/// Pine Script built-in functions (ta.*, math.*, str.*, input.*)
+/// Script built-in functions (ta.*, math.*, str.*, input.*)
 ///
 /// Each category lives in its own submodule:
 /// - `ta` — core technical analysis (moving averages, RSI, MACD, BB, ATR, etc.)
@@ -22,7 +22,7 @@ pub(crate) use ta::*;
 pub(crate) use ta_advanced::*;
 pub(crate) use ta_statistical::*;
 
-/// Register all built-in Pine Script functions
+/// Register all built-in script functions
 pub fn register_builtins(runtime: &mut super::runtime::Runtime) {
     // Technical Analysis functions (ta namespace)
     runtime.register_builtin("ta.sma", ta_sma);

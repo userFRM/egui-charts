@@ -15,7 +15,7 @@ use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
     AlertData, AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction,
-    DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog, PineEditor, PineEditorAction,
+    DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog, ScriptEditor, ScriptEditorAction,
     SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
 };
 use egui_charts::ui::dialogs::{DrawingContextMenuAction, DrawingLineStyle};
@@ -133,7 +133,7 @@ pub struct DemoApp {
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
     export_dialog: ExportDialog,
-    pine_editor: PineEditor,
+    script_editor: ScriptEditor,
     date_picker: DatePicker,
 
     // Right-hand side panel.
@@ -228,7 +228,7 @@ impl DemoApp {
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
-            pine_editor: PineEditor::new(),
+            script_editor: ScriptEditor::new(),
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
             open_panel: None,
@@ -470,12 +470,12 @@ impl DemoApp {
             ExportResponse::Closed | ExportResponse::None => {}
         }
 
-        // Pine editor.
-        match self.pine_editor.show(ctx) {
-            PineEditorAction::Executed => {
-                log::info!("[demo] Pine script executed");
+        // Script editor.
+        match self.script_editor.show(ctx) {
+            ScriptEditorAction::Executed => {
+                log::info!("[demo] Script executed");
             }
-            PineEditorAction::Close | PineEditorAction::None => {}
+            ScriptEditorAction::Close | ScriptEditorAction::None => {}
         }
 
         // Date picker (opened from the bottom toolbar): jump the visible window.
@@ -1302,7 +1302,7 @@ impl DemoApp {
             self.keyboard_shortcuts.toggle();
         }
         if editor {
-            self.pine_editor.open();
+            self.script_editor.open();
         }
     }
 
