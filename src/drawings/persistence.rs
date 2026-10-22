@@ -29,8 +29,11 @@
 //! skips any drawing it cannot read
 //! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
-use crate::drawings::{ChartPoint, Drawing};
+use crate::drawings::{ChartPoint, Drawing, DrawingToolType, PositionSize};
+use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::fmt;
 
 /// A coordinate stored as a `(timestamp, price)` pair for persistence.
 ///
@@ -92,6 +95,36 @@ impl StoredDrawing {
     pub fn add_point(&mut self, point: StoredCoord) {
         self.points.push(point);
         self.modified_at = chrono::Utc::now().timestamp_millis();
+    }
+
+    /// The first field holding NaN or an infinity, which JSON cannot store.
+    fn non_finite_field(&self) -> Option<String> {
+        let d = &self.drawing;
+        let bad = |value: f64| !value.is_finite();
+        if bad(d.stroke_width.into()) {
+            return Some("stroke_width".into());
+        }
+        if bad(d.font_size.into()) {
+            return Some("font_size".into());
+        }
+        if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
+            return Some(format!("points[{i}].price"));
+        }
+        let size = match d.position_size {
+            Some(PositionSize::Quantity(value) | PositionSize::RiskAmount(value)) => [value, 0.0],
+            Some(PositionSize::RiskPercent {
+                account_size,
+                percent,
+            }) => [account_size, percent],
+            None => [0.0; 2],
+        };
+        if size.into_iter().any(bad) {
+            return Some("position_size".into());
+        }
+        let mut levels = d.fib_config.iter().flat_map(|config| &config.levels);
+        levels
+            .position(|level| bad(level.value.into()))
+            .map(|i| format!("fib_config.levels[{i}].value"))
     }
 }
 
@@ -189,19 +222,31 @@ impl DrawingStorage {
         &self.drawings
     }
 
-    /// Serialize to JSON
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+    /// Serialize to JSON, refusing a drawing with a non-finite number, which
+    /// JSON cannot store and which would otherwise be written as `null` and
+    /// lose the drawing on the next load.
+    pub fn to_json(&self) -> Result<String, SaveError> {
+        for stored in &self.drawings {
+            if let Some(field) = stored.non_finite_field() {
+                return Err(SaveError::NonFinite {
+                    id: stored.id.clone(),
+                    field,
+                });
+            }
+        }
+        serde_json::to_string_pretty(self).map_err(SaveError::Json)
     }
 
     /// Deserialize from JSON, migrating version 1 to the current format.
     ///
     /// Fails as a whole on invalid JSON, on a version this release does not
     /// know and on a missing or invalid symbol, timeframe or metadata. A
-    /// drawing that cannot be read (a missing field, a `null` written for a
-    /// non-finite number, a tool type from a newer release or a setting out of
-    /// bounds) is left out and returned as a [`SkippedDrawing`], so one bad
-    /// drawing does not lose the others. Saving the returned storage writes
+    /// drawing that cannot be read (a missing field, a `null` an earlier release
+    /// wrote for a non-finite number, a tool type from a newer release or a
+    /// setting out of bounds) is left out and returned as a [`SkippedDrawing`],
+    /// so one bad drawing does not lose the others. A drawing whose id an
+    /// earlier loaded drawing already has is skipped too, so the loaded ids are
+    /// unique and the first one in the file wins. Saving the returned storage writes
     /// only the drawings that loaded; keep the original file if the skipped
     /// ones must be recovered.
     pub fn from_json(json: &str) -> Result<(Self, Vec<SkippedDrawing>), serde_json::Error> {
@@ -219,7 +264,19 @@ impl DrawingStorage {
         let load: fn(serde_json::Value) -> Result<StoredDrawing, serde_json::Error> =
             match serde_json::from_str::<Version>(json)?.version {
                 1 => v1::load,
-                Self::CURRENT_VERSION => serde_json::from_value,
+                Self::CURRENT_VERSION => |value| {
+                    // Checked here, not in `Drawing`'s serde, which other formats share:
+                    // serde's own error lists every variant.
+                    if let Some(name) = value.pointer("/drawing/tool_type").and_then(|t| t.as_str())
+                    {
+                        DrawingToolType::deserialize(name.into_deserializer()).map_err(
+                            |_: serde::de::value::Error| {
+                                serde::de::Error::custom(format!("unknown drawing tool {name:?}"))
+                            },
+                        )?;
+                    }
+                    serde_json::from_value(value)
+                },
                 version => {
                     return Err(serde::de::Error::custom(format!(
                         "unsupported drawing storage version {version}, expected 1 to {}",
@@ -229,13 +286,25 @@ impl DrawingStorage {
             };
         let container: Container = serde_json::from_str(json)?;
         let mut skipped = Vec::new();
+        let mut ids = HashSet::new();
         let drawings = container
             .drawings
             .into_iter()
-            .filter_map(|value| {
+            .enumerate()
+            .filter_map(|(index, value)| {
                 let id = value.get("id").and_then(|id| id.as_str()).map(String::from);
                 load(value)
-                    .map_err(|error| skipped.push(SkippedDrawing { id, error }))
+                    .and_then(|drawing| {
+                        if ids.insert(drawing.id.clone()) {
+                            Ok(drawing)
+                        } else {
+                            let id = &drawing.id;
+                            Err(serde::de::Error::custom(format!(
+                                "duplicate drawing id {id:?}"
+                            )))
+                        }
+                    })
+                    .map_err(|error| skipped.push(SkippedDrawing { index, id, error }))
                     .ok()
             })
             .collect();
@@ -256,9 +325,46 @@ impl DrawingStorage {
     }
 }
 
-/// A drawing [`DrawingStorage::from_json`] left out because it could not be read.
+/// Why [`DrawingStorage::to_json`] did not save.
+#[derive(Debug)]
+pub enum SaveError {
+    /// A drawing holds NaN or an infinity, which JSON cannot store.
+    NonFinite {
+        /// The id of the drawing.
+        id: String,
+        /// The field, such as `"stroke_width"` or `"points[1].price"`.
+        field: String,
+    },
+    /// Serialization failed.
+    Json(serde_json::Error),
+}
+
+impl fmt::Display for SaveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonFinite { id, field } => {
+                write!(f, "drawing {id:?} has a non-finite {field}")
+            }
+            Self::Json(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SaveError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NonFinite { .. } => None,
+            Self::Json(error) => Some(error),
+        }
+    }
+}
+
+/// A drawing [`DrawingStorage::from_json`] left out because it could not be
+/// read or its id was already taken.
 #[derive(Debug)]
 pub struct SkippedDrawing {
+    /// The position of the entry in the file's list of drawings, counted from 0.
+    pub index: usize,
     /// The stored id, or `None` if the entry has no id or a non-string one.
     pub id: Option<String>,
     /// Why the drawing could not be read.
@@ -302,19 +408,13 @@ mod v1 {
         value: serde_json::Value,
     ) -> Result<super::StoredDrawing, serde_json::Error> {
         let stored: StoredDrawing = serde_json::from_value(value)?;
-        // Cursors share display names with drawing tools ("Arrow") and are never stored.
-        // The previous loader also accepted the names `FromStr` parses, such as "trendline".
-        let tool_type = DrawingToolType::all()
-            .iter()
-            .find(|tool| !tool.is_cursor() && tool.as_str() == stored.tool_type)
-            .copied()
-            .or_else(|| {
-                stored
-                    .tool_type
-                    .parse()
-                    .ok()
-                    .filter(|tool: &DrawingToolType| !tool.is_cursor())
-            })
+        // Cursors were never stored; the previous loader also accepted the
+        // other names `FromStr` parses, such as "trendline".
+        let tool_type = stored
+            .tool_type
+            .parse()
+            .ok()
+            .filter(|tool: &DrawingToolType| !tool.is_cursor())
             .ok_or_else(|| {
                 serde_json::Error::custom(format!("unknown drawing tool {:?}", stored.tool_type))
             })?;
@@ -474,9 +574,9 @@ mod tests {
         }
     }
 
-    /// The version 1 fixture was written by the previous release and the
-    /// version 2 fixture by this format's first implementation; they stand for
-    /// files already saved, so do not rewrite them.
+    /// The version 1 fixture was written by the previous release and stands
+    /// for files already saved, so do not rewrite it. The version 2 fixture was
+    /// written by this format's first implementation, which was never released.
     #[test]
     fn from_json_reads_saved_files_and_skips_the_drawings_it_cannot_read() {
         let v1_json = include_str!("fixtures/storage_v1.json");
@@ -529,21 +629,30 @@ mod tests {
         let second = Drawing::new(2, DrawingToolType::TrendLine);
         storage.add_drawing(drawing_to_stored(&second, bar_to_time));
         let current = storage.to_json().unwrap();
-        let unreadable_first_drawing = [
+        let unreadable = [
             (
                 current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": null", 1),
                 "invalid type: null",
                 &["2"][..],
+                0,
             ),
             (
                 current.replacen("\"rows\": 24", "\"rows\": 0", 1),
                 "volume profile settings out of bounds",
                 &["2"],
+                0,
             ),
             (
                 current.replace("FixedRangeVolumeProfile", "NewerTool"),
-                "unknown variant `NewerTool`",
+                "unknown drawing tool \"NewerTool\"",
                 &["2"],
+                0,
+            ),
+            (
+                current.replacen("\"id\": \"2\"", "\"id\": \"1\"", 1),
+                "duplicate drawing id \"1\"",
+                &["1"],
+                1,
             ),
             (
                 // "fib retracement" is a name the previous loader also accepted.
@@ -554,13 +663,15 @@ mod tests {
                 ),
                 "unknown drawing tool \"Newer Tool\"",
                 &["2", "3", "4", "5"],
+                0,
             ),
         ];
-        for (json, error, loaded) in unreadable_first_drawing {
+        for (json, error, loaded, index) in unreadable {
             let (storage, skipped) = DrawingStorage::from_json(&json).unwrap();
             let ids: Vec<_> = storage.drawings().iter().map(|d| d.id.as_str()).collect();
             assert_eq!(ids, loaded);
             assert_eq!(skipped.len(), 1);
+            assert_eq!(skipped[0].index, index);
             assert_eq!(skipped[0].id.as_deref(), Some("1"));
             assert!(skipped[0].error.to_string().contains(error), "{skipped:?}");
         }
@@ -572,6 +683,44 @@ mod tests {
             got.contains("unsupported drawing storage version 3"),
             "{got}"
         );
+    }
+
+    #[test]
+    fn to_json_refuses_non_finite_values() {
+        type Spoil = fn(&mut StoredDrawing);
+        let cases: [(Spoil, &str); 5] = [
+            (|s| s.drawing.stroke_width = f32::NAN, "stroke_width"),
+            (|s| s.drawing.font_size = f32::INFINITY, "font_size"),
+            (|s| s.points[1].price = f64::NAN, "points[1].price"),
+            (
+                |s| {
+                    s.drawing.position_size = Some(PositionSize::RiskPercent {
+                        account_size: 25_000.0,
+                        percent: f64::NEG_INFINITY,
+                    })
+                },
+                "position_size",
+            ),
+            (
+                |s| s.drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,
+                "fib_config.levels[0].value",
+            ),
+        ];
+        for (spoil, field) in cases {
+            let mut stored = drawing_to_stored(
+                &non_default_drawing(DrawingToolType::TrendLine),
+                bar_to_time,
+            );
+            spoil(&mut stored);
+            let mut storage = DrawingStorage::new("AAPL");
+            storage.add_drawing(stored);
+            match storage.to_json() {
+                Err(SaveError::NonFinite { id, field: got }) => {
+                    assert_eq!((id.as_str(), got.as_str()), ("7", field));
+                }
+                other => panic!("{field}: {other:?}"),
+            }
+        }
     }
 
     #[test]

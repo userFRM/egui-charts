@@ -314,6 +314,15 @@ mod tests {
             "fib".parse::<DrawingToolType>().unwrap(),
             DrawingToolType::FibonacciRetracement
         );
+        let unparsed: Vec<_> = DrawingToolType::all()
+            .iter()
+            .filter(|tool| {
+                let name = tool.as_str();
+                name.parse() != Ok(**tool) || name.to_uppercase().parse() != Ok(**tool)
+            })
+            .map(|tool| tool.as_str())
+            .collect();
+        assert!(unparsed.is_empty(), "{unparsed:?}");
     }
 
     #[test]

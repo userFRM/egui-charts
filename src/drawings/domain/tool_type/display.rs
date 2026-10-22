@@ -62,26 +62,34 @@ impl FromStr for DrawingToolType {
             "fibonacci" | "fib" | "fibonacci retracement" | "fib retracement" => {
                 Ok(Self::FibonacciRetracement)
             }
-            "fibonacciextension" | "fibonacci extension" | "fib extension" | "fib ext" => {
-                Ok(Self::FibonacciExtension)
-            }
+            "fibonacciextension"
+            | "fibonacci extension"
+            | "trend-based fib extension"
+            | "fib extension"
+            | "fib ext" => Ok(Self::FibonacciExtension),
             "fibonaccichannel" | "fibonacci channel" | "fib channel" => Ok(Self::FibonacciChannel),
-            "fibonaccitimezones" | "fibonacci time zones" | "fib time" | "fib time zones" => {
-                Ok(Self::FibonacciTimeZones)
-            }
-            "fibonaccispeedfan" | "fibonacci speed fan" | "fib speed fan" | "speed fan" => {
-                Ok(Self::FibonacciSpeedFan)
-            }
-            "trendbasedfibtime" | "trend based fib time" | "fib trend time" => {
-                Ok(Self::TrendBasedFibTime)
-            }
+            "fibonaccitimezones"
+            | "fibonacci time zones"
+            | "fib time zone"
+            | "fib time"
+            | "fib time zones" => Ok(Self::FibonacciTimeZones),
+            "fibonaccispeedfan"
+            | "fibonacci speed fan"
+            | "fib speed resistance fan"
+            | "fib speed fan"
+            | "speed fan" => Ok(Self::FibonacciSpeedFan),
+            "trendbasedfibtime"
+            | "trend based fib time"
+            | "trend-based fib time"
+            | "fib trend time" => Ok(Self::TrendBasedFibTime),
             "fibonaccicircles" | "fibonacci circles" | "fib circles" => Ok(Self::FibonacciCircles),
             "fibonaccispiral" | "fibonacci spiral" | "fib spiral" | "spiral" => {
                 Ok(Self::FibonacciSpiral)
             }
-            "fibonaccispeedresistancearcs" | "fibonacci speed resistance arcs" | "fib arcs" => {
-                Ok(Self::FibonacciSpeedResistanceArcs)
-            }
+            "fibonaccispeedresistancearcs"
+            | "fibonacci speed resistance arcs"
+            | "fib speed resistance arcs"
+            | "fib arcs" => Ok(Self::FibonacciSpeedResistanceArcs),
             "fibonacciwedge" | "fibonacci wedge" | "fib wedge" => Ok(Self::FibonacciWedge),
             "pitchfan" | "pitch fan" => Ok(Self::Pitchfan),
 
@@ -104,15 +112,28 @@ impl FromStr for DrawingToolType {
             }
 
             // Elliott Wave
-            "elliottimpulse" | "elliott impulse" | "impulse wave" | "impulse" => {
-                Ok(Self::ElliottImpulse)
-            }
-            "elliottcorrection" | "elliott correction" | "correction wave" | "abc" => {
-                Ok(Self::ElliottCorrection)
-            }
-            "elliotttriangle" | "elliott triangle" | "triangle wave" => Ok(Self::ElliottTriangle),
-            "elliottdoublecombo" | "elliott double combo" | "wxy" => Ok(Self::ElliottDoubleCombo),
-            "elliotttriplecombo" | "elliott triple combo" | "wxyxz" => Ok(Self::ElliottTripleCombo),
+            "elliottimpulse"
+            | "elliott impulse"
+            | "elliott impulse wave (12345)"
+            | "impulse wave"
+            | "impulse" => Ok(Self::ElliottImpulse),
+            "elliottcorrection"
+            | "elliott correction"
+            | "elliott correction wave (abc)"
+            | "correction wave"
+            | "abc" => Ok(Self::ElliottCorrection),
+            "elliotttriangle"
+            | "elliott triangle"
+            | "elliott triangle wave (abcde)"
+            | "triangle wave" => Ok(Self::ElliottTriangle),
+            "elliottdoublecombo"
+            | "elliott double combo"
+            | "elliott double combo wave (wxy)"
+            | "wxy" => Ok(Self::ElliottDoubleCombo),
+            "elliotttriplecombo"
+            | "elliott triple combo"
+            | "elliott triple combo wave (wxyxz)"
+            | "wxyxz" => Ok(Self::ElliottTripleCombo),
 
             // Cycles
             "cycliclines" | "cyclic lines" | "cyclic" => Ok(Self::CyclicLines),
@@ -196,13 +217,14 @@ impl DrawingToolType {
     /// `"Fib Retracement"`).
     ///
     /// This is the string shown in the toolbar UI and in the [`Display`](std::fmt::Display)
-    /// implementation.
+    /// implementation. Each tool has its own name, and [`FromStr`] parses it back
+    /// to the same tool, ignoring case.
     pub fn as_str(&self) -> &str {
         match self {
             // Cursors
-            Self::CrossCursor => "Cross",
-            Self::DotCursor => "Dot",
-            Self::ArrowCursor => "Arrow",
+            Self::CrossCursor => "Cross Cursor",
+            Self::DotCursor => "Dot Cursor",
+            Self::ArrowCursor => "Arrow Cursor",
             Self::Eraser => "Eraser",
 
             // Lines
