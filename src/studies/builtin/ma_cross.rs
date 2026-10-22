@@ -46,7 +46,9 @@ impl Indicator for MACross {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.slow_period {
+        // Warm up on the longer window, whichever argument it was passed as
+        let window = self.fast_period.max(self.slow_period);
+        if data.len() < window {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }
@@ -54,7 +56,7 @@ impl Indicator for MACross {
         }
 
         for i in 0..data.len() {
-            if i + 1 < self.slow_period {
+            if i + 1 < window {
                 self.values.push(IndicatorValue::None);
             } else {
                 let fast_start = i + 1 - self.fast_period;

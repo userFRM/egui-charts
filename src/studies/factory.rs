@@ -321,135 +321,136 @@ mod tests {
         }
     }
 
-    /// The factory exposes the full built-in catalogue. This pins the count so
-    /// a dropped registration (or a name collision silently overwriting an
-    /// entry) is caught immediately.
-    /// Every built-in, with each of its length parameters set to `n`.
-    fn builtins_with_length(n: usize) -> Vec<Box<dyn Indicator>> {
+    /// Every built-in, with its `k`-th length parameter set to `l(k)`.
+    fn builtins_with_lengths(l: impl Fn(usize) -> usize) -> Vec<Box<dyn Indicator>> {
         vec![
-            Box::new(SMA::new(n)),
-            Box::new(EMA::new(n)),
-            Box::new(WMA::new(n)),
-            Box::new(DEMA::new(n)),
-            Box::new(TEMA::new(n)),
-            Box::new(HMA::new(n)),
-            Box::new(ALMA::new(n, 0.85, 6.0)),
-            Box::new(VWMA::new(n)),
-            Box::new(LSMA::new(n)),
+            Box::new(SMA::new(l(0))),
+            Box::new(EMA::new(l(0))),
+            Box::new(WMA::new(l(0))),
+            Box::new(DEMA::new(l(0))),
+            Box::new(TEMA::new(l(0))),
+            Box::new(HMA::new(l(0))),
+            Box::new(ALMA::new(l(0), 0.85, 6.0)),
+            Box::new(VWMA::new(l(0))),
+            Box::new(LSMA::new(l(0))),
             Box::new(SWMA::new()),
-            Box::new(KAMA::new(n).with_periods(n, n)),
-            Box::new(SmoothedMA::new(n)),
+            Box::new(KAMA::new(l(0)).with_periods(l(1), l(2))),
+            Box::new(SmoothedMA::new(l(0))),
             Box::new(GuppyMA::new()),
-            Box::new(McGinleyDynamic::new(n)),
-            Box::new(VIDYA::new(n)),
-            Box::new(ZLEMA::new(n)),
-            Box::new(HammingMA::new(n)),
+            Box::new(McGinleyDynamic::new(l(0))),
+            Box::new(VIDYA::new(l(0))),
+            Box::new(ZLEMA::new(l(0))),
+            Box::new(HammingMA::new(l(0))),
             Box::new(MultipleMA::new()),
-            Box::new(MAChannel::new(n, 1.0)),
-            Box::new(EMACross::new(n, n)),
-            Box::new(MACross::new(n, n)),
-            Box::new(RSI::new(n)),
-            Box::new(MACD::new(n, n, n)),
-            Box::new(VolumeWeightedMACD::new(n, n, n)),
-            Box::new(Stochastic::new(n, n, n)),
-            Box::new(StochasticRSI::new(n, n, n, n)),
-            Box::new(WilliamsR::new(n)),
-            Box::new(CCI::new(n)),
-            Box::new(RateOfChange::new(n)),
-            Box::new(Aroon::new(n)),
-            Box::new(AwesomeOscillator::new(n, n)),
-            Box::new(UltimateOscillator::new(n, n, n)),
-            Box::new(ConnorsRSI::new().with_periods(n, n, n)),
-            Box::new(CoppockCurve::new().with_periods(n, n, n)),
-            Box::new(TRIX::new(n).with_signal(n)),
-            Box::new(ElderRay::new(n)),
-            Box::new(FisherTransform::new(n)),
-            Box::new(EhlersFisher::new(n)),
-            Box::new(ForceIndex::new(n)),
-            Box::new(MassIndex::new().with_periods(n, n)),
-            Box::new(DetrendedPriceOscillator::new(n)),
-            Box::new(KDJ::new(n, n, n)),
-            Box::new(PrettyGoodOscillator::new(n)),
-            Box::new(ChandeMomentumOscillator::new(n)),
-            Box::new(TrueStrengthIndex::new(n, n, n)),
-            Box::new(StochasticMomentumIndex::new(n, n, n, n)),
-            Box::new(SchaffTrendCycle::new().with_periods(n, n, n)),
-            Box::new(RelativeVigorIndex::new(n)),
-            Box::new(DoubleStochastic::new(n, n)),
-            Box::new(CenterOfGravity::new(n)),
-            Box::new(KnowSureThing::new().with_params([n; 4], [n; 4], n)),
-            Box::new(RainbowOscillator::new(n, n)),
-            Box::new(UltimateMomentum::new(n, n, n)),
-            Box::new(PriceOscillator::new(n, n, n)),
-            Box::new(VolumeOscillator::new(n, n)),
-            Box::new(BalanceOfPower::new(n)),
-            Box::new(EaseOfMovement::new(n)),
-            Box::new(ADX::new(n)),
-            Box::new(SuperTrend::new(n, 3.0)),
-            Box::new(IchimokuCloud::new(n, n, n)),
+            Box::new(MAChannel::new(l(0), 1.0)),
+            Box::new(EMACross::new(l(0), l(1))),
+            Box::new(MACross::new(l(0), l(1))),
+            Box::new(RSI::new(l(0))),
+            Box::new(MACD::new(l(0), l(1), l(2))),
+            Box::new(VolumeWeightedMACD::new(l(0), l(1), l(2))),
+            Box::new(Stochastic::new(l(0), l(1), l(2))),
+            Box::new(StochasticRSI::new(l(0), l(1), l(2), l(3))),
+            Box::new(WilliamsR::new(l(0))),
+            Box::new(CCI::new(l(0))),
+            Box::new(RateOfChange::new(l(0))),
+            Box::new(Aroon::new(l(0))),
+            Box::new(AwesomeOscillator::new(l(0), l(1))),
+            Box::new(UltimateOscillator::new(l(0), l(1), l(2))),
+            Box::new(ConnorsRSI::new().with_periods(l(0), l(1), l(2))),
+            Box::new(CoppockCurve::new().with_periods(l(0), l(1), l(2))),
+            Box::new(TRIX::new(l(0)).with_signal(l(1))),
+            Box::new(ElderRay::new(l(0))),
+            Box::new(FisherTransform::new(l(0))),
+            Box::new(EhlersFisher::new(l(0))),
+            Box::new(ForceIndex::new(l(0))),
+            Box::new(MassIndex::new().with_periods(l(0), l(1))),
+            Box::new(DetrendedPriceOscillator::new(l(0))),
+            Box::new(KDJ::new(l(0), l(1), l(2))),
+            Box::new(PrettyGoodOscillator::new(l(0))),
+            Box::new(ChandeMomentumOscillator::new(l(0))),
+            Box::new(TrueStrengthIndex::new(l(0), l(1), l(2))),
+            Box::new(StochasticMomentumIndex::new(l(0), l(1), l(2), l(3))),
+            Box::new(SchaffTrendCycle::new().with_periods(l(0), l(1), l(2))),
+            Box::new(RelativeVigorIndex::new(l(0))),
+            Box::new(DoubleStochastic::new(l(0), l(1))),
+            Box::new(CenterOfGravity::new(l(0))),
+            Box::new(KnowSureThing::new().with_params(
+                [l(0), l(1), l(2), l(3)],
+                [l(4), l(5), l(6), l(7)],
+                l(8),
+            )),
+            Box::new(RainbowOscillator::new(l(0), l(1))),
+            Box::new(UltimateMomentum::new(l(0), l(1), l(2))),
+            Box::new(PriceOscillator::new(l(0), l(1), l(2))),
+            Box::new(VolumeOscillator::new(l(0), l(1))),
+            Box::new(BalanceOfPower::new(l(0))),
+            Box::new(EaseOfMovement::new(l(0))),
+            Box::new(ADX::new(l(0))),
+            Box::new(SuperTrend::new(l(0), 3.0)),
+            Box::new(IchimokuCloud::new(l(0), l(1), l(2))),
             Box::new(ParabolicSAR::new(0.02, 0.02, 0.2)),
-            Box::new(DirectionalMovement::new(n)),
-            Box::new(VortexIndicator::new(n)),
+            Box::new(DirectionalMovement::new(l(0))),
+            Box::new(VortexIndicator::new(l(0))),
             Box::new(
                 SqueezeMomentum::new()
-                    .with_bb_params(n, 2.0)
-                    .with_kc_params(n, 1.5),
+                    .with_bb_params(l(0), 2.0)
+                    .with_kc_params(l(1), 1.5),
             ),
-            Box::new(TrendIntensityIndex::new(n)),
-            Box::new(TrendDetectionIndex::new(n)),
-            Box::new(Qstick::new(n)),
-            Box::new(ChoppinessIndex::new(n)),
-            Box::new(ElderImpulseSystem::new(n, n, n, n)),
-            Box::new(BollingerBands::new(n, 2.0)),
-            Box::new(BollingerBandsWidth::new(n, 2.0)),
-            Box::new(ATR::new(n)),
+            Box::new(TrendIntensityIndex::new(l(0))),
+            Box::new(TrendDetectionIndex::new(l(0))),
+            Box::new(Qstick::new(l(0))),
+            Box::new(ChoppinessIndex::new(l(0))),
+            Box::new(ElderImpulseSystem::new(l(0), l(1), l(2), l(3))),
+            Box::new(BollingerBands::new(l(0), 2.0)),
+            Box::new(BollingerBandsWidth::new(l(0), 2.0)),
+            Box::new(ATR::new(l(0))),
             Box::new(TrueRange::new()),
-            Box::new(KeltnerChannels::new(n, n, 2.0)),
-            Box::new(DonchianChannels::new(n)),
-            Box::new(StandardDeviation::new(n)),
-            Box::new(HistoricalVolatility::new(n)),
-            Box::new(ChaikinVolatility::new(n, n)),
-            Box::new(ChandelierExit::new(n, 3.0)),
-            Box::new(AccelerationBands::new(n, 4.0)),
-            Box::new(Envelopes::new(n, 2.5, "SMA")),
-            Box::new(PercentB::new(n, 2.0)),
-            Box::new(CloseToCloseVol::new(n)),
-            Box::new(OhlcVolatility::new(n)),
-            Box::new(VolatilityIndex::new(n)),
-            Box::new(ZeroTrendVol::new(n)),
-            Box::new(CommoditySelectionIndex::new(n, 1.0)),
+            Box::new(KeltnerChannels::new(l(0), l(1), 2.0)),
+            Box::new(DonchianChannels::new(l(0))),
+            Box::new(StandardDeviation::new(l(0))),
+            Box::new(HistoricalVolatility::new(l(0))),
+            Box::new(ChaikinVolatility::new(l(0), l(1))),
+            Box::new(ChandelierExit::new(l(0), 3.0)),
+            Box::new(AccelerationBands::new(l(0), 4.0)),
+            Box::new(Envelopes::new(l(0), 2.5, "SMA")),
+            Box::new(PercentB::new(l(0), 2.0)),
+            Box::new(CloseToCloseVol::new(l(0))),
+            Box::new(OhlcVolatility::new(l(0))),
+            Box::new(VolatilityIndex::new(l(0))),
+            Box::new(ZeroTrendVol::new(l(0))),
+            Box::new(CommoditySelectionIndex::new(l(0), 1.0)),
             Box::new(OnBalanceVolume::new()),
             Box::new(VolumeWeightedAvgPrice::new()),
             Box::new(AnchoredVWAP::new(0)),
-            Box::new(MoneyFlowIndex::new(n)),
+            Box::new(MoneyFlowIndex::new(l(0))),
             Box::new(AccumulationDistribution::new()),
-            Box::new(ChaikinMoneyFlow::new(n)),
-            Box::new(VolumeRateOfChange::new(n)),
-            Box::new(KlingerOscillator::new().with_periods(n, n, n)),
+            Box::new(ChaikinMoneyFlow::new(l(0))),
+            Box::new(VolumeRateOfChange::new(l(0))),
+            Box::new(KlingerOscillator::new().with_periods(l(0), l(1), l(2))),
             Box::new(CVD::new()),
-            Box::new(VolProfileVisible::new(n)),
-            Box::new(VolProfileFixed::new(n)),
+            Box::new(VolProfileVisible::new(l(0))),
+            Box::new(VolProfileFixed::new(l(0))),
             Box::new(NetVolume::new()),
             Box::new(VolumePriceTrend::new()),
-            Box::new(PriceVolumeTrendStudy::new(n)),
+            Box::new(PriceVolumeTrendStudy::new(l(0))),
             Box::new(NegativeVolumeIndex::new()),
             Box::new(PositiveVolumeIndex::new()),
             Box::new(WilliamsAD::new()),
             Box::new(MarketFacilitationIndex::new()),
-            Box::new(IcebergDetector::new(n)),
-            Box::new(StopRunIndicator::new(n).with_reversal_window(n)),
-            Box::new(LiquidityTracker::new(n)),
-            Box::new(PivotPoints::new(n)),
-            Box::new(ZigZag::new(5.0, n)),
-            Box::new(PriceChannel::new(n)),
-            Box::new(CorrelationCoefficient::new(n)),
-            Box::new(CorrelationLogReturns::new(n)),
-            Box::new(LinearRegression::new(n)),
-            Box::new(LinearRegressionSlope::new(n)),
-            Box::new(StandardError::new(n)),
-            Box::new(StandardErrorBands::new(n, 2.0)),
-            Box::new(RankCorrelationIndex::new(n)),
-            Box::new(MajorityRule::new(n)),
+            Box::new(IcebergDetector::new(l(0))),
+            Box::new(StopRunIndicator::new(l(0)).with_reversal_window(l(1))),
+            Box::new(LiquidityTracker::new(l(0))),
+            Box::new(PivotPoints::new(l(0))),
+            Box::new(ZigZag::new(5.0, l(0))),
+            Box::new(PriceChannel::new(l(0))),
+            Box::new(CorrelationCoefficient::new(l(0))),
+            Box::new(CorrelationLogReturns::new(l(0))),
+            Box::new(LinearRegression::new(l(0))),
+            Box::new(LinearRegressionSlope::new(l(0))),
+            Box::new(StandardError::new(l(0))),
+            Box::new(StandardErrorBands::new(l(0), 2.0)),
+            Box::new(RankCorrelationIndex::new(l(0))),
+            Box::new(MajorityRule::new(l(0))),
             Box::new(AccumulationSwingIndex::new(0.5)),
             Box::new(TypicalPrice::new()),
             Box::new(MedianPrice::new()),
@@ -458,7 +459,7 @@ mod tests {
             Box::new(HLC3::new()),
             Box::new(OHLC4::new()),
             Box::new(AdvanceDeclineLine::new()),
-            Box::new(Week52HighLow::new(n)),
+            Box::new(Week52HighLow::new(l(0))),
             Box::new(SpreadStudy::new()),
             Box::new(RatioStudy::new()),
         ]
@@ -529,7 +530,7 @@ mod tests {
         ];
 
         let factory = IndicatorFactory::new();
-        let mut covered: Vec<String> = builtins_with_length(1)
+        let mut covered: Vec<String> = builtins_with_lengths(|_| 1)
             .iter()
             .map(|s| s.name().to_string())
             .collect();
@@ -538,9 +539,20 @@ mod tests {
         registered.sort();
         assert_eq!(covered, registered, "the table must cover every built-in");
 
+        // Every length equal, then each length alone huge, then each alone longer than the rest
+        // (a swapped fast/slow pair, for example).
+        let mut lengths: Vec<[usize; 9]> = vec![[0; 9], [1; 9], [usize::MAX; 9]];
+        for k in 0..9 {
+            let mut huge = [1; 9];
+            huge[k] = usize::MAX;
+            let mut longer = [20; 9];
+            longer[k] = 50;
+            lengths.extend([huge, longer]);
+        }
+
         let mut failures = Vec::new();
-        for n in [0, 1, usize::MAX] {
-            for mut study in builtins_with_length(n) {
+        for n in lengths {
+            for mut study in builtins_with_lengths(|k| n[k]) {
                 for (label, bars) in &datasets {
                     let len = catch_unwind(AssertUnwindSafe(|| {
                         study.calculate(bars);
@@ -548,10 +560,10 @@ mod tests {
                     }));
                     match len {
                         Err(_) => {
-                            failures.push(format!("{}({n}) on {label}: panicked", study.name()))
+                            failures.push(format!("{}{n:?} on {label}: panicked", study.name()))
                         }
                         Ok(len) if len != bars.len() => failures.push(format!(
-                            "{}({n}) on {label}: {len} values for {} bars",
+                            "{}{n:?} on {label}: {len} values for {} bars",
                             study.name(),
                             bars.len()
                         )),
@@ -560,9 +572,9 @@ mod tests {
                 }
             }
         }
-        for (mut zero, mut one) in builtins_with_length(0)
+        for (mut zero, mut one) in builtins_with_lengths(|_| 0)
             .into_iter()
-            .zip(builtins_with_length(1))
+            .zip(builtins_with_lengths(|_| 1))
         {
             if catch_unwind(AssertUnwindSafe(|| {
                 zero.calculate(&normal);
@@ -577,6 +589,9 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// The factory exposes the full built-in catalogue. This pins the count so
+    /// a dropped registration (or a name collision silently overwriting an
+    /// entry) is caught immediately.
     #[test]
     fn factory_exposes_full_builtin_catalogue() {
         let factory = IndicatorFactory::new();

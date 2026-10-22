@@ -43,7 +43,7 @@ impl Indicator for VolProfileFixed {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.is_empty() || self.row_count == 0 {
+        if data.is_empty() {
             return;
         }
         if self.row_count > super::MAX_PROFILE_ROWS {

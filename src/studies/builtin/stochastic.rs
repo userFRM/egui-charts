@@ -165,7 +165,12 @@ impl Indicator for Stochastic {
         // Calculate %D (SMA of smoothed %K)
         let mut d_values = Vec::with_capacity(data.len());
         for i in 0..data.len() {
-            if i < self.k_period + self.k_smooth + self.d_period - 3 || smooth_k[i].is_nan() {
+            let warmup = self
+                .k_period
+                .saturating_add(self.k_smooth)
+                .saturating_add(self.d_period)
+                - 3;
+            if i < warmup || smooth_k[i].is_nan() {
                 d_values.push(f64::NAN);
             } else {
                 let start = i + 1 - self.d_period;

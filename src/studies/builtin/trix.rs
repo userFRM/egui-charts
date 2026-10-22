@@ -46,6 +46,9 @@ impl TRIX {
         if data.is_empty() || period == 0 {
             return Vec::new();
         }
+        if data.len() < period {
+            return vec![f64::NAN; data.len()];
+        }
 
         let multiplier = 2.0 / (period as f64 + 1.0);
         let mut ema = Vec::with_capacity(data.len());

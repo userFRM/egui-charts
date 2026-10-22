@@ -91,7 +91,7 @@ impl Indicator for AwesomeOscillator {
             return;
         }
 
-        let min_period = self.slow_period;
+        let min_period = self.slow_period.max(self.fast_period);
 
         // Calculate median prices (HL/2)
         let median_prices: Vec<f64> = data.iter().map(|b| (b.high + b.low) / 2.0).collect();
