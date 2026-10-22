@@ -211,6 +211,8 @@ pub struct PriceScale {
     options: PriceScaleOptions,
     /// Visible range in scale units
     range: PriceRange,
+    /// The transform `range` is in, from the last `rebase`
+    transform: PriceTransform,
     /// The user zoomed or set the range, so autoscale leaves it alone until reset.
     manual: bool,
 }
@@ -221,6 +223,7 @@ impl PriceScale {
         Self {
             options,
             range: PriceRange::new(0.0, 100.0),
+            transform: PriceTransform::default(),
             manual: false,
         }
     }
@@ -243,6 +246,23 @@ impl PriceScale {
         self.range
     }
 
+    /// Returns the transform the range is in.
+    pub(crate) fn transform(&self) -> PriceTransform {
+        self.transform
+    }
+
+    /// Puts the range in the units of `transform`, this frame's transform.
+    ///
+    /// A range scaled by hand keeps showing the same prices: the relative modes
+    /// measure from a base that moves as the chart scrolls.
+    pub(crate) fn rebase(&mut self, transform: PriceTransform) {
+        let old = std::mem::replace(&mut self.transform, transform);
+        if self.manual && old != transform {
+            let rebased = |value| transform.to_scale(old.to_price(value));
+            self.range = PriceRange::new(rebased(self.range.min), rebased(self.range.max));
+        }
+    }
+
     /// Returns `true` when the user has scaled by hand.
     pub fn is_manual(&self) -> bool {
         self.manual
@@ -260,7 +280,10 @@ impl PriceScale {
         self.range = PriceRange::new(min - span * margins.bottom, max + span * margins.top);
     }
 
-    /// Shows `min..max` (scale units) and switches to manual.
+    /// Shows `min..max` and switches to manual.
+    ///
+    /// The bounds are in the units of the transform the last fit returned
+    /// ([`ChartState::fit_price_scale`](crate::model::ChartState::fit_price_scale)).
     pub fn set_range(&mut self, min: f64, max: f64) {
         self.range = PriceRange::new(min, max);
         self.manual = true;
@@ -268,6 +291,7 @@ impl PriceScale {
 
     /// Scales the range by `factor` (above 1 zooms out) around the scale value
     /// `anchor`, which keeps its position on screen, and switches to manual.
+    /// `anchor` is in the units of the transform the last fit returned.
     ///
     /// One call changes the span by at most 20 times either way. Zooming in stops at a
     /// span of 1e-6 of the larger bound's magnitude (1e-6 when both bounds are 0), and

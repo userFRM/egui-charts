@@ -28,7 +28,7 @@ pub struct ZoomState {
     pub bar_spacing: f32,
     /// Right offset in bars from the chart edge.
     pub right_offset: f32,
-    /// Manual price range in scale units, or `None` when auto-scaled.
+    /// Manual price range in prices, or `None` when auto-scaled.
     pub price_range: Option<(f64, f64)>,
 }
 
@@ -262,11 +262,14 @@ impl ChartState {
             mode,
             PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
         );
-        // Without a usable base there is no percentage, so such a frame shows prices.
-        let transform = if relative && !(base.is_finite() && base != 0.0) {
-            PriceTransform::default()
-        } else {
+        // Without a usable base there is no percentage, so such a frame shows prices. The other
+        // modes ignore the base, so a scroll does not change their transform.
+        let transform = if !relative {
+            PriceTransform { mode, base: 0.0 }
+        } else if base.is_finite() && base != 0.0 {
             PriceTransform { mode, base }
+        } else {
+            PriceTransform::default()
         };
         let (min, max) = visible
             .iter()
@@ -275,19 +278,21 @@ impl ChartState {
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
                 (min.min(value), max.max(value))
             });
+        self.price_scale.rebase(transform);
         self.price_scale.autoscale(min, max);
         transform
     }
 
     /// Save current zoom state to history
     pub fn push_zoom_state(&mut self) {
+        let (range, t) = (self.price_scale.range(), self.price_scale.transform());
         let curr_state = ZoomState {
             bar_spacing: self.time_scale.bar_spacing(),
             right_offset: self.time_scale.right_offset(),
             price_range: self
                 .price_scale
                 .is_manual()
-                .then(|| (self.price_scale.range().min, self.price_scale.range().max)),
+                .then(|| (t.to_price(range.min), t.to_price(range.max))),
         };
         self.zoom_history.push(curr_state);
     }
@@ -297,9 +302,17 @@ impl ChartState {
         if let Some(state) = self.zoom_history.pop() {
             self.time_scale.set_bar_spacing(state.bar_spacing);
             self.time_scale.set_right_offset(state.right_offset);
-            match state.price_range {
-                Some((min, max)) => self.price_scale.set_range(min, max),
-                None => self.price_scale.reset(),
+            // In the units of the scale's transform; the next fit rebases them. A price that
+            // has no finite value there (0 on a logarithmic scale) resets the range instead.
+            let t = self.price_scale.transform();
+            let range = state
+                .price_range
+                .map(|(min, max)| (t.to_scale(min), t.to_scale(max)));
+            match range {
+                Some((min, max)) if min.is_finite() && max.is_finite() => {
+                    self.price_scale.set_range(min, max)
+                }
+                _ => self.price_scale.reset(),
             }
             true
         } else {
@@ -344,5 +357,54 @@ mod tests {
         assert!(min < 100.0 && 100.0 < max, "({min}, {max})");
         // At least one cent at a price of 100, at most the price itself.
         assert!((0.01..=100.0).contains(&(max - min)), "({min}, {max})");
+    }
+
+    /// A range scaled by hand keeps every price at its pixel while the chart scrolls,
+    /// and the zoom history restores the prices it saved, although the first visible
+    /// close the relative modes are measured from changes with the scroll.
+    #[test]
+    fn manual_range_keeps_its_prices_while_the_base_moves() {
+        for mode in [PriceScaleMode::Percentage, PriceScaleMode::IndexedTo100] {
+            let bars = (0..300)
+                .map(|i| {
+                    let t = Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap();
+                    let close = 100.0 + i as f64;
+                    Bar::new(t, close, close, close, close, 1.0)
+                })
+                .collect();
+            let mut state = ChartState::new(BarData::from_bars(bars));
+            state.time_scale_mut().set_width(800.0);
+            state.price_scale_mut().options_mut().mode = mode;
+            let y_of_380 = |state: &mut ChartState| {
+                let transform = state.fit_price_scale();
+                let map = state.price_scale().map(transform, 0.0, 500.0);
+                map.price_to_y(380.0)
+            };
+            let zoom_in = |state: &mut ChartState| {
+                let range = state.price_scale().range();
+                let centre = (range.min + range.max) / 2.0;
+                state.price_scale_mut().zoom(0.9, centre);
+            };
+            y_of_380(&mut state);
+            zoom_in(&mut state);
+            let y = y_of_380(&mut state);
+            state.push_zoom_state();
+
+            let offset = state.time_scale().right_offset();
+            state.time_scale_mut().set_right_offset(offset - 10.0);
+            let panned = y_of_380(&mut state);
+            assert!(
+                (panned - y).abs() < 0.5,
+                "{mode:?} panned: {panned}, was {y}"
+            );
+
+            zoom_in(&mut state);
+            state.pop_zoom_state();
+            let restored = y_of_380(&mut state);
+            assert!(
+                (restored - y).abs() < 0.5,
+                "{mode:?} restored: {restored}, was {y}"
+            );
+        }
     }
 }
