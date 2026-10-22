@@ -291,11 +291,10 @@ pub fn render_magnifier_tooltip(
     // Calculate visible range in the magnifier
     // The magnifier shows a zoomed view centered on the hover position
     let src_width = size / zoom;
-    let src_height = size / zoom;
 
-    // Prices at the bottom and top edges of the magnified area
-    let mag_min_price = price_scale.y_to_price(hover_pos.y + src_height / 2.0);
-    let mag_max_price = price_scale.y_to_price(hover_pos.y - src_height / 2.0);
+    // Enlarges the chart about the cursor, so prices land where the chart's own scale puts them.
+    let price_to_mag_y =
+        |price: f64| center.y + (price_scale.price_to_y(price) - hover_pos.y) * zoom;
 
     // Calculate bar indices visible in magnifier. Degenerate bar spacing maps
     // every pixel onto the same bar rather than dividing by zero.
@@ -338,12 +337,6 @@ pub fn render_magnifier_tooltip(
         if bar_x < clip_rect.min.x - candle_width || bar_x > clip_rect.max.x + candle_width {
             continue;
         }
-
-        // Map prices to magnifier coords
-        let price_to_mag_y = |price: f64| -> f32 {
-            let ratio = ((price - mag_min_price) / (mag_max_price - mag_min_price)) as f32;
-            center.y + radius - ratio * size
-        };
 
         let open_y = price_to_mag_y(bar.open);
         let close_y = price_to_mag_y(bar.close);
@@ -411,4 +404,58 @@ pub fn render_magnifier_tooltip(
         FontId::proportional(typography::TINY),
         DESIGN_TOKENS.semantic.extended.disabled,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scales::{PriceRange, PriceScaleMode, PriceTransform};
+    use chrono::{TimeZone, Utc};
+
+    /// The lens magnifies the chart about the cursor: on a logarithmic scale a wick
+    /// from half to twice the price under the cursor is centred on the lens.
+    #[test]
+    fn magnifier_centres_the_cursor_price_on_a_log_scale() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
+        let transform = PriceTransform {
+            mode: PriceScaleMode::Logarithmic,
+            base: 0.0,
+        };
+        let range = PriceRange::new(10f64.ln(), 10_000f64.ln());
+        let map = PriceMap::new(transform, range, 0.0, 500.0, false);
+        let hover = Pos2::new(400.0, 250.0);
+        let p = map.y_to_price(hover.y);
+        let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let bars = vec![Bar::new(t, p, p * 2.0, p / 2.0, p, 1.0); 80];
+        let coords = ChartMapping::new(rect, 10.0, 0, 79, 0.0, map);
+        let options = TooltipOptions::default();
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            let painter = Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
+            render_magnifier_tooltip(
+                &RenderContext::new(&painter, rect),
+                hover,
+                &bars[0],
+                &options,
+                &map,
+                &coords,
+                &bars,
+            );
+        });
+        // Longer than the lens crosshair, so only a candle wick matches.
+        let wick = output
+            .shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::LineSegment { points, .. }
+                    if points[0].x == points[1].x && (points[0].y - points[1].y).abs() > 50.0 =>
+                {
+                    Some(*points)
+                }
+                _ => None,
+            })
+            .expect("a wick in the lens");
+        output.drop_without_applying_deltas();
+        let mid = (wick[0].y + wick[1].y) / 2.0;
+        assert!((mid - hover.y).abs() < 0.5, "wick {wick:?}");
+    }
 }
