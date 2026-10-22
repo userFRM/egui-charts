@@ -46,9 +46,25 @@
 //! | [`TimescaleMark`]        | Event marker on the time axis                     |
 
 pub use crate::model::Bar;
+use crate::model::Instrument;
 pub use crate::model::Timeframe;
+use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
+use std::time::Duration;
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
+)]
+pub(crate) mod inbox;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
+)]
+pub(crate) mod merge;
+
+pub use inbox::{Reply, Sink};
 
 /// Error types for data source operations.
 ///
@@ -379,4 +395,160 @@ pub trait DataSource: Send {
     fn supports_server_time(&self) -> bool {
         false
     }
+}
+
+/// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait MaybeSend: Send + Sync {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send + Sync + ?Sized> MaybeSend for T {}
+/// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.
+#[cfg(target_arch = "wasm32")]
+pub trait MaybeSend {}
+#[cfg(target_arch = "wasm32")]
+impl<T: ?Sized> MaybeSend for T {}
+
+/// Source of instrument metadata, history and live updates.
+///
+/// Methods are called on the UI thread and must return promptly. Do the work elsewhere and answer
+/// through the [`Reply`] or [`Sink`] you were given, from any thread, runtime or browser task.
+///
+/// ```
+/// use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
+/// use egui_charts::model::Bar;
+///
+/// /// Bars held in memory, oldest first. Answers inline, without live updates.
+/// struct InMemory(Vec<Bar>);
+///
+/// impl Datafeed for InMemory {
+///     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+///         let before = |bar: &Bar| request.before.is_none_or(|before| bar.time < before);
+///         let end = self.0.partition_point(before);
+///         let start = end.saturating_sub(request.count);
+///         reply.send(Ok(HistoryPage {
+///             bars: self.0[start..end].to_vec(),
+///             end_of_history: start == 0,
+///         }));
+///     }
+/// }
+/// ```
+pub trait Datafeed: MaybeSend + 'static {
+    /// Describes `symbol`. The default reports [`Instrument::new`] of the symbol.
+    fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+        reply.send(Ok(Instrument::new(symbol)));
+    }
+
+    /// Up to `request.count` bars that open before `request.before`, or the latest bars when it
+    /// is `None`.
+    fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>);
+
+    /// Starts pushing live updates into `subscription.sink` until `unsubscribe`. The default does
+    /// nothing, which gives a history-only chart.
+    fn subscribe(&self, subscription: Subscription) {
+        let _ = subscription;
+    }
+
+    /// Stops what `subscribe` started. Pushes that arrive afterwards are ignored. The default does
+    /// nothing; a producer can then poll [`Sink::is_active`] to know when to stop.
+    fn unsubscribe(&self, id: SubscriptionId) {
+        let _ = id;
+    }
+}
+
+/// A request for one page of history.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HistoryRequest {
+    pub symbol: String,
+    pub timeframe: Timeframe,
+    /// Only bars that open strictly before this instant. `None` asks for the latest bars.
+    pub before: Option<DateTime<Utc>>,
+    /// Bars wanted. Fewer is fine; the chart asks again as the user scrolls back.
+    pub count: usize,
+}
+
+/// One page of history. A page without bars ends scroll-back like `end_of_history` does, so a
+/// feed that pages by time window must skip empty windows such as weekends itself.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HistoryPage {
+    /// Any order, each stamped with its open or any instant inside it: a bar stamped with its
+    /// close time lands in the next bar. The chart sorts, deduplicates and validates them.
+    pub bars: Vec<Bar>,
+    /// Nothing exists before the oldest returned bar (or before `request.before` when `bars` is
+    /// empty).
+    pub end_of_history: bool,
+}
+
+/// A live subscription: push its updates into `sink` until [`Datafeed::unsubscribe`] gets `id`.
+#[non_exhaustive]
+pub struct Subscription {
+    pub id: SubscriptionId,
+    pub symbol: String,
+    pub timeframe: Timeframe,
+    pub sink: Sink,
+}
+
+/// Identifies a subscription. Unique within the process, so one feed can serve many charts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SubscriptionId(u64);
+
+/// Connection state of a live subscription.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FeedStatus {
+    Connecting,
+    Live,
+    Disconnected,
+}
+
+/// Why a feed could not answer.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum FeedError {
+    /// The feed does not offer this request.
+    NotSupported,
+    SymbolNotFound(String),
+    RateLimited {
+        retry_after: Option<Duration>,
+    },
+    Network(String),
+    InvalidData(String),
+    /// The feed dropped a [`Reply`] without answering.
+    Unanswered,
+    Other(String),
+}
+
+impl fmt::Display for FeedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotSupported => f.write_str("not supported by the feed"),
+            Self::SymbolNotFound(symbol) => write!(f, "symbol not found: {symbol}"),
+            Self::RateLimited {
+                retry_after: Some(after),
+            } => write!(f, "rate limited, retry after {after:?}"),
+            Self::RateLimited { retry_after: None } => f.write_str("rate limited"),
+            Self::Network(message) => write!(f, "network error: {message}"),
+            Self::InvalidData(message) => write!(f, "invalid data: {message}"),
+            Self::Unanswered => f.write_str("no answer from the feed"),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl Error for FeedError {}
+
+/// What the chart knows about one series' feed, for the application to show or log.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct FeedState {
+    /// Last status pushed by the feed. `None` without a live subscription.
+    pub status: Option<FeedStatus>,
+    pub loading_history: bool,
+    pub history_complete: bool,
+    pub last_error: Option<FeedError>,
+    /// Bars and ticks dropped by validation: non-finite values, a high or low on the wrong side of
+    /// the open and close, negative volume.
+    pub rejected_bars: u64,
+    /// Trades older than the forming bar, dropped.
+    pub late_ticks: u64,
 }

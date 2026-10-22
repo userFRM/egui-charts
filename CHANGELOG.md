@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- `data::Datafeed`, a callback contract for market data: a feed answers instrument and history requests once through a `data::Reply` (dropping it unanswered reports `FeedError::Unanswered`) and pushes live bars, trades, status and errors through a per-subscription `data::Sink`, from any thread, runtime or browser task. Pushes coalesce on arrival into one bar per time slot, so memory follows the bars that changed rather than the update rate. Supporting types: `HistoryRequest`, `HistoryPage`, `Subscription`, `SubscriptionId`, `FeedStatus`, `FeedError`, `FeedState` and `MaybeSend` in `data`, `Instrument` and `BarClock` in `model`. Charts do not consume it yet; `DataSource` is unchanged.
+- `model::Bar` implements `PartialEq`.
+
 ### Fixed
 
 - The crate builds warning-free on current stable Rust: float literals that relied on the deprecated `f32` inference fallback are now explicitly typed.

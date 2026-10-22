@@ -27,7 +27,7 @@ use std::fmt;
 ///
 /// assert!(bar.is_bullish()); // close > open
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bar {
     /// Timestamp of the bar
     pub time: DateTime<Utc>,

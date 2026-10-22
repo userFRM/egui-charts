@@ -14,9 +14,11 @@ mod annotations;
 pub mod bar;
 mod chart_type;
 mod chartstate;
+mod clock;
 mod color;
 mod date_range;
 pub mod enums;
+mod instrument;
 pub mod kagi;
 pub mod line_break;
 mod markers;
@@ -37,8 +39,10 @@ pub(crate) use bar::SeriesFingerprint;
 pub use bar::{Bar, BarData};
 pub use chart_type::{ChartType, ChartTypeCategory, ChartTypeParams};
 pub use chartstate::{ChartState, ZoomState};
+pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
+pub use instrument::Instrument;
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
