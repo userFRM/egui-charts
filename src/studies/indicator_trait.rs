@@ -72,6 +72,24 @@ pub trait Indicator: Send {
     /// any previous state so the indicator can be recalculated on new data.
     fn calculate(&mut self, data: &[Bar]);
 
+    /// Bring [`values`](Indicator::values) up to date after `data[from..]` changed or grew,
+    /// given that `data[..from]` is unchanged since the previous call. The result equals
+    /// [`calculate`](Indicator::calculate) on the same data. After bars are prepended pass 0;
+    /// after bars are removed from the end pass the new length.
+    ///
+    /// The default recomputes everything.
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let _ = from;
+        self.calculate(data);
+    }
+
+    /// Whether a last-bar update or an append through [`update`](Indicator::update) costs
+    /// time independent of the series length. An earlier change still recomputes in full.
+    /// Defaults to `false`.
+    fn is_incremental(&self) -> bool {
+        false
+    }
+
     /// Return the slice of computed values (one per input bar).
     ///
     /// The length of the returned slice matches the length of the `data`

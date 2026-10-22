@@ -60,6 +60,7 @@ mod custom;
 pub mod factory;
 mod indicator_trait;
 mod palette;
+mod stepper;
 
 pub use builtin::*;
 pub use custom::CustomIndicator;
@@ -137,6 +138,17 @@ impl IndicatorRegistry {
     pub fn calculate_all(&mut self, data: &[Bar]) {
         for indicator in &mut self.indicators {
             indicator.calculate(data);
+        }
+    }
+
+    /// Bring every indicator up to date after `data[from..]` changed or grew,
+    /// given that `data[..from]` is unchanged since the previous call.
+    ///
+    /// Calls [`Indicator::update`] on each one; studies that are not
+    /// incremental recompute in full.
+    pub fn update_all(&mut self, data: &[Bar], from: usize) {
+        for indicator in &mut self.indicators {
+            indicator.update(data, from);
         }
     }
 

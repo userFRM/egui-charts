@@ -39,6 +39,7 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -51,6 +52,8 @@ use egui::Color32;
 pub struct EMA {
     period: usize,
     values: Vec<IndicatorValue>,
+    /// The EMA of the bars stepped so far, `None` before the first bar.
+    stepper: Stepper<Option<f64>>,
     color: Color32,
     visible: bool,
 }
@@ -64,6 +67,7 @@ impl EMA {
         Self {
             period: period.max(1),
             values: Vec::new(),
+            stepper: Stepper::default(),
             color: DESIGN_TOKENS.semantic.indicators.ema, // Blue
             visible: true,
         }
@@ -93,23 +97,24 @@ impl Indicator for EMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.is_empty() {
-            return;
-        }
-
+    fn update(&mut self, data: &[Bar], from: usize) {
         let multiplier = 2.0 / (self.period as f64 + 1.0);
+        self.stepper.run(data, from, &mut self.values, |ema, bar| {
+            // Seed with the first close, then smooth from the second bar onward.
+            let next = match *ema {
+                None => bar.close,
+                Some(prev) => (bar.close - prev) * multiplier + prev,
+            };
+            *ema = Some(next);
+            IndicatorValue::Single(next)
+        });
+    }
 
-        // Seed the series with the first close, then smooth from the second bar
-        // onward. This keeps values[0] == close[0] and emits one value per bar.
-        let mut ema = data[0].close;
-        self.values.push(IndicatorValue::Single(ema));
-
-        for bar in data.iter().skip(1) {
-            ema = (bar.close - ema) * multiplier + ema;
-            self.values.push(IndicatorValue::Single(ema));
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -168,41 +173,35 @@ mod tests {
             .collect()
     }
 
-    /// The documented seeding convention: the first output equals the first
-    /// close, there is no `None` warmup, and the series is one value per bar.
+    /// Reference values from pandas 3.0.2, `Series.ewm(span=4, adjust=False).mean()`,
+    /// which seeds with the first value and applies `alpha = 2 / (span + 1)`. The
+    /// closes are the first ten of the StockCharts ChartSchool EMA worksheet.
     #[test]
-    fn first_value_equals_first_close() {
-        let closes = [10.0, 11.0, 12.0, 13.0, 14.0];
-        let bars = bars_from_closes(&closes);
-
-        let mut ema = EMA::new(3);
-        ema.calculate(&bars);
-
-        assert_eq!(ema.values().len(), bars.len());
-        match ema.values()[0] {
-            IndicatorValue::Single(v) => assert!((v - closes[0]).abs() < 1e-12),
-            _ => panic!("first EMA value must be the seeded first close"),
-        }
-    }
-
-    /// The recursive step must match the documented formula exactly from the
-    /// second bar onward, proving bar 0 is not re-smoothed.
-    #[test]
-    fn recursion_matches_formula() {
-        let closes = [10.0, 20.0, 30.0];
+    fn matches_pandas_reference() {
+        let closes = [
+            22.27, 22.19, 22.08, 22.17, 22.18, 22.13, 22.23, 22.43, 22.24, 22.29,
+        ];
+        let expected = [
+            22.27,
+            22.238,
+            22.1748,
+            22.17288,
+            22.175728,
+            22.1574368,
+            22.18646208,
+            22.283877248,
+            22.2663263488,
+            22.27579580928,
+        ];
         let bars = bars_from_closes(&closes);
 
         let mut ema = EMA::new(4);
         ema.calculate(&bars);
 
-        let mult = 2.0 / (4.0 + 1.0);
-        let mut expected = closes[0];
-        for (i, &c) in closes.iter().enumerate() {
-            if i > 0 {
-                expected = (c - expected) * mult + expected;
-            }
-            match ema.values()[i] {
-                IndicatorValue::Single(v) => assert!((v - expected).abs() < 1e-12),
+        assert_eq!(ema.values().len(), expected.len());
+        for (i, (v, e)) in ema.values().iter().zip(expected).enumerate() {
+            match v {
+                IndicatorValue::Single(v) => assert!((v - e).abs() < 1e-9, "bar {i}: {v} != {e}"),
                 _ => panic!("bar {i} must carry a value"),
             }
         }

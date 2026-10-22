@@ -32,9 +32,11 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
+use std::collections::VecDeque;
 
 /// Simple Moving Average indicator.
 ///
@@ -44,6 +46,8 @@ use egui::Color32;
 pub struct SMA {
     period: usize,
     values: Vec<IndicatorValue>,
+    /// The closes of the current window, oldest first.
+    stepper: Stepper<VecDeque<f64>>,
     color: Color32,
     visible: bool,
 }
@@ -57,6 +61,7 @@ impl SMA {
         Self {
             period: period.max(1),
             values: Vec::new(),
+            stepper: Stepper::default(),
             color: DESIGN_TOKENS.semantic.indicators.ma, // Orange for MA
             visible: true,
         }
@@ -86,18 +91,28 @@ impl Indicator for SMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let start = i + 1 - self.period;
-                let sum: f64 = data[start..=i].iter().map(|bar| bar.close).sum();
-                let sma = sum / self.period as f64;
-                self.values.push(IndicatorValue::Single(sma));
-            }
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let period = self.period;
+        self.stepper
+            .run(data, from, &mut self.values, |window, bar| {
+                window.push_back(bar.close);
+                if window.len() > period {
+                    window.pop_front();
+                }
+                if window.len() < period {
+                    IndicatorValue::None
+                } else {
+                    // Summed afresh each bar so long series do not accumulate rounding drift.
+                    IndicatorValue::Single(window.iter().sum::<f64>() / period as f64)
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -132,5 +147,48 @@ impl Indicator for SMA {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("SMA({})", self.period)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    /// Worked example from StockCharts ChartSchool, "Moving Averages - Simple and
+    /// Exponential": closes 11 to 17 give a 5-day SMA of 13, 14 and 15.
+    #[test]
+    fn matches_published_example() {
+        let start = Utc::now();
+        let bars: Vec<Bar> = (11..=17)
+            .enumerate()
+            .map(|(i, c)| {
+                let c = f64::from(c);
+                Bar {
+                    time: start + Duration::minutes(i as i64),
+                    open: c,
+                    high: c,
+                    low: c,
+                    close: c,
+                    volume: 1.0,
+                }
+            })
+            .collect();
+
+        let mut sma = SMA::new(5);
+        sma.calculate(&bars);
+
+        let got: Vec<Option<f64>> = sma
+            .values()
+            .iter()
+            .map(|v| match v {
+                IndicatorValue::Single(x) => Some(*x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [None, None, None, None, Some(13.0), Some(14.0), Some(15.0)]
+        );
     }
 }
