@@ -40,27 +40,20 @@ impl Drawing {
         let p1 = self.points[1]; // First swing
         let p2 = self.points[2]; // Second swing
 
-        // Calculate midpoint of p1-p2
-        let midpoint = if is_schiff {
-            // Schiff pitchfork uses different anchor calculation
-            Pos2::new((p1.x + p2.x) / 2.0, (p0.y + (p1.y + p2.y) / 2.0) / 2.0)
-        } else {
-            Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0)
-        };
-
-        // Draw median line (from anchor through midpoint)
-        let median_direction = Pos2::new(midpoint.x - p0.x, midpoint.y - p0.y);
-        let median_len = chart_rect.max.x - p0.x;
-        let scale = median_len / (midpoint.x - p0.x).max(0.001);
+        // Draw median line (from its origin through the midpoint of p1-p2)
+        let (origin, midpoint) = median_line(p0, p1, p2, is_schiff);
+        let median_direction = Pos2::new(midpoint.x - origin.x, midpoint.y - origin.y);
+        let median_len = chart_rect.max.x - origin.x;
+        let scale = median_len / (midpoint.x - origin.x).max(0.001);
         let median_end = Pos2::new(
-            p0.x + median_direction.x * scale,
-            p0.y + median_direction.y * scale,
+            origin.x + median_direction.x * scale,
+            origin.y + median_direction.y * scale,
         );
 
-        painter.line_segment([p0, median_end], Stroke::new(self.stroke_width, color));
+        painter.line_segment([origin, median_end], Stroke::new(self.stroke_width, color));
 
         // Calculate parallel lines through p1 and p2
-        let parallel_direction = Pos2::new(median_end.x - p0.x, median_end.y - p0.y);
+        let parallel_direction = Pos2::new(median_end.x - origin.x, median_end.y - origin.y);
 
         // Upper parallel (through p1)
         let upper_end = Pos2::new(p1.x + parallel_direction.x, p1.y + parallel_direction.y);
@@ -283,5 +276,45 @@ impl Drawing {
 
         painter.circle_filled(center, DESIGN_TOKENS.rounding.md, color);
         painter.circle_filled(end, DESIGN_TOKENS.rounding.sm, color);
+    }
+}
+
+/// Origin of the median line and the point it passes through, the midpoint of the
+/// second and third anchors. The Schiff variant keeps the first anchor's time and
+/// moves its price halfway to the second anchor.
+fn median_line(p0: Pos2, p1: Pos2, p2: Pos2, is_schiff: bool) -> (Pos2, Pos2) {
+    let origin = if is_schiff {
+        Pos2::new(p0.x, (p0.y + p1.y) / 2.0)
+    } else {
+        p0
+    };
+    (origin, p1.lerp(p2, 0.5))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reference: anchors (0, 0), (10, 100), (20, -50). Both medians run through
+    /// (15, 25), the midpoint of the second and third anchors. The standard median
+    /// starts at the first anchor (slope 5/3); the Schiff median starts at (0, 50),
+    /// halfway up the first leg (slope -5/3).
+    #[test]
+    fn median_line_matches_construction() {
+        let anchors = [
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 100.0),
+            Pos2::new(20.0, -50.0),
+        ];
+        for (is_schiff, origin, through) in [
+            (false, Pos2::new(0.0, 0.0), Pos2::new(15.0, 25.0)),
+            (true, Pos2::new(0.0, 50.0), Pos2::new(15.0, 25.0)),
+        ] {
+            let got = median_line(anchors[0], anchors[1], anchors[2], is_schiff);
+            assert!(
+                got.0.distance(origin) < 1e-4 && got.1.distance(through) < 1e-4,
+                "schiff {is_schiff}: got {got:?}, want ({origin:?}, {through:?})"
+            );
+        }
     }
 }

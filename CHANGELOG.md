@@ -202,6 +202,7 @@ All notable changes to this project are documented in this file. The format is b
 - A live update no longer copies the history: `TradingChart` merges the bars of each poll in place, and the chart updates its studies once per frame from the first changed bar instead of recomputing them on every poll.
 - Removing a study no longer moves the selection to another study, and removing the selected study clears the selection.
 - Loading older bars with `Chart::set_data` moves the drawings with their bars, as `TradingChart`'s scroll-back already did, and so does a bar that `Chart::update` or a `TradingChart` `NewBars` poll inserts between stored bars.
+- The Schiff pitchfork's median starts at the first anchor's time, halfway between the first and second anchors, and runs through the midpoint of the second and third anchors with the tines parallel to it. It started at the first anchor and was aimed halfway between that anchor and the midpoint, so the median and both tines had the wrong slope.
 
 ### Changed
 
