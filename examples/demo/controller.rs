@@ -587,36 +587,39 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 
 impl eframe::App for DemoApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui_charts::theme::apply_to_egui(ctx, &self.theme);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        egui_charts::theme::apply_to_egui(&ctx, &self.theme);
+        // The root Ui was created before the theme was applied this frame.
+        ui.set_style(ctx.global_style());
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
 
-        let panel_bg = ctx.style().visuals.panel_fill;
+        let panel_bg = ui.style().visuals.panel_fill;
 
-        self.show_top_toolbar(ctx, panel_bg);
-        self.show_symbol_header(ctx, panel_bg);
-        self.show_drawing_toolbar(ctx, panel_bg);
-        self.show_widget_bar(ctx, panel_bg);
-        self.show_side_panel(ctx);
-        self.show_bottom_toolbar(ctx, panel_bg);
-        self.show_chart(ctx, panel_bg);
+        self.show_top_toolbar(ui, panel_bg);
+        self.show_symbol_header(ui, panel_bg);
+        self.show_drawing_toolbar(ui, panel_bg);
+        self.show_widget_bar(ui, panel_bg);
+        self.show_side_panel(ui);
+        self.show_bottom_toolbar(ui, panel_bg);
+        self.show_chart(ui, panel_bg);
 
         // Floating replay transport, on top of the chart.
-        self.show_replay_control(ctx);
+        self.show_replay_control(&ctx);
 
         // All modal dialogs.
-        self.show_dialogs(ctx);
+        self.show_dialogs(&ctx);
 
         // Global keyboard shortcuts (e.g. the shortcuts help itself).
-        self.handle_keyboard(ctx);
+        self.handle_keyboard(&ctx);
 
         // Fulfil a pending screenshot request.
-        self.handle_screenshot(ctx);
+        self.handle_screenshot(&ctx);
 
         // Transient status notice.
-        self.show_notice(ctx);
+        self.show_notice(&ctx);
 
         // Keep the header OHLC in sync with whatever the chart last rendered.
         if let Some(last) = self.trading_chart.get_last_bar() {
@@ -641,14 +644,14 @@ impl eframe::App for DemoApp {
 // ---------------------------------------------------------------------------
 
 impl DemoApp {
-    fn show_top_toolbar(&mut self, ctx: &egui::Context, bg: egui::Color32) {
-        egui::TopBottomPanel::top("toolbar")
-            .exact_height(38.0)
+    fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        egui::Panel::top("toolbar")
+            .exact_size(38.0)
             .show_separator_line(false)
             .frame(panel_frame(bg))
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 let action = self.top_toolbar.show_with_state(ui, &self.state);
-                self.handle_top_toolbar(ctx, action);
+                self.handle_top_toolbar(ui.ctx(), action);
             });
     }
 
@@ -733,23 +736,23 @@ impl DemoApp {
         cfg.grid_color = self.theme.chart.grid_line;
     }
 
-    fn show_symbol_header(&mut self, ctx: &egui::Context, bg: egui::Color32) {
-        egui::TopBottomPanel::top("symbol_header")
-            .exact_height(38.0)
+    fn show_symbol_header(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        egui::Panel::top("symbol_header")
+            .exact_size(38.0)
             .show_separator_line(true)
             .frame(panel_frame(bg))
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 self.symbol_header.show(ui);
             });
     }
 
-    fn show_drawing_toolbar(&mut self, ctx: &egui::Context, bg: egui::Color32) {
-        egui::SidePanel::left("drawing_toolbar")
+    fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        egui::Panel::left("drawing_toolbar")
             .resizable(false)
-            .default_width(52.0)
+            .default_size(52.0)
             .show_separator_line(true)
             .frame(panel_frame(bg))
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 let action = self.drawing_toolbar.show_with_action(ui);
                 self.handle_drawing_toolbar(action);
             });
@@ -833,13 +836,13 @@ impl DemoApp {
         }
     }
 
-    fn show_widget_bar(&mut self, ctx: &egui::Context, bg: egui::Color32) {
-        egui::SidePanel::right("widget_bar")
+    fn show_widget_bar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        egui::Panel::right("widget_bar")
             .resizable(false)
-            .exact_width(52.0)
+            .exact_size(52.0)
             .show_separator_line(true)
             .frame(panel_frame(bg))
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 let action = self.widget_bar.show(ui);
                 if let WidgetBarAction::Clicked(icon) = action {
                     self.toggle_panel(icon);
@@ -865,15 +868,15 @@ impl DemoApp {
         }
     }
 
-    fn show_side_panel(&mut self, ctx: &egui::Context) {
+    fn show_side_panel(&mut self, ui: &mut egui::Ui) {
         let Some(which) = self.open_panel else {
             return;
         };
-        egui::SidePanel::right("detail_panel")
+        egui::Panel::right("detail_panel")
             .resizable(true)
-            .default_width(280.0)
-            .min_width(220.0)
-            .show(ctx, |ui| match which {
+            .default_size(280.0)
+            .min_size(220.0)
+            .show_inside(ui, |ui| match which {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
             });
@@ -1079,12 +1082,12 @@ impl DemoApp {
         }
     }
 
-    fn show_bottom_toolbar(&mut self, ctx: &egui::Context, bg: egui::Color32) {
-        egui::TopBottomPanel::bottom("bottom")
-            .exact_height(38.0)
+    fn show_bottom_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        egui::Panel::bottom("bottom")
+            .exact_size(38.0)
             .show_separator_line(true)
             .frame(panel_frame(bg))
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 let action = self.timeframe_toolbar.show(ui);
                 self.handle_timeframe_toolbar(action);
             });
@@ -1109,10 +1112,10 @@ impl DemoApp {
         }
     }
 
-    fn show_chart(&mut self, ctx: &egui::Context, bg: egui::Color32) {
+    fn show_chart(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::CentralPanel::default()
             .frame(panel_frame(bg))
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 self.trading_chart.show(ui);
             });
         // Right-click context actions resolve after the chart is shown.

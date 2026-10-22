@@ -101,7 +101,7 @@ impl<T> ModalHandler<T> {
         }
 
         let response = egui::Modal::new(self.id)
-            .frame(dialog_frame(&ctx.style()))
+            .frame(dialog_frame(&ctx.global_style()))
             .backdrop_color(DESIGN_TOKENS.semantic.modal.overlay_bg)
             .show(ctx, |ui| add_contents(ui, self.payload.as_mut()));
         if response.should_close() {

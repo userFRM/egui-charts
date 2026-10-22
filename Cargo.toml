@@ -2,7 +2,7 @@
 name = "egui-charts"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 description = "Financial charting engine for egui: candlesticks and other chart types, drawing tools, technical indicators and a design-token theme system"
 repository = "https://github.com/userFRM/egui-charts"
@@ -75,17 +75,17 @@ serde = []
 # CI without a Vulkan/Metal toolchain, and the `x11`/`wayland` platform features
 # are required because `default-features = false` otherwise leaves `winit`
 # without a Linux backend.
-eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
-egui = "0.33.3"
+eframe = { version = "0.34.3", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+egui = "0.34.3"
 rand = "0.10.0"
 
 [dependencies]
 # Fonts are the application's choice: eframe enables egui's `default_fonts`.
-egui = { version = "0.33.3", default-features = false, features = ["serde"], optional = true }
+egui = { version = "0.34.3", default-features = false, features = ["serde"], optional = true }
 # The engine names colours as `egui::Color32`; without `widget` that path
 # resolves to this crate, which egui re-exports.
-ecolor = { version = "0.33.3", features = ["serde"] }
-egui_extras = { version = "0.33.3", default-features = false, optional = true }
+ecolor = { version = "0.34.3", features = ["serde"] }
+egui_extras = { version = "0.34.3", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }

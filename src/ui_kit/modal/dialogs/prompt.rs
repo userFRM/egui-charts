@@ -210,8 +210,8 @@ mod tests {
                 events,
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                result = PromptDialog::new("p", "Name").show(ctx, &mut open)
+            let _ = ctx.run_ui(input, |ui| {
+                result = PromptDialog::new("p", "Name").show(ui.ctx(), &mut open)
             });
             result
         };

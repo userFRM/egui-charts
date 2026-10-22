@@ -82,7 +82,7 @@ impl DialogFrame {
 
     /// Show the dialog. The closure receives `&mut Ui` for the dialog content.
     pub fn show(self, ctx: &Context, add_contents: impl FnOnce(&mut Ui)) {
-        let mut frame = dialog_frame(&ctx.style());
+        let mut frame = dialog_frame(&ctx.global_style());
         if let Some(r) = self.rounding {
             frame = frame.corner_radius(r);
         }
@@ -270,8 +270,8 @@ mod tests {
                 screen_rect: Some(screen),
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                DialogFrame::new("d", Vec2::new(420.0, 240.0)).show(ctx, |ui| {
+            let _ = ctx.run_ui(input, |ui| {
+                DialogFrame::new("d", Vec2::new(420.0, 240.0)).show(ui.ctx(), |ui| {
                     ui.label("Body");
                     DialogFooter::new("Apply")
                         .secondary("Cancel")

@@ -11,7 +11,7 @@
 //! let mut filter = FilterWidget::new();
 //! # let items = ["AAPL", "MSFT", "NVDA"];
 //!
-//! # egui::__run_test_ctx(|ctx| egui::CentralPanel::default().show(ctx, |ui| {
+//! # egui::__run_test_ui(|ui| {
 //! // Show the filter input
 //! filter.show(ui);
 //!
@@ -19,7 +19,7 @@
 //! for item in items.iter().filter(|name| filter.matches(name)) {
 //!     ui.label(*item);
 //! }
-//! # }).inner);
+//! # });
 //! ```
 
 use egui::{

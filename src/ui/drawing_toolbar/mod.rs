@@ -51,7 +51,7 @@
 //! let mut toolbar = DrawingToolbar::default();
 //!
 //! // In your UI update loop:
-//! # egui::__run_test_ctx(|ctx| egui::CentralPanel::default().show(ctx, |ui| {
+//! # egui::__run_test_ui(|ui| {
 //! let action = toolbar.show_with_action(ui);
 //! match action {
 //!     DrawingToolbarAction::SelectTool(tool) => {
@@ -59,7 +59,7 @@
 //!     }
 //!     _ => {}
 //! }
-//! # }).inner);
+//! # });
 //! ```
 
 // Core module declarations

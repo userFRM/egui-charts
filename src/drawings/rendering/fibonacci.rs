@@ -729,7 +729,7 @@ impl Drawing {
         let base_radius = ((edge.x - center.x).powi(2) + (edge.y - center.y).powi(2)).sqrt();
 
         // Golden spiral approximation
-        let phi: f32 = 1.618_034;
+        let phi = std::f32::consts::GOLDEN_RATIO;
         let mut prev_point: Option<Pos2> = None;
         for i in 0..100 {
             let angle = i as f32 * 0.1;

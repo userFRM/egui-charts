@@ -157,8 +157,8 @@ mod tests {
         {
             let ctx = egui::Context::default();
             apply_to_egui(&ctx, &theme);
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
                     // Disabled buttons are exempt from 4.5:1 but must stay as legible as other
                     // disabled buttons; egui fades everything a disabled `Ui` paints.
                     for (enabled, min) in [(true, 4.5), (false, 3.0)] {

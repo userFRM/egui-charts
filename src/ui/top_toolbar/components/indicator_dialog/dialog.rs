@@ -142,7 +142,7 @@ impl IndicatorDialog {
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .fixed_size(Vec2::new(dialog_width, dialog_height))
             .frame(
-                egui::Frame::window(&ctx.style())
+                egui::Frame::window(&ctx.global_style())
                     .fill(self.config.bg_color)
                     .corner_radius(corner_radius as u8),
             )

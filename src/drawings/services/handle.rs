@@ -305,27 +305,23 @@ impl HandleService {
         G: Fn(f32) -> f64,
     {
         match handle {
-            HandlePos::Point(idx) => {
-                if idx < drawing.points.len() && idx < drawing.chart_points.len() {
-                    drawing.points[idx] = new_pos;
-                    drawing.chart_points[idx].bar_idx = x_to_bar(new_pos.x);
-                    drawing.chart_points[idx].price = y_to_price(new_pos.y);
-                }
+            HandlePos::Point(idx)
+                if idx < drawing.points.len() && idx < drawing.chart_points.len() =>
+            {
+                drawing.points[idx] = new_pos;
+                drawing.chart_points[idx].bar_idx = x_to_bar(new_pos.x);
+                drawing.chart_points[idx].price = y_to_price(new_pos.y);
             }
-            HandlePos::Start => {
-                if !drawing.points.is_empty() && !drawing.chart_points.is_empty() {
-                    drawing.points[0] = new_pos;
-                    drawing.chart_points[0].bar_idx = x_to_bar(new_pos.x);
-                    drawing.chart_points[0].price = y_to_price(new_pos.y);
-                }
+            HandlePos::Start if !drawing.points.is_empty() && !drawing.chart_points.is_empty() => {
+                drawing.points[0] = new_pos;
+                drawing.chart_points[0].bar_idx = x_to_bar(new_pos.x);
+                drawing.chart_points[0].price = y_to_price(new_pos.y);
             }
-            HandlePos::End => {
-                if drawing.points.len() >= 2 && drawing.chart_points.len() >= 2 {
-                    let last = drawing.points.len() - 1;
-                    drawing.points[last] = new_pos;
-                    drawing.chart_points[last].bar_idx = x_to_bar(new_pos.x);
-                    drawing.chart_points[last].price = y_to_price(new_pos.y);
-                }
+            HandlePos::End if drawing.points.len() >= 2 && drawing.chart_points.len() >= 2 => {
+                let last = drawing.points.len() - 1;
+                drawing.points[last] = new_pos;
+                drawing.chart_points[last].bar_idx = x_to_bar(new_pos.x);
+                drawing.chart_points[last].price = y_to_price(new_pos.y);
             }
             HandlePos::Middle
                 // Move entire drawing by centroid delta

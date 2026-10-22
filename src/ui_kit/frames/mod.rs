@@ -55,21 +55,21 @@ pub enum PanelPosition {
 /// # Example
 /// ```
 /// # use egui_charts::ui_kit::frames::StyledPanelFrame;
-/// # egui::__run_test_ctx(|ctx| {
-/// let visuals = ctx.style().visuals.clone();
+/// # egui::__run_test_ui(|ui| {
+/// let visuals = ui.visuals().clone();
 ///
 /// // Method 1: Show both frames with content
-/// egui::CentralPanel::default().show(ctx, |ui| {
+/// egui::CentralPanel::default().show_inside(ui, |ui| {
 ///     StyledPanelFrame::left(&visuals).show(ui, |ui| {
 ///         ui.label("Panel content");
 ///     });
 /// });
 ///
-/// // Method 2: Get frames separately (for SidePanel usage)
+/// // Method 2: Get frames separately (for a side panel)
 /// let frame = StyledPanelFrame::left(&visuals);
-/// egui::SidePanel::left("left")
+/// egui::Panel::left("left")
 ///     .frame(frame.outer_frame())
-///     .show(ctx, |ui| {
+///     .show_inside(ui, |ui| {
 ///         frame.inner_frame().show(ui, |ui| {
 ///             ui.label("Panel content");
 ///         });

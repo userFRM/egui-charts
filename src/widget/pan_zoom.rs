@@ -14,12 +14,47 @@
 //!   double-click on the price axis re-enables auto-scale.
 //! - **Timescale config** -- applies pending visible-bar and width settings.
 
-use egui::{Pos2, Rect, Response, Ui};
+use egui::{Event, MouseWheelUnit, Pos2, Rect, Response, Ui, Vec2, vec2};
 use web_time::Instant;
 
 use crate::chart::state::BoxZoomMode;
 use crate::scales::PriceTransform;
 use crate::widget::Chart;
+
+/// This frame's wheel scroll in points before egui smooths it: line and page units converted, and
+/// the axis forced by egui's horizontal and vertical scroll modifiers. Unlike
+/// `smooth_scroll_delta` it includes scrolling with the zoom modifier (Ctrl, or Cmd on macOS),
+/// which egui turns into zoom instead.
+pub(super) fn raw_wheel_delta(ui: &Ui) -> Vec2 {
+    let options = ui.ctx().options(|o| o.input_options);
+    ui.input(|i| {
+        let mut sum = Vec2::ZERO;
+        for event in &i.events {
+            if let Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } = event
+            {
+                let mut delta = match unit {
+                    MouseWheelUnit::Point => *delta,
+                    MouseWheelUnit::Line => options.line_scroll_speed * *delta,
+                    MouseWheelUnit::Page => i.viewport_rect().height() * *delta,
+                };
+                let horizontal = modifiers.matches_any(options.horizontal_scroll_modifier);
+                let vertical = modifiers.matches_any(options.vertical_scroll_modifier);
+                if horizontal && !vertical {
+                    delta = vec2(delta.x + delta.y, 0.0);
+                } else if vertical && !horizontal {
+                    delta = vec2(0.0, delta.x + delta.y);
+                }
+                sum += delta;
+            }
+        }
+        sum
+    })
+}
 
 impl Chart {
     /// Handle mouse wheel events for time-axis zoom, price-axis zoom, and horizontal pan.
@@ -43,16 +78,17 @@ impl Chart {
             return pending_price_zoom;
         }
 
+        let raw = raw_wheel_delta(ui);
         let scroll_input = ui.input(|i| {
             let mut dx = if i.smooth_scroll_delta.x.abs() > 0.0 {
                 i.smooth_scroll_delta.x
             } else {
-                i.raw_scroll_delta.x
+                raw.x
             };
             let mut dy = if i.smooth_scroll_delta.y.abs() > 0.0 {
                 i.smooth_scroll_delta.y
             } else {
-                i.raw_scroll_delta.y
+                raw.y
             };
 
             // Treat Shift+Wheel as horizontal scroll for standard mice
@@ -638,6 +674,35 @@ mod tests {
         step(&mut chart, vec![button(pos, false)]);
         let range = chart.state.price_scale().range();
         (range.min, range.max)
+    }
+
+    /// A wheel notch over the chart zooms the time axis, also with the zoom modifier (Ctrl, or
+    /// Cmd on macOS) held, which egui leaves out of its smoothed scroll delta.
+    #[test]
+    fn wheel_zooms_the_time_axis_with_and_without_the_zoom_modifier() {
+        for modifiers in [Modifiers::NONE, Modifiers::COMMAND] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let spacing = chart.state.time_scale().bar_spacing();
+            let center = chart.last_rendered_price_rect.center();
+            frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(center)]);
+            let wheel = Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers,
+            };
+            frame(&ctx, &mut chart, 0.04, vec![wheel]);
+            for i in 3..10 {
+                frame(&ctx, &mut chart, i as f64 * 0.02, Vec::new());
+            }
+            let zoomed = chart.state.time_scale().bar_spacing();
+            assert!(
+                zoomed > spacing,
+                "{modifiers:?}: spacing {spacing} -> {zoomed}"
+            );
+        }
     }
 
     /// Zoom speed must not depend on how many frames a drag spans.

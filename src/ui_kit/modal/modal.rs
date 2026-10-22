@@ -69,7 +69,7 @@ impl Modal {
             return None;
         }
 
-        let frame = dialog_frame(&ctx.style());
+        let frame = dialog_frame(&ctx.global_style());
         let size = egui::vec2(
             self.width
                 .unwrap_or(DESIGN_TOKENS.sizing.dialog.default_width),

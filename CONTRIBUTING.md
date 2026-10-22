@@ -46,7 +46,7 @@ To add one: add a `Theme::<name>()` constructor in `src/theme/presets.rs` and ad
 
 ## Development setup
 
-Install the Rust toolchain with [rustup](https://rustup.rs/). The minimum supported Rust version (MSRV) is **1.88**. CI tests against both `1.88.0` and current `stable`.
+Install the Rust toolchain with [rustup](https://rustup.rs/). The minimum supported Rust version (MSRV) is **1.95**. CI tests against both `1.95.0` and current `stable`.
 
 For the web demo you also need the WebAssembly target and [Trunk](https://trunkrs.dev/):
 
@@ -134,7 +134,7 @@ And for the web demo:
 cd examples/demo && trunk build --release
 ```
 
-CI runs clippy with warnings denied. Its `stable` toolchain is current stable, which is newer than the 1.88 MSRV, so run clippy on current stable to catch the same lints CI will. CI additionally builds the docs with warnings denied (`cargo doc --no-deps --all-features`) and runs a dependency audit (`cargo audit`), so it is worth keeping doc comments warning-clean.
+CI runs clippy with warnings denied. Its `stable` toolchain is current stable, which is newer than the 1.95 MSRV, so run clippy on current stable to catch the same lints CI will. CI additionally builds the docs with warnings denied (`cargo doc --no-deps --all-features`) and runs a dependency audit (`cargo audit`), so it is worth keeping doc comments warning-clean.
 
 ## Code style
 

@@ -89,7 +89,7 @@ impl DrawingToolShortcuts {
     /// });
     ///
     /// let mut triggered = None;
-    /// let _ = ctx.run(input, |ctx| triggered = shortcuts.check(ctx));
+    /// let _ = ctx.run_ui(input, |ui| triggered = shortcuts.check(ui.ctx()));
     /// assert_eq!(triggered, Some(DrawingToolType::TrendLine));
     /// ```
     pub fn check(&self, ctx: &Context) -> Option<DrawingToolType> {

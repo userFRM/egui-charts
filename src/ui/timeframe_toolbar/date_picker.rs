@@ -143,7 +143,7 @@ impl DatePicker {
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .fixed_size(Vec2::new(self.config.width, self.config.height))
-            .frame(egui::Frame::window(&ctx.style()).fill(self.config.bg_color))
+            .frame(egui::Frame::window(&ctx.global_style()).fill(self.config.bg_color))
             .show(ctx, |ui| {
                 action = self.draw_content(ui);
             });

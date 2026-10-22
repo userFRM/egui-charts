@@ -356,7 +356,9 @@ pub(crate) fn contrast(fg: Color32, bg: Color32) -> f32 {
 
 /// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
 ///
-/// Call it once at startup and again after the theme changes.
+/// Call it once at startup and again after the theme changes. Inside `eframe::App::ui` the root
+/// `Ui` already exists, so follow the call with `ui.set_style(ui.ctx().global_style())` for the
+/// panels shown in that `Ui` to use the theme in the same frame.
 pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     let mut visuals = if theme.dark {
         egui::Visuals::dark()
@@ -436,11 +438,11 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     ctx.set_visuals(visuals);
 
     let spacing = &theme.spacing;
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
     style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
     style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 
     // Store the theme so components resolve their colours from it while painting.
     context::set_active_theme(ctx, theme.clone());
@@ -473,8 +475,8 @@ mod tests {
         ]);
         let focus_ring_of = |ctx: &egui::Context| {
             let mut focus_ring = Color32::TRANSPARENT;
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
                     focus_ring = crate::styles::focus::focus_ring_color(ui);
                 });
             });
@@ -484,7 +486,7 @@ mod tests {
         for (name, theme) in themes {
             let ctx = egui::Context::default();
             apply_to_egui(&ctx, &theme);
-            let visuals = ctx.style().visuals.clone();
+            let visuals = ctx.global_style().visuals.clone();
             let ui = &theme.ui;
             let focus_ring = focus_ring_of(&ctx);
             // High contrast holds every text level to 7:1 and outlines to 4.5:1 (WCAG AAA).
@@ -570,7 +572,7 @@ mod tests {
         // An app that styles egui itself and never applies a theme keeps a visible ring.
         let ctx = egui::Context::default();
         ctx.set_theme(egui::Theme::Light);
-        let (focus_ring, panel) = (focus_ring_of(&ctx), ctx.style().visuals.panel_fill);
+        let (focus_ring, panel) = (focus_ring_of(&ctx), ctx.global_style().visuals.panel_fill);
         let ratio = contrast(focus_ring, panel);
         if ratio < 3.0 {
             failures.push(format!(

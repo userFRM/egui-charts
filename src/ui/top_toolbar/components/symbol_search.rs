@@ -601,7 +601,7 @@ impl CompareSymbolsDialog {
         }
 
         let mut is_open = self.is_open;
-        let config = self.config.resolved(&ctx.style().visuals);
+        let config = self.config.resolved(&ctx.global_style().visuals);
 
         Window::new("Compare symbol")
             .open(&mut is_open)
@@ -609,7 +609,7 @@ impl CompareSymbolsDialog {
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .fixed_size(Vec2::new(config.width, config.height))
-            .frame(egui::Frame::window(&ctx.style()).fill(config.bg_color))
+            .frame(egui::Frame::window(&ctx.global_style()).fill(config.bg_color))
             .show(ctx, |ui| {
                 action = self.draw_content(ui, symbols, &config);
             });

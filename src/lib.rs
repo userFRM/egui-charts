@@ -92,7 +92,7 @@
 //!
 //! 3. Build the chart once with [`chart::builder::ChartBuilder`], then call
 //!    `trading_chart.update()` and `trading_chart.show(ui)` inside an
-//!    `egui::CentralPanel` in `eframe::App::update`.
+//!    `egui::CentralPanel` in `eframe::App::ui`.
 //!
 //! 4. Apply a theme at startup with [`theme::apply_to_egui`] to propagate
 //!    design tokens into egui's visual system.

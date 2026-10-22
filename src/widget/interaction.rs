@@ -7,6 +7,7 @@
 use egui::{Response, Ui};
 
 use crate::widget::Chart;
+use crate::widget::pan_zoom::raw_wheel_delta;
 
 impl Chart {
     /// Manage tracking mode — auto-scroll to the latest bar while active.
@@ -46,9 +47,8 @@ impl Chart {
 
             // Exit tracking mode on any manual interaction (scroll, zoom, drag)
             if response.dragged()
-                || ui.input(|i| {
-                    i.raw_scroll_delta.length_sq() > 0.0 || i.smooth_scroll_delta.length_sq() > 0.0
-                })
+                || raw_wheel_delta(ui).length_sq() > 0.0
+                || ui.input(|i| i.smooth_scroll_delta.length_sq() > 0.0)
             {
                 self.tracking_mode_active = false;
             }

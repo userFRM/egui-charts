@@ -17,7 +17,7 @@
 //!    design-token theme into egui's visual system.
 //!
 //! 4. **Update loop** -- Call `trading_chart.update()` then
-//!    `trading_chart.show(ui)` inside your `eframe::App::update`.
+//!    `trading_chart.show(ui)` inside your `eframe::App::ui`.
 //!
 //! ## In a real Tauri app
 //!
@@ -82,16 +82,18 @@ impl TauriApp {
 }
 
 impl eframe::App for TauriApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // 1. Apply theme at the start of each frame
         let theme = Theme::dark();
-        egui_charts::theme::apply_to_egui(ctx, &theme);
+        egui_charts::theme::apply_to_egui(ui.ctx(), &theme);
+        // The root Ui was created before the theme was applied this frame.
+        ui.set_style(ui.ctx().global_style());
 
         // 2. Poll data source for updates and handle progressive loading
         self.trading_chart.update();
 
         // 3. Render the chart
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             self.trading_chart.show(ui);
         });
 
