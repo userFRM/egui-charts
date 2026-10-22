@@ -4,7 +4,7 @@
 
 use egui::{Align, Layout, Ui};
 
-use crate::tokens::DESIGN_TOKENS;
+use crate::theme::ThemeExt;
 
 /// A group of toolbar buttons with optional separator
 ///
@@ -54,32 +54,53 @@ impl ButtonGroup {
         self
     }
 
-    /// Show the button group
+    /// Show the button group along the parent's layout direction
     ///
-    /// Returns the result of the content closure.
+    /// The buttons sit side by side in a horizontal parent and stacked in a vertical one. Each
+    /// separator is a 1 px line across the group, with a small gap on either side. Returns the
+    /// result of the content closure.
     pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> R {
-        if self.separator_before {
-            render_toolbar_separator(ui);
+        let gap = ui.active_theme().spacing.sm;
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        let slot = 2.0 * gap + stroke.width;
+        let horizontal = ui.layout().main_dir().is_horizontal();
+        let body = |ui: &mut Ui| {
+            if self.separator_before {
+                ui.add_space(slot);
+            }
+            let result = content(ui);
+            let group = ui.min_rect();
+            // Half a stroke in, so the line covers whole pixels.
+            let offset = gap + stroke.width / 2.0;
+            if horizontal {
+                if self.separator_before {
+                    ui.painter()
+                        .vline(group.left() + offset, group.y_range(), stroke);
+                }
+                if self.separator_after {
+                    ui.painter()
+                        .vline(group.right() + offset, group.y_range(), stroke);
+                    ui.expand_to_include_x(group.right() + slot);
+                }
+            } else {
+                if self.separator_before {
+                    ui.painter()
+                        .hline(group.x_range(), group.top() + offset, stroke);
+                }
+                if self.separator_after {
+                    ui.painter()
+                        .hline(group.x_range(), group.bottom() + offset, stroke);
+                    ui.expand_to_include_y(group.bottom() + slot);
+                }
+            }
+            result
+        };
+        if horizontal {
+            ui.horizontal(body).inner
+        } else {
+            ui.vertical(body).inner
         }
-
-        let result = content(ui);
-
-        if self.separator_after {
-            render_toolbar_separator(ui);
-        }
-
-        result
     }
-}
-
-/// Helper to render a toolbar separator
-fn render_toolbar_separator(ui: &mut Ui) {
-    ui.add_space(DESIGN_TOKENS.spacing.sm);
-    let stroke = ui.style().visuals.widgets.noninteractive.bg_stroke;
-    let available = ui.available_rect_before_wrap();
-    let x = available.left();
-    ui.painter().vline(x, available.y_range(), stroke);
-    ui.add_space(DESIGN_TOKENS.spacing.sm);
 }
 
 /// Helper for common toolbar layout patterns
