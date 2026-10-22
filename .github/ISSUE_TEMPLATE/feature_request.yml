@@ -39,7 +39,6 @@ body:
         - indicators
         - drawings
         - ui
-        - scripting
         - backtest
         - docs
     validations:

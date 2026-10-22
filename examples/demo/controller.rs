@@ -15,7 +15,7 @@ use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
     AlertData, AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction,
-    DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog, ScriptEditor, ScriptEditorAction,
+    DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog,
     SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
 };
 use egui_charts::ui::dialogs::{DrawingContextMenuAction, DrawingLineStyle};
@@ -133,7 +133,6 @@ pub struct DemoApp {
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
     export_dialog: ExportDialog,
-    script_editor: ScriptEditor,
     date_picker: DatePicker,
 
     // Right-hand side panel.
@@ -228,7 +227,6 @@ impl DemoApp {
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
-            script_editor: ScriptEditor::new(),
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
             open_panel: None,
@@ -468,14 +466,6 @@ impl DemoApp {
         match self.export_dialog.show(ctx) {
             ExportResponse::Export { config, save_path } => self.run_export(ctx, config, save_path),
             ExportResponse::Closed | ExportResponse::None => {}
-        }
-
-        // Script editor.
-        match self.script_editor.show(ctx) {
-            ScriptEditorAction::Executed => {
-                log::info!("[demo] Script executed");
-            }
-            ScriptEditorAction::Close | ScriptEditorAction::None => {}
         }
 
         // Date picker (opened from the bottom toolbar): jump the visible window.
@@ -1290,19 +1280,13 @@ impl DemoApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        // F1 / "?" opens the keyboard shortcuts help; Alt+E opens the editor.
-        let (help, editor) = ctx.input(|i| {
-            (
-                i.key_pressed(egui::Key::F1)
-                    || (i.modifiers.shift && i.key_pressed(egui::Key::Questionmark)),
-                i.modifiers.alt && i.key_pressed(egui::Key::E),
-            )
+        // F1 / "?" opens the keyboard shortcuts help.
+        let help = ctx.input(|i| {
+            i.key_pressed(egui::Key::F1)
+                || (i.modifiers.shift && i.key_pressed(egui::Key::Questionmark))
         });
         if help {
             self.keyboard_shortcuts.toggle();
-        }
-        if editor {
-            self.script_editor.open();
         }
     }
 

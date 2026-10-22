@@ -43,8 +43,6 @@ impl IndicatorTab {
 pub enum IndicatorCategory {
     /// User-favorited indicators
     Favorites,
-    /// User-created custom scripts
-    MyScripts,
     /// Built-in platform indicators
     BuiltIns,
     /// Community-contributed indicators
@@ -58,7 +56,6 @@ impl IndicatorCategory {
     pub fn all() -> &'static [IndicatorCategory] {
         &[
             IndicatorCategory::Favorites,
-            IndicatorCategory::MyScripts,
             IndicatorCategory::BuiltIns,
             IndicatorCategory::Community,
             IndicatorCategory::Premium,
@@ -69,7 +66,6 @@ impl IndicatorCategory {
     pub fn name(&self) -> &'static str {
         match self {
             IndicatorCategory::Favorites => "Favorites",
-            IndicatorCategory::MyScripts => "My scripts",
             IndicatorCategory::BuiltIns => "Built-ins",
             IndicatorCategory::Community => "Community",
             IndicatorCategory::Premium => "Premium",
@@ -81,7 +77,6 @@ impl IndicatorCategory {
         use crate::icons::icons as embedded_icons;
         match self {
             IndicatorCategory::Favorites => &embedded_icons::EMOJI_ICON,
-            IndicatorCategory::MyScripts => &embedded_icons::EMOJI_ICON,
             IndicatorCategory::BuiltIns => &embedded_icons::EMOJI_ICON,
             IndicatorCategory::Community => &embedded_icons::EMOJI_ICON,
             IndicatorCategory::Premium => &embedded_icons::EMOJI_ICON,

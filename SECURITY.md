@@ -28,7 +28,7 @@ A clear report helps a small project triage quickly. Where possible, please incl
 - A description of the issue and the impact you believe it has.
 - The affected version (the crate version, commit, or `Cargo.lock` entry).
 - Step-by-step instructions or a minimal example that reproduces the problem.
-- Any sample input (for example a CSV file or script) that triggers the behavior.
+- Any sample input (for example a CSV file) that triggers the behavior.
 - Your assessment of severity and any suggested remediation, if you have one.
 
 ## What to expect
@@ -44,8 +44,8 @@ If a report turns out to be a bug without security impact, we may ask you to ref
 
 ## Scope and threat model
 
-egui-charts is a client-side charting library: it renders charts inside an egui application and does not run a server, open network listeners, or manage credentials on its own. In practice the most relevant security surface is the parsing and handling of untrusted input, for example CSV data loaded into a chart, or user-supplied scripts when the `scripting` feature is enabled. Reports about crashes, panics, or unexpected behavior triggered by malformed or hostile input of this kind are in scope and welcome.
+egui-charts is a client-side charting library: it renders charts inside an egui application and does not run a server, open network listeners, or manage credentials on its own. In practice the most relevant security surface is the parsing and handling of untrusted input, for example CSV data loaded into a chart. Reports about crashes, panics, or unexpected behavior triggered by malformed or hostile input of this kind are in scope and welcome.
 
 Dependency vulnerabilities are also relevant. The CI pipeline runs a `cargo audit` job against the [RustSec advisory database](https://rustsec.org/) on every push and pull request, so advisories affecting our dependency tree are surfaced automatically; if you spot one that we have missed, please let us know.
 
-Because the library runs as part of a host application, the overall security of any deployment also depends on how that application sources its data and configures features such as `scripting`. We are happy to discuss hardening guidance for a given integration.
+Because the library runs as part of a host application, the overall security of any deployment also depends on how that application sources its data. We are happy to discuss hardening guidance for a given integration.

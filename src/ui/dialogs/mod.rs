@@ -11,8 +11,6 @@ pub mod alert_dialog;
 pub mod drawing_context_menu;
 pub mod drawing_properties;
 pub mod keyboard_shortcuts;
-#[cfg(feature = "scripting")]
-pub mod script_editor;
 pub mod series_context_menu;
 pub mod series_settings;
 
@@ -23,8 +21,6 @@ pub use drawing_properties::{
     DrawingPropertiesDialog, DrawingProps, PropertiesTab,
 };
 pub use keyboard_shortcuts::{KeyboardShortcutsAction, KeyboardShortcutsDialog};
-#[cfg(feature = "scripting")]
-pub use script_editor::{ScriptEditor, ScriptEditorAction};
 pub use series_context_menu::{SeriesContextMenu, SeriesContextMenuAction};
 pub use series_settings::{
     SeriesSettingsAction, SeriesSettingsConfig, SeriesSettingsDialog, SeriesSettingsTab,

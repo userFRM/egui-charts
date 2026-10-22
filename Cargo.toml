@@ -56,7 +56,7 @@ default = ["widget", "icons"]
 ## The egui chart widget and everything built on it: `Chart`, `ChartBuilder`,
 ## drawings, configuration, theme and extension traits.  Without it the crate
 ## is the headless engine (`model`, `scales`, `data`, `studies`, `tokens`,
-## `validation`, plus `backtest` and `scripting` when enabled) and does not
+## `validation`, plus `backtest` when enabled) and does not
 ## depend on egui.
 widget = ["dep:egui", "dep:web-time"]
 ## Compile-time embedded SVG icons.  Required by the `ui` feature and
@@ -69,8 +69,6 @@ icons = ["widget", "dep:egui_extras", "egui_extras/svg"]
 ui = ["icons", "dep:thiserror"]
 ## Backtesting framework for strategy evaluation on historical data.
 backtest = []
-## Embedded scripting support for user-defined indicators and strategies.
-scripting = []
 ## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
 serde = []
 

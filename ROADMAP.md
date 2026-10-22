@@ -422,7 +422,6 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] **Alert Dialog**: 3 tabs (Price, Indicator, Volume) with form validation
 - [x] **Series Settings**: 7 tabs (Symbol, Status Line, Scales, Canvas, Trading, Alerts, Events)
 - [x] **Drawing Properties**: 4 tabs (Style, Coordinates, Visibility, Text); only color, width, line style, extend and label are applied
-- [x] **Script Editor**: syntax highlighting, parse and runtime errors with line/column; scripts run against an empty bar set, so no plot output or metrics are shown
 - [x] **Keyboard Shortcuts**: help dialog listing the KeyboardAction table; chart and drawing keys are hardcoded in chart/interaction.rs and chart/tool_interaction/
 - [x] **Drawing Context Menu**
 - [x] **Series Context Menu** (Settings, Add indicator and Add alert work; the other 12 entries do nothing)
@@ -516,18 +515,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 - [x] Token categories: sizing, spacing, rounding, stroke widths, semantic colors
 - [x] Theme helpers: `toolbar_bg()`, `icon_color()`, `sel_color()`, `hover_color()`
 
-### Scripting (built-in scripting language interpreter)
-- [x] Lexer, Parser, Runtime types
-- [x] `register_builtins()` function
-- [x] Syntax highlighting for the scripting language's common keywords, builtins and namespaces
-- [x] Parse errors with line/column
-- [x] Basic runtime execution with plot output
-- [x] Strategy metrics: total_trades, win_rate, net_profit, max_drawdown
-- [ ] No series/array operations beyond basic runtime
-- [ ] No `input.*` UI-driven parameter integration
-- [ ] No indicator overlay/pane placement logic from scripts
-- [ ] Strategy trade simulation completeness unverified
-
 ### Backtesting
 - [x] Config, Engine, Metrics, Portfolio, Strategy, Trade modules
 - [x] Strategy metrics struct (total_trades, win_rate, net_profit, max_drawdown)
@@ -573,7 +560,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - 24 reusable ui_kit building blocks
 - Theme system with 300+ design tokens and multiple presets
-- Basic interpreter for the crate's scripting language, with syntax highlighting
 - Data validation, configuration
 
 ### What needs work (P1: core functionality gaps)
@@ -601,7 +587,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 - [ ] Real-time data streaming protocol
 - [ ] Server-side rendering for chart snapshots
 - [ ] Chart comparison / overlay mode
-- [ ] Advanced scripting language features (series ops, arrays, inputs, strategy simulation)
 - [ ] Multi-symbol data correlation
 - [ ] Alerts engine (evaluation, triggering, notification delivery)
 - [ ] Print / PDF export
