@@ -150,8 +150,8 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
 
-    /// Worked example from StockCharts ChartSchool, "Moving Averages - Simple and
-    /// Exponential": closes 11 to 17 give a 5-day SMA of 13, 14 and 15.
+    /// Closes 11 to 17 give a 5-bar SMA of 13, 14 and 15, the means of 11 to 15, 12 to 16
+    /// and 13 to 17.
     #[test]
     fn matches_published_example() {
         let start = Utc::now();

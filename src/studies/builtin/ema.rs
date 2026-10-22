@@ -175,8 +175,7 @@ mod tests {
     }
 
     /// Reference values from pandas 3.0.2, `Series.ewm(span=4, adjust=False).mean()`,
-    /// which seeds with the first value and applies `alpha = 2 / (span + 1)`. The
-    /// closes are the first ten of the StockCharts ChartSchool EMA worksheet.
+    /// which seeds with the first value and applies `alpha = 2 / (span + 1)`.
     #[test]
     fn matches_pandas_reference() {
         let closes = [

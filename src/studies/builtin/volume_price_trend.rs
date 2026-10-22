@@ -342,11 +342,10 @@ mod tests {
 
     /// Index and signal line against the published definition. On a bar whose volume fell (NVI)
     /// or rose (PVI), the index is multiplied by close / previous close (Fosback, "Stock Market
-    /// Logic", 1976). The index starts at 1000 and the signal is its 255-day EMA (StockCharts
-    /// ChartSchool, "Negative Volume Index (NVI)"), seeded with its first value as the crate's
-    /// EMA is. Expected values were computed independently in exact rational arithmetic. Hand
-    /// check, NVI bar 1: the index rises 5% to 1050 and the signal is
-    /// 1000 + (1050 - 1000) * 2 / 256 = 1000.390625.
+    /// Logic", 1976). The index starts at 1000 and the signal is its 255-bar EMA, about one
+    /// trading year, seeded with its first value as the crate's EMA is. Expected values were
+    /// computed independently in exact rational arithmetic. Hand check, NVI bar 1: the index
+    /// rises 5% to 1050 and the signal is 1000 + (1050 - 1000) * 2 / 256 = 1000.390625.
     #[test]
     fn nvi_pvi_match_published_definition() {
         // Volume down, up, unchanged with a zero close, down after a zero close, unchanged, up after
