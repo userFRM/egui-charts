@@ -29,7 +29,7 @@
 //! skips any drawing it cannot read
 //! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
-use crate::drawings::{ChartPoint, Drawing, DrawingToolType, PositionSize};
+use crate::drawings::{ChartPoint, Drawing, DrawingToolType, ParseToolTypeError, PositionSize};
 use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -261,9 +261,10 @@ impl DrawingStorage {
     /// Fails as a whole on invalid JSON, on a version this release does not
     /// know and on a missing or invalid symbol, timeframe or metadata. A
     /// drawing that cannot be read (a missing field, a `null` an earlier release
-    /// wrote for a non-finite number, a tool type from a newer release or a
-    /// setting out of bounds) is left out and returned as a [`SkippedDrawing`],
-    /// so one bad drawing does not lose the others. A drawing whose id an
+    /// wrote for a non-finite number, a number out of the range of its field, a
+    /// tool type from a newer release, a cursor or a setting out of bounds) is
+    /// left out and returned as a [`SkippedDrawing`], so one bad drawing does
+    /// not lose the others. A drawing whose id an
     /// earlier loaded drawing already has is skipped too, so the loaded ids are
     /// unique and the first one in the file wins. Saving the returned storage writes
     /// only the drawings that loaded; keep the original file if the skipped
@@ -290,7 +291,7 @@ impl DrawingStorage {
                     {
                         DrawingToolType::deserialize(name.into_deserializer()).map_err(
                             |_: serde::de::value::Error| {
-                                serde::de::Error::custom(format!("unknown drawing tool {name:?}"))
+                                serde::de::Error::custom(ParseToolTypeError { input: name.into() })
                             },
                         )?;
                     }
@@ -314,6 +315,16 @@ impl DrawingStorage {
                 let id = value.get("id").and_then(|id| id.as_str()).map(String::from);
                 load(value)
                     .and_then(|drawing| {
+                        // Before the id check, so that a skipped drawing does not claim its id.
+                        let tool = drawing.drawing.tool_type;
+                        if tool.is_cursor() {
+                            return Err(serde::de::Error::custom(format!(
+                                "{tool} is a cursor, not a drawing"
+                            )));
+                        }
+                        if let Some(field) = drawing.non_finite_field() {
+                            return Err(serde::de::Error::custom(format!("non-finite {field}")));
+                        }
                         if ids.insert(drawing.id.clone()) {
                             Ok(drawing)
                         } else {
@@ -433,16 +444,12 @@ mod v1 {
         value: serde_json::Value,
     ) -> Result<super::StoredDrawing, serde_json::Error> {
         let stored: StoredDrawing = serde_json::from_value(value)?;
-        // Cursors were never stored; the previous loader also accepted the
-        // other names `FromStr` parses, such as "trendline".
-        let tool_type = stored
+        // The previous loader also accepted the other names `FromStr` parses,
+        // such as "trendline".
+        let tool_type: DrawingToolType = stored
             .tool_type
             .parse()
-            .ok()
-            .filter(|tool: &DrawingToolType| !tool.is_cursor())
-            .ok_or_else(|| {
-                serde_json::Error::custom(format!("unknown drawing tool {:?}", stored.tool_type))
-            })?;
+            .map_err(serde_json::Error::custom)?;
         let Color { r, g, b, a } = stored.color;
         let mut drawing = Drawing::new(0, tool_type);
         drawing.color = [r, g, b, a];
@@ -589,7 +596,7 @@ mod tests {
 
     #[test]
     fn every_tool_round_trips_with_all_settings() {
-        for &tool in DrawingToolType::all() {
+        for &tool in DrawingToolType::all().iter().filter(|t| !t.is_cursor()) {
             let drawing = non_default_drawing(tool);
             let mut storage = DrawingStorage::new("AAPL");
             storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
@@ -674,6 +681,18 @@ mod tests {
                 0,
             ),
             (
+                current.replace("FixedRangeVolumeProfile", "Eraser"),
+                "Eraser is a cursor, not a drawing",
+                &["2"],
+                0,
+            ),
+            (
+                current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": 1e39", 1),
+                "non-finite stroke_width",
+                &["2"],
+                0,
+            ),
+            (
                 current.replacen("\"id\": \"2\"", "\"id\": \"1\"", 1),
                 "duplicate drawing id \"1\"",
                 &["1"],
@@ -699,6 +718,7 @@ mod tests {
             assert_eq!(skipped[0].index, index);
             assert_eq!(skipped[0].id.as_deref(), Some("1"));
             assert!(skipped[0].error.to_string().contains(error), "{skipped:?}");
+            assert!(storage.to_json().is_ok(), "{error}");
         }
 
         let got = DrawingStorage::from_json(&current.replace("\"version\": 2", "\"version\": 3"))
