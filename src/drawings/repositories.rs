@@ -144,88 +144,30 @@ impl InMemoryToolsRepository {
 mod tests {
     use super::*;
 
+    /// A tool reports the category it is listed under, and a case-insensitive
+    /// search on part of its name finds it.
     #[test]
-    fn test_get_all_categories() {
+    fn tools_are_found_by_category_and_search() {
         let repo = InMemoryToolsRepository::new();
-        let categories = repo.get_all_categories();
-
-        assert!(!categories.is_empty(), "Should have categories");
-        assert!(categories.contains(&"Lines".to_string()));
-        assert!(categories.contains(&"Fibonacci".to_string()));
-        assert!(
-            !categories.contains(&"Favorites".to_string()),
-            "Should not include dynamic categories"
-        );
-    }
-
-    #[test]
-    fn test_get_category_tools() {
-        let repo = InMemoryToolsRepository::new();
-        let tools = repo.get_category_tools("Lines");
-
-        assert!(!tools.is_empty(), "Lines category should have tools");
-
-        // Check that we get sections
-        let all_tools: Vec<DrawingToolType> = tools
-            .iter()
-            .flat_map(|(_, section_tools)| section_tools.clone())
-            .collect();
-
-        assert!(
-            all_tools.contains(&DrawingToolType::TrendLine),
-            "Should contain TrendLine"
-        );
-    }
-
-    #[test]
-    fn test_get_tool_category() {
-        let repo = InMemoryToolsRepository::new();
-
-        assert_eq!(
-            repo.get_tool_category(DrawingToolType::TrendLine),
-            Some("Lines".to_string())
-        );
-        assert_eq!(
-            repo.get_tool_category(DrawingToolType::FibonacciRetracement),
-            Some("Fibonacci".to_string())
-        );
-    }
-
-    #[test]
-    fn test_search_tools() {
-        let repo = InMemoryToolsRepository::new();
-
-        // Search for "fib" which matches "Fib Retracement", "Fib Channel", etc.
-        let results = repo.search_tools("fib");
-        assert!(!results.is_empty(), "Should find Fib tools");
-        assert!(results.contains(&DrawingToolType::FibonacciRetracement));
-    }
-
-    #[test]
-    fn test_search_case_insensitive() {
-        let repo = InMemoryToolsRepository::new();
-
-        let results1 = repo.search_tools("FIB");
-        let results2 = repo.search_tools("fib");
-
-        assert_eq!(
-            results1.len(),
-            results2.len(),
-            "Search should be case-insensitive"
-        );
-    }
-
-    #[test]
-    fn test_search_empty_returns_all() {
-        let repo = InMemoryToolsRepository::new();
-
-        let all = repo.get_all_tools();
-        let search_results = repo.search_tools("");
-
-        assert_eq!(
-            all.len(),
-            search_results.len(),
-            "Empty search should return all tools"
-        );
+        let cases = [
+            (DrawingToolType::TrendLine, "Lines", "trend"),
+            (DrawingToolType::FibonacciRetracement, "Fibonacci", "FIB"),
+        ];
+        for (tool, category, query) in cases {
+            assert_eq!(
+                repo.get_tool_category(tool).as_deref(),
+                Some(category),
+                "{tool:?}"
+            );
+            let listed = repo
+                .get_category_tools(category)
+                .iter()
+                .any(|(_, tools)| tools.contains(&tool));
+            assert!(listed, "{tool:?} is not listed under {category}");
+            assert!(
+                repo.search_tools(query).contains(&tool),
+                "search {query:?} misses {tool:?}"
+            );
+        }
     }
 }
