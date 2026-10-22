@@ -15,10 +15,10 @@ use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
-/// A `Result<T, FeedError>`, for the `T` of the request it answers.
+/// A `Result<T, FeedError>` answering a request for `T`, or a `T` pushed through an event stream.
 pub(crate) type Answer = Box<dyn Any + Send>;
 
 /// One chart's inbox, shared with every `Reply` and `Sink` it hands out.
@@ -33,6 +33,8 @@ struct State {
     /// Set by the first push after a drain, so a burst wakes the chart once.
     woken: bool,
     answers: Vec<(u64, Answer)>,
+    /// Pushes queued in `answers` per event stream.
+    streamed: HashMap<u64, usize>,
     subscriptions: HashMap<SubscriptionId, Live>,
 }
 
@@ -46,7 +48,7 @@ struct Live {
 
 /// What arrived since the last drain.
 pub(crate) struct Drained {
-    /// In arrival order, each with the request it answers.
+    /// In arrival order, each with the key of its request or event stream.
     pub(crate) answers: Vec<(u64, Answer)>,
     pub(crate) updates: Vec<(SubscriptionId, Updates)>,
 }
@@ -131,6 +133,7 @@ impl Inbox {
         let mut state = self.state();
         state.woken = false;
         let answers = std::mem::take(&mut state.answers);
+        state.streamed.clear();
         let updates = state
             .subscriptions
             .iter_mut()
@@ -166,7 +169,28 @@ impl Inbox {
             true
         });
     }
+
+    /// Queues `event` under `key` while `active` holds, up to 10,000 per drain. A push over the
+    /// bound is dropped and clears `active`: the stream lagged.
+    pub(crate) fn push_answer(&self, key: u64, event: Answer, active: &AtomicBool) {
+        self.push(|state| {
+            if !active.load(Ordering::Relaxed) {
+                return false;
+            }
+            let queued = state.streamed.entry(key).or_default();
+            if *queued == STREAM_BOUND {
+                active.store(false, Ordering::Relaxed);
+                return false;
+            }
+            *queued += 1;
+            state.answers.push((key, event));
+            true
+        });
+    }
 }
+
+/// Pushes one event stream may queue between two drains.
+const STREAM_BOUND: usize = 10_000;
 
 /// The answer to one request, usable from any thread. Dropping it unanswered reports
 /// [`FeedError::Unanswered`], so a lost request never leaves the chart loading forever.

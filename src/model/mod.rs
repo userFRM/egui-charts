@@ -27,6 +27,7 @@ pub mod quote;
 pub mod range_bar;
 pub mod renko;
 pub mod session;
+mod signal;
 mod symbol;
 pub mod symbol_info;
 mod timeframe;
@@ -64,6 +65,7 @@ pub use session::{
     CompositeSessionProvider, DailySessionProvider, MonthlySessionProvider, SessionBreak,
     SessionBreakType, SessionProvider, WeeklySessionProvider, find_session_breaks,
 };
+pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use symbol::Symbol;
 pub use symbol_info::{DataStatus, LibrarySymbolInfo, SubsessionInfo, SymbolFormat, SymbolType};
 pub use timeframe::Timeframe;

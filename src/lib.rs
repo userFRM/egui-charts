@@ -49,7 +49,7 @@
 //! |---|---|---|
 //! | **Domain model** | [`model`] | `Bar`, `BarData`, `Symbol`, `Timeframe`, `ChartType`, Renko/Kagi/P&F transforms |
 //! | **Data** | [`data`] | `DataSource` trait, `DataUpdate`, historical/live data abstractions |
-//! | **Host services** | [`services`] | Traits a host implements to supply services such as storage and symbol search |
+//! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search and signals |
 //! | **Chart engine** | [`chart`] | Pan/zoom, hit-testing, coordinate mapping, series rendering, interaction |
 //! | **Drawing tools** | [`drawings`] | 95 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
 //! | **Indicators** | [`studies`] | 128 indicator names in `IndicatorFactory`, `Indicator` trait, `IndicatorRegistry` |
