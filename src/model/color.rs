@@ -46,9 +46,9 @@ impl ColorType {
         Self::Solid(Color32::from_rgb(r, g, b))
     }
 
-    /// Create a solid color from RGBA values
+    /// Create a solid color from unmultiplied RGBA values
     pub fn from_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self::Solid(Color32::from_rgba_premultiplied(r, g, b, a))
+        Self::Solid(Color32::from_rgba_unmultiplied(r, g, b, a))
     }
 
     /// Create a solid color from hex string (e.g., "#FF5733" or "FF5733")
@@ -63,7 +63,7 @@ impl ColorType {
         let (r, g, b) = (channel(0), channel(2), channel(4));
         let a = if hex.len() == 8 { channel(6) } else { 255 };
 
-        Ok(Self::Solid(Color32::from_rgba_premultiplied(r, g, b, a)))
+        Ok(Self::Solid(Color32::from_rgba_unmultiplied(r, g, b, a)))
     }
 
     /// Create a vertical gradient
@@ -130,13 +130,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_from_hex() {
-        let color = ColorType::from_hex("#FF5733").unwrap();
-        assert!(color.is_solid());
-        assert_eq!(color.primary_color(), Color32::from_rgb(255, 87, 51));
-
-        let color_no_hash = ColorType::from_hex("FF5733").unwrap();
-        assert_eq!(color, color_no_hash);
+    fn from_hex_and_from_rgba_read_unmultiplied_alpha() {
+        // Premultiplied in gamma space, rounded half up: 255 * 128 / 255 = 128.
+        for (input, expected) in [
+            ("#FF5733", [255, 87, 51, 255]),
+            ("FF5733", [255, 87, 51, 255]),
+            ("#FF000000", [0, 0, 0, 0]),
+            ("#FF000080", [128, 0, 0, 128]),
+        ] {
+            let color = ColorType::from_hex(input).unwrap();
+            assert_eq!(color.to_color32().to_array(), expected, "{input:?}");
+        }
+        assert_eq!(
+            ColorType::from_rgba(255, 0, 0, 128).to_color32().to_array(),
+            [128, 0, 0, 128]
+        );
     }
 
     #[test]
