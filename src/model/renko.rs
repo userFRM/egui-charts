@@ -1,10 +1,11 @@
 //! Renko chart transformation.
 //!
 //! Renko charts filter out time entirely, plotting uniform-sized bricks
-//! that represent a fixed price movement. A new brick is drawn only when
-//! price moves by at least [`brick_size`](RenkoConfig::brick_size) from
-//! the close of the previous brick. This makes trends and reversals very
-//! easy to spot.
+//! that represent a fixed price movement. A brick in the direction of the
+//! trend is drawn when the close moves one [`brick_size`](RenkoConfig::brick_size)
+//! beyond the close of the previous brick. A reversal needs a two-brick move:
+//! the close must move one brick beyond the open of the previous brick, and
+//! the reversal brick starts at that open.
 //!
 //! Use [`to_renko_bricks`] to transform OHLCV bars into Renko bricks.
 
@@ -80,6 +81,12 @@ impl RenkoConfig {
 
 /// Transform bars into Renko bricks
 ///
+/// The first brick is drawn once a close moves one brick either way from the
+/// first close rounded down to a multiple of the brick size. After that, a
+/// brick continues the trend when a close reaches one brick beyond the last
+/// brick's close, and reverses it when a close reaches one brick beyond the
+/// last brick's open, so a reversal needs a two-brick move.
+///
 /// # Safety Limits
 /// - Maximum 10,000 bricks to prevent memory issues
 /// - Auto-adjusts brick size if too small relative to price range
@@ -103,45 +110,44 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
     const MAX_BRICKS: usize = 10_000;
 
     // Start with the first bar's close price, aligned to brick boundary
-    let mut curr_price = (bars[0].close / brick_size).floor() * brick_size;
+    let start = (bars[0].close / brick_size).floor() * brick_size;
+    // Open and close of the last brick, or the start price before the first brick.
+    let mut last = (start, start);
 
     for bar in bars.iter() {
         let price = bar.close;
-
-        // Calculate how many bricks we can form
-        let price_diff = price - curr_price;
-        let num_bricks = (price_diff.abs() / brick_size).floor() as i32;
-
-        if num_bricks > 0 {
-            let direction = if price_diff > 0.0 {
-                RenkoDirection::Up
+        loop {
+            let (open, close) = last;
+            let (low, high) = (open.min(close), open.max(close));
+            // Before the first brick both ends are the start, so either direction needs one brick.
+            let (brick_open, brick_close) = if price >= high + brick_size {
+                (high, high + brick_size)
+            } else if price <= low - brick_size {
+                (low, low - brick_size)
             } else {
-                RenkoDirection::Down
+                break;
             };
+            // A box below the precision of the price moves nothing.
+            if brick_close == brick_open {
+                break;
+            }
+            let up = brick_close > brick_open;
 
-            // Create bricks for this price movement (with safety limit)
-            let bricks_to_create = (num_bricks as usize).min(MAX_BRICKS - bricks.len());
-            for _ in 0..bricks_to_create {
-                let brick_open = curr_price;
-                let brick_close = if direction == RenkoDirection::Up {
-                    curr_price + brick_size
+            bricks.push(RenkoBrick {
+                ts: bar.time,
+                open: brick_open,
+                close: brick_close,
+                direction: if up {
+                    RenkoDirection::Up
                 } else {
-                    curr_price - brick_size
-                };
+                    RenkoDirection::Down
+                },
+            });
+            last = (brick_open, brick_close);
 
-                bricks.push(RenkoBrick {
-                    ts: bar.time,
-                    open: brick_open,
-                    close: brick_close,
-                    direction,
-                });
-
-                curr_price = brick_close;
-
-                // Safety check
-                if bricks.len() >= MAX_BRICKS {
-                    return bricks;
-                }
+            // Safety check
+            if bricks.len() >= MAX_BRICKS {
+                return bricks;
             }
         }
     }
@@ -212,14 +218,56 @@ mod tests {
     }
 
     #[test]
-    fn test_renko_brick_creation() {
-        let bars = create_test_bars();
-        let config = RenkoConfig::new(2.0);
-        let bricks = to_renko_bricks(&bars, &config);
-
-        assert!(!bricks.is_empty());
-        // With brick size of 2.0, price moving from 101 to 106 should create bricks
-        assert!(bricks.len() >= 2);
+    fn bricks_reverse_only_after_a_two_box_move() {
+        let cases = [
+            (
+                vec![100.0, 103.0, 102.0],
+                vec![(100.0, 101.0), (101.0, 102.0), (102.0, 103.0)],
+            ),
+            (
+                vec![100.0, 103.0, 101.0],
+                vec![
+                    (100.0, 101.0),
+                    (101.0, 102.0),
+                    (102.0, 103.0),
+                    (102.0, 101.0),
+                ],
+            ),
+            (
+                vec![100.0, 103.0, 101.0, 102.0, 103.0],
+                vec![
+                    (100.0, 101.0),
+                    (101.0, 102.0),
+                    (102.0, 103.0),
+                    (102.0, 101.0),
+                    (102.0, 103.0),
+                ],
+            ),
+            (vec![100.0, 98.0], vec![(100.0, 99.0), (99.0, 98.0)]),
+            (vec![100.0, 100.9], vec![]),
+            // At 2^53 one box rounds away above the price but not below it.
+            (vec![9_007_199_254_740_992.0; 2], vec![]),
+        ];
+        let start = Utc::now();
+        for (closes, expected) in &cases {
+            let bars: Vec<Bar> = closes
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| Bar {
+                    time: start + Duration::minutes(i as i64),
+                    open: c,
+                    high: c,
+                    low: c,
+                    close: c,
+                    volume: 0.0,
+                })
+                .collect();
+            let got: Vec<(f64, f64)> = to_renko_bricks(&bars, &RenkoConfig::new(1.0))
+                .iter()
+                .map(|b| (b.open, b.close))
+                .collect();
+            assert_eq!(got, *expected, "closes {closes:?}");
+        }
     }
 
     #[test]
