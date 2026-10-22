@@ -9,6 +9,7 @@
 //! - OBV divergence from price can signal trend changes
 //!
 //! # Calculation
+//! OBV is 0 on the first bar. On each later bar:
 //! If close > prev_close: OBV = prev_OBV + volume
 //! If close < prev_close: OBV = prev_OBV - volume
 //! If close == prev_close: OBV = prev_OBV
@@ -74,10 +75,8 @@ impl Indicator for OnBalanceVolume {
             return;
         }
 
+        // The first bar has no previous close, so the running total starts at 0.
         let mut obv = 0.0;
-
-        // First bar - use volume as initial OBV
-        obv += data[0].volume;
         self.values.push(IndicatorValue::Single(obv));
 
         // Subsequent bars
@@ -130,98 +129,49 @@ impl Indicator for OnBalanceVolume {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, Utc};
+    use chrono::Utc;
 
-    #[test]
-    fn test_obv_up_day() {
-        let start = Utc::now();
-        let bars = vec![
-            Bar {
-                time: start,
-                open: 100.0,
-                high: 101.0,
-                low: 99.0,
-                close: 100.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: start + Duration::minutes(5),
-                open: 100.0,
-                high: 102.0,
-                low: 100.0,
-                close: 101.0,
-                volume: 1500.0,
-            },
-        ];
-
-        let mut obv = OnBalanceVolume::new();
-        obv.calculate(&bars);
-
-        // OBV should increase on up day: 1000 + 1500 = 2500
-        if let IndicatorValue::Single(v) = obv.values()[1] {
-            assert!((v - 2500.0).abs() < 0.001);
-        }
+    fn bars(closes: &[f64], volumes: &[f64]) -> Vec<Bar> {
+        closes
+            .iter()
+            .zip(volumes)
+            .map(|(&c, &v)| Bar::new(Utc::now(), c, c + 1.0, c - 1.0, c, v))
+            .collect()
     }
 
+    /// Expected values are the running total worked by hand: the first bar has
+    /// no previous close, so it adds nothing and OBV is 0 there.
     #[test]
-    fn test_obv_down_day() {
-        let start = Utc::now();
-        let bars = vec![
-            Bar {
-                time: start,
-                open: 100.0,
-                high: 101.0,
-                low: 99.0,
-                close: 100.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: start + Duration::minutes(5),
-                open: 100.0,
-                high: 100.0,
-                low: 98.0,
-                close: 99.0,
-                volume: 1500.0,
-            },
+    fn test_obv_matches_reference() {
+        // (closes, volumes, expected OBV)
+        let cases: &[(&[f64], &[f64], &[f64])] = &[
+            // Up, down, unchanged, a zero-volume up bar, then down.
+            (
+                &[10.0, 11.0, 10.5, 10.5, 12.0, 11.0],
+                &[1000.0, 1500.0, 700.0, 900.0, 0.0, 400.0],
+                &[0.0, 1500.0, 800.0, 800.0, 800.0, 400.0],
+            ),
+            // Flat series.
+            (
+                &[10.0, 10.0, 10.0],
+                &[1000.0, 2000.0, 3000.0],
+                &[0.0, 0.0, 0.0],
+            ),
+            // Single bar.
+            (&[10.0], &[5000.0], &[0.0]),
         ];
-
-        let mut obv = OnBalanceVolume::new();
-        obv.calculate(&bars);
-
-        // OBV should decrease on down day: 1000 - 1500 = -500
-        if let IndicatorValue::Single(v) = obv.values()[1] {
-            assert!((v - (-500.0)).abs() < 0.001);
-        }
-    }
-
-    #[test]
-    fn test_obv_flat_day() {
-        let start = Utc::now();
-        let bars = vec![
-            Bar {
-                time: start,
-                open: 100.0,
-                high: 101.0,
-                low: 99.0,
-                close: 100.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: start + Duration::minutes(5),
-                open: 100.0,
-                high: 101.0,
-                low: 99.0,
-                close: 100.0,
-                volume: 1500.0,
-            },
-        ];
-
-        let mut obv = OnBalanceVolume::new();
-        obv.calculate(&bars);
-
-        // OBV should stay same on flat day: 1000
-        if let IndicatorValue::Single(v) = obv.values()[1] {
-            assert!((v - 1000.0).abs() < 0.001);
+        for (closes, volumes, expected) in cases {
+            let mut obv = OnBalanceVolume::new();
+            obv.calculate(&bars(closes, volumes));
+            let got: Vec<f64> = obv
+                .values()
+                .iter()
+                .map(|v| match v {
+                    IndicatorValue::Single(x) => *x,
+                    other => panic!("unexpected value {other:?}"),
+                })
+                .collect();
+            assert_eq!(got, *expected, "closes {closes:?}");
         }
     }
 
