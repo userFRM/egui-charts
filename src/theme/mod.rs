@@ -448,16 +448,17 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
         state.corner_radius = theme.radius.xs.into();
     }
 
-    ctx.set_visuals(visuals);
-
+    // egui keeps a dark and a light style and follows the system appearance by default, so
+    // style both: the theme then stays when the system switches.
     let spacing = &theme.spacing;
-    let mut style = (*ctx.global_style()).clone();
-    style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
-    style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
-    style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
-    style.spacing.button_padding = egui::vec2(spacing.sm, DESIGN_TOKENS.spacing.hairline);
-    style.spacing.interact_size.y = DESIGN_TOKENS.sizing.control_height;
-    ctx.set_global_style(style);
+    ctx.all_styles_mut(|style| {
+        style.visuals = visuals.clone();
+        style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
+        style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
+        style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
+        style.spacing.button_padding = egui::vec2(spacing.sm, DESIGN_TOKENS.spacing.hairline);
+        style.spacing.interact_size.y = DESIGN_TOKENS.sizing.control_height;
+    });
 
     // Store the theme so components resolve their colours from it while painting.
     context::set_active_theme(ctx, theme.clone());
@@ -596,5 +597,32 @@ mod tests {
             ));
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// egui follows the system appearance by default and keeps a style for each, so an app that
+    /// applies its theme once must keep it when the system switches between light and dark.
+    #[test]
+    fn the_theme_outlasts_a_switch_of_the_system_appearance() {
+        let ctx = egui::Context::default();
+        let frame = |system: egui::Theme, apply: bool| {
+            let input = egui::RawInput {
+                system_theme: Some(system),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                if apply {
+                    apply_to_egui(ui.ctx(), &Theme::high_contrast());
+                }
+            })
+            .drop_without_applying_deltas();
+        };
+        frame(egui::Theme::Dark, true);
+        let applied = ctx.global_style();
+        frame(egui::Theme::Light, false);
+        let style = ctx.global_style();
+        assert!(
+            style.visuals == applied.visuals && style.spacing == applied.spacing,
+            "switching the system to light dropped the applied theme"
+        );
     }
 }
