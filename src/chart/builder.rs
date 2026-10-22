@@ -270,7 +270,8 @@ impl ChartBuilder {
 
     /// Set the trading symbol (e.g., `"BTCUSDT"`, `"AAPL"`).
     ///
-    /// Defaults to `"BTCUSDT"` if not specified.
+    /// Without a symbol the chart shows none and requests nothing from the
+    /// data source.
     #[must_use]
     pub fn with_symbol(mut self, symbol: impl Into<String>) -> Self {
         self.symbol = Some(symbol.into());
@@ -524,14 +525,16 @@ impl ChartBuilder {
         chart.set_chart_type(self.chart_type);
         chart.set_visible_bars(self.visible_candles);
 
-        let symbol = self.symbol.unwrap_or_else(|| "BTCUSDT".to_string());
+        let symbol = self.symbol.unwrap_or_default();
 
         // Set symbol and timeframe for legend display
         chart.set_symbol(&symbol);
         chart.set_timeframe_label(&self.timeframe.as_str());
 
         // Subscribe to symbol and fetch historical data if data source provided
-        if let Some(ref mut source) = self.data_src {
+        if !symbol.is_empty()
+            && let Some(ref mut source) = self.data_src
+        {
             // Subscribe for real-time updates
             let _ = source.subscribe(symbol.clone(), self.timeframe);
 
@@ -678,7 +681,9 @@ impl TradingChart {
     ///    historical data and prepends it, shifting drawing indices to maintain
     ///    alignment.
     pub fn update(&mut self) {
-        if let Some(ref mut source) = self.data_src {
+        if !self.symbol.is_empty()
+            && let Some(ref mut source) = self.data_src
+        {
             // Poll for real-time updates
             let updates = source.poll();
             for update in updates {
@@ -1034,7 +1039,9 @@ impl TradingChart {
         // Reset progressive loading state for new symbol
         self.has_more_historical_data = true;
 
-        if let Some(ref mut source) = self.data_src {
+        if !symbol.is_empty()
+            && let Some(ref mut source) = self.data_src
+        {
             // Subscribe for real-time updates
             let _ = source.subscribe(symbol.clone(), self.timeframe);
 
@@ -1101,7 +1108,9 @@ impl TradingChart {
         // Reset indicators with empty data
         self.indicators.calculate_all(&[]);
 
-        if let Some(ref mut source) = self.data_src {
+        if !self.symbol.is_empty()
+            && let Some(ref mut source) = self.data_src
+        {
             // Subscribe for real-time updates with new timeframe
             // This creates a new TickAggregator with the new period
             let _ = source.subscribe(self.symbol.clone(), timeframe);
@@ -1167,5 +1176,59 @@ impl TradingChart {
     /// Clears any current selection (equivalent to clicking empty chart area).
     pub fn clear_selection(&mut self) {
         self.chart.clear_selection();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{DataSourceError, DataUpdate, HistoricalDataRequest};
+    use crate::model::Bar;
+    use std::sync::{Arc, Mutex};
+
+    /// Records the symbol of every subscription and history request.
+    struct RecordingSource(Arc<Mutex<Vec<String>>>);
+
+    impl DataSource for RecordingSource {
+        fn symbols(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn subscribe(&mut self, symbol: String, _: Timeframe) -> Result<(), DataSourceError> {
+            self.0.lock().unwrap().push(symbol);
+            Ok(())
+        }
+        fn unsubscribe(&mut self, _: String) -> Result<(), DataSourceError> {
+            Ok(())
+        }
+        fn poll(&mut self) -> Vec<DataUpdate> {
+            Vec::new()
+        }
+        fn fetch_historical(
+            &mut self,
+            request: HistoricalDataRequest,
+        ) -> Result<Vec<Bar>, DataSourceError> {
+            self.0.lock().unwrap().push(request.symbol);
+            Ok(Vec::new())
+        }
+        fn supports_historical(&self) -> bool {
+            true
+        }
+        fn get_timeframe(&self, _: &str) -> Option<Timeframe> {
+            None
+        }
+    }
+
+    #[test]
+    fn chart_without_symbol_requests_no_instrument() {
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let mut chart = ChartBuilder::new()
+            .with_data_src(Box::new(RecordingSource(requested.clone())))
+            .build();
+        chart.set_timeframe(Timeframe::Min5);
+        chart.update();
+        chart.set_symbol("");
+
+        assert_eq!(chart.get_symbol(), "");
+        assert!(requested.lock().unwrap().is_empty());
     }
 }

@@ -385,9 +385,7 @@ impl TopToolbar {
         let icon_size = icons::SM_MD;
         let small_icon_size = icons::XS;
         let padding = DESIGN_TOKENS.spacing.lg;
-        // Use provided symbol or fallback to default display
-        let display_symbol = if symbol.is_empty() { "AAPL" } else { symbol };
-        let text_width = display_symbol.len() as f32 * 7.5; // Slightly more space for text
+        let text_width = symbol.len() as f32 * 7.5; // Slightly more space for text
         let separator_width = DESIGN_TOKENS.stroke.hairline;
         let separator_padding = DESIGN_TOKENS.spacing.sm;
 
@@ -439,7 +437,7 @@ impl TopToolbar {
             ui.painter().text(
                 Pos2::new(x, rect.center().y),
                 egui::Align2::LEFT_CENTER,
-                display_symbol,
+                symbol,
                 egui::FontId::proportional(typography::MD),
                 theming::text_color(ui),
             );

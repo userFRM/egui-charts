@@ -260,6 +260,18 @@ pub fn render_time_labels(
     }
 }
 
+/// Formats a header price with decimals chosen by its magnitude: 2 from 100
+/// up, 4 from 1 up, 6 below 1.
+fn format_price(price: f64) -> String {
+    if price.abs() >= 100.0 {
+        format!("{price:.2}")
+    } else if price.abs() >= 1.0 {
+        format!("{price:.4}")
+    } else {
+        format!("{price:.6}")
+    }
+}
+
 /// Renders OHLC info header
 pub fn render_ohlc_info(
     painter: &egui::Painter,
@@ -275,8 +287,12 @@ pub fn render_ohlc_info(
     let candle = &visible_data[visible_data.len() - 1];
 
     let info = format!(
-        "open: {:.8}  close: {:.8}  high: {:.8}  low: {:.8}  24h volume: {:.2}",
-        candle.open, candle.close, candle.high, candle.low, candle.volume
+        "open: {}  close: {}  high: {}  low: {}  volume: {:.2}",
+        format_price(candle.open),
+        format_price(candle.close),
+        format_price(candle.high),
+        format_price(candle.low),
+        candle.volume
     );
 
     painter.text(
@@ -333,17 +349,6 @@ pub fn render_legend(
     let tf_galley = painter.layout_no_wrap(timeframe.to_string(), sep_font.clone(), colors.text);
     painter.galley(Pos2::new(x, y), tf_galley.clone(), colors.text);
     x += tf_galley.rect.width() + 20.0;
-
-    // Format price helper - auto-detect decimals based on price magnitude
-    let format_price = |price: f64| -> String {
-        if price >= 100.0 {
-            format!("{price:.2}")
-        } else if price >= 1.0 {
-            format!("{price:.4}")
-        } else {
-            format!("{price:.6}")
-        }
-    };
 
     // OHLC values with labels and color coding
     let label_font = FontId::proportional(typography::SM);

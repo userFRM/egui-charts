@@ -8,7 +8,7 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
 /// Symbol information for display
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SymbolInfo {
     /// Ticker symbol (e.g. "AAPL")
     pub symbol: String,
@@ -18,17 +18,6 @@ pub struct SymbolInfo {
     pub exchange: String,
     /// Chart timeframe (e.g. "1D")
     pub timeframe: String,
-}
-
-impl Default for SymbolInfo {
-    fn default() -> Self {
-        Self {
-            symbol: "AAPL".to_string(),
-            company_name: "Apple Inc".to_string(),
-            exchange: "NASDAQ".to_string(),
-            timeframe: "1D".to_string(),
-        }
-    }
 }
 
 /// OHLC price data for the current bar
@@ -213,14 +202,15 @@ impl SymbolHeader {
         );
         x += symbol_galley.size().x + DESIGN_TOKENS.spacing.sm;
 
-        // Company name • Exchange • Timeframe
-        if config.show_company_name {
-            let info_text = format!(
-                "{} • {} • {}",
-                self.symbol_info.company_name,
-                self.symbol_info.exchange,
-                self.symbol_info.timeframe
-            );
+        // Company name • Exchange • Timeframe, skipping empty fields
+        let info = &self.symbol_info;
+        let info_text = [&info.company_name, &info.exchange, &info.timeframe]
+            .into_iter()
+            .filter(|field| !field.is_empty())
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" • ");
+        if config.show_company_name && !info_text.is_empty() {
             let info_galley = painter.layout_no_wrap(
                 info_text,
                 egui::FontId::proportional(typography::MD),

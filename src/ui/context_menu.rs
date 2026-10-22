@@ -156,7 +156,7 @@ impl ChartContextMenu {
         Self {
             is_open: false,
             position: Pos2::ZERO,
-            symbol: "AAPL".to_string(),
+            symbol: String::new(),
             click_price: 0.0,
             indicator_cnt: 0,
             last_action: ContextMenuAction::None,
@@ -250,7 +250,7 @@ impl ChartContextMenu {
         let price_str = Self::format_price(self.click_price);
         let symbol = &self.symbol;
 
-        vec![
+        let mut items = vec![
             // Reset chart view at top
             MenuEntry::Item(
                 MenuItem::new("Reset chart view", ContextMenuAction::ResetChart)
@@ -266,53 +266,59 @@ impl ChartContextMenu {
                 MenuItem::new("Paste", ContextMenuAction::Paste).with_shortcut("Cmd V"),
             ),
             MenuEntry::Separator,
-            // Trading section - using exact SVG icons
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Add alert on {symbol} at {price_str}…"),
-                    ContextMenuAction::AddAlert {
-                        symbol: symbol.clone(),
-                        price: self.click_price,
-                    },
-                )
-                .with_icon(&embedded_icons::ALERTS)
-                .with_shortcut("Alt A"),
-            ),
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Sell 1 {symbol} @ {price_str} limit"),
-                    ContextMenuAction::SellLimit {
-                        symbol: symbol.clone(),
-                        price: self.click_price,
-                        quantity: 1,
-                    },
-                )
-                .with_icon(&embedded_icons::SHORT_POS)
-                .with_shortcut("Alt Shift S"),
-            ),
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Buy 1 {symbol} @ {price_str} stop"),
-                    ContextMenuAction::BuyStop {
-                        symbol: symbol.clone(),
-                        price: self.click_price,
-                        quantity: 1,
-                    },
-                )
-                .with_icon(&embedded_icons::LONG_POS),
-            ),
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Add order on {symbol} at {price_str}…"),
-                    ContextMenuAction::AddOrder {
-                        symbol: symbol.clone(),
-                        price: self.click_price,
-                    },
-                )
-                .with_icon(&embedded_icons::PLUS)
-                .with_shortcut("Shift T"),
-            ),
-            MenuEntry::Separator,
+        ];
+        // Trading items need an instrument, so they are offered only with a symbol.
+        if !symbol.is_empty() {
+            items.extend([
+                MenuEntry::Item(
+                    MenuItem::new(
+                        format!("Add alert on {symbol} at {price_str}…"),
+                        ContextMenuAction::AddAlert {
+                            symbol: symbol.clone(),
+                            price: self.click_price,
+                        },
+                    )
+                    .with_icon(&embedded_icons::ALERTS)
+                    .with_shortcut("Alt A"),
+                ),
+                MenuEntry::Item(
+                    MenuItem::new(
+                        format!("Sell 1 {symbol} @ {price_str} limit"),
+                        ContextMenuAction::SellLimit {
+                            symbol: symbol.clone(),
+                            price: self.click_price,
+                            quantity: 1,
+                        },
+                    )
+                    .with_icon(&embedded_icons::SHORT_POS)
+                    .with_shortcut("Alt Shift S"),
+                ),
+                MenuEntry::Item(
+                    MenuItem::new(
+                        format!("Buy 1 {symbol} @ {price_str} stop"),
+                        ContextMenuAction::BuyStop {
+                            symbol: symbol.clone(),
+                            price: self.click_price,
+                            quantity: 1,
+                        },
+                    )
+                    .with_icon(&embedded_icons::LONG_POS),
+                ),
+                MenuEntry::Item(
+                    MenuItem::new(
+                        format!("Add order on {symbol} at {price_str}…"),
+                        ContextMenuAction::AddOrder {
+                            symbol: symbol.clone(),
+                            price: self.click_price,
+                        },
+                    )
+                    .with_icon(&embedded_icons::PLUS)
+                    .with_shortcut("Shift T"),
+                ),
+                MenuEntry::Separator,
+            ]);
+        }
+        items.extend([
             // Cursor section
             MenuEntry::Item(MenuItem::new(
                 "Lock vertical cursor line by time",
@@ -354,7 +360,8 @@ impl ChartContextMenu {
                 MenuItem::new("Chart Settings…", ContextMenuAction::OpenSettings)
                     .with_icon(&embedded_icons::SETTINGS_GEAR),
             ),
-        ]
+        ]);
+        items
     }
 
     /// Show the context menu

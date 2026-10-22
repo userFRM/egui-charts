@@ -139,7 +139,7 @@ impl SeriesContextMenu {
             is_open: false,
             position: Pos2::ZERO,
             series_id: None,
-            symbol: "AAPL".to_string(),
+            symbol: String::new(),
             click_price: 0.0,
             last_action: SeriesContextMenuAction::None,
             just_opened: false,
@@ -191,35 +191,48 @@ impl SeriesContextMenu {
     fn build_menu_items(&self) -> Vec<MenuEntry> {
         let price_str = Self::format_price(self.click_price);
         let symbol = &self.symbol;
+        let has_symbol = !symbol.is_empty();
+        let of_symbol = |prep: &str| {
+            if has_symbol {
+                format!(" {prep} {symbol}")
+            } else {
+                String::new()
+            }
+        };
 
-        vec![
-            // Trading section
+        let mut items = Vec::new();
+        // Alerts, orders, watchlists and notes need an instrument.
+        if has_symbol {
+            items.extend([
+                MenuEntry::Item(
+                    MenuItem::new(
+                        format!("Add alert on {symbol} at {price_str}…"),
+                        SeriesContextMenuAction::AddAlert,
+                    )
+                    .with_icon(&embedded_icons::ALERTS)
+                    .with_shortcut("Alt A"),
+                ),
+                MenuEntry::Item(
+                    MenuItem::new(
+                        format!("Add order on {symbol} at {price_str}…"),
+                        SeriesContextMenuAction::AddOrder,
+                    )
+                    .with_icon(&embedded_icons::PLUS)
+                    .with_shortcut("Shift T"),
+                ),
+            ]);
+        }
+        items.extend([
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add alert on {symbol} at {price_str}…"),
-                    SeriesContextMenuAction::AddAlert,
-                )
-                .with_icon(&embedded_icons::ALERTS)
-                .with_shortcut("Alt A"),
-            ),
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Add order on {symbol} at {price_str}…"),
-                    SeriesContextMenuAction::AddOrder,
-                )
-                .with_icon(&embedded_icons::PLUS)
-                .with_shortcut("Shift T"),
-            ),
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Add indicator/strategy on {symbol}…"),
+                    format!("Add indicator/strategy{}…", of_symbol("on")),
                     SeriesContextMenuAction::AddIndicator,
                 )
                 .with_icon(&embedded_icons::INDICATORS),
             ),
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add financial metric for {symbol}…"),
+                    format!("Add financial metric{}…", of_symbol("for")),
                     SeriesContextMenuAction::AddFinancialMetric,
                 )
                 .with_icon(&embedded_icons::BAR_CHART),
@@ -270,30 +283,35 @@ impl SeriesContextMenu {
                 .submenu(),
             ),
             MenuEntry::Separator,
-            // Watchlist & notes section
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Add {symbol} to watchlist"),
-                    SeriesContextMenuAction::AddToWatchlist,
-                )
-                .with_icon(&embedded_icons::WATCHLIST)
-                .submenu(),
-            ),
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Add text note for {symbol}"),
-                    SeriesContextMenuAction::AddTextNote,
-                )
-                .with_icon(&embedded_icons::TEXT)
-                .with_shortcut("Alt N"),
-            ),
-            MenuEntry::Separator,
-            // Settings (last item)
-            MenuEntry::Item(
-                MenuItem::new("Settings…", SeriesContextMenuAction::OpenSettings)
-                    .with_icon(&embedded_icons::SETTINGS_GEAR),
-            ),
-        ]
+        ]);
+        if has_symbol {
+            items.extend([
+                // Watchlist & notes section
+                MenuEntry::Item(
+                    MenuItem::new(
+                        format!("Add {symbol} to watchlist"),
+                        SeriesContextMenuAction::AddToWatchlist,
+                    )
+                    .with_icon(&embedded_icons::WATCHLIST)
+                    .submenu(),
+                ),
+                MenuEntry::Item(
+                    MenuItem::new(
+                        format!("Add text note for {symbol}"),
+                        SeriesContextMenuAction::AddTextNote,
+                    )
+                    .with_icon(&embedded_icons::TEXT)
+                    .with_shortcut("Alt N"),
+                ),
+                MenuEntry::Separator,
+            ]);
+        }
+        // Settings (last item)
+        items.push(MenuEntry::Item(
+            MenuItem::new("Settings…", SeriesContextMenuAction::OpenSettings)
+                .with_icon(&embedded_icons::SETTINGS_GEAR),
+        ));
+        items
     }
 
     /// Show the context menu

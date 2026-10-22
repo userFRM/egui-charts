@@ -35,6 +35,7 @@ All notable changes to this project are documented in this file. The format is b
 - The forecast drawing shows the predicted change over its bar span and resolves to success once a bar reaches the target by the target bar, or to failure once the target bar has closed without that.
 - The bars pattern projection draws shifted copies of the selected bars.
 - The chart watermark falls back to the chart symbol and is hidden when there is none, instead of showing a placeholder.
+- The OHLC header of a chart without a symbol prints prices with the same magnitude-based decimals as the legend instead of 8 decimals, and labels the last bar's volume as volume instead of 24h volume. The top toolbar's symbol pill shows no symbol instead of AAPL when none is set, the chart and series context menus leave out their alert, order, watchlist and note items until there is a symbol, and `SymbolHeader` leaves out empty info fields instead of drawing bare separators.
 - Zooming the price axis in by hand stops at a span of one millionth of the price level instead of narrowing to a few nanounits, and repeated zooming out can no longer overflow the price range to infinite or NaN bounds.
 - `Timeframe::duration_ms` saturates at `i64::MAX` for custom timeframes too large to represent instead of overflowing into a panic or a negative duration, and parsing a custom timeframe whose second count overflows is rejected.
 - Built-in studies raise a length of 0 to 1 and accept any longer length, alone or mixed with short ones, so a zero, huge or swapped period no longer panics, exhausts memory or yields only NaN (for example `KAMA::new(0)`, `SmoothedMA::new(0)` and `MACross::new(50, 20)`).
@@ -76,6 +77,8 @@ All notable changes to this project are documented in this file. The format is b
 - `apply_to_egui` sets `visuals.window_fill` to `UiSemanticTokens::panel_bg_floating`, which in dark themes is now (42, 46, 57), one step above `panel_bg`, instead of equal to it. Popups and windows also get a hairline border and a smaller shadow.
 - The `text_on_primary`, `text_on_primary_hovered`, `icon_on_primary` and `icon_on_primary_hovered` tokens of `ListItemSemanticTokens` are white instead of the accent and near-black, so content on a selected list item is readable.
 - `TradingChart` context menus follow the theme applied with `apply_to_egui` once there is one; the theme passed to `ChartBuilder::with_theme` only colours them before that.
+- `ChartBuilder` no longer defaults the symbol to `BTCUSDT`: a chart built without `with_symbol` has an empty symbol, shows no symbol and does not subscribe to or fetch from its data source until `TradingChart::set_symbol` is called. Migration: call `with_symbol` to keep the previous behaviour.
+- `SymbolInfo::default()` (in `ui::symbol_header`) has empty fields instead of AAPL, Apple Inc, NASDAQ and 1D. Migration: set the fields explicitly.
 
 ### Removed
 
