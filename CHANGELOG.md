@@ -106,6 +106,7 @@ All notable changes to this project are documented in this file. The format is b
 - Saved drawings round-trip: `stored_to_drawing` restores the anchors (`chart_points`), so a restored drawing no longer disappears on the next frame, every tool type loads back, and every setting (line style, fill, font, extend, arrows, lock, visibility, per-timeframe visibility, z-order, Fibonacci levels, volume profile, regression trend and position size) is kept.
 - Every drawing tool's display name parses back to that tool with `FromStr`, ignoring case; the Fibonacci extension, time zone, speed resistance fan, trend-based time and speed resistance arcs tools and the five Elliott wave tools were not parsed.
 - A drawing whose tool type is unknown is skipped with the error `unknown drawing tool "Name"` instead of one listing all 95 tool types.
+- `ColorType::from_hex` returns an error for input that is not six or eight hexadecimal digits, instead of panicking on a multi-byte character such as `"aÄÄb"` or accepting a sign such as `"+F+F+F"`.
 
 ### Changed
 

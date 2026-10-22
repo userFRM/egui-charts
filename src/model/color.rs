@@ -53,25 +53,15 @@ impl ColorType {
 
     /// Create a solid color from hex string (e.g., "#FF5733" or "FF5733")
     pub fn from_hex(hex: &str) -> Result<Self, String> {
-        let hex = hex.trim_start_matches('#');
+        let hex = hex.strip_prefix('#').unwrap_or(hex);
 
-        if hex.len() != 6 && hex.len() != 8 {
+        // Slicing panics inside a multi-byte character, and `from_str_radix` accepts a leading `+`.
+        if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(format!("Invalid hex color: {hex}"));
         }
-
-        let r = u8::from_str_radix(&hex[0..2], 16)
-            .map_err(|_| format!("Invalid red component: {}", &hex[0..2]))?;
-        let g = u8::from_str_radix(&hex[2..4], 16)
-            .map_err(|_| format!("Invalid green component: {}", &hex[2..4]))?;
-        let b = u8::from_str_radix(&hex[4..6], 16)
-            .map_err(|_| format!("Invalid blue component: {}", &hex[4..6]))?;
-
-        let a = if hex.len() == 8 {
-            u8::from_str_radix(&hex[6..8], 16)
-                .map_err(|_| format!("Invalid alpha component: {}", &hex[6..8]))?
-        } else {
-            255
-        };
+        let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or_default();
+        let (r, g, b) = (channel(0), channel(2), channel(4));
+        let a = if hex.len() == 8 { channel(6) } else { 255 };
 
         Ok(Self::Solid(Color32::from_rgba_premultiplied(r, g, b, a)))
     }
@@ -147,6 +137,16 @@ mod tests {
 
         let color_no_hash = ColorType::from_hex("FF5733").unwrap();
         assert_eq!(color, color_no_hash);
+    }
+
+    #[test]
+    fn from_hex_rejects_invalid_input() {
+        // "aÄÄb" and "ÄÄÄ" have a valid byte length but split multi-byte characters.
+        for input in [
+            "aÄÄb", "#ÄÄÄ", "+F+F+F", "GG0000", "12345", "#1234567", "##FF0000", "",
+        ] {
+            assert!(ColorType::from_hex(input).is_err(), "{input:?}");
+        }
     }
 
     #[test]
