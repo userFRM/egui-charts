@@ -135,8 +135,8 @@
 
             // Buttons
             btn_bg_light: "white",
-            btn_bg_hover_light: (243, 244, 246),
-            btn_bg_active_light: (230, 232, 240),
+            btn_bg_hover_light: (229, 232, 238),
+            btn_bg_active_light: (220, 224, 233),
             btn_bg_dark: "gray_900",
             btn_bg_hover_dark: "gray_800",
             btn_bg_active_dark: "gray_700",
@@ -144,6 +144,9 @@
             // Accent
             accent: "blue_500",
             accent_hover: "blue_600",
+            // Light selection: accent text on a pale accent fill, also the focused input outline
+            selection_bg_light: (219, 229, 255),
+            selection_text_light: "ui_accent_active",
 
             // Status text, at least 4.5:1 on its theme's panels and windows
             success_light: "green_600",
@@ -200,9 +203,11 @@
             selection_text: "white",
         ),
 
+        // Hover and pressed accents step darker so white text keeps 4.5:1 on all three.
         brand: (
             accent: "blue_500",
-            accent_hover: "blue_600",
+            accent_hover: (35, 88, 230),
+            accent_active: "ui_accent_active",
         ),
 
         // Status colors - Extended set
@@ -335,9 +340,10 @@
             outlined_border_hover: "gray_600",
 
             // Danger variant
-            danger_bg: "red_400",
-            danger_bg_hover: "red_500",
-            danger_bg_active: "red_600",
+            // Dark enough for white text at 4.5:1
+            danger_bg: "red_700",
+            danger_bg_hover: (198, 40, 40),
+            danger_bg_active: "red_800",
             danger_fg: "white",
         ),
 

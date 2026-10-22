@@ -85,6 +85,8 @@ pub(super) struct RawUiSemanticTokens {
     pub btn_bg_active_dark: RawColor,
     pub accent: RawColor,
     pub accent_hover: RawColor,
+    pub selection_bg_light: RawColor,
+    pub selection_text_light: RawColor,
     pub success_light: RawColor,
     pub warning_light: RawColor,
     pub error_light: RawColor,
@@ -130,6 +132,7 @@ pub(super) struct RawChartSemanticTokens {
 pub(super) struct RawBrandSemanticTokens {
     pub accent: RawColor,
     pub accent_hover: RawColor,
+    pub accent_active: RawColor,
 }
 
 #[derive(Deserialize)]

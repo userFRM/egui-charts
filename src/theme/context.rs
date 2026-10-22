@@ -429,7 +429,7 @@ impl ThemeUiExt for Ui {
 
     #[inline]
     fn theme_icon_active(&self) -> Color32 {
-        self.style().visuals.selection.bg_fill
+        self.ctx().theme_data().ui_icon_active
     }
 
     #[inline]
@@ -439,7 +439,7 @@ impl ThemeUiExt for Ui {
 
     #[inline]
     fn theme_accent(&self) -> Color32 {
-        self.style().visuals.selection.bg_fill
+        self.ctx().theme_data().ui_accent
     }
 
     #[inline]

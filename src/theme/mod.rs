@@ -417,7 +417,9 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
 
-    // Selection: egui paints selected labels in `selection.stroke`, on top of `bg_fill`.
+    // Selection: egui paints selected labels in `selection.stroke`, on top of `bg_fill`, and
+    // outlines a focused text input with `selection.stroke`. Dark themes use white on the accent,
+    // light themes accent text on a pale accent fill.
     visuals.selection.bg_fill = ui.selection_bg;
     visuals.selection.stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.selection_text);
 
@@ -516,6 +518,41 @@ mod tests {
                 "selection",
                 visuals.selection.bg_fill,
                 4.5,
+            );
+            for (fill, bg) in [
+                ("accent", ui.accent),
+                ("hovered accent", ui.accent_hover),
+                ("pressed accent", ui.accent_active),
+                ("danger", DESIGN_TOKENS.semantic.buttons.danger_bg),
+                (
+                    "hovered danger",
+                    DESIGN_TOKENS.semantic.buttons.danger_bg_hover,
+                ),
+                (
+                    "pressed danger",
+                    DESIGN_TOKENS.semantic.buttons.danger_bg_active,
+                ),
+            ] {
+                check("on-accent text", ui.accent_text, fill, bg, 4.5);
+            }
+            // Hover must read on a panel, and pressed must sit further from it than hover.
+            let (panel, hovered) = (visuals.panel_fill, visuals.widgets.hovered.bg_fill);
+            check("hover fill", hovered, "panels", panel, 1.2);
+            let pressed_min = contrast(hovered, panel) + 0.05;
+            check(
+                "pressed fill",
+                visuals.widgets.active.bg_fill,
+                "panels",
+                panel,
+                pressed_min,
+            );
+            // egui outlines a focused text input with the selection stroke.
+            check(
+                "focused input outline",
+                visuals.selection.stroke.color,
+                "inputs",
+                visuals.text_edit_bg_color(),
+                3.0,
             );
             for (surface, bg) in [
                 ("panels", visuals.panel_fill),

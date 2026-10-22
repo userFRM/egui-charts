@@ -533,6 +533,8 @@ fn resolve_tokens(raw: RawDesignTokens) -> DesignTokens {
                 btn_bg_active_dark: resolve_color(&raw.semantic.ui.btn_bg_active_dark),
                 accent: resolve_color(&raw.semantic.ui.accent),
                 accent_hover: resolve_color(&raw.semantic.ui.accent_hover),
+                selection_bg_light: resolve_color(&raw.semantic.ui.selection_bg_light),
+                selection_text_light: resolve_color(&raw.semantic.ui.selection_text_light),
                 success_light: resolve_color(&raw.semantic.ui.success_light),
                 warning_light: resolve_color(&raw.semantic.ui.warning_light),
                 error_light: resolve_color(&raw.semantic.ui.error_light),
@@ -574,6 +576,7 @@ fn resolve_tokens(raw: RawDesignTokens) -> DesignTokens {
             brand: BrandSemanticTokens {
                 accent: resolve_color(&raw.semantic.brand.accent),
                 accent_hover: resolve_color(&raw.semantic.brand.accent_hover),
+                accent_active: resolve_color(&raw.semantic.brand.accent_active),
             },
             status: StatusSemanticTokens {
                 error: resolve_color(&raw.semantic.status.error),

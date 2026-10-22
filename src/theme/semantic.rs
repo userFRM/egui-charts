@@ -124,7 +124,7 @@ impl UiSemanticTokens {
 
                 accent: tokens.brand.accent,
                 accent_hover: tokens.brand.accent_hover,
-                accent_active: tokens.buttons.primary_bg_active,
+                accent_active: tokens.brand.accent_active,
                 accent_text: tokens.chart.selection_text,
 
                 success: tokens.ui.success_dark,
@@ -162,12 +162,12 @@ impl UiSemanticTokens {
                 border_control: tokens.ui.border_control_light,
                 border_focus: tokens.brand.accent,
 
-                selection_bg: tokens.brand.accent,
-                selection_text: tokens.chart.selection_text,
+                selection_bg: tokens.ui.selection_bg_light,
+                selection_text: tokens.ui.selection_text_light,
 
                 accent: tokens.brand.accent,
                 accent_hover: tokens.brand.accent_hover,
-                accent_active: tokens.buttons.primary_bg_active,
+                accent_active: tokens.brand.accent_active,
                 accent_text: tokens.chart.selection_text,
 
                 success: tokens.ui.success_light,

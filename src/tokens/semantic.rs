@@ -89,6 +89,8 @@ pub struct UiSemanticTokens {
     pub btn_bg_active_dark: Color32,
     pub accent: Color32,
     pub accent_hover: Color32,
+    pub selection_bg_light: Color32,
+    pub selection_text_light: Color32,
     pub success_light: Color32,
     pub warning_light: Color32,
     pub error_light: Color32,
@@ -140,6 +142,7 @@ pub struct ChartSemanticTokens {
 pub struct BrandSemanticTokens {
     pub accent: Color32,
     pub accent_hover: Color32,
+    pub accent_active: Color32,
 }
 
 /// Status and feedback colors (error, info, disabled, caution).
