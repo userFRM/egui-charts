@@ -15,8 +15,8 @@ impl Chart {
     /// and counted in [`feed_state`](Self::feed_state), the rest sorted by time, and of several
     /// bars with one open time the last is kept. If the new bars still hold the former first bar,
     /// the drawings move with it, so older history can be loaded in front of the bars. The
-    /// studies are updated from the first bar that changed, and near the live edge the view
-    /// follows a new last bar, as with [`update`](Self::update).
+    /// studies are updated from the first bar that changed on the next [`show`](Self::show), and
+    /// near the live edge the view follows a new last bar, as with [`update`](Self::update).
     ///
     /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
@@ -40,8 +40,9 @@ impl Chart {
     /// Merges `bar` into the bars of `series` as [`Sink::push_bar`](crate::data::Sink::push_bar)
     /// does, matched by exact open time: a bar with the open time of a stored bar replaces it, a
     /// newer one is appended and an older one is inserted in order. An invalid bar is dropped and
-    /// counted in [`feed_state`](Self::feed_state). Studies and drawings follow the bars, and near
-    /// the live edge the view follows a new last bar.
+    /// counted in [`feed_state`](Self::feed_state). Drawings move with their bars, studies follow
+    /// them on the next [`show`](Self::show), and near the live edge the view follows a new last
+    /// bar.
     ///
     /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
     pub fn update(&mut self, series: SeriesId, bar: Bar) {
@@ -138,15 +139,16 @@ impl Chart {
         true
     }
 
-    /// The chart's studies with their ids, in the order they were added. Their values follow
-    /// every change of the bars.
+    /// The chart's studies with their ids, in the order they were added. Their values reflect the
+    /// bars as of the last [`show`](Self::show), or of the call to
+    /// [`add_indicator`](Self::add_indicator).
     pub fn indicators(&self) -> impl Iterator<Item = (SeriesId, &dyn Indicator)> {
         let studies = self.studies.indicators().iter().map(|study| study.as_ref());
         self.study_ids.iter().copied().zip(studies)
     }
 
-    /// The study `id`, to change its settings. It is recomputed in full on the next
-    /// [`show`](Self::show).
+    /// The study `id`, to change its settings. Its values reflect the bars as of the last
+    /// [`show`](Self::show); the next one recomputes it in full.
     pub fn indicator_mut(&mut self, id: SeriesId) -> Option<&mut (dyn Indicator + 'static)> {
         let at = self.study_ids.iter().position(|study| *study == id)?;
         self.pending_from[at] = Some(0);
@@ -165,10 +167,13 @@ impl Chart {
     }
 
     /// Keeps studies and the view in step after the main bars changed. `first_changed` is the
-    /// index of the first bar inserted, changed or removed.
+    /// index of the first bar inserted, changed or removed. The studies are updated once on the
+    /// next frame, for all changes since the previous one.
     fn bars_changed(&mut self, before: Edge, first_changed: Option<usize>) {
         if let Some(from) = first_changed {
-            self.studies.update_all(&self.state.data().bars, from);
+            for pending in &mut self.pending_from {
+                *pending = Some(pending.map_or(from, |pending| pending.min(from)));
+            }
         }
         self.follow_live_edge(before);
     }
