@@ -76,6 +76,7 @@ All notable changes to this project are documented in this file. The format is b
 - `FormRow` takes the height of its content instead of the remaining height of the panel, so consecutive rows and a following `FormGrid` stay visible. The label is centred on the widget's line, and the description sits below it in the theme's muted text colour.
 - The `FilterWidget` search icon and clear button sit inside the field, 8 px from its edges, and the field no longer grows by a pixel when hovered or focused. Clicking the clear button now clears the query.
 - The `ColorPicker` swatch is 28 px with a border that stays visible on dark colours and brightens on hover. Its popup is as wide as the swatch grid and uses the popup border, and the row below the grid shows the hex value and opacity of the selected colour.
+- The compare symbols dialog draws its symbols, labels and background in the theme's colours when `CompareSymbolsConfig` leaves them at the default instead of drawing them transparent.
 
 ### Changed
 
@@ -96,6 +97,7 @@ All notable changes to this project are documented in this file. The format is b
 - `ChartBuilder` no longer defaults the symbol to `BTCUSDT`: a chart built without `with_symbol` has an empty symbol, shows no symbol and does not subscribe to or fetch from its data source until `TradingChart::set_symbol` is called. Migration: call `with_symbol` to keep the previous behaviour.
 - `SymbolInfo::default()` (in `ui::symbol_header`) has empty fields instead of AAPL, Apple Inc, NASDAQ and 1D. Migration: set the fields explicitly.
 - Iceberg takes its tick size from `IcebergDetector::with_tick_size` instead of guessing it from the first 100 bars, and Liquidity no longer defaults to a tick size of 1.0. Without a tick size, both divide the series' price span into 1,000 levels; set the instrument's tick size to key levels on it.
+- `CompareSymbolsDialog::show` takes the symbols to suggest (`show(ctx, &symbols)`, the same `&[model::Symbol]` that `SymbolSearchDialog::show` takes) and lists only those, with an empty state when there are none, instead of a built-in list of tickers the data source may not offer. Migration: pass the symbols your data source offers.
 
 ### Removed
 
@@ -107,6 +109,7 @@ All notable changes to this project are documented in this file. The format is b
 - Unused icon constants `AREA_CHART`, `LINE_CHART`, `ORDER_BOOK`, `TIME_AND_SALES`, `HIDE`, `RISK_REWARD_SHORT`, `TREND_BASED_FIB_EXTENSION`, `ZOOM_TOGGLE`, `EMOJI_EAGLE`, `EMOJI_ORNAMENT`, `WIDGET_BAR_NOTIFICATIONS`, `WATCHLIST_44`, `SCREENER_44`, `PINE_SCRIPT_44`, `COMMUNITY_44` and `PRODUCTS_44`. Migration: use `CHART_AREA`, `CHART_LINE`, `WATCHLIST`, `EYE_HIDE` (or `EYE` for the visible state), `SHORT_POSITION` and `FIB_EXTENSION`; the others have no replacement.
 - The unused series renderers `chart::series::{LineSeries, AreaSeries, BaselineSeries, HistogramSeries, BarSeries}` and the `Series` trait with `SeriesData` and `SeriesType`, which the chart never drew through. No replacement; the chart renders its series from `ChartType`.
 - The `model::enums` module of wire-format enums, which nothing used, with `ChartType::to_chart_style` and `From<ChartStyle> for ChartType`. Migration: use `scales::PriceScaleMode` for `PriceScaleMode`, `ChartType` for `ChartStyle`, and `drawings::LineStyle` for `LineStyle` (it has no large-dashed or sparse-dotted style); `CrosshairMode` and `ColorType` are unrelated to `config::CrosshairMode` and `model::ColorType` and, like `ChartMode`, `Timezone`, `MagnetMode`, `Orientation`, `Size`, `Resolution`, `ChartTheme`, `PriceLineSource`, `ScaleLocation`, `BackgroundType`, `OverrideLineStyle`, `OverridePriceAxisLastValueMode`, `ChartStyleParameters`, `ClearMarksMode`, `MarkLocation`, `StudyPlotType`, `StudyDisplayTarget`, `StudyInputType`, `StudyTargetPriceScale`, `LineStudyPlotStyle`, `OhlcStudyPlotStyle` and `FilledAreaType`, have no replacement.
+- `ui::top_toolbar::components::symbol_search::popular_symbols`, a fixed list of index, crypto, commodity and forex tickers. Migration: pass your own symbols to `CompareSymbolsDialog::show`.
 - The `templates` module. Migration: import `SettingsTemplate` and `TemplateManager` from `ui::model`.
 - `CVDMode::TickSplit`, which computed the same estimate as `CVDMode::ClosePosition` while claiming footprint data; use `ClosePosition`. `CVD::with_histogram`, which had no effect, with no replacement.
 - `StopRunIndicator::with_reversal_window`, which only lengthened the warm-up; the reversal is tested on the breaking bar. Remove the call.

@@ -26,13 +26,16 @@
 //! # Example - Compare Symbols
 //!
 //! ```no_run
+//! use egui_charts::model::Symbol;
 //! use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbolsDialog};
 //!
 //! # fn update(ctx: &egui::Context) {
 //! let mut compare = CompareSymbolsDialog::new();
 //! compare.open();
 //!
-//! match compare.show(ctx) {
+//! // The symbols your data source offers
+//! let symbols = vec![Symbol::new("ETHUSDT", "Ethereum / Tether")];
+//! match compare.show(ctx, &symbols) {
 //!     CompareAction::AddSymbol(sym) => println!("Add: {}", sym),
 //!     CompareAction::RemoveSymbol(sym) => println!("Remove: {}", sym),
 //!     _ => {}
@@ -44,6 +47,7 @@ use crate::ext::UiExt;
 use crate::model::Symbol;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::EmptyState;
 use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2, Window};
 
 // =============================================================================
@@ -424,82 +428,6 @@ impl CompareSymbol {
     }
 }
 
-/// Popular symbols by category for comparison
-pub fn popular_symbols() -> Vec<CompareSymbol> {
-    vec![
-        // Indices
-        CompareSymbol::new(
-            "SPY",
-            "S&P 500 ETF",
-            "NYSE",
-            DESIGN_TOKENS.semantic.extended.warning,
-        ),
-        CompareSymbol::new(
-            "QQQ",
-            "NASDAQ 100 ETF",
-            "NASDAQ",
-            DESIGN_TOKENS.semantic.extended.info,
-        ),
-        CompareSymbol::new(
-            "DIA",
-            "Dow Jones ETF",
-            "NYSE",
-            DESIGN_TOKENS.semantic.extended.success,
-        ),
-        CompareSymbol::new(
-            "IWM",
-            "Russell 2000 ETF",
-            "NYSE",
-            DESIGN_TOKENS.semantic.extended.purple,
-        ),
-        CompareSymbol::new(
-            "VIX",
-            "Volatility Index",
-            "CBOE",
-            DESIGN_TOKENS.semantic.extended.error,
-        ),
-        // Crypto
-        CompareSymbol::new(
-            "BTCUSD",
-            "Bitcoin",
-            "CRYPTO",
-            DESIGN_TOKENS.semantic.extended.favorite_gold,
-        ),
-        CompareSymbol::new(
-            "ETHUSD",
-            "Ethereum",
-            "CRYPTO",
-            DESIGN_TOKENS.semantic.extended.purple,
-        ),
-        // Commodities
-        CompareSymbol::new(
-            "GC",
-            "Gold Futures",
-            "COMEX",
-            DESIGN_TOKENS.semantic.extended.favorite_gold,
-        ),
-        CompareSymbol::new(
-            "CL",
-            "Crude Oil",
-            "NYMEX",
-            DESIGN_TOKENS.semantic.extended.brown,
-        ),
-        // Forex
-        CompareSymbol::new(
-            "EURUSD",
-            "Euro/US Dollar",
-            "FOREX",
-            DESIGN_TOKENS.semantic.extended.cyan,
-        ),
-        CompareSymbol::new(
-            "USDJPY",
-            "Dollar/Yen",
-            "FOREX",
-            DESIGN_TOKENS.semantic.extended.warning,
-        ),
-    ]
-}
-
 /// Configuration for compare symbols dialog
 #[derive(Debug, Clone)]
 pub struct CompareSymbolsConfig {
@@ -532,6 +460,26 @@ impl Default for CompareSymbolsConfig {
     }
 }
 
+impl CompareSymbolsConfig {
+    /// The configured colors, each `TRANSPARENT` one taken from `visuals`.
+    fn resolved(&self, visuals: &egui::Visuals) -> Self {
+        let or = |color: Color32, theme: Color32| {
+            if color == Color32::TRANSPARENT {
+                theme
+            } else {
+                color
+            }
+        };
+        Self {
+            bg_color: or(self.bg_color, visuals.window_fill),
+            text_color: or(self.text_color, visuals.text_color()),
+            muted_color: or(self.muted_color, visuals.weak_text_color()),
+            hover_color: or(self.hover_color, visuals.widgets.hovered.weak_bg_fill),
+            ..self.clone()
+        }
+    }
+}
+
 /// Action from compare symbols dialog
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompareAction {
@@ -551,20 +499,22 @@ pub enum CompareAction {
 ///
 /// Allows comparing multiple symbols on the same chart with:
 /// - Search for symbols to add
-/// - Popular symbol suggestions
+/// - Suggestions from the symbols the host passes in, with an empty state when there are none
 /// - Color-coded symbols
 /// - Visibility toggles
 ///
 /// # Example
 ///
 /// ```no_run
+/// use egui_charts::model::Symbol;
 /// use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbolsDialog};
 ///
 /// # fn update(ctx: &egui::Context) {
 /// let mut compare = CompareSymbolsDialog::new();
 /// compare.open();
 ///
-/// match compare.show(ctx) {
+/// let symbols = vec![Symbol::new("ETHUSDT", "Ethereum / Tether")];
+/// match compare.show(ctx, &symbols) {
 ///     CompareAction::AddSymbol(sym) => {
 ///         // Add symbol to chart overlay
 ///     }
@@ -582,8 +532,6 @@ pub struct CompareSymbolsDialog {
     search_query: String,
     /// Currently compared symbols
     pub compared_symbols: Vec<CompareSymbol>,
-    /// Popular/suggested symbols
-    popular: Vec<CompareSymbol>,
     /// Configuration
     config: CompareSymbolsConfig,
     /// Color palette for new symbols
@@ -605,7 +553,6 @@ impl CompareSymbolsDialog {
             is_open: false,
             search_query: String::new(),
             compared_symbols: Vec::new(),
-            popular: popular_symbols(),
             config: CompareSymbolsConfig::default(),
             color_palette: vec![
                 DESIGN_TOKENS.semantic.extended.warning,       // Orange
@@ -645,8 +592,8 @@ impl CompareSymbolsDialog {
         color
     }
 
-    /// Show the dialog
-    pub fn show(&mut self, ctx: &egui::Context) -> CompareAction {
+    /// Show the dialog, suggesting `symbols`: the symbols the host's data source offers
+    pub fn show(&mut self, ctx: &egui::Context, symbols: &[Symbol]) -> CompareAction {
         let mut action = CompareAction::None;
 
         if !self.is_open {
@@ -654,16 +601,17 @@ impl CompareSymbolsDialog {
         }
 
         let mut is_open = self.is_open;
+        let config = self.config.resolved(&ctx.style().visuals);
 
         Window::new("Compare symbol")
             .open(&mut is_open)
             .resizable(false)
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(Vec2::new(self.config.width, self.config.height))
-            .frame(egui::Frame::window(&ctx.style()).fill(self.config.bg_color))
+            .fixed_size(Vec2::new(config.width, config.height))
+            .frame(egui::Frame::window(&ctx.style()).fill(config.bg_color))
             .show(ctx, |ui| {
-                action = self.draw_content(ui);
+                action = self.draw_content(ui, symbols, &config);
             });
 
         self.is_open = is_open;
@@ -674,7 +622,12 @@ impl CompareSymbolsDialog {
         action
     }
 
-    fn draw_content(&mut self, ui: &mut Ui) -> CompareAction {
+    fn draw_content(
+        &mut self,
+        ui: &mut Ui,
+        symbols: &[Symbol],
+        config: &CompareSymbolsConfig,
+    ) -> CompareAction {
         let mut action = CompareAction::None;
 
         // Search bar
@@ -683,8 +636,8 @@ impl CompareSymbolsDialog {
             ui.label("Search:");
             ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("Symbol, SSE or CCSE")
-                    .desired_width(self.config.width - 50.0),
+                    .hint_text("Symbol")
+                    .desired_width(config.width - 50.0),
             );
         });
 
@@ -692,10 +645,9 @@ impl CompareSymbolsDialog {
 
         // Currently compared symbols
         if !self.compared_symbols.is_empty() {
-            ui.label(RichText::new("Currently comparing:").color(self.config.muted_color));
+            ui.label(RichText::new("Currently comparing:").color(config.muted_color));
             ui.space_sm();
 
-            let symbols_to_remove: Vec<String> = Vec::new();
             for symbol in &self.compared_symbols {
                 ui.horizontal(|ui| {
                     // Color indicator
@@ -708,7 +660,7 @@ impl CompareSymbolsDialog {
                     ui.label(&symbol.symbol);
                     ui.label(
                         RichText::new(&symbol.name)
-                            .color(self.config.muted_color)
+                            .color(config.muted_color)
                             .size(typography::SM),
                     );
 
@@ -725,51 +677,30 @@ impl CompareSymbolsDialog {
                 });
             }
 
-            // Remove symbols after iteration
-            for symbol in symbols_to_remove {
-                self.compared_symbols.retain(|s| s.symbol != symbol);
-            }
-
             ui.separator_with_margin(DESIGN_TOKENS.spacing.lg);
         }
 
-        // Popular symbols
-        ui.label(RichText::new("Popular symbols").color(self.config.muted_color));
+        // Suggestions
+        ui.label(RichText::new("Symbols").color(config.muted_color));
         ui.space_lg();
 
+        if symbols.is_empty() {
+            EmptyState::new("No symbols to compare").show(ui);
+        }
+
         // Two-column layout
+        let (left, right) = symbols.split_at(symbols.len().div_ceil(2));
         ui.horizontal(|ui| {
-            // Left column
-            ui.vertical(|ui| {
-                ui.set_width(self.config.width / 2.0 - 16.0);
-
-                let half = self.popular.len() / 2;
-                for (i, symbol) in self.popular.iter().enumerate() {
-                    if i >= half {
-                        break;
+            for column in [left, right] {
+                ui.vertical(|ui| {
+                    ui.set_width(config.width / 2.0 - 16.0);
+                    for symbol in column {
+                        if let Some(a) = self.draw_symbol_item(ui, symbol, config) {
+                            action = a;
+                        }
                     }
-
-                    if let Some(a) = self.draw_symbol_item(ui, symbol) {
-                        action = a;
-                    }
-                }
-            });
-
-            // Right column
-            ui.vertical(|ui| {
-                ui.set_width(self.config.width / 2.0 - 16.0);
-
-                let half = self.popular.len() / 2;
-                for (i, symbol) in self.popular.iter().enumerate() {
-                    if i < half {
-                        continue;
-                    }
-
-                    if let Some(a) = self.draw_symbol_item(ui, symbol) {
-                        action = a;
-                    }
-                }
-            });
+                });
+            }
         });
 
         // Handle add action
@@ -777,18 +708,12 @@ impl CompareSymbolsDialog {
             && !self.compared_symbols.iter().any(|s| s.symbol == *sym)
         {
             let color = self.next_color();
-            if let Some(popular) = self.popular.iter().find(|s| s.symbol == *sym) {
-                self.compared_symbols.push(CompareSymbol {
-                    symbol: popular.symbol.clone(),
-                    name: popular.name.clone(),
-                    exchange: popular.exchange.clone(),
-                    color,
-                    visible: true,
-                });
-            } else {
-                self.compared_symbols
-                    .push(CompareSymbol::new(sym.clone(), "", "", color));
-            }
+            let name = symbols
+                .iter()
+                .find(|s| s.name == *sym)
+                .map_or("", |s| s.display_name.as_str());
+            self.compared_symbols
+                .push(CompareSymbol::new(sym.clone(), name, "", color));
         }
 
         // Handle remove action
@@ -806,11 +731,16 @@ impl CompareSymbolsDialog {
         action
     }
 
-    fn draw_symbol_item(&self, ui: &mut Ui, symbol: &CompareSymbol) -> Option<CompareAction> {
+    fn draw_symbol_item(
+        &self,
+        ui: &mut Ui,
+        symbol: &Symbol,
+        config: &CompareSymbolsConfig,
+    ) -> Option<CompareAction> {
         let is_compared = self
             .compared_symbols
             .iter()
-            .any(|s| s.symbol == symbol.symbol);
+            .any(|s| s.symbol == symbol.name);
 
         let desired_size = Vec2::new(ui.available_width(), 32.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
@@ -818,14 +748,11 @@ impl CompareSymbolsDialog {
         // Background on hover
         if response.hovered() && !is_compared {
             ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.md, self.config.hover_color);
+                .rect_filled(rect, DESIGN_TOKENS.rounding.md, config.hover_color);
         }
 
-        // Color indicator
-        let indicator_pos = Pos2::new(rect.min.x + 12.0, rect.center().y);
-        ui.painter().circle_filled(indicator_pos, 5.0, symbol.color);
-
         // Checkmark if compared
+        let indicator_pos = Pos2::new(rect.min.x + 12.0, rect.center().y);
         if is_compared {
             ui.painter()
                 .circle_filled(indicator_pos, 5.0, DESIGN_TOKENS.semantic.extended.success);
@@ -842,22 +769,22 @@ impl CompareSymbolsDialog {
         ui.painter().text(
             Pos2::new(rect.min.x + 28.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            &symbol.symbol,
+            &symbol.name,
             egui::FontId::proportional(typography::MD),
-            self.config.text_color,
+            config.text_color,
         );
 
-        // Exchange
+        // Description
         ui.painter().text(
             Pos2::new(rect.right() - 8.0, rect.center().y),
             egui::Align2::RIGHT_CENTER,
-            &symbol.exchange,
+            &symbol.display_name,
             egui::FontId::proportional(typography::XS),
-            self.config.muted_color,
+            config.muted_color,
         );
 
         if response.clicked() && !is_compared {
-            return Some(CompareAction::AddSymbol(symbol.symbol.clone()));
+            return Some(CompareAction::AddSymbol(symbol.name.clone()));
         }
 
         None
@@ -954,14 +881,6 @@ mod tests {
         assert_eq!(sym.name, "Bitcoin");
         assert_eq!(sym.exchange, "CRYPTO");
         assert!(sym.visible);
-    }
-
-    #[test]
-    fn test_compare_dialog_creation() {
-        let dialog = CompareSymbolsDialog::new();
-        assert!(!dialog.is_open);
-        assert!(dialog.compared_symbols.is_empty());
-        assert!(!dialog.popular.is_empty());
     }
 
     #[test]
