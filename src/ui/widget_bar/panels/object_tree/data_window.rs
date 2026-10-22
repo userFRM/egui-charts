@@ -110,21 +110,23 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
         });
 }
 
-/// Format price with appropriate precision
+/// Format price with decimals chosen by its magnitude, so a negative price
+/// keeps the decimals of the positive price of the same size
 fn format_price(price: f64) -> String {
     if price == 0.0 {
         return "—".to_string();
     }
 
-    if price >= 10000.0 {
+    let magnitude = price.abs();
+    if magnitude >= 10000.0 {
         format!("{price:.0}")
-    } else if price >= 1000.0 {
+    } else if magnitude >= 1000.0 {
         format!("{price:.1}")
-    } else if price >= 10.0 {
+    } else if magnitude >= 10.0 {
         format!("{price:.2}")
-    } else if price >= 1.0 {
+    } else if magnitude >= 1.0 {
         format!("{price:.4}")
-    } else if price >= 0.001 {
+    } else if magnitude >= 0.001 {
         format!("{price:.6}")
     } else {
         format!("{price:.8}")
@@ -159,6 +161,7 @@ mod tests {
         assert_eq!(format_price(99.99), "99.99");
         assert_eq!(format_price(1.2345), "1.2345");
         assert_eq!(format_price(0.001234), "0.001234");
+        assert_eq!(format_price(-37.63), "-37.63");
     }
 
     #[test]

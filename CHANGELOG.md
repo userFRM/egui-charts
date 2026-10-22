@@ -116,6 +116,7 @@ All notable changes to this project are documented in this file. The format is b
 - The `ui_kit` buttons report their role, label (the tooltip for icon-only buttons), and enabled and selected state to accessibility tools, and show their tooltip while disabled.
 - The kit `Modal`, `ConfirmDialog`, `PromptDialog` and the command palette draw their dimming backdrop below their window instead of over it, so the dialog is shown at full contrast. Clicking the backdrop closes a closable modal.
 - `PromptDialog` keeps the text typed into it between frames instead of resetting it to the initial value, so Enter and the submit button return what was typed.
+- The data window prints a negative price with the decimals of the positive price of the same magnitude, so -37.63 reads `-37.63` instead of `-37.63000000`.
 - Saved drawings round-trip: `stored_to_drawing` restores the anchors (`chart_points`), so a restored drawing no longer disappears on the next frame, every tool type loads back, and every setting (line style, fill, font, extend, arrows, lock, visibility, per-timeframe visibility, z-order, Fibonacci levels, volume profile, regression trend and position size) is kept.
 - Every drawing tool's display name parses back to that tool with `FromStr`, ignoring case; the Fibonacci extension, time zone, speed resistance fan, trend-based time and speed resistance arcs tools and the five Elliott wave tools were not parsed.
 - A drawing whose tool type is unknown is skipped with the error `unknown drawing tool "Name"` instead of one listing all 95 tool types.
