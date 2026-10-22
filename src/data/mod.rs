@@ -64,6 +64,7 @@ pub(crate) mod inbox;
     expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
 )]
 pub(crate) mod merge;
+mod resample;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
@@ -71,6 +72,7 @@ pub(crate) mod merge;
 pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink};
+pub use resample::resample;
 
 /// Error types for data source operations.
 ///
