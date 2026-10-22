@@ -108,22 +108,29 @@ fn try_parse_relative(s: &str) -> DateRangeResult {
         return Err(DateRangeParseError::InvalidRangeFormat(s.to_string()));
     }
 
+    let invalid_number = || DateRangeParseError::InvalidNumber(parts[1].to_string());
     let n: i64 = parts[1]
         .parse()
-        .map_err(|_| DateRangeParseError::InvalidNumber(parts[1].to_string()))?;
+        .ok()
+        .filter(|&n| n > 0)
+        .ok_or_else(invalid_number)?;
 
     let unit = parts[2];
     let now = Utc::now();
 
-    let duration = match unit {
-        "day" | "days" => Duration::days(n),
-        "week" | "weeks" => Duration::weeks(n),
-        "month" | "months" => Duration::days(n * 30), // Approximate
-        "year" | "years" => Duration::days(n * 365),  // Approximate
+    let days_per_unit = match unit {
+        "day" | "days" => 1,
+        "week" | "weeks" => 7,
+        "month" | "months" => 30, // Approximate
+        "year" | "years" => 365,  // Approximate
         _ => return Err(DateRangeParseError::InvalidTimeUnit(unit.to_string())),
     };
 
-    let start = now - duration;
+    let start = n
+        .checked_mul(days_per_unit)
+        .and_then(Duration::try_days)
+        .and_then(|duration| now.checked_sub_signed(duration))
+        .ok_or_else(invalid_number)?;
     Ok(Some((start, now)))
 }
 
@@ -261,26 +268,25 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_order() {
-        let result = parse_date_range("2024-12-31 to 2024-01-01");
-        assert!(matches!(result, Err(DateRangeParseError::InvalidDateOrder)));
-    }
-
-    #[test]
-    fn test_invalid_format() {
-        let result = parse_date_range("invalid");
-        assert!(matches!(
-            result,
-            Err(DateRangeParseError::UnsupportedFormat(_))
-        ));
-    }
-
-    #[test]
-    fn test_invalid_date() {
-        let result = parse_date_range("2024-13-01 to 2024-12-31");
-        assert!(matches!(
-            result,
-            Err(DateRangeParseError::InvalidDateFormat(_))
-        ));
+    fn test_errors() {
+        use DateRangeParseError::*;
+        let cases = [
+            ("2024-12-31 to 2024-01-01", InvalidDateOrder),
+            ("invalid", UnsupportedFormat("invalid".into())),
+            (
+                "2024-13-01 to 2024-12-31",
+                InvalidDateFormat("2024-13-01".into()),
+            ),
+            ("last -5 days", InvalidNumber("-5".into())),
+            ("last 0 days", InvalidNumber("0".into())),
+            (
+                "last 9999999999999 days",
+                InvalidNumber("9999999999999".into()),
+            ),
+            ("last 100000000 days", InvalidNumber("100000000".into())),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(parse_date_range(input), Err(expected), "{input}");
+        }
     }
 }
