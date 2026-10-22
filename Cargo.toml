@@ -50,6 +50,17 @@ name = "data_source"
 path = "examples/data_source.rs"
 required-features = ["widget"]
 
+[[example]]
+name = "bare_chart"
+path = "examples/bare_chart.rs"
+required-features = ["widget"]
+
+[[bench]]
+name = "bare_chart"
+path = "benches/bare_chart.rs"
+harness = false
+required-features = ["widget"]
+
 [features]
 default = ["ui"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,
