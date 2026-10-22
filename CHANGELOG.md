@@ -20,6 +20,7 @@ All notable changes to this project are documented in this file. The format is b
 - `model::Instrument` describes the instrument type, tick size, price decimals, currency, exchange time zone (`model::TimezoneId`) and trading hours (`model::Session`, `model::SessionWindow`), each unknown by default and set with a `with_` method.
 - `model::Tick` implements `PartialEq`.
 - `DialogFooter::danger` fills the primary action with the danger colour.
+- `scales::TimezoneMode`, the time axis timezone mode, now lives next to the time formatters that use it. `config::TimezoneMode` remains as a re-export of the same type.
 
 ### Fixed
 

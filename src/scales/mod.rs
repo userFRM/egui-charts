@@ -40,7 +40,7 @@ pub use pricescale::{
 pub use pricescale_marks::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConfig};
 pub use time_formatter::{
     CustomTimeFormatter, DefaultTimeFormatter, LocaleTimeFormatter, RelativeTimeFormatter,
-    TimeFormatter, TimeFormatterBuilder,
+    TimeFormatter, TimeFormatterBuilder, TimezoneMode,
 };
 pub use timescale_marks::{
     TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight,

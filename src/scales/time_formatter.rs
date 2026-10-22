@@ -8,10 +8,10 @@
 //! Use [`TimeFormatterBuilder`] for a fluent construction API.
 
 use super::timescale_marks::TickMarkType;
-use crate::config::TimezoneMode;
 /// Time formatting trait for customizable time axis labels.
 /// Reference: lightweight-charts TimeFormatterFn.
 use chrono::{DateTime, TimeZone, Utc};
+use chrono_tz::Tz;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -211,6 +211,48 @@ impl TimeFormatter for RelativeTimeFormatter {
 
     fn clone_box(&self) -> Box<dyn TimeFormatter> {
         Box::new(self.clone())
+    }
+}
+
+/// Timezone display mode for time axis labels.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum TimezoneMode {
+    /// Display in UTC
+    #[default]
+    Utc,
+    /// Display in user's local timezone
+    Local,
+    /// Display in specific timezone
+    Timezone(Tz),
+    /// Display in exchange/venue timezone (user must specify via Timezone)
+    Exchange(Tz),
+}
+
+impl TimezoneMode {
+    /// Common exchange timezones
+    pub fn nyse() -> Self {
+        TimezoneMode::Exchange(Tz::America__New_York)
+    }
+
+    pub fn lse() -> Self {
+        TimezoneMode::Exchange(Tz::Europe__London)
+    }
+
+    pub fn jse() -> Self {
+        TimezoneMode::Exchange(Tz::Asia__Tokyo)
+    }
+
+    pub fn hkex() -> Self {
+        TimezoneMode::Exchange(Tz::Asia__Hong_Kong)
+    }
+
+    /// Get the underlying Tz for conversion
+    pub fn to_tz(&self) -> Option<Tz> {
+        match self {
+            TimezoneMode::Utc => None,   // Already UTC
+            TimezoneMode::Local => None, // Will use system local
+            TimezoneMode::Timezone(tz) | TimezoneMode::Exchange(tz) => Some(*tz),
+        }
     }
 }
 
@@ -430,8 +472,6 @@ mod tests {
 
     #[test]
     fn test_timezone_conversion_utc() {
-        use crate::config::TimezoneMode;
-
         let formatter = TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(false)
@@ -445,7 +485,6 @@ mod tests {
 
     #[test]
     fn test_timezone_conversion_ny() {
-        use crate::config::TimezoneMode;
         use chrono_tz::America::New_York;
 
         let formatter = TimeFormatterBuilder::new()
@@ -462,7 +501,6 @@ mod tests {
 
     #[test]
     fn test_dst_spring_forward() {
-        use crate::config::TimezoneMode;
         use chrono_tz::America::New_York;
 
         let formatter = TimeFormatterBuilder::new()
@@ -485,7 +523,6 @@ mod tests {
 
     #[test]
     fn test_dst_fall_back() {
-        use crate::config::TimezoneMode;
         use chrono_tz::America::New_York;
 
         let formatter = TimeFormatterBuilder::new()
@@ -508,8 +545,6 @@ mod tests {
 
     #[test]
     fn test_timezone_london() {
-        use crate::config::TimezoneMode;
-
         let formatter = TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(false)
@@ -529,8 +564,6 @@ mod tests {
 
     #[test]
     fn test_timezone_tokyo() {
-        use crate::config::TimezoneMode;
-
         let formatter = TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(false)
@@ -546,8 +579,6 @@ mod tests {
 
     #[test]
     fn test_timezone_clone() {
-        use crate::config::TimezoneMode;
-
         let formatter1 = TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(false)

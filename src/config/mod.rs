@@ -34,8 +34,10 @@ pub use interaction::{
 };
 pub use keyboard::{KeyboardAction, KeyboardOptions};
 pub use kinetic::KineticScrollOptions;
-pub use timescale::{TimeScaleOptions, TimezoneMode};
+pub use timescale::TimeScaleOptions;
 pub use tooltip::{TooltipMode, TooltipOptions};
+
+pub use crate::scales::TimezoneMode;
 
 /// Top-level chart interaction options.
 ///

@@ -1,55 +1,13 @@
-//! Time-scale (X-axis) options and timezone handling.
+//! Time-scale (X-axis) options.
 //!
 //! [`TimeScaleOptions`] configures bar spacing, scroll constraints, edge
-//! fixing, and time-label visibility.  [`TimezoneMode`] controls how
-//! UTC timestamps are converted before rendering axis labels.
+//! fixing, time-label visibility, and the [`TimezoneMode`] used to convert
+//! UTC timestamps before rendering axis labels.
+
+use crate::scales::TimezoneMode;
 
 /// Time Scale Options.
 /// Controls bar spacing, scrolling constraints, and time display.
-use chrono_tz::Tz;
-
-/// Timezone display mode for time axis labels.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum TimezoneMode {
-    /// Display in UTC
-    #[default]
-    Utc,
-    /// Display in user's local timezone
-    Local,
-    /// Display in specific timezone
-    Timezone(Tz),
-    /// Display in exchange/venue timezone (user must specify via Timezone)
-    Exchange(Tz),
-}
-
-impl TimezoneMode {
-    /// Common exchange timezones
-    pub fn nyse() -> Self {
-        TimezoneMode::Exchange(Tz::America__New_York)
-    }
-
-    pub fn lse() -> Self {
-        TimezoneMode::Exchange(Tz::Europe__London)
-    }
-
-    pub fn jse() -> Self {
-        TimezoneMode::Exchange(Tz::Asia__Tokyo)
-    }
-
-    pub fn hkex() -> Self {
-        TimezoneMode::Exchange(Tz::Asia__Hong_Kong)
-    }
-
-    /// Get the underlying Tz for conversion
-    pub fn to_tz(&self) -> Option<Tz> {
-        match self {
-            TimezoneMode::Utc => None,   // Already UTC
-            TimezoneMode::Local => None, // Will use system local
-            TimezoneMode::Timezone(tz) | TimezoneMode::Exchange(tz) => Some(*tz),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct TimeScaleOptions {
     /// The margin space in bars from the right side of the chart.
