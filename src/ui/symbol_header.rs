@@ -1,9 +1,10 @@
 //! Symbol Header Widget
 //!
-//! Displays symbol info, OHLC values, bid/ask prices, and volume
+//! Displays symbol info, the last close and its change, bid/ask prices, and volume
 //! in a horizontal bar at the top of the chart area.
 
 use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
@@ -97,8 +98,8 @@ impl Default for SymbolHeaderConfig {
             bg_color: Color32::TRANSPARENT, // Let parent Frame show through
             text_color: Color32::PLACEHOLDER,
             label_color: Color32::PLACEHOLDER,
-            bullish_color: DESIGN_TOKENS.semantic.extended.bullish, // Canonical bullish teal
-            bearish_color: DESIGN_TOKENS.semantic.extended.bearish, // Canonical bearish red
+            bullish_color: Color32::PLACEHOLDER,
+            bearish_color: Color32::PLACEHOLDER,
             separator_color: Color32::PLACEHOLDER,
             show_company_name: true,
             show_bid_ask: true,
@@ -114,15 +115,22 @@ impl SymbolHeaderConfig {
         Self {
             text_color: ui.text,
             label_color: ui.text_secondary,
+            bullish_color: ui.success,
+            bearish_color: ui.error,
             separator_color: ui.border,
             ..Self::default()
         }
     }
 
-    /// This config with `Color32::PLACEHOLDER` colours taken from `visuals`.
-    fn resolved(&self, visuals: &egui::Visuals) -> Self {
+    /// This config with `Color32::PLACEHOLDER` colours taken from the style and theme of `ui`.
+    fn resolved(&self, ui: &Ui) -> Self {
+        let visuals = ui.visuals();
+        // Text-grade status colours: the candle colours are too light for text on white.
+        let colors = ui.active_theme().ui;
         let or = |c: Color32, style: Color32| if c == Color32::PLACEHOLDER { style } else { c };
         Self {
+            bullish_color: or(self.bullish_color, colors.success),
+            bearish_color: or(self.bearish_color, colors.error),
             text_color: or(self.text_color, visuals.strong_text_color()),
             label_color: or(
                 self.label_color,
@@ -176,7 +184,7 @@ impl SymbolHeader {
 
     /// Show the symbol header
     pub fn show(&self, ui: &mut Ui) -> Response {
-        let config = &self.config.resolved(ui.visuals());
+        let config = &self.config.resolved(ui);
         let (response, painter) = ui.allocate_painter(
             Vec2::new(ui.available_width(), config.height),
             Sense::hover(),
@@ -234,64 +242,16 @@ impl SymbolHeader {
         );
         x += DESIGN_TOKENS.spacing.md;
 
-        // OHLC values
+        // Last close and change; the chart legend shows the bar's OHLC.
         let price_color = if self.ohlc.is_bullish() {
             config.bullish_color
         } else {
             config.bearish_color
         };
 
-        // O: value
-        x = self.draw_labeled_val(
-            &painter,
-            config,
-            x,
-            center_y,
-            "O",
-            self.ohlc.open,
-            config.label_color,
-        );
-        x += DESIGN_TOKENS.spacing.sm;
-
-        // H: value
-        x = self.draw_labeled_val(
-            &painter,
-            config,
-            x,
-            center_y,
-            "H",
-            self.ohlc.high,
-            config.label_color,
-        );
-        x += DESIGN_TOKENS.spacing.sm;
-
-        // L: value
-        x = self.draw_labeled_val(
-            &painter,
-            config,
-            x,
-            center_y,
-            "L",
-            self.ohlc.low,
-            config.label_color,
-        );
-        x += DESIGN_TOKENS.spacing.sm;
-
-        // C: value (colored)
-        x = self.draw_labeled_val(
-            &painter,
-            config,
-            x,
-            center_y,
-            "C",
-            self.ohlc.close,
-            price_color,
-        );
-        x += DESIGN_TOKENS.spacing.sm;
-
-        // Change (+/-value (percent%))
         let change_text = format!(
-            "{}{:.2} ({}{:.2}%)",
+            "{:.2} {}{:.2} ({}{:.2}%)",
+            self.ohlc.close,
             if self.ohlc.change >= 0.0 { "+" } else { "" },
             self.ohlc.change,
             if self.ohlc.change_percent >= 0.0 {
@@ -387,47 +347,6 @@ impl SymbolHeader {
             [Pos2::new(x, y1), Pos2::new(x, y2)],
             Stroke::new(DESIGN_TOKENS.stroke.hairline, config.separator_color),
         );
-    }
-
-    fn draw_labeled_val(
-        &self,
-        painter: &egui::Painter,
-        config: &SymbolHeaderConfig,
-        x: f32,
-        center_y: f32,
-        label: &str,
-        value: f64,
-        val_color: Color32,
-    ) -> f32 {
-        // Label
-        let label_galley = painter.layout_no_wrap(
-            format!("{label}:"),
-            egui::FontId::proportional(typography::MD),
-            config.label_color,
-        );
-        painter.galley(
-            Pos2::new(x, center_y - label_galley.size().y / 2.0),
-            label_galley.clone(),
-            Color32::TRANSPARENT,
-        );
-        let label_width = label_galley.size().x;
-
-        // Value
-        let val_galley = painter.layout_no_wrap(
-            format!("{value:.2}"),
-            egui::FontId::proportional(typography::MD),
-            val_color,
-        );
-        painter.galley(
-            Pos2::new(
-                x + label_width + DESIGN_TOKENS.spacing.xs,
-                center_y - val_galley.size().y / 2.0,
-            ),
-            val_galley.clone(),
-            Color32::TRANSPARENT,
-        );
-
-        x + label_width + DESIGN_TOKENS.spacing.xs + val_galley.size().x
     }
 
     fn draw_quote_box(
