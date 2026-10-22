@@ -83,10 +83,14 @@ pub struct ChartView<'a> {
 /// (inclusive, either order), clamped to the series; `None` when no bar lies
 /// between them.
 pub(crate) fn bars_between(bars: &[Bar], a: f32, b: f32) -> Option<(usize, &[Bar])> {
-    let last = bars.len().checked_sub(1)? as f32;
-    let first = a.min(b).round().max(0.0);
-    let end = a.max(b).round().min(last);
-    (first <= end).then(|| (first as usize, &bars[first as usize..=end as usize]))
+    let last = bars.len().checked_sub(1)?;
+    let (first, end) = (a.min(b).round(), a.max(b).round());
+    if end < 0.0 {
+        return None;
+    }
+    // Clamp as indices: past 2^24 bars an f32 no longer holds every index.
+    let (first, end) = (first.max(0.0) as usize, (end as usize).min(last));
+    (first <= end).then(|| (first, &bars[first..=end]))
 }
 
 /// Results computed from a span of bars, kept per render thread so that a
