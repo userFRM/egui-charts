@@ -648,10 +648,13 @@ fn level_grid(data: &[crate::model::Bar], tick: f64) -> f64 {
     let level_span = high / MAX_PRICE_LEVELS - low / MAX_PRICE_LEVELS;
     if tick > 0.0 && tick.is_finite() {
         // A whole number of ticks keeps level prices on the tick
-        tick * (level_span / tick).ceil().max(1.0)
-    } else {
-        tick.max(level_span)
+        let grid = tick * (level_span / tick).ceil().max(1.0);
+        // A subnormal tick overflows the tick count
+        if grid.is_finite() {
+            return grid;
+        }
     }
+    tick.max(level_span)
 }
 
 /// Grid key of a price; the f64 division saturates instead of overflowing.
@@ -663,4 +666,23 @@ fn level_key(price: f64, grid: f64) -> i64 {
 fn bar_level_keys(bar: &crate::model::Bar, grid: f64) -> Option<(i64, i64)> {
     let (low, high) = (level_key(bar.low, grid), level_key(bar.high, grid));
     (bar.low.is_finite() && bar.high.is_finite() && low <= high).then_some((low, high))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::Bar;
+
+    #[test]
+    fn level_grid_stays_finite_for_a_subnormal_tick() {
+        let bar = Bar {
+            time: chrono::DateTime::UNIX_EPOCH,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.0,
+            volume: 0.0,
+        };
+        let grid = super::level_grid(&[bar], 5e-324);
+        assert!(grid.is_finite() && grid > 0.0, "grid {grid}");
+    }
 }
