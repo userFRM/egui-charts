@@ -3,29 +3,28 @@
 //! Financial charting engine for
 //! [egui](https://docs.rs/egui). Render interactive charts (candlesticks, OHLC
 //! bars, line, area, Renko, Kagi, Point & Figure, Market Profile (TPO)) with
-//! drawing tools, technical indicators and a design-token theme system.
-//! Built to be embedded in [Tauri](https://tauri.app) desktop apps or any egui
-//! host.
+//! drawing tools, technical indicators and a design-token theme system. The
+//! chart is an egui widget and runs in any egui host, native or WebAssembly.
 //!
 //! ## Quick start
 //!
 //! ```rust,no_run
 //! # #[cfg(feature = "widget")] {
-//! use egui_charts::{ChartBuilder, Chart};
-//! use egui_charts::model::{Bar, BarData, Timeframe};
+//! use egui_charts::ChartBuilder;
+//! use egui_charts::model::Timeframe;
 //! use egui_charts::theme::Theme;
 //!
 //! // Build a chart with the fluent API
-//! let mut trading_chart = ChartBuilder::new()
+//! let trading_chart = ChartBuilder::new()
 //!     .with_symbol("BTCUSDT")
 //!     .with_timeframe(Timeframe::Hour1)
 //!     .with_theme(Theme::dark())
 //!     .with_drawing_tools()
 //!     .build();
 //!
-//! // In your egui update loop:
-//! // trading_chart.update();           // poll data source, progressive loading
-//! // trading_chart.show(&mut ui);      // render into an egui::Ui
+//! // In `eframe::App::ui`, with `ui: &mut egui::Ui`:
+//! // trading_chart.update(); // poll the data source, load older bars
+//! // trading_chart.show(ui); // render the chart
 //! # }
 //! ```
 //!
@@ -50,14 +49,14 @@
 //! | **Domain model** | [`model`] | `Bar`, `BarData`, `Symbol`, `Timeframe`, `ChartType`, Renko/Kagi/P&F transforms |
 //! | **Data** | [`data`] | `DataSource` trait, `DataUpdate`, historical/live data abstractions |
 //! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
-//! | **Chart engine** | [`chart`] | Pan/zoom, hit-testing, coordinate mapping, series rendering, interaction |
+//! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays, `ChartBuilder` and `TradingChart` |
 //! | **Drawing tools** | [`drawings`] | 95 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
 //! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 128 indicator names in `IndicatorFactory` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Validation** | [`validation`] | OHLC integrity checks, timestamp ordering, data quality |
 //! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
-//! | **Widget** | [`widget`] | `Chart` egui widget, `ChartBuilder`, `TradingChart` |
+//! | **Widget** | [`widget`] | `Chart` egui widget: pan and zoom, kinetic scrolling, keyboard and drawing input, indicator panes |
 //! | **Extensions** | `ext` | *(feature `ui`)* `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt`, `RoundingExt` |
 //! | **Icons** | [`icons`] | Compile-time embedded SVG icons |
 //! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
@@ -78,22 +77,23 @@
 //! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons` and `studies`. |
 //! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
 //!
-//! ## Integrating with Tauri
+//! ## Embedding in an application
 //!
-//! `egui-charts` is designed to be used as the rendering engine inside a Tauri
-//! desktop application. A typical setup:
+//! A typical setup:
 //!
-//! 1. Add the crate to your Tauri frontend's dependencies:
+//! 1. Add the crate to your dependencies:
 //!
 //!    ```toml
 //!    [dependencies]
 //!    egui-charts = "0.2"
 //!    ```
 //!
-//! 2. Implement [`data::DataSource`] to bridge your Tauri backend (IPC /
-//!    WebSocket) to the chart's data layer.
+//! 2. Implement [`data::DataSource`] to bridge your backend (IPC, a WebSocket
+//!    or a database) to the chart's data layer, and return `true` from
+//!    [`data::DataSource::supports_historical`] if it serves history.
 //!
-//! 3. Build the chart once with [`chart::builder::ChartBuilder`], then call
+//! 3. Build the chart once with [`chart::builder::ChartBuilder`] and
+//!    [`chart::builder::ChartBuilder::with_data_src`], then call
 //!    `trading_chart.update()` and `trading_chart.show(ui)` inside an
 //!    `egui::CentralPanel` in `eframe::App::ui`.
 //!
