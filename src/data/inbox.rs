@@ -257,7 +257,10 @@ pub struct Sink {
 
 impl Sink {
     /// A bar of the subscribed timeframe, stamped with its open or any instant inside it:
-    /// replaces the bar it shares a slot with, appends a newer one, corrects an older one.
+    /// replaces the bar it shares a slot with, appends a newer one, corrects an older one. A bar
+    /// of a day or longer is stamped inside its UTC period, as [`HistoryPage::bars`] describes.
+    ///
+    /// [`HistoryPage::bars`]: super::HistoryPage::bars
     pub fn push_bar(&self, bar: Bar) {
         self.update(|live| {
             if !valid(&bar) {

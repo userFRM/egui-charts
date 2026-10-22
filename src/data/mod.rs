@@ -497,7 +497,11 @@ pub struct HistoryRequest {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HistoryPage {
     /// Any order, each stamped with its open or any instant inside it: a bar stamped with its
-    /// close time lands in the next bar. The chart sorts, deduplicates and validates them.
+    /// close time lands in the next bar. A bar of a day or longer covers a UTC period of
+    /// [`BarClock`](crate::model::BarClock), such as a UTC day, a week from Monday or a calendar
+    /// month: stamp it inside that period, for example at 00:00 UTC on its trading date. A
+    /// session open on the evening before can fall in the period of the bar before, and one of
+    /// the two bars is then dropped. The chart sorts, deduplicates and validates them.
     pub bars: Vec<Bar>,
     /// Nothing exists before the oldest returned bar (or before `request.before` when `bars` is
     /// empty).
