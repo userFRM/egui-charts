@@ -11,7 +11,7 @@
 //! use egui_charts::model::Timeframe;
 //!
 //! # fn example(my_data_source: impl egui_charts::DataSource + 'static, ui: &mut egui::Ui) {
-//! // Full-featured chart with drawing tools and indicators
+//! // Chart with drawing tools and an indicator registry
 //! let mut chart = ChartBuilder::extended()
 //!     .with_symbol("BTCUSDT")
 //!     .with_timeframe(Timeframe::Min1)
@@ -26,12 +26,12 @@
 //!
 //! # Builder Variants
 //!
-//! | Constructor | Use Case |
+//! | Constructor | What it sets |
 //! |------------|----------|
-//! | [`ChartBuilder::new()`] | Sensible defaults, auto-fetch 1000 bars |
-//! | [`ChartBuilder::extended()`] | Full trading terminal (drawings + indicators) |
-//! | [`ChartBuilder::price_chart()`] | Minimal sparkline / dashboard widget |
-//! | [`ChartBuilder::options_chart()`] | Non-time-based displays (options chains) |
+//! | [`ChartBuilder::new()`] | Candles, 100 bars visible; fetches 1000 bars when built if a symbol is set and the data source supports history |
+//! | [`ChartBuilder::extended()`] | `new()` plus drawing tools and an empty indicator registry |
+//! | [`ChartBuilder::price_chart()`] | Line chart without grid or crosshair, 50 bars visible |
+//! | [`ChartBuilder::options_chart()`] | Line chart with the time axis labels and ticks hidden |
 
 use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::DataSource;
@@ -90,8 +90,9 @@ pub struct ChartBuilder {
 impl ChartBuilder {
     /// Create a new chart builder with sensible defaults
     ///
-    /// By default, charts will auto-fetch 1000 bars on initial load and when
-    /// symbol/timeframe changes. Use `with_initial_bars(None)` to disable auto-fetch.
+    /// Fetches 1000 bars when built, and again when the symbol or timeframe
+    /// changes, if a symbol is set and the data source returns `true` from
+    /// `supports_historical`. `with_initial_bars(None)` turns this off.
     pub fn new() -> Self {
         Self {
             data_src: None,
@@ -110,57 +111,30 @@ impl ChartBuilder {
         }
     }
 
-    /// Create an extended chart with all advanced features enabled.
+    /// Creates a chart with drawing tools and an empty indicator registry.
     ///
-    /// This pre-configured variant creates a full-featured trading terminal chart
-    /// with drawing tools and indicators registry enabled.
-    ///
-    /// # Features Enabled
-    ///
-    /// - **Drawing Tools**: Full suite of technical analysis drawing tools
-    /// - **Indicators Registry**: Support for technical indicators (RSI, MACD, etc.)
-    /// - **All Interactive Features**: Complete user interaction capabilities
+    /// Add studies to [`TradingChart::indicators`] or pass a registry with
+    /// [`with_indicators`](Self::with_indicators).
     pub fn extended() -> Self {
         Self::new()
             .with_drawing_tools()
             .with_indicators(IndicatorRegistry::new())
     }
 
-    /// Create an options chart optimized for non-time-based pricing displays.
+    /// Creates a line chart with the time axis labels and ticks hidden.
     ///
-    /// This variant creates a chart specifically designed for options pricing,
-    /// volatility surfaces, and other financial instruments where time is not
-    /// the primary axis. Time scale features are disabled.
-    ///
-    /// # Features Disabled
-    ///
-    /// - **Time Scale**: No time axis display
-    /// - **Time Labels**: Time values hidden
-    /// - **Time-Based Interactions**: Scroll/zoom based on price levels only
-    ///
-    /// # Chart Type
-    ///
-    /// - Uses `Line` chart by default (suitable for smooth price curves)
-    ///
-    /// # Use Cases
-    ///
-    /// - Options pricing chains
-    /// - Volatility surface visualization
-    /// - Greeks display
-    /// - Implied volatility curves
-    /// - Non-time-series financial data
+    /// The data is still a time series of bars, and pan and zoom work as on any
+    /// chart.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use egui_charts::ChartBuilder;
     ///
-    /// // Create options chain chart
+    /// // Line chart without time axis labels
     /// let chart = ChartBuilder::options_chart()
     ///     .with_symbol("SPY")
     ///     .build();
-    ///
-    /// // Time scale is disabled, optimized for strike price vs premium
     /// ```
     ///
     /// # Note
@@ -178,32 +152,9 @@ impl ChartBuilder {
             .with_chart_type(ChartType::Line)
     }
 
-    /// Create a minimal, lightweight price chart for simple displays.
+    /// Creates a line chart without grid or crosshair, showing 50 bars.
     ///
-    /// This variant provides a clean, distraction-free price chart optimized
-    /// for dashboards, tickers, and embedded widgets. Removes visual clutter
-    /// and focuses purely on price movement.
-    ///
-    /// # Features Disabled
-    ///
-    /// - **Grid**: No grid lines
-    /// - **Crosshair**: No crosshair lines or labels
-    /// - **Drawing Tools**: Not included
-    /// - **Indicators**: Not included
-    ///
-    /// # Configuration
-    ///
-    /// - **Chart Type**: Line (smooth, clean appearance)
-    /// - **Visible Candles**: 50 (narrower view window)
-    /// - **Interactions**: Basic only (no complex overlays)
-    ///
-    /// # Use Cases
-    ///
-    /// - Price tickers and widgets
-    /// - Dashboard sparklines
-    /// - Embedded mini-charts
-    /// - Overview displays
-    /// - Mobile-optimized views
+    /// Drawing tools and studies are not added.
     ///
     /// # Examples
     ///
@@ -236,7 +187,7 @@ impl ChartBuilder {
     ///
     /// # Note
     ///
-    /// For full-featured charts, use [`ChartBuilder::extended()`] instead.
+    /// For drawing tools and an indicator registry, use [`ChartBuilder::extended()`] instead.
     pub fn price_chart() -> Self {
         use crate::config::CrosshairOptions;
 
@@ -606,10 +557,10 @@ impl Default for ChartBuilder {
 /// the core [`Chart`] widget and adds:
 ///
 /// - **Live data polling** via the [`DataSource`] trait
-/// - **Progressive historical loading** — automatically prefetches older bars as the
-///   user scrolls left, so history appears to scroll without end
-/// - **Indicator calculation** — recalculates all registered studies when data changes
-/// - **Drawing tool management** — optional [`DrawingManager`] for annotations
+/// - **Progressive historical loading**: prefetches older bars as the user scrolls
+///   left, so history keeps loading
+/// - **Indicator calculation**: recalculates all registered studies when data changes
+/// - **Drawing tool management**: an optional [`DrawingManager`] for annotations
 ///
 /// # Usage
 ///
@@ -679,11 +630,11 @@ impl TradingChart {
     /// This method should be called **once per frame**, before [`show`](Self::show).
     /// It performs three key tasks:
     ///
-    /// 1. **Polls real-time updates** — processes `FullDataset` and `NewBars` events
+    /// 1. **Polls real-time updates**: processes `FullDataset` and `NewBars` events
     ///    from the data source, merging live bars into the existing dataset.
-    /// 2. **Recalculates indicators** — whenever data changes, all registered
+    /// 2. **Recalculates indicators**: whenever data changes, all registered
     ///    indicators are recalculated on the updated bar slice.
-    /// 3. **Progressive loading** — when the user scrolls close to the oldest bar
+    /// 3. **Progressive loading**: when the user scrolls close to the oldest bar
     ///    (within `historical_fetch_threshold`), automatically fetches more
     ///    historical data and prepends it, shifting drawing indices to maintain
     ///    alignment.
