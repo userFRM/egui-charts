@@ -85,16 +85,17 @@ pub struct TooltipOptions {
     /// Text color for tooltip content (`Color32::PLACEHOLDER`: active theme)
     pub text_color: Color32,
 
-    /// Border color for tooltip (bullish)
+    /// Border color for the floating tooltip of a rising bar (`Color32::PLACEHOLDER`: active theme)
     pub border_color_bullish: Color32,
 
-    /// Border color for tooltip (bearish)
+    /// Border color for the floating tooltip of a falling bar (`Color32::PLACEHOLDER`: active theme)
     pub border_color_bearish: Color32,
 
     /// Font size for tooltip text
     pub font_size: f32,
 
-    /// Decimal precision for price values
+    /// Most decimals for price values. The floating tooltip shows fewer for prices whose
+    /// magnitude needs fewer; the tracking bar shows this many, at most 4.
     pub price_precision: usize,
 
     /// Tracking bar height (for Tracking mode)
@@ -118,8 +119,8 @@ impl Default for TooltipOptions {
             magnifier_size: 120.0,
             background_color: Color32::PLACEHOLDER,
             text_color: Color32::PLACEHOLDER,
-            border_color_bullish: DESIGN_TOKENS.semantic.extended.bullish,
-            border_color_bearish: DESIGN_TOKENS.semantic.extended.bearish,
+            border_color_bullish: Color32::PLACEHOLDER,
+            border_color_bearish: Color32::PLACEHOLDER,
             font_size: 11.0,
             price_precision: 8,
             tracking_bar_height: 24.0,
@@ -130,9 +131,11 @@ impl Default for TooltipOptions {
 
 impl TooltipOptions {
     /// These options with `Color32::PLACEHOLDER` colours taken from the theme applied to
-    /// `ctx`, or from the dark chart tokens when none has been applied.
+    /// `ctx`, or from the dark tokens when none has been applied.
     pub(crate) fn resolved(&self, ctx: &egui::Context) -> Self {
-        let chart = crate::theme::applied_theme(ctx).map(|theme| theme.chart);
+        let theme = crate::theme::applied_theme(ctx);
+        let chart = theme.as_ref().map(|theme| theme.chart);
+        let border = theme.map(|theme| theme.ui.border);
         let tokens = &DESIGN_TOKENS.semantic;
         let or = |color: Color32, themed: Option<Color32>, fallback: Color32| {
             if color == Color32::PLACEHOLDER {
@@ -152,6 +155,8 @@ impl TooltipOptions {
                 chart.map(|c| c.axis_text),
                 tokens.extended.chart_text,
             ),
+            border_color_bullish: or(self.border_color_bullish, border, tokens.ui.border_dark),
+            border_color_bearish: or(self.border_color_bearish, border, tokens.ui.border_dark),
             tracking_bar_background: or(
                 self.tracking_bar_background,
                 chart.map(|c| c.bg),

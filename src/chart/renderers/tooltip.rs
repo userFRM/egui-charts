@@ -1,8 +1,10 @@
 use super::context::{ChartMapping, RenderContext};
+use super::labels::price_decimals;
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::model::Bar;
 use crate::scales::PriceMap;
 use crate::styles::typography;
+use crate::theme::ThemeExt;
 /// Tooltip Renderers
 ///
 /// Provides three tooltip variants:
@@ -10,7 +12,7 @@ use crate::styles::typography;
 /// - Tracking: Fixed horizontal bar at top of chart showing OHLC data
 /// - Magnifier: Circular zoom lens for detailed data inspection
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
+use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
 
 /// Renders tooltip based on configured mode
 pub fn render_tooltip_with_options(
@@ -43,8 +45,8 @@ pub fn render_tooltip_with_options(
     }
 }
 
-/// Renders floating tooltip near cursor
-/// Classic tooltip that follows the mouse
+/// Renders the floating tooltip: a label and value grid in the top corner of `price_rect`
+/// on the side away from the pointer, so it never covers the hovered bar.
 pub fn render_floating_tooltip(
     painter: &Painter,
     hover_pos: Pos2,
@@ -53,110 +55,94 @@ pub fn render_floating_tooltip(
     options: &TooltipOptions,
 ) {
     let options = &options.resolved(painter.ctx());
-    let mut tooltip_lines = Vec::new();
+    let price = |price: f64| {
+        let decimals = price_decimals(price).min(options.price_precision);
+        format!("{price:.decimals$}")
+    };
+    let mut rows = Vec::new();
 
     if options.show_time {
-        tooltip_lines.push(format!("Time: {}", candle.time.format("%Y-%m-%d %H:%M:%S")));
+        rows.push(("Time", candle.time.format("%Y-%m-%d %H:%M:%S").to_string()));
     }
 
     if options.show_ohlc {
-        let precision = options.price_precision;
-        tooltip_lines.push(format!("Open:   {:.precision$}", candle.open));
-        tooltip_lines.push(format!("High:   {:.precision$}", candle.high));
-        tooltip_lines.push(format!("Low:    {:.precision$}", candle.low));
-        tooltip_lines.push(format!("Close:  {:.precision$}", candle.close));
+        rows.push(("Open", price(candle.open)));
+        rows.push(("High", price(candle.high)));
+        rows.push(("Low", price(candle.low)));
+        rows.push(("Close", price(candle.close)));
     }
 
     if options.show_volume {
-        tooltip_lines.push(format!("Volume: {:.2}", candle.volume));
+        rows.push(("Volume", format!("{:.2}", candle.volume)));
     }
 
     if options.show_change {
         let change_pct = (candle.close - candle.open) / candle.open * 100.0;
         let sign = if change_pct >= 0.0 { "+" } else { "" };
-        tooltip_lines.push(format!("Change: {sign}{change_pct:.2}%"));
+        rows.push(("Change", format!("{sign}{change_pct:.2}%")));
     }
 
-    if tooltip_lines.is_empty() {
+    if rows.is_empty() {
         return;
     }
 
-    let font_id = FontId::monospace(options.font_size);
-    let line_height = options.font_size + DESIGN_TOKENS.spacing.sm + DESIGN_TOKENS.spacing.hairline;
-    let padding = DESIGN_TOKENS.spacing.lg;
+    let theme = painter.ctx().active_theme();
+    let font_id = FontId::proportional(options.font_size);
+    let rows: Vec<_> = rows
+        .into_iter()
+        .map(|(label, value)| {
+            let layout = |text| painter.layout_no_wrap(text, font_id.clone(), options.text_color);
+            (layout(label.to_owned()), layout(value))
+        })
+        .collect();
+    let label_width = rows
+        .iter()
+        .map(|(label, _)| label.size().x)
+        .fold(0.0, f32::max);
+    let value_width = rows
+        .iter()
+        .map(|(_, value)| value.size().x)
+        .fold(0.0, f32::max);
+    let line_height = rows[0].0.size().y + theme.spacing.xs;
+    let padding = theme.spacing.lg;
+    let size = Vec2::new(
+        label_width + theme.spacing.lg + value_width,
+        rows.len() as f32 * line_height - theme.spacing.xs,
+    ) + Vec2::splat(2.0 * padding);
+
+    let inset = theme.spacing.lg;
+    let x = if hover_pos.x > price_rect.center().x {
+        price_rect.min.x + inset
+    } else {
+        price_rect.max.x - inset - size.x
+    };
+    let tooltip_rect = Rect::from_min_size(Pos2::new(x, price_rect.min.y + inset), size);
 
     let border_color = if candle.is_bullish() {
         options.border_color_bullish
     } else {
         options.border_color_bearish
     };
-
-    // Calculate tooltip size
-    let mut max_width = 0.0f32;
-    for line in &tooltip_lines {
-        let text_size = painter.text(
-            Pos2::ZERO,
-            egui::Align2::LEFT_TOP,
-            line,
-            font_id.clone(),
-            Color32::TRANSPARENT,
-        );
-        max_width = max_width.max(text_size.width());
-    }
-
-    let tooltip_width = max_width + padding * 2.0;
-    let tooltip_height = tooltip_lines.len() as f32 * line_height + padding * 2.0;
-
-    // Pos tooltip (prefer right of cursor, fallback to left)
-    let cursor_offset = DESIGN_TOKENS.sizing.tooltip.cursor_offset_x;
-    let mut tooltip_x = hover_pos.x + cursor_offset;
-    let mut tooltip_y = hover_pos.y - tooltip_height / 2.0;
-
-    // Keep within bounds. Prefer the right of the cursor; flip to the left when
-    // the right edge would clip, then clamp both axes so a flipped or oversized
-    // tooltip never spills past the chart on any side.
-    if tooltip_x + tooltip_width > price_rect.max.x {
-        tooltip_x = hover_pos.x - tooltip_width - cursor_offset;
-    }
-    if tooltip_x < price_rect.min.x {
-        tooltip_x = price_rect.min.x;
-    }
-    if tooltip_y < price_rect.min.y {
-        tooltip_y = price_rect.min.y;
-    }
-    if tooltip_y + tooltip_height > price_rect.max.y {
-        tooltip_y = price_rect.max.y - tooltip_height;
-    }
-
-    let tooltip_rect = Rect::from_min_size(
-        Pos2::new(tooltip_x, tooltip_y),
-        Vec2::new(tooltip_width, tooltip_height),
-    );
-
-    // Draw tooltip background with border
-    painter.rect_filled(
-        tooltip_rect,
-        DESIGN_TOKENS.rounding.sm,
-        options.background_color,
-    );
+    painter.rect_filled(tooltip_rect, theme.radius.sm, options.background_color);
     painter.rect_stroke(
         tooltip_rect,
-        DESIGN_TOKENS.rounding.sm,
-        Stroke::new(DESIGN_TOKENS.spacing.xs, border_color),
-        StrokeKind::Outside,
+        theme.radius.sm,
+        Stroke::new(1.0, border_color),
+        StrokeKind::Inside,
     );
 
-    // Draw tooltip text
-    for (i, line) in tooltip_lines.iter().enumerate() {
-        let text_pos = Pos2::new(
-            tooltip_rect.min.x + padding,
-            tooltip_rect.min.y + padding + i as f32 * line_height,
+    // Labels left-aligned, values right-aligned
+    let values_right = tooltip_rect.max.x - padding;
+    for (i, (label, value)) in rows.into_iter().enumerate() {
+        let y = tooltip_rect.min.y + padding + i as f32 * line_height;
+        painter.galley(
+            Pos2::new(tooltip_rect.min.x + padding, y),
+            label,
+            options.text_color,
         );
-        painter.text(
-            text_pos,
-            egui::Align2::LEFT_TOP,
-            line,
-            font_id.clone(),
+        painter.galley(
+            Pos2::new(values_right - value.size().x, y),
+            value,
             options.text_color,
         );
     }
@@ -199,10 +185,11 @@ pub fn render_tracking_tooltip(
     if options.show_change {
         let change_pct = (candle.close - candle.open) / candle.open * 100.0;
         let sign = if change_pct >= 0.0 { "+" } else { "" };
+        let chart = painter.ctx().active_theme().chart;
         let change_color = if change_pct >= 0.0 {
-            options.border_color_bullish
+            chart.candle_up
         } else {
-            options.border_color_bearish
+            chart.candle_down
         };
 
         // Draw change separately with color
@@ -257,6 +244,7 @@ pub fn render_magnifier_tooltip(
     coords: &ChartMapping,
     visible_data: &[Bar],
 ) {
+    let chart = context.painter.ctx().active_theme().chart;
     let zoom = options.magnifier_zoom;
     let size = options.magnifier_size;
     let radius = size / 2.0;
@@ -277,15 +265,15 @@ pub fn render_magnifier_tooltip(
     }
 
     // Draw magnifier background (dark circle)
-    let lens_bg = DESIGN_TOKENS.semantic.extended.chart_tooltip_bg;
-    context.painter.circle_filled(center, radius, lens_bg);
+    context
+        .painter
+        .circle_filled(center, radius, chart.bg_tooltip);
 
     // Draw magnifier border
-    let border_color = DESIGN_TOKENS.semantic.extended.chart_text_muted;
     context.painter.circle_stroke(
         center,
         radius,
-        Stroke::new(DESIGN_TOKENS.stroke.thick, border_color),
+        Stroke::new(DESIGN_TOKENS.stroke.thick, chart.axis_text_secondary),
     );
 
     // Calculate visible range in the magnifier
@@ -345,9 +333,9 @@ pub fn render_magnifier_tooltip(
 
         let is_bullish = bar.close >= bar.open;
         let candle_color = if is_bullish {
-            options.border_color_bullish
+            chart.candle_up
         } else {
-            options.border_color_bearish
+            chart.candle_down
         };
 
         // Draw wick
@@ -379,7 +367,7 @@ pub fn render_magnifier_tooltip(
     }
 
     // Draw crosshair in center of magnifier
-    let crosshair_color = DESIGN_TOKENS.semantic.chart.crosshair_line;
+    let crosshair_color = chart.crosshair_line;
     context.painter.line_segment(
         [
             Pos2::new(center.x, center.y - radius * 0.3),
@@ -402,7 +390,7 @@ pub fn render_magnifier_tooltip(
         egui::Align2::CENTER_BOTTOM,
         &zoom_text,
         FontId::proportional(typography::TINY),
-        DESIGN_TOKENS.semantic.extended.disabled,
+        chart.axis_text_secondary,
     );
 }
 
