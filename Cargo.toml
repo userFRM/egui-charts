@@ -19,7 +19,6 @@ readme = "README.md"
 autoexamples = false
 exclude = [
     "plan.md",
-    "ROADMAP.md",
     ".github/",
     "tests/",
     "benches/",

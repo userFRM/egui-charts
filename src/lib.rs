@@ -191,19 +191,21 @@ mod tests {
     use crate::drawings::DrawingToolType;
     use crate::studies::IndicatorFactory;
 
-    /// Every number followed, directly or after one or two words, by "drawing tool..." or
-    /// "indicator..." (ignoring surrounding punctuation) in the README, the package description
-    /// and the crate docs must match the code.
+    /// Every number followed, directly or after one or two words, by "drawing tool...",
+    /// "indicator..." or "chart type..." (ignoring surrounding punctuation) in the README, the
+    /// package description, the crate docs and the ROADMAP must match the code.
     #[test]
     fn stated_counts_match_code() {
         let docs = [
             include_str!("../README.md"),
             include_str!("../Cargo.toml"),
             include_str!("lib.rs"),
+            include_str!("../ROADMAP.md"),
         ];
-        let counts: [(&[&str], usize); 2] = [
+        let counts: [(&[&str], usize); 3] = [
             (&["drawing", "tool"], DrawingToolType::all().len()),
             (&["indicator"], IndicatorFactory::new().count()),
+            (&["chart", "type"], crate::model::ChartType::all().len()),
         ];
         for (noun, count) in counts {
             let mut stated = 0;
