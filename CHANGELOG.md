@@ -141,7 +141,7 @@ All notable changes to this project are documented in this file. The format is b
 - Price and time axis labels use one font size, so month and day labels share a baseline.
 - The selected drawing's handles are round, an accent ring around the chart background like the selection dots of a series, instead of white squares with a dark outline; the handle being dragged is filled with the accent. `HandleConfig::color` and `selected_color` default to `Color32::PLACEHOLDER.to_array()`, the theme's accent.
 - A new drawing is pink (`DrawingManagerOptions::default_color`), a colour no default study uses, instead of a blue close to the EMA's.
-- The legend's O, H, L and C labels and the bullet after the symbol use the theme's secondary axis text colour instead of fixed greys ([#459](https://github.com/userFRM/egui-charts/issues/459)).
+- The legend's O, H, L and C labels and the bullet after the symbol use the theme's secondary axis text colour instead of fixed greys ([#459](https://github.com/userFRM/egui-charts/issues/459)), and its values and change the theme's success and error colours instead of the candle colours, which read at 3:1 on the light chart.
 
 ### Changed
 

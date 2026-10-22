@@ -337,10 +337,12 @@ pub fn render_legend(
 
     let candle = &visible_data[visible_data.len() - 1];
     let is_bullish = candle.close >= candle.open;
+    // Text takes the theme's status colours, which read at 4.5:1, rather than the candle colours.
+    let theme = painter.ctx().active_theme();
     let val_color = if is_bullish {
-        colors.bullish
+        theme.ui.success
     } else {
-        colors.bearish
+        theme.ui.error
     };
 
     // Start position
@@ -355,7 +357,7 @@ pub fn render_legend(
     x += symbol_galley.rect.width() + 8.0;
 
     // Bullet separator, in the colour of the O, H, L and C labels
-    let label_color = painter.ctx().active_theme().chart.axis_text_secondary;
+    let label_color = theme.chart.axis_text_secondary;
     let sep_font = FontId::proportional(typography::SM);
     let sep = painter.layout_no_wrap("•".to_string(), sep_font.clone(), label_color);
     painter.galley(Pos2::new(x, y), sep.clone(), label_color);
@@ -412,9 +414,9 @@ pub fn render_legend(
     };
 
     let change_color = if change >= 0.0 {
-        colors.bullish
+        theme.ui.success
     } else {
-        colors.bearish
+        theme.ui.error
     };
     let sign = if change >= 0.0 { "+" } else { "" };
 
