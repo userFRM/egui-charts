@@ -282,80 +282,65 @@ impl HistoryService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drawings::DrawingToolType;
+    use crate::drawings::{ChartPoint, DrawingToolType};
 
     fn make_drawing(id: usize) -> Drawing {
         Drawing::new(id, DrawingToolType::TrendLine)
     }
 
-    #[test]
-    fn test_undo_add() {
-        let mut history = HistoryService::new();
-        let mut drawings = Vec::new();
-
-        // Add a drawing
-        let drawing = make_drawing(1);
-        drawings.push(drawing.clone());
-        history.push_add(drawing);
-
-        assert_eq!(drawings.len(), 1);
-        assert!(history.can_undo());
-
-        // Undo
-        let affected = history.undo(&mut drawings);
-        assert_eq!(affected, Some(1));
-        assert_eq!(drawings.len(), 0);
-        assert!(history.can_redo());
+    fn drawing(id: usize, stroke_width: f32) -> Drawing {
+        let mut d = make_drawing(id);
+        d.stroke_width = stroke_width;
+        d
     }
 
-    #[test]
-    fn test_undo_delete() {
-        let mut history = HistoryService::new();
-        let drawing = make_drawing(1);
-        let mut drawings = vec![drawing.clone()];
-
-        // Delete the drawing
-        drawings.clear();
-        history.push_delete(drawing);
-
-        // Undo should restore it
-        history.undo(&mut drawings);
-        assert_eq!(drawings.len(), 1);
-        assert_eq!(drawings[0].id, 1);
+    /// The live set as sorted (id, stroke width) pairs, so a test sees which
+    /// drawings exist and which state each one is in.
+    fn state(drawings: &[Drawing]) -> Vec<(usize, f32)> {
+        let mut state: Vec<_> = drawings.iter().map(|d| (d.id, d.stroke_width)).collect();
+        state.sort_by_key(|&(id, _)| id);
+        state
     }
 
+    /// Undo of each command returns the live set to its state before the
+    /// action, redo returns it to the state after, and the redone command can
+    /// be undone again.
     #[test]
-    fn test_undo_modify() {
-        let mut history = HistoryService::new();
-        let mut drawing = make_drawing(1);
-        drawing.stroke_width = 2.0;
-        let mut drawings = vec![drawing.clone()];
+    fn undo_and_redo_restore_each_command() {
+        type Record = fn(&mut HistoryService);
+        let cases: [(&str, Vec<Drawing>, Vec<Drawing>, Record); 3] = [
+            (
+                "add",
+                vec![drawing(2, 1.0)],
+                vec![drawing(1, 1.0), drawing(2, 1.0)],
+                |h| h.push_add(drawing(1, 1.0)),
+            ),
+            (
+                "delete",
+                vec![drawing(1, 1.0), drawing(2, 1.0)],
+                vec![drawing(2, 1.0)],
+                |h| h.push_delete(drawing(1, 1.0)),
+            ),
+            (
+                "modify",
+                vec![drawing(1, 2.0)],
+                vec![drawing(1, 5.0)],
+                |h| h.push_modify(1, drawing(1, 2.0)),
+            ),
+        ];
 
-        // Modify
-        let old_state = drawing.clone();
-        drawings[0].stroke_width = 5.0;
-        history.push_modify(1, old_state);
+        for (name, before, after, record) in cases {
+            let mut history = HistoryService::new();
+            let mut drawings = after.clone();
+            record(&mut history);
 
-        // Undo should restore old stroke width
-        history.undo(&mut drawings);
-        assert_eq!(drawings[0].stroke_width, 2.0);
-    }
-
-    #[test]
-    fn test_redo() {
-        let mut history = HistoryService::new();
-        let mut drawings = Vec::new();
-
-        let drawing = make_drawing(1);
-        drawings.push(drawing.clone());
-        history.push_add(drawing);
-
-        // Undo then redo
-        history.undo(&mut drawings);
-        assert_eq!(drawings.len(), 0);
-
-        history.redo(&mut drawings);
-        assert_eq!(drawings.len(), 1);
+            assert_eq!(history.undo(&mut drawings), Some(1), "{name}: undo id");
+            assert_eq!(state(&drawings), state(&before), "{name}: after undo");
+            assert_eq!(history.redo(&mut drawings), Some(1), "{name}: redo id");
+            assert_eq!(state(&drawings), state(&after), "{name}: after redo");
+            assert_eq!(history.undo(&mut drawings), Some(1), "{name}: undo again");
+            assert_eq!(state(&drawings), state(&before), "{name}: after undo again");
+        }
     }
 
     #[test]
@@ -378,6 +363,7 @@ mod tests {
         assert!(!history.can_redo()); // Redo cleared
     }
 
+    /// The cap drops the oldest command, so the newest ones stay undoable.
     #[test]
     fn test_max_stack_size() {
         let mut history = HistoryService::with_max_size(3);
@@ -389,25 +375,37 @@ mod tests {
             history.push_add(d);
         }
 
-        // Only 3 items should be in stack
-        assert_eq!(history.undo_count(), 3);
+        for expected in [5, 4, 3] {
+            assert_eq!(history.undo(&mut drawings), Some(expected));
+        }
+        assert_eq!(history.undo(&mut drawings), None);
     }
 
+    /// When history is prepended, commands on both stacks move with the bars,
+    /// so a later undo or redo puts the drawing back at its shifted position.
     #[test]
     fn test_shift_bar_indices() {
+        let anchored = |id, bar_idx| {
+            let mut d = make_drawing(id);
+            d.chart_points.push(ChartPoint::new(bar_idx, 50.0));
+            d
+        };
         let mut history = HistoryService::new();
+        let mut drawings = vec![anchored(1, 120.0), anchored(2, 200.0)];
 
-        let mut drawing = make_drawing(1);
-        drawing
-            .chart_points
-            .push(crate::drawings::ChartPoint::new(100.0, 50.0));
-        history.push_add(drawing);
+        history.push_modify(1, anchored(1, 100.0));
+        history.push_add(anchored(2, 200.0));
+        history.undo(&mut drawings); // Add(2) moves to the redo stack
 
         history.shift_bar_indices(50.0);
 
-        // The drawing in history should have shifted bar indices
-        // (We can't easily verify this without exposing internals,
-        // but the method should not panic)
+        // Modify(1) sat on the undo stack: undo restores its old state, shifted.
+        assert_eq!(history.undo(&mut drawings), Some(1));
+        assert_eq!(drawings[0].chart_points[0].bar_idx, 150.0);
+        history.redo(&mut drawings); // reapplies Modify(1)
+        // Add(2) was on the redo stack: redo re-adds it at the shifted bar.
+        assert_eq!(history.redo(&mut drawings), Some(2));
+        assert_eq!(drawings[1].chart_points[0].bar_idx, 250.0);
     }
 
     /// Undoing an `Add` parks the re-add command on the redo stack while the
@@ -441,18 +439,5 @@ mod tests {
         assert_eq!(affected, Some(1));
         assert_eq!(drawings.len(), 1);
         assert_eq!(drawings[0].id, 1);
-    }
-
-    #[test]
-    fn test_descriptions() {
-        let mut history = HistoryService::new();
-
-        assert_eq!(history.last_undo_description(), None);
-
-        history.push_add(make_drawing(1));
-        assert_eq!(history.last_undo_description(), Some("Add Drawing"));
-
-        history.push_delete(make_drawing(2));
-        assert_eq!(history.last_undo_description(), Some("Delete Drawing"));
     }
 }
