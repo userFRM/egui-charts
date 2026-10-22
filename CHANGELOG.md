@@ -41,6 +41,7 @@ All notable changes to this project are documented in this file. The format is b
 - `config::KeyboardAction::shortcut` returns the key combination that triggers an action, as an `egui::KeyboardShortcut`, for the actions the context menus show a shortcut for: Reset chart, Create alert and Delete drawing.
 - `ToastKind::color` returns the theme's status colour for a toast kind.
 - `AlertKind::color` and `ToastKind::color` return the theme's status colour for an alert or toast kind.
+- `MessageKind::Warning`: `status_message` draws it in the theme's warning colour. Migration: a `match` on `MessageKind` needs a `Warning` arm.
 
 ### Fixed
 
@@ -160,6 +161,7 @@ All notable changes to this project are documented in this file. The format is b
 - `NotificationPanel` stacks its toasts 8 px apart, newest nearest the corner, 16 px from the window corner. Every toast was drawn at the same spot, flush to the corner, so only one was visible.
 - Toasts are opaque and follow the theme: the window fill, border and popup shadow, text in the theme's text colour (a title in the strong text colour, its message in the secondary text colour), and the icon and progress bar in the theme's colour for the kind. They were translucent fixed-colour slabs, the same in every theme, with error text below 4.5:1. The close button can be clicked, and a timed toast's progress bar spans the toast's content instead of stopping 16 px short.
 - `Alert` takes its colours from the theme: the icon in the theme's colour for the kind, the fill and border in that colour at 10 % and 40 %, and the title in the strong text colour with the message under it in the secondary text colour. It used fixed tokens tuned for the dark theme, so several icons fell below 3:1 in the light theme and the high contrast theme showed the dark colours. Every alert fills the available width, the dismiss button can be clicked, and the text starts 8 px after the icon instead of 16 px.
+- `status_message` draws Info in the theme's info colour instead of the plain text colour, starts at the left edge of the content around it instead of 8 px in, and leaves 4 px above instead of 6 px.
 
 ### Changed
 

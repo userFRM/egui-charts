@@ -1,6 +1,6 @@
 //! Status message display helpers.
 //!
-//! Provides consistent error/success/info message rendering
+//! Provides consistent error/success/warning/info message rendering
 //! used in dialogs and forms.
 //!
 //! # Example
@@ -19,7 +19,6 @@
 //! ```
 
 use crate::theme::ThemeExt;
-use crate::tokens::DESIGN_TOKENS;
 use egui::Ui;
 
 /// Kind of status message, determines color.
@@ -27,20 +26,20 @@ use egui::Ui;
 pub enum MessageKind {
     Error,
     Success,
+    Warning,
     Info,
 }
 
 /// Show a padded, colored status message.
 pub fn status_message(ui: &mut Ui, kind: MessageKind, text: &str) {
+    let theme = ui.active_theme();
     let color = match kind {
         MessageKind::Error => ui.style().visuals.error_fg_color,
-        MessageKind::Success => ui.active_theme().ui.success,
-        MessageKind::Info => ui.style().visuals.text_color(),
+        MessageKind::Success => theme.ui.success,
+        MessageKind::Warning => ui.style().visuals.warn_fg_color,
+        MessageKind::Info => theme.ui.info,
     };
 
-    ui.add_space(DESIGN_TOKENS.spacing.md);
-    ui.horizontal(|ui| {
-        ui.add_space(DESIGN_TOKENS.spacing.lg);
-        ui.colored_label(color, text);
-    });
+    ui.add_space(theme.spacing.sm);
+    ui.colored_label(color, text);
 }
