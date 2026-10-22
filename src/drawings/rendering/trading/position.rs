@@ -54,7 +54,18 @@ impl Drawing {
             &[]
         };
         let exit = position_exit(after_entry, entry_price, target_price, stop_price, is_long);
-        let qty = self.quantity.unwrap_or(100.0);
+        let qty = self
+            .position_size
+            .unwrap_or_default()
+            .quantity(entry_price, stop_price);
+        let qty_text = qty.map_or_else(
+            || "n/a".to_owned(),
+            |qty| {
+                // Four decimals, or four significant digits below 0.1.
+                let scale = 10f64.powi((3 - qty.log10().floor() as i32).clamp(4, 300));
+                ((qty * scale).round() / scale).to_string()
+            },
+        );
 
         // Calculate width - extend across chart
         let width = (target.x - entry.x)
@@ -93,32 +104,29 @@ impl Drawing {
         // Draw labels
         let (summary, summary_color) = match exit {
             Some((exit_price, closed)) => {
-                let pnl = side * (exit_price - entry_price) * f64::from(qty);
+                let change = side * (exit_price - entry_price);
+                let pnl =
+                    qty.map_or_else(|| "n/a".to_owned(), |qty| format!("{:.2}", change * qty));
                 let risk_reward = (target_price - entry_price) / (entry_price - stop_price);
                 let summary = format!(
-                    "{} P&L: {pnl:.2} ({:.2}%)  •  Risk/Reward: {risk_reward:.2}  •  Qty: {}",
+                    "{} P&L: {pnl} ({:.2}%)  •  Risk/Reward: {risk_reward:.2}  •  Qty: {qty_text}",
                     if closed { "Closed" } else { "Open" },
                     pct(exit_price),
-                    qty as i32
                 );
-                let color = if pnl >= 0.0 { profit_color } else { loss_color };
+                let color = if change >= 0.0 {
+                    profit_color
+                } else {
+                    loss_color
+                };
                 (summary, color)
             }
             None => (
-                format!("P&L: n/a  •  Risk/Reward: n/a  •  Qty: {}", qty as i32),
+                format!("P&L: n/a  •  Risk/Reward: n/a  •  Qty: {qty_text}"),
                 entry_color,
             ),
         };
-        let target_label = format!(
-            "Target: {target_price:.2} ({:.2}%) {}",
-            pct(target_price),
-            qty as i32
-        );
-        let stop_label = format!(
-            "Stop: {stop_price:.2} ({:.2}%) {}",
-            pct(stop_price),
-            qty as i32
-        );
+        let target_label = format!("Target: {target_price:.2} ({:.2}%)", pct(target_price));
+        let stop_label = format!("Stop: {stop_price:.2} ({:.2}%)", pct(stop_price));
         self.draw_position_labels(
             painter,
             entry,

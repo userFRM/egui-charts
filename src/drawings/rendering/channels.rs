@@ -68,7 +68,8 @@ impl Drawing {
     }
 
     /// Render Regression Trend - least-squares line through the closes of the
-    /// bars between the anchors, with bands one and two standard deviations away
+    /// bars between the anchors, with bands the configured number of standard
+    /// deviations away
     pub(crate) fn render_regression_trend(&self, painter: &egui::Painter, view: &ChartView) {
         let (&[start, end, ..], &[a, b, ..]) =
             (self.points.as_slice(), self.chart_points.as_slice())
@@ -104,6 +105,7 @@ impl Drawing {
         color: Color32,
     ) {
         let last = len - 1;
+        let deviations = self.regression_trend.unwrap_or_default().deviations();
         // The fitted line shifted by `k` standard deviations, from the first bar to the last
         let line = |k: f64| {
             [0, last].map(|i| {
@@ -114,54 +116,27 @@ impl Drawing {
                 )
             })
         };
-        let [upper_2sd, upper_1sd, center, lower_1sd, lower_2sd] =
-            [2.0, 1.0, 0.0, -1.0, -2.0].map(line);
+        let [upper, center, lower] = [deviations, 0.0, -deviations].map(line);
 
-        // Fill between 2σ bands (outer fill - very light)
-        let fill_2sd =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 15);
-        for (outer, inner) in [(upper_2sd, upper_1sd), (lower_2sd, lower_1sd)] {
-            painter.add(egui::epaint::PathShape::convex_polygon(
-                vec![outer[0], outer[1], inner[1], inner[0]],
-                fill_2sd,
-                Stroke::NONE,
-            ));
-        }
-
-        // Fill between 1σ bands (inner fill - slightly more visible)
-        let fill_1sd =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
+        // Fill between the bands
+        let fill = Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 25);
         painter.add(egui::epaint::PathShape::convex_polygon(
-            vec![upper_1sd[0], upper_1sd[1], lower_1sd[1], lower_1sd[0]],
-            fill_1sd,
+            vec![upper[0], upper[1], lower[1], lower[0]],
+            fill,
             Stroke::NONE,
         ));
 
-        // Draw 2σ band lines (dashed, lighter)
-        let sd2_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-        for [from, to] in [upper_2sd, lower_2sd] {
-            super::utils::draw_dashed_line(
-                painter,
-                from,
-                to,
-                Stroke::new(stroke::HAIRLINE, sd2_color),
-                DESIGN_TOKENS.rounding.xl,
-                DESIGN_TOKENS.rounding.md,
-            );
-        }
-
-        // Draw 1σ band lines (solid)
-        let sd1_color =
+        // Draw the band lines
+        let band_color =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180);
-        for band in [upper_1sd, lower_1sd] {
-            painter.line_segment(band, Stroke::new(stroke::HAIRLINE, sd1_color));
+        for band in [upper, lower] {
+            painter.line_segment(band, Stroke::new(stroke::HAIRLINE, band_color));
         }
 
         // Draw main regression line (thicker)
         painter.line_segment(center, Stroke::new(self.stroke_width + 0.5, color));
 
-        // Draw info label with R² and the slope per bar
+        // Draw info label with R² and the correlation
         let line_end = center[1];
         let label_pos = Pos2::new(line_end.x + typography::XS, line_end.y - typography::XXL);
         let label_bg = DESIGN_TOKENS
@@ -193,11 +168,12 @@ impl Drawing {
             color,
         );
 
-        // Slope value
+        // Pearson correlation
         painter.text(
             Pos2::new(label_pos.x + 35.0, label_pos.y + typography::XXL),
             egui::Align2::CENTER_CENTER,
-            format!("m = {:.4}", fit.slope),
+            fit.correlation
+                .map_or_else(|| "r = n/a".to_owned(), |r| format!("r = {r:.2}")),
             egui::FontId::proportional(typography::XS),
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180),
         );
@@ -547,6 +523,9 @@ struct LinearFit {
     sigma: f64,
     /// Share of the closes' variance the line explains.
     r_squared: f64,
+    /// Pearson correlation of the closes with their position; `None` when
+    /// the closes are flat.
+    correlation: Option<f64>,
 }
 
 /// Means of the closes of a span of bars and of their positions in it, and
@@ -573,7 +552,7 @@ fn span_moments(view: &ChartView, first: usize, bars: &[Bar]) -> Rc<Moments> {
 }
 
 impl Moments {
-    /// Moments of the closes of `bars`, in two passes.
+    /// Moments of the closes of `bars`: the mean, corrected for rounding, then the centred sums.
     fn of(bars: &[Bar]) -> Self {
         let n = bars.len() as f64;
         if bars.is_empty() {
@@ -581,6 +560,8 @@ impl Moments {
         }
         let mean_x = (n - 1.0) / 2.0;
         let mean_y = bars.iter().map(|bar| bar.close).sum::<f64>() / n;
+        // Correct the rounding of the sum, so equal closes give their close as the mean.
+        let mean_y = mean_y + bars.iter().map(|bar| bar.close - mean_y).sum::<f64>() / n;
         let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
         for (i, bar) in bars.iter().enumerate() {
             let (dx, dy) = (i as f64 - mean_x, bar.close - mean_y);
@@ -620,16 +601,15 @@ impl Moments {
         }
         let slope = self.sxy / self.sxx;
         let residual = (self.syy - slope * self.sxy).max(0.0);
+        // Closes are flat when they vary by no more than the rounding of their mean.
+        let flat = self.syy <= 16.0 * self.n * (self.mean_y * f64::EPSILON).powi(2);
         Some(LinearFit {
             slope,
             intercept: self.mean_y - slope * self.mean_x,
             sigma: (residual / (self.n - 1.0)).sqrt(),
             // Flat closes are fitted exactly.
-            r_squared: if self.syy > 0.0 {
-                1.0 - residual / self.syy
-            } else {
-                1.0
-            },
+            r_squared: if flat { 1.0 } else { 1.0 - residual / self.syy },
+            correlation: (!flat).then(|| self.sxy / (self.sxx * self.syy).sqrt()),
         })
     }
 }
@@ -640,9 +620,9 @@ mod tests {
     use crate::drawings::rendering::sample_bars;
 
     /// Reference: ordinary least squares of the closes of bars 0..=5 against
-    /// 0..=5, residual standard deviation over n - 1, R² = 1 - SSres / SStot.
-    /// The moments give the same fit in two
-    /// passes, streamed bar by bar, or with the last bar added to the others.
+    /// 0..=5, residual standard deviation over n - 1, R² = 1 - SSres / SStot,
+    /// Pearson r = Sxy / sqrt(Sxx Syy). The moments give the same fit computed
+    /// over all bars at once, streamed bar by bar, or with the last bar added to the others.
     #[test]
     fn linear_fit_matches_reference() {
         let bars = &sample_bars()[..6];
@@ -657,9 +637,21 @@ mod tests {
                 (fit.intercept, 11.190476190476192),
                 (fit.sigma, 0.9139136147569393),
                 (fit.r_squared, 0.4668693009118541),
+                (fit.correlation.unwrap(), 0.6832783480484758),
             ] {
                 assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
             }
         }
+        // Flat closes whose mean does not round to the close are fitted exactly.
+        let flat = Moments::of(&vec![
+            Bar {
+                close: 0.1,
+                ..bars[0]
+            };
+            100
+        ])
+        .fit()
+        .unwrap();
+        assert_eq!((flat.r_squared, flat.correlation), (1.0, None));
     }
 }

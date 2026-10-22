@@ -102,7 +102,7 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [x] Parallel Channel: Two parallel lines + connectors, explicit hit test
 - [x] Flat Top/Bottom: Trend line + horizontal + Support/Resistance labels
 - [x] Disjoint Channel: Two parallel segments + dashed connectors + width label
-- [x] Regression Trend: least-squares line through the closes between the anchors, 1σ and 2σ bands, R² and slope label
+- [x] Regression Trend: least-squares line through the closes between the anchors, bands a configurable number of standard deviations away, R² and Pearson correlation label
 
 ### Pitchforks (2/4)
 - [x] Pitchfork (Andrews)
@@ -150,7 +150,7 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [x] Sine Line: Full sine wave with amplitude guides
 
 ### Projection / Trading (5/6)
-- [x] Long Position: entry, target and independent stop zones; risk/reward from the levels, P&L from the bars after the entry
+- [x] Long Position: entry, target and independent stop zones; risk/reward from the levels, P&L from the bars after the entry, quantity fixed or sized from the amount or account share at risk
 - [x] Short Position
 - [x] Forecast: price change over the bar span, resolved against the bars up to the target bar
 - [ ] Ghost Feed: faded polyline through the clicked points; draws no bars
@@ -159,7 +159,7 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 
 ### Volume / VWAP (3/3)
 - [x] Anchored VWAP: VWAP of the typical price from the anchor bar, with 1σ and 2σ volume-weighted bands
-- [x] Fixed Range Volume Profile: each bar's volume spread over its high-low range, POC and 70% value area
+- [x] Fixed Range Volume Profile: each bar's volume spread over its high-low range, POC and value area; row count and value area share are settings (24 rows, 70% by default)
 - [x] Anchored Volume Profile: the same profile from the anchor bar to the latest bar
 
 ### Measurements (4/4)

@@ -11,10 +11,6 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
-/// Price rows in a volume profile.
-const PROFILE_ROWS: usize = 24;
-/// Share of the profile's volume inside the value area.
-const VALUE_AREA_SHARE: f64 = 0.7;
 /// Bars between the saved running sums of an anchored VWAP.
 const VWAP_CHECKPOINT: usize = 1024;
 
@@ -178,11 +174,12 @@ impl Drawing {
         left: f32,
         right: f32,
     ) {
-        let profile = span_profile(view, PROFILE_ROWS, first, bars);
+        let config = self.volume_profile.unwrap_or_default();
+        let profile = span_profile(view, config.rows(), first, bars);
         let Some(profile) = profile.as_ref() else {
             return;
         };
-        let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(VALUE_AREA_SHARE) else {
+        let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
             return;
         };
         let y_at_row =
@@ -589,7 +586,7 @@ mod tests {
 
     /// Reference: rows of 1.5 from 9.0, each bar's volume split by how much of
     /// its range falls in the row, the zero-range bar whole in the row of 13.0.
-    /// The value area takes the two rows below the POC (433.3) over
+    /// For 70% the value area takes the two rows below the POC (433.3) over
     /// the one row above it (397.5); comparing single rows would take the row
     /// above.
     #[test]
@@ -605,7 +602,13 @@ mod tests {
         {
             assert_close(*got, want);
         }
-        assert_eq!(profile.poc_and_value_area(0.7), Some((2, (0, 2))));
+        for (share, value_area) in [(0.5, (1, 2)), (0.7, (0, 2)), (1.0, (0, 3))] {
+            assert_eq!(
+                profile.poc_and_value_area(share),
+                Some((2, value_area)),
+                "share {share}"
+            );
+        }
     }
 
     /// The profile of a span that ends on the forming bar follows its ticks

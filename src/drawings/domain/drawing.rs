@@ -9,8 +9,8 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, LineStyle,
-    TimeframeVisibility,
+    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, LineStyle, PositionSize,
+    RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
 
 /// A drawing on the chart
@@ -71,13 +71,15 @@ pub struct Drawing {
     /// Per-timeframe visibility
     pub timeframe_visibility: TimeframeVisibility,
 
-    // === Position fields ===
-    /// Position quantity (e.g., 100 shares)
-    pub quantity: Option<f32>,
-
-    // === Fibonacci configuration ===
+    // === Tool-specific configuration (None uses the defaults) ===
+    /// Quantity of the long and short position tools
+    pub position_size: Option<PositionSize>,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
+    /// Rows and value area of the volume profile tools
+    pub volume_profile: Option<VolumeProfileConfig>,
+    /// Band width of the regression trend tool
+    pub regression_trend: Option<RegressionTrendConfig>,
 
     // === Z-Order (rendering layer) ===
     /// Z-order for rendering priority (higher = drawn on top)
@@ -108,10 +110,10 @@ impl Drawing {
             arrow_start_style: ArrowStyle::None,
             arrow_end_style: ArrowStyle::Arrow,
             timeframe_visibility: TimeframeVisibility::all(),
-            // Position defaults
-            quantity: Some(100.0),
-            // Fibonacci config
+            position_size: None,
             fib_config: None,
+            volume_profile: None,
+            regression_trend: None,
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }

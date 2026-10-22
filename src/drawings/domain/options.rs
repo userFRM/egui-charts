@@ -2,10 +2,13 @@
 //!
 //! Contains styling enums ([`LineStyle`], [`ArrowStyle`], [`FontWeight`]),
 //! interaction configuration ([`DrawingOptions`], [`HandlePos`]),
-//! per-timeframe visibility ([`TimeframeVisibility`]), and Fibonacci level
-//! configuration ([`FibonacciConfig`], [`FibonacciLevel`]).
+//! per-timeframe visibility ([`TimeframeVisibility`]), Fibonacci level
+//! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
+//! the volume profile, regression trend and position drawings
+//! ([`VolumeProfileConfig`], [`RegressionTrendConfig`], [`PositionSize`]).
 
 use std::collections::HashSet;
+use std::ops::RangeInclusive;
 
 /// Identifies a selection handle position on a drawing.
 ///
@@ -305,9 +308,162 @@ impl FibonacciConfig {
     }
 }
 
+/// Settings of the fixed range and anchored volume profile drawings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VolumeProfileConfig {
+    rows: usize,
+    value_area: f64,
+}
+
+impl VolumeProfileConfig {
+    /// Price rows a profile may have.
+    pub const ROWS: RangeInclusive<usize> = 1..=1000;
+
+    /// A profile of `rows` equal price rows whose value area holds the
+    /// `value_area` share of its volume (above 0, at most 1); `None` when
+    /// either is out of bounds.
+    pub fn new(rows: usize, value_area: f64) -> Option<Self> {
+        (Self::ROWS.contains(&rows) && value_area > 0.0 && value_area <= 1.0)
+            .then_some(Self { rows, value_area })
+    }
+
+    /// Number of price rows.
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// Share of the volume inside the value area.
+    pub fn value_area(&self) -> f64 {
+        self.value_area
+    }
+}
+
+impl Default for VolumeProfileConfig {
+    /// 24 rows and a value area of 70% of the volume.
+    fn default() -> Self {
+        Self {
+            rows: 24,
+            value_area: 0.7,
+        }
+    }
+}
+
+/// Settings of the regression trend drawing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegressionTrendConfig {
+    deviations: f64,
+}
+
+impl RegressionTrendConfig {
+    /// Bands `deviations` standard deviations either side of the fitted line
+    /// (above 0, at most 10); `None` when out of bounds.
+    pub fn new(deviations: f64) -> Option<Self> {
+        (deviations > 0.0 && deviations <= 10.0).then_some(Self { deviations })
+    }
+
+    /// Distance of the bands from the fitted line, in standard deviations.
+    pub fn deviations(&self) -> f64 {
+        self.deviations
+    }
+}
+
+impl Default for RegressionTrendConfig {
+    /// Bands two standard deviations away.
+    fn default() -> Self {
+        Self { deviations: 2.0 }
+    }
+}
+
+/// How a long or short position drawing sizes its quantity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PositionSize {
+    /// A fixed quantity.
+    Quantity(f64),
+    /// The quantity that loses this amount if the stop is hit.
+    RiskAmount(f64),
+    /// The quantity that loses `percent` of `account_size` if the stop is hit.
+    RiskPercent {
+        /// Account size, in the currency of the instrument's prices.
+        account_size: f64,
+        /// Share of the account risked, in percent (above 0, at most 100).
+        percent: f64,
+    },
+}
+
+impl PositionSize {
+    /// The quantity of a position entered at `entry` with its stop at `stop`;
+    /// `None` when a size from the risk has its stop at the entry, or a
+    /// setting is out of bounds (not positive and finite, or a percent above 100).
+    pub fn quantity(&self, entry: f64, stop: f64) -> Option<f64> {
+        let positive = |value: f64| value.is_finite() && value > 0.0;
+        let risk = match *self {
+            Self::Quantity(quantity) => return positive(quantity).then_some(quantity),
+            Self::RiskAmount(amount) => amount,
+            Self::RiskPercent {
+                account_size,
+                percent,
+            } if positive(account_size) && positive(percent) && percent <= 100.0 => {
+                account_size * percent / 100.0
+            }
+            Self::RiskPercent { .. } => return None,
+        };
+        let quantity = risk / (entry - stop).abs();
+        positive(quantity).then_some(quantity)
+    }
+}
+
+impl Default for PositionSize {
+    /// One unit, so the profit and loss read per unit.
+    fn default() -> Self {
+        Self::Quantity(1.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reference: quantity = risked amount / |entry - stop| (reference.py);
+    /// none when a size from the risk has its stop at the entry, or a setting
+    /// is out of bounds.
+    #[test]
+    fn position_size_quantity() {
+        let percent = |account_size, percent| PositionSize::RiskPercent {
+            account_size,
+            percent,
+        };
+        for (size, entry, stop, want) in [
+            (PositionSize::Quantity(3.0), 50.0, 48.0, Some(3.0)),
+            (PositionSize::RiskAmount(100.0), 50.0, 48.0, Some(50.0)),
+            (percent(10_000.0, 1.0), 50.0, 52.5, Some(40.0)),
+            (percent(2_000.0, 2.5), 1.1, 1.0975, Some(19999.99999999865)),
+            (PositionSize::RiskAmount(100.0), 50.0, 50.0, None),
+            (PositionSize::RiskAmount(-100.0), 50.0, 48.0, None),
+            (PositionSize::Quantity(f64::NAN), 50.0, 48.0, None),
+            (percent(10_000.0, 150.0), 50.0, 48.0, None),
+            (percent(-10_000.0, -1.0), 50.0, 48.0, None),
+        ] {
+            let got = size.quantity(entry, stop);
+            assert!(
+                got.zip(want)
+                    .map_or(got == want, |(got, want)| (got - want).abs() < 1e-6),
+                "{size:?}: got {got:?}, want {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn drawing_settings_reject_out_of_bounds_values() {
+        assert!(VolumeProfileConfig::new(1, 1.0).is_some());
+        assert!(VolumeProfileConfig::new(1000, 0.01).is_some());
+        for (rows, value_area) in [(0, 0.7), (1001, 0.7), (24, 0.0), (24, 1.01), (24, f64::NAN)] {
+            assert!(VolumeProfileConfig::new(rows, value_area).is_none());
+        }
+        assert!(RegressionTrendConfig::new(10.0).is_some());
+        for deviations in [0.0, -1.0, 10.5, f64::INFINITY, f64::NAN] {
+            assert!(RegressionTrendConfig::new(deviations).is_none());
+        }
+    }
 
     #[test]
     fn test_line_style_dash_pattern() {

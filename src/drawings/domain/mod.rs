@@ -11,7 +11,8 @@
 //! - [`DrawingInteractionMode`] -- how mouse input maps to point capture.
 //! - Options types: [`LineStyle`], [`ArrowStyle`], [`FontWeight`],
 //!   [`HandlePos`], [`TimeframeVisibility`], [`DrawingOptions`],
-//!   [`FibonacciConfig`], [`FibonacciLevel`].
+//!   [`FibonacciConfig`], [`FibonacciLevel`], [`VolumeProfileConfig`],
+//!   [`RegressionTrendConfig`], [`PositionSize`].
 //!
 //! The only external dependency is `egui` (for `Pos2` and `Color32` in
 //! `Drawing`). All other types are pure Rust with no framework coupling.
@@ -26,6 +27,6 @@ pub use coordinates::ChartPoint;
 pub use drawing::Drawing;
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos, LineStyle,
-    TimeframeVisibility,
+    PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
 pub use tool_type::{DrawingInteractionMode, DrawingToolType};
