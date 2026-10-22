@@ -78,8 +78,8 @@ impl Drawing {
 
 /// Whether the price reached the target after the start bar and by the
 /// target bar: `Some(true)` once a bar trades at the target, `Some(false)`
-/// when the target bar has closed without that, `None` while it is still
-/// ahead (or the target is not after the start).
+/// once a bar after the target bar exists without that, `None` while the
+/// target bar is ahead or still forming (or the target is not after the start).
 fn forecast_outcome(bars: &[Bar], from: ChartPoint, to: ChartPoint) -> Option<bool> {
     let (start, end) = (from.bar_idx.round(), to.bar_idx.round());
     if end <= start {
@@ -97,7 +97,7 @@ fn forecast_outcome(bars: &[Bar], from: ChartPoint, to: ChartPoint) -> Option<bo
     if reached {
         Some(true)
     } else {
-        (end < bars.len() as f32).then_some(false)
+        ((end as usize).saturating_add(1) < bars.len()).then_some(false)
     }
 }
 
@@ -123,6 +123,8 @@ mod tests {
             ((3.0, 13.5), (5.0, 12.2), Some(true)),
             // Down from bar 3: no low reaches 11.5 by bar 5.
             ((3.0, 13.5), (5.0, 11.5), Some(false)),
+            // Target bar 6 is the last, still forming bar: not decided yet.
+            ((3.0, 13.5), (6.0, 11.5), None),
         ];
         for ((from_bar, from_price), (to_bar, to_price), want) in cases {
             let from = ChartPoint::new(from_bar, from_price);
