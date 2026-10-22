@@ -353,6 +353,7 @@ mod tests {
             Box::new(WilliamsR::new(l(0))),
             Box::new(CCI::new(l(0))),
             Box::new(RateOfChange::new(l(0))),
+            Box::new(Momentum::new(l(0))),
             Box::new(Aroon::new(l(0))),
             Box::new(AwesomeOscillator::new(l(0), l(1))),
             Box::new(UltimateOscillator::new(l(0), l(1), l(2))),
