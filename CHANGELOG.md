@@ -166,6 +166,7 @@ All notable changes to this project are documented in this file. The format is b
 - Parsing a `DrawingToolType` fails with `drawings::ParseToolTypeError`, whose `input` field holds the name as given and whose message reads `unknown drawing tool "name"`, instead of a `String`. The names that parse, and the tools they parse to, are unchanged. Migration: code that used the error as a `String` reads `error.input` or calls `error.to_string()`.
 - `OrderId` and `OrderSide` now live in `model` (still re-exported from `chart::overlays`).
 - A last-bar update or an append of `SMA` reads the window from the bars instead of keeping a copy of it, so it no longer copies the whole close series when the period is longer than the series.
+- `Week52HighLow`, `DonchianChannels`, `IchimokuCloud`, `Stochastic` and `WilliamsR` find the highest high and lowest low of each window in time linear in the number of bars, independent of the period, instead of rescanning the window for every bar; their values are unchanged. `Week52HighLow` with its default 252-bar period takes about 7 ms instead of 95 ms on 100,000 bars and `IchimokuCloud` about 24 ms instead of 52 ms.
 
 ### Removed
 

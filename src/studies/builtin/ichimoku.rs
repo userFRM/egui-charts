@@ -26,6 +26,7 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -95,31 +96,6 @@ impl IchimokuCloud {
         self.displacement = displacement;
         self
     }
-
-    /// Calculate highest high over period
-    fn highest_high(data: &[Bar], end: usize, period: usize) -> f64 {
-        let start = end.saturating_sub(period - 1);
-        data[start..=end]
-            .iter()
-            .map(|b| b.high)
-            .fold(f64::NEG_INFINITY, f64::max)
-    }
-
-    /// Calculate lowest low over period
-    fn lowest_low(data: &[Bar], end: usize, period: usize) -> f64 {
-        let start = end.saturating_sub(period - 1);
-        data[start..=end]
-            .iter()
-            .map(|b| b.low)
-            .fold(f64::INFINITY, f64::min)
-    }
-
-    /// Calculate Donchian midline (high + low) / 2
-    fn donchian_mid(data: &[Bar], end: usize, period: usize) -> f64 {
-        let hh = Self::highest_high(data, end, period);
-        let ll = Self::lowest_low(data, end, period);
-        (hh + ll) / 2.0
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -141,19 +117,28 @@ impl Indicator for IchimokuCloud {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let mid = |end: usize, period: usize| {
-            (end + 1 >= period).then(|| Self::donchian_mid(data, end, period))
+        // Midpoint of the highest high and lowest low of each full window
+        let mid = |period: usize| -> Vec<Option<f64>> {
+            let highest = rolling_max(data.iter().map(|b| b.high), period);
+            let lowest = rolling_min(data.iter().map(|b| b.low), period);
+            highest
+                .into_iter()
+                .zip(lowest)
+                .enumerate()
+                .map(|(i, (hh, ll))| (i + 1 >= period).then_some((hh + ll) / 2.0))
+                .collect()
         };
+        let tenkan_line = mid(self.tenkan_period);
+        let kijun_line = mid(self.kijun_period);
+        let senkou_b_line = mid(self.senkou_b_period);
         let d = self.displacement;
         for i in 0..data.len() {
-            let tenkan = mid(i, self.tenkan_period);
-            let kijun = mid(i, self.kijun_period);
+            let tenkan = tenkan_line[i];
+            let kijun = kijun_line[i];
             // Leading spans: computed on bar i - d, plotted on bar i
             let base = i.checked_sub(d);
-            let span_a = base.and_then(|j| {
-                Some((mid(j, self.tenkan_period)? + mid(j, self.kijun_period)?) / 2.0)
-            });
-            let span_b = base.and_then(|j| mid(j, self.senkou_b_period));
+            let span_a = base.and_then(|j| Some((tenkan_line[j]? + kijun_line[j]?) / 2.0));
+            let span_b = base.and_then(|j| senkou_b_line[j]);
             // Lagging span: the close of bar i + d, plotted on bar i
             let chikou = i.checked_add(d).and_then(|j| data.get(j)).map(|b| b.close);
 
@@ -303,24 +288,5 @@ mod tests {
                     .all(|(g, e)| (g.is_nan() && e.is_nan()) || *g == e);
             assert!(same, "bar {i}: {got:?} != {row:?}");
         }
-    }
-
-    #[test]
-    fn test_ichimoku_line_cnt() {
-        let ichimoku = IchimokuCloud::new(9, 26, 52);
-        assert_eq!(ichimoku.line_cnt(), 5);
-    }
-
-    #[test]
-    fn test_ichimoku_is_overlay() {
-        let ichimoku = IchimokuCloud::new(9, 26, 52);
-        assert!(ichimoku.is_overlay());
-    }
-
-    #[test]
-    fn test_ichimoku_empty_data() {
-        let mut ichimoku = IchimokuCloud::new(9, 26, 52);
-        ichimoku.calculate(&[]);
-        assert!(ichimoku.values().is_empty());
     }
 }

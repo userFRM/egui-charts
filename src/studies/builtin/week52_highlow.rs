@@ -1,4 +1,5 @@
 use crate::model::Bar;
+use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -42,30 +43,19 @@ impl Indicator for Week52HighLow {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.is_empty() {
-            return;
-        }
-
+        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
+        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
         for i in 0..data.len() {
             if i + 1 < self.period {
                 self.values.push(IndicatorValue::None);
                 continue;
             }
 
-            let start = i + 1 - self.period;
-            let window = &data[start..=i];
-
-            let highest = window
-                .iter()
-                .map(|b| b.high)
-                .fold(f64::NEG_INFINITY, f64::max);
-            let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
-
-            let range = highest - lowest;
+            let range = highest[i] - lowest[i];
             if range.abs() < 1e-15 {
                 self.values.push(IndicatorValue::Single(50.0));
             } else {
-                let pct = (data[i].close - lowest) / range * 100.0;
+                let pct = (data[i].close - lowest[i]) / range * 100.0;
                 self.values.push(IndicatorValue::Single(pct));
             }
         }

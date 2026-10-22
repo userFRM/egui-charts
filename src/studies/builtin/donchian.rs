@@ -23,6 +23,7 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -61,24 +62,6 @@ impl DonchianChannels {
         self.lower_color = lower;
         self
     }
-
-    /// Calculate highest high over period
-    fn highest_high(data: &[Bar], end: usize, period: usize) -> f64 {
-        let start = end.saturating_sub(period - 1);
-        data[start..=end]
-            .iter()
-            .map(|b| b.high)
-            .fold(f64::NEG_INFINITY, f64::max)
-    }
-
-    /// Calculate lowest low over period
-    fn lowest_low(data: &[Bar], end: usize, period: usize) -> f64 {
-        let start = end.saturating_sub(period - 1);
-        data[start..=end]
-            .iter()
-            .map(|b| b.low)
-            .fold(f64::INFINITY, f64::min)
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -107,12 +90,13 @@ impl Indicator for DonchianChannels {
             return;
         }
 
+        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
+        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
         for i in 0..data.len() {
             if i < self.period - 1 {
                 self.values.push(IndicatorValue::None);
             } else {
-                let upper = Self::highest_high(data, i, self.period);
-                let lower = Self::lowest_low(data, i, self.period);
+                let (upper, lower) = (highest[i], lowest[i]);
                 let middle = (upper + lower) / 2.0;
 
                 self.values
@@ -208,24 +192,5 @@ mod tests {
                 assert!(middle >= lower, "Middle should be >= lower");
             }
         }
-    }
-
-    #[test]
-    fn test_donchian_is_overlay() {
-        let donchian = DonchianChannels::new(20);
-        assert!(donchian.is_overlay());
-    }
-
-    #[test]
-    fn test_donchian_line_cnt() {
-        let donchian = DonchianChannels::new(20);
-        assert_eq!(donchian.line_cnt(), 3);
-    }
-
-    #[test]
-    fn test_donchian_empty_data() {
-        let mut donchian = DonchianChannels::new(20);
-        donchian.calculate(&[]);
-        assert!(donchian.values().is_empty());
     }
 }

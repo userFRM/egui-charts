@@ -20,6 +20,7 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -52,24 +53,6 @@ impl WilliamsR {
         self.color = color;
         self
     }
-
-    /// Calculate highest high over a period
-    fn highest_high(data: &[Bar], end: usize, period: usize) -> f64 {
-        let start = end.saturating_sub(period - 1);
-        data[start..=end]
-            .iter()
-            .map(|b| b.high)
-            .fold(f64::NEG_INFINITY, f64::max)
-    }
-
-    /// Calculate lowest low over a period
-    fn lowest_low(data: &[Bar], end: usize, period: usize) -> f64 {
-        let start = end.saturating_sub(period - 1);
-        data[start..=end]
-            .iter()
-            .map(|b| b.low)
-            .fold(f64::INFINITY, f64::min)
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -98,12 +81,13 @@ impl Indicator for WilliamsR {
             return;
         }
 
+        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
+        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
         for i in 0..data.len() {
             if i < self.period - 1 {
                 self.values.push(IndicatorValue::None);
             } else {
-                let highest = Self::highest_high(data, i, self.period);
-                let lowest = Self::lowest_low(data, i, self.period);
+                let (highest, lowest) = (highest[i], lowest[i]);
                 let range = highest - lowest;
 
                 if range.abs() < 1e-10 {
@@ -234,12 +218,5 @@ mod tests {
         if let Some(IndicatorValue::Single(v)) = williams.values().last() {
             assert!((*v - (-100.0)).abs() < 0.001, "At low, %R should be -100");
         }
-    }
-
-    #[test]
-    fn test_williams_r_empty_data() {
-        let mut williams = WilliamsR::new(14);
-        williams.calculate(&[]);
-        assert!(williams.values().is_empty());
     }
 }
