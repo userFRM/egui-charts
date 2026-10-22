@@ -124,7 +124,7 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [x] Trend-Based Fib Time: vertical lines at ratio multiples of the two-anchor span; no third anchor
 
 ### Gann (3/4)
-- [ ] Gann Fan: 9 lines drawn (lines more than 200 px off the chart are skipped), but the 8x1 to 1x8 labels are inverted
+- [ ] Gann Fan: 9 lines at their labelled price to time ratios; a line whose end at the right edge of the chart is more than 200 px off the chart is skipped, and the fan always opens to the right of its first anchor
 - [x] Gann Square: Grid with diagonals, inscribed circle, degree labels
 - [x] Gann Box: 8x8 grid with diagonals; angle lines from the top-left corner only
 - [x] Gann Fixed: 1:1 forced-square with 4x4 grid

@@ -7,6 +7,22 @@ use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
+/// Screen y at `x` of the fan line through `start` whose slope is `ratio`
+/// times the 1x1 slope from `start` to `end`.
+fn gann_fan_line_y(start: Pos2, end: Pos2, ratio: f32, x: f32) -> f32 {
+    let dy = end.y - start.y;
+    let dx = (end.x - start.x).abs();
+    // A vertical base has no slope; fall back to one pixel per pixel in the direction of the move.
+    let base_slope = if dx > 0.001 {
+        dy / dx
+    } else if dy < 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    start.y + (x - start.x) * base_slope * ratio
+}
+
 impl Drawing {
     /// Render Gann Fan - Complete 9-angle Gann fan with bi-directional support
     pub(crate) fn render_gann_fan(&self, painter: &egui::Painter, chart_rect: Rect) {
@@ -25,7 +41,7 @@ impl Drawing {
         );
 
         // Gann fan angles with colors - 9 standard Gann angles
-        // Above 1:1 are time-dominant, below are price-dominant
+        // An NxM line moves N price units per M time units: N/M times the 1x1 slope
         let angles: [(f32, &str, Color32); 9] = [
             (8.0, "8×1", DESIGN_TOKENS.semantic.extended.bearish), // Steepest resistance
             (4.0, "4×1", DESIGN_TOKENS.semantic.indicators.ma),    // Strong resistance
@@ -33,30 +49,13 @@ impl Drawing {
             (2.0, "2×1", DESIGN_TOKENS.semantic.extended.caution), // Mild resistance
             (1.0, "1×1", DESIGN_TOKENS.semantic.indicators.bb_upper), // 45° balance line
             (0.5, "1×2", DESIGN_TOKENS.semantic.indicators.ema),   // Mild support
-            (0.333, "1×3", DESIGN_TOKENS.semantic.drawings.fib_100), // Moderate support
+            (1.0 / 3.0, "1×3", DESIGN_TOKENS.semantic.drawings.fib_100), // Moderate support
             (0.25, "1×4", DESIGN_TOKENS.semantic.extended.bullish), // Strong support
             (0.125, "1×8", DESIGN_TOKENS.semantic.extended.bullish), // Strongest support
         ];
 
-        let dy = end.y - start.y;
-        let dx = end.x - start.x;
-
-        // Determine primary direction (bullish or bearish)
-        let is_bullish = dy < 0.0;
-        let direction = if is_bullish { -1.0 } else { 1.0 };
-
-        // Calculate base unit for scaling
-        let base_unit = if dx.abs() > 0.001 {
-            dy.abs() / dx.abs()
-        } else {
-            1.0
-        };
-
         for (angle_ratio, label, angle_color) in &angles {
-            // Calculate the end point for this Gann angle
-            let extend_x = chart_rect.max.x - start.x;
-            let angle_slope = base_unit / angle_ratio;
-            let end_y = start.y + extend_x * angle_slope * direction;
+            let end_y = gann_fan_line_y(start, end, *angle_ratio, chart_rect.max.x);
 
             // Only draw if within reasonable bounds
             if end_y.is_finite()
@@ -626,5 +625,38 @@ impl Drawing {
             DESIGN_TOKENS.rounding.md,
             Stroke::new(stroke::HAIRLINE, Color32::WHITE),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Anchors (0, 100) and (10, 90) put the 1x1 line through the second anchor.
+    /// An NxM line moves N price units per M bars, so at x = 10 it sits at
+    /// 100 - 10 * N / M (screen y grows downward).
+    #[test]
+    fn fan_line_slopes_follow_their_labels() {
+        let start = Pos2::new(0.0, 100.0);
+        let end = Pos2::new(10.0, 90.0);
+        let cases = [
+            ("8x1", 8.0, 20.0),
+            ("4x1", 4.0, 60.0),
+            ("3x1", 3.0, 70.0),
+            ("2x1", 2.0, 80.0),
+            ("1x1", 1.0, 90.0),
+            ("1x2", 0.5, 95.0),
+            ("1x3", 1.0 / 3.0, 96.6667),
+            ("1x4", 0.25, 97.5),
+            ("1x8", 0.125, 98.75),
+        ];
+        let wrong: Vec<_> = cases
+            .iter()
+            .map(|&(label, ratio, expected)| {
+                (label, gann_fan_line_y(start, end, ratio, 10.0), expected)
+            })
+            .filter(|&(_, y, expected)| (y - expected).abs() >= 1e-3)
+            .collect();
+        assert!(wrong.is_empty(), "(label, y, expected): {wrong:?}");
     }
 }
