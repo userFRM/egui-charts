@@ -1,8 +1,6 @@
 //! Extended symbol information
 //!
-//! Comprehensive symbol metadata with 50+ fields.
-//! Provides comprehensive metadata for financial instruments including
-//! session info, pricing parameters, supported resolutions, and display options.
+//! Symbol metadata: sessions, pricing parameters, supported resolutions and display options.
 
 use serde::{Deserialize, Serialize};
 

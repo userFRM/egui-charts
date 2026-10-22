@@ -1,7 +1,7 @@
-//! Form grid — a 2-column grid with standard spacing for label + control rows.
+//! Form grid: a two-column grid with standard spacing for label and control rows.
 //!
-//! Eliminates the repeated `Grid::new("id").num_columns(2).spacing([lg, md])` boilerplate
-//! used across 25+ form dialogs.
+//! Replaces the repeated `Grid::new("id").num_columns(2).spacing([lg, md])` setup in the
+//! settings, properties and alert dialogs.
 //!
 //! ```
 //! # use egui_charts::ui_kit::FormGrid;

@@ -1,6 +1,6 @@
 //! UiExt - Extension trait for egui::Ui
 //!
-//! Provides 60+ convenience methods for common UI patterns following rerun's approach.
+//! Convenience methods for common UI patterns.
 //!
 //! # Categories
 //!
@@ -26,7 +26,7 @@ use crate::styles::icons;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
-/// Extension trait for `egui::Ui` providing 60+ convenience methods
+/// Extension trait for `egui::Ui` with convenience methods for common UI patterns.
 pub trait UiExt {
     // ==========================================================================
     // Icon Methods (require "icons" feature)
@@ -230,7 +230,7 @@ pub trait UiExt {
     /// Add a separator with margin
     fn separator_with_margin(&mut self, margin: f32);
 
-    /// Add a separator with small spacing above and below — the most common section divider.
+    /// Add a separator with small spacing above and below, the usual section divider.
     fn spaced_separator(&mut self);
 
     /// Add a horizontal separator with theme-appropriate color

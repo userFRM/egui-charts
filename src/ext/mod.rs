@@ -10,7 +10,7 @@
 //!
 //! | Trait | Extended Type | Purpose |
 //! |---|---|---|
-//! | [`UiExt`] | `egui::Ui` | 60+ methods for icons, labels, buttons, layout, spacing |
+//! | [`UiExt`] | `egui::Ui` | Methods for icons, labels, buttons, layout and spacing |
 //! | [`ResponseExt`] | `egui::Response` | Click/hover handlers, cursor control |
 //! | [`ButtonWidgetExt`] | `egui::Button` | `fill_width()`, `min_width()`, `exact_size()` |
 //! | [`TextEditWidgetExt`] | `egui::TextEdit` | `fill_width()`, `fixed_width()`, `char_limit()` |
