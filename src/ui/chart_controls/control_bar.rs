@@ -68,6 +68,7 @@ impl ChartControlBar {
         let icon_color = ui.style().visuals.widgets.inactive.fg_stroke.color;
         let icon_hover_color = ui.style().visuals.widgets.hovered.fg_stroke.color;
         let active_color = ui.style().visuals.selection.bg_fill;
+        let active_icon_color = ui.style().visuals.selection.stroke.color;
         let btn_hover_bg = ui.style().visuals.widgets.hovered.bg_fill;
         let sep_stroke = ui.style().visuals.widgets.noninteractive.bg_stroke;
 
@@ -171,7 +172,9 @@ impl ChartControlBar {
 
                 // Icon
                 let icon_rect = Rect::from_center_size(btn_rect.center(), Vec2::splat(icon_size));
-                let icon_color_final = if is_hovered {
+                let icon_color_final = if is_active {
+                    active_icon_color
+                } else if is_hovered {
                     icon_hover_color
                 } else {
                     icon_color
@@ -218,7 +221,9 @@ impl ChartControlBar {
 
                 // Icon
                 let icon_rect = Rect::from_center_size(btn_rect.center(), Vec2::splat(icon_size));
-                let icon_color_final = if is_active || is_hovered {
+                let icon_color_final = if is_active {
+                    active_icon_color
+                } else if is_hovered {
                     icon_hover_color
                 } else {
                     icon_color

@@ -2,6 +2,7 @@
 //!
 //! A dropdown menu for saving, loading, and managing chart layouts.
 use crate::styles::typography;
+use crate::theme::ThemeUiExt;
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
@@ -11,7 +12,7 @@ struct MenuColors {
     bg: Color32,
     border: Color32,
     hover: Color32,
-    accent: Color32,
+    selected: Color32,
     text: Color32,
     muted: Color32,
     strong: Color32,
@@ -24,7 +25,7 @@ impl MenuColors {
             bg: visuals.window_fill,
             border: visuals.widgets.noninteractive.bg_stroke.color,
             hover: visuals.widgets.hovered.bg_fill,
-            accent: visuals.selection.bg_fill,
+            selected: visuals.selection.bg_fill,
             text: visuals.text_color(),
             muted: visuals.widgets.noninteractive.fg_stroke.color,
             strong: visuals.strong_text_color(),
@@ -506,7 +507,7 @@ impl LayoutMenu {
         ui.painter().rect_stroke(
             input_rect,
             DESIGN_TOKENS.rounding.sm,
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, colors.accent),
+            Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.theme_accent()),
             StrokeKind::Outside,
         );
 
@@ -542,7 +543,7 @@ impl LayoutMenu {
         let btn_res = ui.allocate_rect(btn_rect, Sense::click());
 
         let btn_bg = if btn_res.hovered() {
-            colors.accent
+            colors.selected
         } else {
             colors.hover
         };
@@ -583,7 +584,7 @@ impl LayoutMenu {
         // Background
         if is_current || item_res.hovered() {
             let bg = if is_current {
-                colors.accent
+                colors.selected
             } else {
                 colors.hover
             };

@@ -55,6 +55,8 @@ pub struct ThemeData {
     pub ui_accent: Color32,
     /// Accent color on hover.
     pub ui_accent_hover: Color32,
+    /// Text and icon color on an accent fill.
+    pub ui_accent_text: Color32,
     /// Page/gap background (shows through between panels).
     pub page_bg: Color32,
     /// Chart area background.
@@ -134,6 +136,7 @@ impl Default for ThemeData {
             ui_border_subtle: tokens.ui.border_subtle_light,
             ui_accent: tokens.ui.accent,
             ui_accent_hover: tokens.ui.accent_hover,
+            ui_accent_text: tokens.chart.selection_text,
 
             // Default: page_bg is chart_bg (dark) for light UI mode
             page_bg: tokens.chart.bg,
@@ -201,6 +204,7 @@ impl ThemeData {
             ui_border_subtle: theme.semantic.ui.border_subtle,
             ui_accent: theme.semantic.ui.accent,
             ui_accent_hover: theme.semantic.ui.accent_hover,
+            ui_accent_text: theme.semantic.ui.accent_text,
 
             // Page background for gaps between panels
             // In dark UI mode, gaps are LIGHTER than panels for contrast

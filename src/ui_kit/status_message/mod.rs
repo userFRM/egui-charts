@@ -13,6 +13,7 @@
 //! }
 //! ```
 
+use crate::theme::ThemeUiExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Ui;
 
@@ -28,7 +29,7 @@ pub enum MessageKind {
 pub fn status_message(ui: &mut Ui, kind: MessageKind, text: &str) {
     let color = match kind {
         MessageKind::Error => ui.style().visuals.error_fg_color,
-        MessageKind::Success => ui.style().visuals.selection.bg_fill,
+        MessageKind::Success => ui.theme_success(),
         MessageKind::Info => ui.style().visuals.text_color(),
     };
 

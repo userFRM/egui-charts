@@ -691,7 +691,7 @@ impl TimeframeSelector {
         }
 
         let (text, muted) = if is_current {
-            (colors.on_selected, colors.on_selected.gamma_multiply(0.8))
+            (colors.on_selected, colors.on_selected)
         } else {
             (colors.text, colors.muted)
         };

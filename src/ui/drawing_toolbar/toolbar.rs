@@ -11,6 +11,7 @@ use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::responsive::LayoutContext;
 use crate::styles::{icons as icon_sizes, typography};
+use crate::theme::ThemeUiExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 
@@ -795,11 +796,10 @@ impl DrawingToolbar {
         is_selected: bool,
     ) {
         if is_selected {
-            let selection_color = ui.style().visuals.selection.bg_fill;
             ui.painter().rect_stroke(
                 rect,
                 DESIGN_TOKENS.rounding.sm,
-                Stroke::new(DESIGN_TOKENS.stroke.thick, selection_color),
+                Stroke::new(DESIGN_TOKENS.stroke.thick, ui.theme_accent()),
                 egui::StrokeKind::Outside,
             );
         } else if response.hovered() {

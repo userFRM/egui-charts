@@ -362,7 +362,7 @@
             strong_text: "gray_900",
             noninteractive_text: "gray_500",
 
-            // Text on selection (primary bg)
+            // Text on a primary (accent) background
             text_on_primary: "white",
             text_on_primary_hovered: "white",
 

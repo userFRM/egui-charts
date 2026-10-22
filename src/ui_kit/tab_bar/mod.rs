@@ -15,6 +15,7 @@
 //! ```
 
 use crate::styles::typography;
+use crate::theme::ThemeUiExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Ui};
 
@@ -48,7 +49,7 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
             for tab in self.tabs {
                 let is_active = *tab == *self.active;
                 let text_color = if is_active {
-                    ui.style().visuals.selection.bg_fill
+                    ui.style().visuals.strong_text_color()
                 } else {
                     ui.style().visuals.text_color()
                 };
@@ -75,10 +76,7 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
                             Pos2::new(rect.min.x, rect.max.y + 2.0),
                             Pos2::new(rect.max.x, rect.max.y + 2.0),
                         ],
-                        egui::Stroke::new(
-                            DESIGN_TOKENS.stroke.thick,
-                            ui.style().visuals.selection.bg_fill,
-                        ),
+                        egui::Stroke::new(DESIGN_TOKENS.stroke.thick, ui.theme_accent()),
                     );
                 }
 

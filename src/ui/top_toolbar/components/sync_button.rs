@@ -5,6 +5,7 @@
 
 use crate::icons::icons as embedded_icons;
 use crate::styles::typography;
+use crate::theme::ThemeUiExt;
 use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::multi_chart::ChartSyncOptions;
@@ -79,7 +80,7 @@ impl SyncButton {
         let visuals = ui.style().visuals.clone();
         let hover_color = visuals.widgets.hovered.bg_fill;
         let border_color = visuals.widgets.noninteractive.bg_stroke.color;
-        let accent_color = visuals.selection.bg_fill;
+        let accent_color = ui.theme_accent();
 
         // Check if any sync is enabled
         let any_sync_enabled = self.options.sync_time_axis
@@ -142,8 +143,8 @@ impl SyncButton {
         let border_color = visuals.widgets.noninteractive.bg_stroke.color;
         let hover_color = visuals.widgets.hovered.bg_fill;
         let text_color = visuals.text_color();
-        let accent_color = visuals.selection.bg_fill;
-        let check_color = visuals.selection.stroke.color;
+        let accent_color = ui.theme_accent();
+        let check_color = ui.theme_data().ui_accent_text;
 
         let dropdown_rect = self.dropdown_rect(btn_rect);
 

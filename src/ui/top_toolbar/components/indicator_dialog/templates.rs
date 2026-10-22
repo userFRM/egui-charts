@@ -362,7 +362,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
         let visuals = ui.visuals();
         let (text, weak) = if is_selected {
             let on_accent = visuals.selection.stroke.color;
-            (on_accent, on_accent.gamma_multiply(0.8))
+            (on_accent, on_accent)
         } else {
             (visuals.text_color(), visuals.weak_text_color())
         };

@@ -163,7 +163,7 @@ impl ChartGridSelector {
         let bg_color = visuals.window_fill;
         let border_color = visuals.widgets.noninteractive.bg_stroke.color;
         let hover_color = visuals.widgets.hovered.bg_fill;
-        let accent_color = visuals.selection.bg_fill;
+        let selected_color = visuals.selection.bg_fill;
         let text_color = visuals.text_color();
         let strong_color = visuals.strong_text_color();
 
@@ -206,7 +206,7 @@ impl ChartGridSelector {
             // Highlight current or hovered
             if is_current || item_response.hovered() {
                 let bg = if is_current {
-                    accent_color
+                    selected_color
                 } else {
                     hover_color
                 };

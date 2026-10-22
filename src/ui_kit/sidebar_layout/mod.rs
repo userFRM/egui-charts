@@ -110,18 +110,15 @@ impl<'a> SidebarTab<'a> {
 
         // Background
         if self.is_active {
-            ui.painter().rect_filled(
-                rect,
-                0.0,
-                ui.style().visuals.selection.bg_fill.gamma_multiply(0.3),
-            );
+            ui.painter()
+                .rect_filled(rect, 0.0, ui.style().visuals.selection.bg_fill);
         } else if is_hovered {
             ui.painter()
                 .rect_filled(rect, 0.0, ui.style().visuals.widgets.hovered.bg_fill);
         }
 
         let text_color = if self.is_active {
-            ui.style().visuals.selection.bg_fill
+            ui.style().visuals.selection.stroke.color
         } else {
             ui.style().visuals.text_color()
         };

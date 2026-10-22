@@ -340,7 +340,7 @@ impl ChartTypeSelector {
 
         // Description
         let desc_color = if is_current {
-            colors.on_selected.gamma_multiply(0.8)
+            colors.on_selected
         } else {
             colors.muted
         };

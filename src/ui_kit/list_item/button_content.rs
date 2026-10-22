@@ -3,6 +3,7 @@
 use egui::{Color32, Response, Ui, Vec2, WidgetInfo, WidgetType};
 
 use crate::icons::Icon;
+use crate::theme::ThemeUiExt;
 use crate::tokens::DESIGN_TOKENS;
 
 use super::content::{ContentContext, ListItemContent};
@@ -157,8 +158,8 @@ impl<'a> ButtonContent<'a> {
                 }
             }
             ButtonStyle::Primary => {
-                let accent = visuals.selection.bg_fill;
-                let text = visuals.selection.stroke.color;
+                let accent = ui.theme_accent();
+                let text = ui.theme_data().ui_accent_text;
                 if active {
                     (accent.gamma_multiply(0.8), text, text)
                 } else if hovered {
@@ -168,8 +169,8 @@ impl<'a> ButtonContent<'a> {
                 }
             }
             ButtonStyle::Danger => {
-                let danger = visuals.error_fg_color;
-                let text = visuals.selection.stroke.color;
+                let danger = DESIGN_TOKENS.semantic.buttons.danger_bg;
+                let text = ui.theme_data().ui_accent_text;
                 if active {
                     (danger.gamma_multiply(0.8), text, text)
                 } else if hovered {

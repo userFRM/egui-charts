@@ -503,6 +503,12 @@ mod tests {
             apply_to_egui(&ctx, &theme);
             let visuals = ctx.style().visuals.clone();
             let ui = &theme.semantic.ui;
+            let mut focus_ring = Color32::TRANSPARENT;
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    focus_ring = crate::styles::focus::focus_ring_color(ui);
+                });
+            });
             let mut check = |role: &str, fg: Color32, surface: &str, bg: Color32, min: f32| {
                 let ratio = contrast(fg, bg);
                 if ratio < min {
@@ -571,6 +577,7 @@ mod tests {
                     bg,
                     3.0,
                 );
+                check("keyboard focus ring", focus_ring, surface, bg, 3.0);
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));

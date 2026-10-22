@@ -2,6 +2,7 @@
 //!
 //! A color swatch picker with grayscale row, main colors row, and color variations.
 
+use crate::theme::ThemeUiExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{
     Color32, Id, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType,
@@ -253,7 +254,7 @@ impl<'a> ColorPicker<'a> {
 
         // The border uses text colours so it stays visible whatever the swatch colour.
         let border_color = if self.state.is_open {
-            visuals.selection.bg_fill
+            ui.theme_accent()
         } else if btn_res.hovered() {
             visuals.widgets.hovered.fg_stroke.color
         } else {
