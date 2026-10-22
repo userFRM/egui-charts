@@ -631,23 +631,29 @@ pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
 /// Most price rows a volume profile computes.
 const MAX_PROFILE_ROWS: usize = 10_000;
 
-/// Most tick levels a level-keyed study (Iceberg, Liquidity) spreads one bar over.
-const MAX_LEVELS_PER_BAR: u64 = 1_000;
+/// Most price levels a level-keyed study (Iceberg, Liquidity) spreads one series over.
+const MAX_PRICE_LEVELS: f64 = 1_000.0;
 
-/// Tick keys a bar covers, as `(low, high, step)`: every `step`-th key from `low`
-/// to `high`. A bar covering more than [`MAX_LEVELS_PER_BAR`] tick levels is
-/// grouped on a coarser grid of `step` ticks. `None` for a non-finite or
-/// inverted bar.
-fn bar_level_keys(bar: &crate::model::Bar, tick: f64) -> Option<(i64, i64, usize)> {
-    let key = |price: f64| (price / tick).round() as i64;
-    let (low, high) = (key(bar.low), key(bar.high));
-    let span = high.saturating_sub(low);
-    let valid = bar.low.is_finite() && bar.high.is_finite() && span >= 0;
-    valid.then(|| {
-        (
-            low,
-            high,
-            (span as u64 + 1).div_ceil(MAX_LEVELS_PER_BAR) as usize,
-        )
-    })
+/// Price grid a level-keyed study keys one series by: `tick`, widened when the
+/// finite prices of `data` span more than [`MAX_PRICE_LEVELS`] ticks. Every key
+/// is a multiple of the grid, so a series touches about that many levels at most.
+fn level_grid(data: &[crate::model::Bar], tick: f64) -> f64 {
+    let (low, high) = data
+        .iter()
+        .flat_map(|b| [b.low, b.high, b.close])
+        .filter(|p| p.is_finite())
+        .fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p), hi.max(p)));
+    // Dividing before subtracting keeps the span finite for prices near f64::MAX.
+    tick.max(high / MAX_PRICE_LEVELS - low / MAX_PRICE_LEVELS)
+}
+
+/// Grid key of a price; the f64 division saturates instead of overflowing.
+fn level_key(price: f64, grid: f64) -> i64 {
+    (price / grid).round() as i64
+}
+
+/// Grid keys of a bar's low and high, or `None` for a non-finite or inverted bar.
+fn bar_level_keys(bar: &crate::model::Bar, grid: f64) -> Option<(i64, i64)> {
+    let (low, high) = (level_key(bar.low, grid), level_key(bar.high, grid));
+    (bar.low.is_finite() && bar.high.is_finite() && low <= high).then_some((low, high))
 }

@@ -33,7 +33,7 @@ All notable changes to this project are documented in this file. The format is b
 - Stochastic no longer panics when all its periods are 1, Volume Profile Fixed Range no longer panics on a bar with a NaN price, and Rank Correlation no longer panics sorting NaN closes.
 - Rainbow Oscillator keeps a running sum instead of every SMA level, so a huge level count no longer exhausts memory.
 - Volume profiles refuse a row count above 10,000 and yield `None` for every bar instead of allocating that many rows for each bar.
-- Iceberg and Liquidity skip bars with a non-finite price or an inverted range and group the levels of a bar covering more than 1,000 tick levels, so an infinite or 1e12 print no longer hangs the chart or exhausts memory.
+- Iceberg and Liquidity key prices on one grid per series, the tick size widened when the series spans more than 1,000 ticks, and skip bars with a non-finite price or an inverted range, so an infinite or 1e12 print no longer hangs the chart or exhausts memory. Liquidity scans its levels once per bar instead of three times, and Iceberg keeps its levels in a dense vector: on 20,000 bars near 60,000 with a 0.01 tick, Liquidity takes about 20 ms instead of 80 s.
 
 ### Changed
 

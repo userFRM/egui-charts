@@ -15,16 +15,18 @@ use std::collections::HashMap;
 /// - Liquidity sweeps (price moves through liquidity zones)
 /// - Liquidity imbalances
 ///
-/// Bars with a non-finite price or an inverted range are not tracked: they add
-/// no volume. Levels are grouped when a bar covers more than 1,000 tick levels:
-/// the bar then spreads its volume over every n-th level, n chosen so it
-/// touches at most 1,000 of them.
+/// Prices are keyed on the tick size, widened when the series spans more than
+/// 1,000 ticks so it covers at most about 1,000 levels; level, zone and sweep
+/// prices are multiples of that grid. Bars with a non-finite price or an
+/// inverted range are not tracked: they add no volume.
 #[derive(Clone)]
 pub struct LiquidityTracker {
     /// Period for analysis
     period: usize,
     /// Tick size for price grouping
     tick_size: f64,
+    /// Grid the last calculation keyed levels by: `tick_size`, widened to bound the level count
+    grid: f64,
     /// Minimum volume threshold for significant level
     volume_threshold: f64,
     /// Calculated values
@@ -124,6 +126,7 @@ impl LiquidityTracker {
         Self {
             period: period.max(1),
             tick_size: 1.0,
+            grid: 1.0,
             volume_threshold: 2.0, // Multiple of average
             values: Vec::new(),
             high_liq_color: Color32::from_rgba_unmultiplied(255, 215, 0, 128), // Gold
@@ -138,6 +141,7 @@ impl LiquidityTracker {
     /// Set tick size
     pub fn with_tick_size(mut self, tick_size: f64) -> Self {
         self.tick_size = tick_size;
+        self.grid = tick_size;
         self
     }
 
@@ -180,11 +184,11 @@ impl LiquidityTracker {
     }
 
     fn price_to_key(&self, price: f64) -> i64 {
-        (price / self.tick_size).round() as i64
+        super::level_key(price, self.grid)
     }
 
     fn key_to_price(&self, key: i64) -> f64 {
-        key as f64 * self.tick_size
+        key as f64 * self.grid
     }
 
     /// Add volume to a price level
@@ -210,49 +214,51 @@ impl LiquidityTracker {
         level.side_bias += if is_buy { volume } else { -volume };
     }
 
-    /// Decay old liquidity
-    fn decay_old_liquidity(&mut self, current_idx: usize) {
-        let decay_threshold = current_idx.saturating_sub(self.period);
-        self.liquidity_map
-            .retain(|_, level| level.last_touch > decay_threshold);
-    }
-
-    /// Detect liquidity sweep
-    fn check_sweep(&mut self, bar: &Bar, bar_idx: usize, avg_volume: f64) {
+    /// Record the sweeps `bar` makes, drop levels untouched for `period` bars,
+    /// and return the largest remaining level volume, in one pass over the levels.
+    fn sweep_and_decay(&mut self, bar: &Bar, bar_idx: usize, avg_volume: f64) -> f64 {
         let threshold = avg_volume * self.volume_threshold;
-
-        // Check for sweep through lows
         let low_key = self.price_to_key(bar.low);
-        for (key, level) in &self.liquidity_map {
-            if *key <= low_key && level.volume >= threshold {
-                // Price swept through this liquidity level
-                let is_clean = bar.close > level.price; // Reversed back up
-
-                self.sweeps.push(LiquiditySweep {
-                    bar_idx,
-                    swept_price: level.price,
-                    swept_volume: level.volume,
-                    direction: SweepDirection::SweepLows,
-                    is_clean,
-                });
-            }
-        }
-
-        // Check for sweep through highs
         let high_key = self.price_to_key(bar.high);
-        for (key, level) in &self.liquidity_map {
-            if *key >= high_key && level.volume >= threshold {
-                let is_clean = bar.close < level.price; // Reversed back down
+        let decay_threshold = bar_idx.saturating_sub(self.period);
+        let sweeps = &mut self.sweeps;
+        let mut max_liq = 0.0_f64;
 
-                self.sweeps.push(LiquiditySweep {
-                    bar_idx,
-                    swept_price: level.price,
-                    swept_volume: level.volume,
-                    direction: SweepDirection::SweepHighs,
-                    is_clean,
-                });
+        self.liquidity_map.retain(|key, level| {
+            if level.volume >= threshold {
+                // Price swept through this level: below the low (clean if it reversed
+                // back up) or above the high (clean if it reversed back down)
+                let sides = [
+                    (
+                        *key <= low_key,
+                        SweepDirection::SweepLows,
+                        bar.close > level.price,
+                    ),
+                    (
+                        *key >= high_key,
+                        SweepDirection::SweepHighs,
+                        bar.close < level.price,
+                    ),
+                ];
+                for (swept, direction, is_clean) in sides {
+                    if swept {
+                        sweeps.push(LiquiditySweep {
+                            bar_idx,
+                            swept_price: level.price,
+                            swept_volume: level.volume,
+                            direction,
+                            is_clean,
+                        });
+                    }
+                }
             }
-        }
+            let keep = level.last_touch > decay_threshold;
+            if keep {
+                max_liq = max_liq.max(level.volume);
+            }
+            keep
+        });
+        max_liq
     }
 
     /// Identify liquidity zones (clusters of significant levels)
@@ -275,7 +281,7 @@ impl LiquidityTracker {
 
         // Group adjacent levels into zones
         let mut current_zone_start = 0;
-        let zone_gap = self.tick_size * 3.0; // Max gap between levels in a zone
+        let zone_gap = self.grid * 3.0; // Max gap between levels in a zone
 
         for i in 1..significant.len() {
             let gap = significant[i].price - significant[i - 1].price;
@@ -354,18 +360,19 @@ impl Indicator for LiquidityTracker {
 
         // Calculate average volume
         let avg_volume: f64 = data.iter().map(|b| b.volume).sum::<f64>() / data.len() as f64;
+        self.grid = super::level_grid(data, self.tick_size);
 
         for (idx, bar) in data.iter().enumerate() {
             let is_bullish = bar.close >= bar.open;
             let range = bar.high - bar.low;
 
-            match super::bar_level_keys(bar, self.tick_size) {
-                Some((low_key, high_key, step)) if range > 0.0 => {
+            match super::bar_level_keys(bar, self.grid) {
+                Some((low_key, high_key)) if range > 0.0 => {
                     // Distribute volume across price levels touched
-                    let levels_count = ((high_key - low_key) as u64 / step as u64 + 1) as f64;
+                    let levels_count = (high_key.abs_diff(low_key) + 1) as f64;
                     let vol_per_level = bar.volume / levels_count;
 
-                    for key in (low_key..=high_key).step_by(step) {
+                    for key in low_key..=high_key {
                         let price = self.key_to_price(key);
                         self.add_volume(price, vol_per_level, idx, is_bullish);
                     }
@@ -378,18 +385,9 @@ impl Indicator for LiquidityTracker {
                 _ => {}
             }
 
-            // Check for liquidity sweep
-            self.check_sweep(bar, idx, avg_volume);
-
-            // Decay old liquidity
-            self.decay_old_liquidity(idx);
-
-            // Calculate value for this bar (max liquidity ratio)
-            let max_liq = self
-                .liquidity_map
-                .values()
-                .map(|l| l.volume)
-                .fold(0.0_f64, f64::max);
+            // Check for liquidity sweeps, decay old liquidity, and take the
+            // value for this bar (max liquidity ratio)
+            let max_liq = self.sweep_and_decay(bar, idx, avg_volume);
 
             let liquidity_ratio = if avg_volume > 0.0 {
                 max_liq / avg_volume
