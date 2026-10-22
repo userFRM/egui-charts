@@ -515,6 +515,15 @@ mod tests {
                 }),
             ),
             (
+                "±1e300",
+                edit(|i, b| {
+                    if i % 10 == 3 {
+                        b.high = 1e300;
+                        b.low = -1e300;
+                    }
+                }),
+            ),
+            (
                 "1e12 scale",
                 edit(|i, b| {
                     let s = if i % 2 == 0 { 1e12 } else { 1e-9 };
