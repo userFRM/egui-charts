@@ -32,7 +32,7 @@ pub struct TPOLetter {
     pub letter: char,
     /// Zero-based index of the time period within the session.
     pub period_idx: usize,
-    /// Timestamp of the bar that generated this letter.
+    /// Open time of the first bar in this letter's period.
     pub ts: DateTime<Utc>,
 }
 
@@ -199,7 +199,7 @@ impl TPOProfile {
             .keys()
             .map(|&k| key_to_price(k, tick_size))
             .collect();
-        levels.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        levels.sort_by(|a, b| b.total_cmp(a));
         levels
     }
 
@@ -275,6 +275,10 @@ fn key_to_price(key: i64, tick_size: f64) -> f64 {
 
 /// Transform bars into TPO profiles
 ///
+/// A session is one UTC date. Its periods are whole multiples of
+/// `config.period_minutes` since its first bar, so a gap leaves empty periods,
+/// and each period places one letter on every row its bars touched.
+///
 /// Rows are `config.tick_size` widened so the bars cover at most about 1,000
 /// rows (see [`TPOProfile::tick_size`]). Bars with a non-finite high or low or
 /// an inverted range are skipped.
@@ -300,8 +304,11 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
     let mut profiles: Vec<TPOProfile> = Vec::new();
     let mut current_profile: Option<TPOProfile> = None;
     let mut current_session_start: Option<DateTime<Utc>> = None;
+    // The open period: its index, the open time of its first bar and the rows its bars touched
     let mut period_idx = 0;
-    let mut last_period_start: Option<DateTime<Utc>> = None;
+    let mut period_ts = bars[0].time;
+    let mut period_rows: Vec<RangeInclusive<i64>> = Vec::new();
+    let period_minutes = i64::from(config.period_minutes.max(1));
     let tick_size = level_grid(bars, config.tick_size);
 
     for bar in bars {
@@ -314,6 +321,21 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
         let is_new_session = current_session_start
             .map(|s| s.date_naive() != session_date)
             .unwrap_or(true);
+        let bar_period = match current_session_start {
+            Some(start) if !is_new_session => {
+                ((bar.time - start).num_minutes().max(0) / period_minutes) as usize
+            }
+            _ => 0,
+        };
+
+        if is_new_session || bar_period != period_idx {
+            if let Some(ref mut profile) = current_profile {
+                let letter = letters[period_idx % letters.len()];
+                add_tpo_letters(profile, &mut period_rows, letter, period_idx, period_ts);
+            }
+            period_idx = bar_period;
+            period_ts = bar.time;
+        }
 
         if is_new_session {
             // Save the current profile
@@ -325,8 +347,6 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
             // Start new profile
             current_profile = Some(TPOProfile::new(bar.time, tick_size));
             current_session_start = Some(bar.time);
-            period_idx = 0;
-            last_period_start = Some(bar.time);
 
             // Set opening price
             if let Some(ref mut profile) = current_profile {
@@ -334,22 +354,9 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
             }
         }
 
-        // Check if we need to advance to a new period
-        if let Some(period_start) = last_period_start {
-            let elapsed_minutes = (bar.time - period_start).num_minutes();
-            if elapsed_minutes >= config.period_minutes as i64 {
-                period_idx += 1;
-                last_period_start = Some(bar.time);
-            }
-        }
+        insert_rows(&mut period_rows, low_key..=high_key);
 
-        // Get the letter for this period
-        let letter = letters[period_idx % letters.len()];
-
-        // Add TPO letters for all price levels touched by this bar
         if let Some(ref mut profile) = current_profile {
-            add_tpo_letters(profile, bar, low_key..=high_key, letter, period_idx);
-
             // Update profile high/low
             profile.profile_high = profile.profile_high.max(bar.high);
             profile.profile_low = profile.profile_low.min(bar.low);
@@ -372,6 +379,14 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
 
     // Don't forget the last profile
     if let Some(mut profile) = current_profile.take() {
+        let letter = letters[period_idx % letters.len()];
+        add_tpo_letters(
+            &mut profile,
+            &mut period_rows,
+            letter,
+            period_idx,
+            period_ts,
+        );
         calculate_profile_stats(&mut profile, config);
         profiles.push(profile);
     }
@@ -379,22 +394,36 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
     profiles
 }
 
-/// Add TPO letters for a bar at the row `keys` it spans
+/// Merge `new` into `rows`, a sorted list of disjoint row ranges
+fn insert_rows(rows: &mut Vec<RangeInclusive<i64>>, new: RangeInclusive<i64>) {
+    let (mut low, mut high) = new.into_inner();
+    // Ranges that overlap or adjoin `new` are contiguous in the list
+    let first = rows.partition_point(|r| r.end().saturating_add(1) < low);
+    let mut last = first;
+    while last < rows.len() && *rows[last].start() <= high.saturating_add(1) {
+        low = low.min(*rows[last].start());
+        high = high.max(*rows[last].end());
+        last += 1;
+    }
+    rows.splice(first..last, std::iter::once(low..=high));
+}
+
+/// Add one TPO letter and one count at each row of a period, and clear `rows`
 fn add_tpo_letters(
     profile: &mut TPOProfile,
-    bar: &Bar,
-    keys: RangeInclusive<i64>,
+    rows: &mut Vec<RangeInclusive<i64>>,
     letter: char,
     period_idx: usize,
+    ts: DateTime<Utc>,
 ) {
-    for key in keys {
+    for key in rows.drain(..).flatten() {
         let price = key_to_price(key, profile.tick_size);
 
         profile.letters.push(TPOLetter {
             price,
             letter,
             period_idx,
-            ts: bar.time,
+            ts,
         });
 
         *profile.price_tpo_count.entry(key).or_insert(0) += 1;
@@ -628,27 +657,81 @@ mod tests {
     }
 
     #[test]
-    fn bin_assignment_covers_every_touched_tick() {
-        // A single 30-minute bar spanning 100..=104 with tick 1.0 must register
-        // exactly one TPO at each of the five integer price levels it touches.
+    fn each_period_counts_once_per_row() {
+        // (bars as (minute, low, high), expected letters as (profile, period, letter, minute of ts, rows))
+        type Case = (
+            &'static [(i64, f64, f64)],
+            &'static [(usize, usize, char, i64, RangeInclusive<i64>)],
+        );
+        let cases: [Case; 6] = [
+            // One 30-minute bar: one TPO on each row it spans
+            (&[(0, 100.0, 104.0)], &[(0, 0, 'A', 0, 100..=104)]),
+            // Two bars of one period: their union, one TPO per row, stamped with the first bar
+            (
+                &[(0, 100.0, 102.0), (1, 101.0, 104.0)],
+                &[(0, 0, 'A', 0, 100..=104)],
+            ),
+            // Rows between the bars of a period stay empty
+            (
+                &[(0, 103.0, 104.0), (1, 100.0, 101.0)],
+                &[(0, 0, 'A', 0, 100..=101), (0, 0, 'A', 0, 103..=104)],
+            ),
+            // 95 minutes in is the fourth period, after two empty ones
+            (
+                &[(0, 100.0, 101.0), (95, 102.0, 103.0)],
+                &[(0, 0, 'A', 0, 100..=101), (0, 3, 'D', 95, 102..=103)],
+            ),
+            // Periods follow the session start, not the bar that opened the previous period
+            (
+                &[(0, 100.0, 100.0), (45, 101.0, 101.0), (61, 102.0, 102.0)],
+                &[
+                    (0, 0, 'A', 0, 100..=100),
+                    (0, 1, 'B', 45, 101..=101),
+                    (0, 2, 'C', 61, 102..=102),
+                ],
+            ),
+            // A new UTC date closes the open period in its own profile, even when both are period 0
+            (
+                &[(0, 100.0, 100.0), (900, 101.0, 101.0)],
+                &[(0, 0, 'A', 0, 100..=100), (1, 0, 'A', 900, 101..=101)],
+            ),
+        ];
         let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
-        let bars = vec![bar_at(start, 0, 100.0, 104.0, 100.0, 103.0)];
         let config = TPOConfig {
             tick_size: 1.0,
             ..Default::default()
         };
-        let profile = &to_tpo_profiles(&bars, &config)[0];
-
-        for level in [100.0, 101.0, 102.0, 103.0, 104.0] {
-            assert_eq!(
-                profile.tpo_count_at(level, 1.0),
-                1,
-                "level {level} should have exactly one TPO"
-            );
+        for (bars, expected) in cases {
+            let bars: Vec<Bar> = bars
+                .iter()
+                .map(|&(m, low, high)| bar_at(start, m, low, high, low, high))
+                .collect();
+            let profiles = to_tpo_profiles(&bars, &config);
+            let mut letters = Vec::new();
+            let mut counts = Vec::new();
+            for (i, profile) in profiles.iter().enumerate() {
+                letters.extend(
+                    profile
+                        .letters
+                        .iter()
+                        .map(|l| (i, l.period_idx, l.letter, l.ts, price_to_key(l.price, 1.0))),
+                );
+                counts.extend(profile.price_tpo_count.iter().map(|(&k, &c)| (i, k, c)));
+            }
+            letters.sort_by_key(|&(i, period, _, _, key)| (i, period, key));
+            counts.sort_unstable();
+            let want: Vec<_> = expected
+                .iter()
+                .flat_map(|(i, period, letter, minute, rows)| {
+                    let ts = start + Duration::minutes(*minute);
+                    rows.clone().map(move |key| (*i, *period, *letter, ts, key))
+                })
+                .collect();
+            assert_eq!(letters, want, "bars {bars:?}");
+            // No row is shared between periods here, so every row counts one TPO
+            let ones: Vec<_> = want.iter().map(|&(i, _, _, _, key)| (i, key, 1)).collect();
+            assert_eq!(counts, ones, "bars {bars:?}");
         }
-        // Nothing outside the bar's range.
-        assert_eq!(profile.tpo_count_at(99.0, 1.0), 0);
-        assert_eq!(profile.tpo_count_at(105.0, 1.0), 0);
     }
 
     #[test]
