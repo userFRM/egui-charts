@@ -383,6 +383,8 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     visuals.widgets.hovered.bg_fill = ui.btn_bg_hover;
     visuals.widgets.active.bg_fill = ui.btn_bg_active;
     visuals.widgets.open.bg_fill = ui.btn_bg_active;
+    // egui fills the top window's title bar, an open combo box and an open submenu button with it.
+    visuals.widgets.open.weak_bg_fill = ui.btn_bg_hover;
 
     // Widget borders
     visuals.widgets.noninteractive.bg_stroke =
