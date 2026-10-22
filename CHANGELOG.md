@@ -237,6 +237,7 @@ All notable changes to this project are documented in this file. The format is b
 - `ext` (`UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt`, `RoundingExt`) needs the `ui` feature instead of `widget`. Migration: enable `ui`.
 - `ui::context_menu::MenuItem` is generic over its action, `MenuItem<A = ContextMenuAction>`, holds its shortcut as an `egui::KeyboardShortcut` instead of a string, and gains `danger` and `submenu`. Migration: replace `with_shortcut("Cmd R")` with `with_shortcut(KeyboardShortcut::new(Modifiers::COMMAND, Key::R))`, which egui formats for the platform; struct literals set `danger`.
 - The symbol header shows the last close with its change instead of the bar's open, high, low and close, which the chart legend shows. Its up and down colours default to the theme's success and error text colours, which read at 4.5:1 or better where the candle colours do not (`Color32::PLACEHOLDER` in `SymbolHeaderConfig::default`, resolved while painting), and `SymbolHeaderConfig::from_theme` sets them.
+- Widget bar icons are 20 px, as in the top toolbar, and their tooltips open to the left of the button instead of over the button below. The bottom bar's date button icon is 16 px.
 
 ### Removed
 

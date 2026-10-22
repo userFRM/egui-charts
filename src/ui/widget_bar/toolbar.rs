@@ -3,7 +3,7 @@
 //! Vertical strip of icon btns on the far right edge of the screen.
 
 use crate::icons::{Icon, icons as embedded_icons};
-use crate::styles::typography;
+use crate::styles::{icons as icon_sizes, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Sense, Ui, Vec2};
@@ -76,7 +76,7 @@ impl Default for WidgetBarConfig {
             // Exact dimensions
             width: DESIGN_TOKENS.sizing.toolbar.right_sidebar_width, // 52px
             btn_size: DESIGN_TOKENS.sizing.toolbar.right_btn_size,   // 44px
-            icon_size: DESIGN_TOKENS.sizing.toolbar.right_icon_size, // 24px
+            icon_size: icon_sizes::MD,                               // 20px, as in the top toolbar
             btn_spacing: DESIGN_TOKENS.sizing.toolbar.right_btn_spacing, // 2px
             hover_margin: DESIGN_TOKENS.sizing.toolbar.right_hover_margin, // 3px
             hover_rounding: DESIGN_TOKENS.sizing.toolbar.right_hover_rounding, // 8px
@@ -345,10 +345,12 @@ impl WidgetBar {
             *action = WidgetBarAction::Clicked(*icon);
         }
 
-        // Tooltip
-        if is_hovered {
-            btn_res.on_hover_text(icon.tooltip());
-        }
+        // The bar is at the window's right edge, so the tooltip opens to the left, clear of the
+        // next button. Unlike `on_hover_text`, `Tooltip` does not name the button.
+        btn_res.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, icon.tooltip()));
+        let mut tooltip = egui::Tooltip::for_enabled(&btn_res);
+        tooltip.popup = tooltip.popup.align(egui::RectAlign::LEFT);
+        tooltip.show(|ui| ui.label(icon.tooltip()));
 
         y + self.config.btn_size + self.config.btn_spacing
     }
