@@ -10,9 +10,10 @@
 //!
 //! ```rust
 //! # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
-//! # let bar_data = egui_charts::model::BarData::from_bars(bars.clone());
 //! use egui_charts::model::BarData;
 //! use egui_charts::widget::Chart;
+//!
+//! let bar_data = BarData::from_bars(bars);
 //!
 //! // Create chart with OHLCV data
 //! let mut chart = Chart::new(bar_data);
@@ -140,9 +141,10 @@ pub use state::{BoxZoomMode, BoxZoomState, ElasticBounceState, KineticScrollStat
 ///
 /// ```rust
 /// # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
-/// # let bar_data = egui_charts::model::BarData::from_bars(bars.clone());
 /// use egui_charts::model::BarData;
 /// use egui_charts::widget::Chart;
+///
+/// let bar_data = BarData::from_bars(bars);
 ///
 /// let mut chart = Chart::new(bar_data);
 ///

@@ -7,7 +7,7 @@
 //! # Output
 //!
 //! Each computed value is a `Multiple` vector containing
-//! `[Pivot, S1, R1, S2, R2, S3, R3]` (7 levels).
+//! `[Pivot, S1, S2, S3, R1, R2, R3]` (7 levels).
 //!
 //! # Example
 //!
