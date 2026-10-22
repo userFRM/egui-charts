@@ -1,4 +1,4 @@
-//! Loading indicator component — spinner with optional message.
+//! Loading indicator component: a spinner with an optional message.
 //!
 //! ```
 //! # use egui_charts::ui_kit::LoadingIndicator;

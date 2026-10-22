@@ -5,8 +5,8 @@
 //!
 //! The whole chart tracks a single selection through one
 //! [`SelectionState<ChartElementId>`]. The [`ChartElementId`] enum distinguishes
-//! the kinds of selectable things — a price/volume series, an overlay indicator
-//! drawn on the main chart, or a separate-pane indicator — so one selection
+//! the kinds of selectable things (a price or volume series, an overlay indicator
+//! drawn on the main chart, or a separate-pane indicator), so one selection
 //! model can express "whatever the user last clicked" regardless of which layer
 //! it lives on.
 
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(state.selected_id(), Some(ChartElementId::PaneIndicator(2)));
         assert_eq!(state.selected_bar(), Some(10));
 
-        // Re-select a different element kind — the previous selection is replaced.
+        // Re-select a different element kind: the previous selection is replaced.
         state.select(ChartElementId::Series(SeriesId::MAIN), Some(20));
         assert_eq!(
             state.selected_id(),

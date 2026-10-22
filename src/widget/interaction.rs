@@ -10,7 +10,7 @@ use crate::widget::Chart;
 use crate::widget::pan_zoom::raw_wheel_delta;
 
 impl Chart {
-    /// Manage tracking mode — auto-scroll to the latest bar while active.
+    /// Manage tracking mode: auto-scroll to the latest bar while active.
     ///
     /// Tracking mode keeps the chart viewport anchored to real-time data.
     /// It exits automatically based on the configured

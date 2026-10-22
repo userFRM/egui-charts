@@ -1,8 +1,8 @@
-//! Trading label widgets — PnlLabel and SideLabel
+//! Trading label widgets: `PnlLabel` and `SideLabel`.
 //!
 //! Pre-styled labels for common trading UI patterns:
-//! - `PnlLabel` — auto-colored profit/loss display (green/red/neutral)
-//! - `SideLabel` — colored buy/sell or long/short badges
+//! - `PnlLabel`: a profit or loss coloured by its sign (green, red or neutral)
+//! - `SideLabel`: coloured buy and sell or long and short badges
 
 use egui::{Color32, Response, RichText, Ui};
 
