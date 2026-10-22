@@ -157,6 +157,8 @@ impl<'a> AutocompleteEdit<'a> {
         // Filter suggestions
         let filtered = self.filter_suggestions();
         let has_suggestions = !filtered.is_empty();
+        // The list can shrink without a keystroke, so a stored row may be past its end.
+        selected_idx = selected_idx.min(filtered.len().saturating_sub(1));
 
         // Determine if popup should be open
         let mut popup_open = Popup::is_id_open(ui.ctx(), popup_id);
@@ -252,8 +254,8 @@ impl<'a> AutocompleteEdit<'a> {
                         });
 
                         // Handle Enter/Tab to select
-                        if confirm && !filtered.is_empty() && selected.is_none() {
-                            selected = Some(filtered[selected_idx].0.clone());
+                        if confirm && selected.is_none() {
+                            selected = filtered.get(selected_idx).map(|(s, _)| s.clone());
                         }
                     });
                 });
@@ -274,6 +276,8 @@ impl<'a> AutocompleteEdit<'a> {
         if let Some(ref sel) = selected {
             *self.text = sel.clone();
             Popup::close_id(ui.ctx(), popup_id);
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_temp(selected_idx_id, 0usize));
         }
 
         AutocompleteResponse {
@@ -291,4 +295,59 @@ pub fn autocomplete(
     suggestions: impl IntoIterator<Item = impl Into<String>>,
 ) -> AutocompleteResponse {
     AutocompleteEdit::new(text, suggestions).show(ui)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Context, Event, Modifiers, RawInput};
+
+    #[test]
+    fn enter_after_a_pick_from_further_down_keeps_the_picked_text() {
+        let suggestions = [
+            "Apple", "Avocado", "Banana", "Grape", "Papaya", "Guava", "Mango", "Pear",
+        ];
+        let ctx = Context::default();
+        let mut text = String::new();
+        let mut frame = |events: Vec<Event>| {
+            let mut shown = None;
+            let input = RawInput {
+                events,
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                let response = AutocompleteEdit::new(&mut text, suggestions).show(ui);
+                shown = Some((response.response.id, response.selected));
+            })
+            .drop_without_applying_deltas();
+            let (id, selected) = shown.unwrap();
+            (id, selected, text.clone())
+        };
+        let key = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+
+        // Every name contains an `a`, so typing it lists all eight and five arrows reach row 5.
+        // The popup stays in memory only every other frame, and Enter takes the input's focus,
+        // so each Enter follows an idle frame that reopens the popup.
+        let (id, _, _) = frame(vec![]);
+        ctx.memory_mut(|m| m.request_focus(id));
+        frame(vec![Event::Text("a".into())]);
+        for _ in 0..5 {
+            frame(vec![key(Key::ArrowDown)]);
+        }
+        frame(vec![]);
+        let (_, picked, text_after_pick) = frame(vec![key(Key::Enter)]);
+        assert!(picked.is_some());
+
+        // The picked name matches only itself, so the list now has one row.
+        ctx.memory_mut(|m| m.request_focus(id));
+        frame(vec![]);
+        let (_, _, text_after_enter) = frame(vec![key(Key::Enter)]);
+        assert_eq!(text_after_enter, text_after_pick);
+    }
 }
