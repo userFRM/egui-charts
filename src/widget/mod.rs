@@ -527,7 +527,7 @@ pub(crate) mod test_frames {
     use super::Chart;
     use crate::model::{Bar, BarData};
     use chrono::{TimeZone, Utc};
-    use egui::{Context, Event, Pos2, RawInput, Rect, Vec2};
+    use egui::{Context, Event, Pos2, RawInput, Rect, Shape, Vec2};
 
     /// 100 daily bars; bar `i` opens at `lows[i % len]` and closes at `highs[i % len]`.
     pub(crate) fn chart(lows: &[f64], highs: &[f64]) -> Chart {
@@ -543,19 +543,40 @@ pub(crate) mod test_frames {
         Chart::new(BarData::from_bars(bars))
     }
 
-    /// Runs one frame at `time` seconds with `events`.
-    pub(crate) fn frame(ctx: &Context, chart: &mut Chart, time: f64, events: Vec<Event>) {
+    /// Runs one frame at `time` seconds with `events` and returns the shapes it painted.
+    pub(crate) fn shapes(
+        ctx: &Context,
+        chart: &mut Chart,
+        time: f64,
+        events: Vec<Event>,
+    ) -> Vec<Shape> {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
             time: Some(time),
             events,
             ..Default::default()
         };
-        ctx.run_ui(input, |ui| {
+        let mut output = ctx.run_ui(input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 chart.show(ui);
             });
-        })
-        .drop_without_applying_deltas();
+        });
+        fn flatten(shape: Shape, out: &mut Vec<Shape>) {
+            match shape {
+                Shape::Vec(shapes) => shapes.into_iter().for_each(|shape| flatten(shape, out)),
+                shape => out.push(shape),
+            }
+        }
+        let mut shapes = Vec::new();
+        for clipped in std::mem::take(&mut output.shapes) {
+            flatten(clipped.shape, &mut shapes);
+        }
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// Runs one frame at `time` seconds with `events`.
+    pub(crate) fn frame(ctx: &Context, chart: &mut Chart, time: f64, events: Vec<Event>) {
+        shapes(ctx, chart, time, events);
     }
 }

@@ -106,7 +106,8 @@ impl Theme {
                 grid_line_major: Color32::from_black_alpha(20),
                 axis_text: rgb(19, 23, 34),
                 axis_text_secondary: rgb(78, 83, 96),
-                crosshair_line: Color32::from_rgba_unmultiplied(120, 120, 120, 150),
+                // 3.2:1 on the white chart.
+                crosshair_line: Color32::from_rgba_unmultiplied(120, 120, 120, 210),
                 crosshair_label_bg: rgb(240, 243, 250),
                 crosshair_label_text: rgb(19, 23, 34),
                 ..dark.chart

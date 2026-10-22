@@ -1,27 +1,44 @@
 use super::context::{ChartMapping, RenderContext, StyleColors};
+use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
 use crate::model::Bar;
 use crate::scales::{
     PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkGenerator,
-    TickMarkGeneratorConfig, TickMarkWeight, TimeFormatter,
+    TickMarkGeneratorConfig, TimeFormatter,
 };
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use chrono::Duration;
-use egui::{Color32, FontId, Pos2, Rect};
+use egui::layers::ShapeIdx;
+use egui::{Color32, FontId, Pos2, Rect, Shape};
 
-/// Renders price labels on the right side using smart tick mark generation
-/// Uses intelligent price mark distribution system
-pub fn render_price_labels(context: &RenderContext, price_scale: &PriceMap, colors: &StyleColors) {
-    render_price_labels_at_pos(context, price_scale, colors, PriceScaleId::Right);
+/// Paints the price labels on the right side into `slot`, using smart tick mark generation and
+/// leaving out the labels the `tags` (the last price and crosshair labels) would cut through.
+pub fn render_price_labels(
+    context: &RenderContext,
+    price_scale: &PriceMap,
+    colors: &StyleColors,
+    tags: &[Option<Rect>],
+    slot: ShapeIdx,
+) {
+    render_price_labels_at_pos(
+        context,
+        price_scale,
+        colors,
+        PriceScaleId::Right,
+        tags,
+        slot,
+    );
 }
 
-/// Renders price labels at the specified position (left or right)
+/// Paints the price labels at the specified position (left or right) into `slot`
 /// Core implementation for price label rendering
 pub fn render_price_labels_at_pos(
     context: &RenderContext,
     price_scale: &PriceMap,
     colors: &StyleColors,
     position: PriceScaleId,
+    tags: &[Option<Rect>],
+    slot: ShapeIdx,
 ) {
     // Create price mark generator with default config
     let generator = PriceMarkGenerator::new();
@@ -31,38 +48,55 @@ pub fn render_price_labels_at_pos(
 
     // Determine positioning based on scale position
     let (x_offset, alignment) = match position {
-        PriceScaleId::Right => (context.rect.max.x + 8.0, egui::Align2::LEFT_CENTER),
-        PriceScaleId::Left => (context.rect.min.x - 8.0, egui::Align2::RIGHT_CENTER),
+        PriceScaleId::Right => (
+            context.rect.max.x + PRICE_LABEL_GAP,
+            egui::Align2::LEFT_CENTER,
+        ),
+        PriceScaleId::Left => (
+            context.rect.min.x - PRICE_LABEL_GAP,
+            egui::Align2::RIGHT_CENTER,
+        ),
     };
 
-    // Render marks with weight-based styling for visual hierarchy
-    for mark in marks {
-        // Use larger font for higher weight marks (major boundaries)
-        let font_size = if mark.weight >= 80 {
-            11.5 // Major marks (e.g., round numbers like 100, 1000)
-        } else if mark.weight >= 60 {
-            11.0 // Medium marks
-        } else {
-            10.5 // Minor marks
-        };
+    let font = axis_font(context.painter.ctx());
+    let labels: Vec<Shape> = marks
+        .into_iter()
+        .filter_map(|mark| {
+            let galley = context
+                .painter
+                .layout_no_wrap(mark.label, font.clone(), colors.text);
+            let rect = alignment.anchor_size(Pos2::new(x_offset, mark.y_coord), galley.size());
+            (!under_tag(tags, rect)).then(|| Shape::galley(rect.min, galley, colors.text))
+        })
+        .collect();
+    context.painter.set(slot, labels);
+}
 
-        // Render label (mark.label is already formatted by the generator)
-        // Pos labels in the price axis area with offset for better visibility
-        context.painter.text(
-            Pos2::new(x_offset, mark.y_coord),
-            alignment,
-            &mark.label,
-            FontId::proportional(font_size),
-            colors.text,
-        );
-    }
+/// Whether a label at `rect` is left out: a tag takes the place of the axis labels it overlaps.
+fn under_tag(tags: &[Option<Rect>], rect: Rect) -> bool {
+    tags.iter().flatten().any(|tag| tag.intersects(rect))
+}
+
+/// Decimals of the price axis tick label nearest to `y`, so that a price written with them reads
+/// like the ticks.
+pub(crate) fn tick_decimals(price_scale: &PriceMap, y: f32) -> usize {
+    PriceMarkGenerator::new()
+        .generate_marks(price_scale)
+        .into_iter()
+        .min_by(|a, b| (a.y_coord - y).abs().total_cmp(&(b.y_coord - y).abs()))
+        // Normal and logarithmic tick labels are plain numbers.
+        .map_or(2, |mark| {
+            mark.label
+                .split_once('.')
+                .map_or(0, |(_, decimals)| decimals.len())
+        })
 }
 
 fn generate_time_marks(
     context: &RenderContext,
     visible_data: &[Bar],
     coords: &ChartMapping,
-    formatter: Option<&dyn TimeFormatter>,
+    formatter: &dyn TimeFormatter,
 ) -> (Vec<TickMark>, Vec<(chrono::DateTime<chrono::Utc>, usize)>) {
     if visible_data.is_empty() {
         return (Vec::new(), Vec::new());
@@ -95,11 +129,7 @@ fn generate_time_marks(
         target_density: (1.0 * zoom_factor).clamp(0.6, 2.5),
     };
 
-    let generator = if let Some(fmt) = formatter {
-        TickMarkGenerator::with_formatter(config, fmt.clone_box())
-    } else {
-        TickMarkGenerator::with_config(config)
-    };
+    let generator = TickMarkGenerator::with_formatter(config, formatter.clone_box());
 
     let bar_duration_ms = bar_duration_ms.max(1);
     // Safe: guarded by is_empty() check above
@@ -194,13 +224,17 @@ pub fn render_time_labels(
     visible_data: &[Bar],
     coords: &ChartMapping,
     colors: &StyleColors,
-    formatter: Option<&dyn TimeFormatter>,
+    formatter: &dyn TimeFormatter,
+    tags: &[Option<Rect>],
+    slot: ShapeIdx,
 ) {
     let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter);
+    let font = axis_font(context.painter.ctx());
 
     // Track last rendered label position to prevent overlap
     let min_label_spacing = 80.0; // Min pixels between label centers
     let mut last_label_x: Option<f32> = None;
+    let mut labels = Vec::new();
 
     for mark in marks {
         // Use fractional index for smooth label movement during pan
@@ -222,35 +256,35 @@ pub fn render_time_labels(
             continue;
         }
 
-        let y = context.rect.max.y + 5.0;
-        context.painter.text(
-            Pos2::new(x, y),
-            egui::Align2::CENTER_TOP,
-            &mark.label,
-            FontId::proportional(if mark.weight >= TickMarkWeight::MONTH {
-                11.0
-            } else if mark.weight >= TickMarkWeight::DAY {
-                10.5
-            } else {
-                10.0
-            }),
-            colors.text,
-        );
+        let y = context.rect.max.y + TIME_LABEL_GAP;
+        let galley = context
+            .painter
+            .layout_no_wrap(mark.label, font.clone(), colors.text);
+        let rect = egui::Align2::CENTER_TOP.anchor_size(Pos2::new(x, y), galley.size());
+        if !under_tag(tags, rect) {
+            labels.push(Shape::galley(rect.min, galley, colors.text));
+        }
 
         last_label_x = Some(x);
     }
+    context.painter.set(slot, labels);
 }
 
-/// Formats a header price with decimals chosen by its magnitude: 2 from 100
-/// up, 4 from 1 up, 6 below 1.
-fn format_price(price: f64) -> String {
+/// Decimals for a price by its magnitude: 2 from 100 up, 4 from 1 up, 6 below 1.
+pub(crate) fn price_decimals(price: f64) -> usize {
     if price.abs() >= 100.0 {
-        format!("{price:.2}")
+        2
     } else if price.abs() >= 1.0 {
-        format!("{price:.4}")
+        4
     } else {
-        format!("{price:.6}")
+        6
     }
+}
+
+/// Formats a header price with [`price_decimals`].
+fn format_price(price: f64) -> String {
+    let decimals = price_decimals(price);
+    format!("{price:.decimals$}")
 }
 
 /// Renders OHLC info header
@@ -387,4 +421,101 @@ pub fn render_legend(
     let change_text = format!("{sign}{change:.2} ({sign}{change_pct:.2}%)");
     let change_galley = painter.layout_no_wrap(change_text, val_font, change_color);
     painter.galley(Pos2::new(x, y), change_galley, change_color);
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::widget::Chart;
+    use crate::widget::test_frames::{chart, shapes};
+    use egui::{Context, Event, Pos2, Rect, Shape};
+
+    /// The tick labels and the tags one frame paints in the price axis, with the pointer at
+    /// `hover`. A number inside a tag is the tag's own text, not a tick.
+    fn price_axis(
+        ctx: &Context,
+        chart: &mut Chart,
+        hover: Option<Pos2>,
+    ) -> (Vec<(String, Rect)>, Vec<Rect>) {
+        let time = ctx.input(|i| i.time) + 0.1;
+        let shapes = shapes(
+            ctx,
+            chart,
+            time,
+            hover.map(Event::PointerMoved).into_iter().collect(),
+        );
+
+        let plot = chart.get_chart_mapping().rect;
+        let tags: Vec<Rect> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Rect(rect)
+                    if rect.fill.a() > 0
+                        && rect.rect.max.x > plot.max.x
+                        && rect.rect.height() < 40.0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .collect();
+        let ticks = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text)
+                    if text.pos.x > plot.max.x && text.galley.text().parse::<f64>().is_ok() =>
+                {
+                    let rect = Rect::from_min_size(text.pos, text.galley.size());
+                    (!tags.iter().any(|tag| tag.contains_rect(rect)))
+                        .then(|| (text.galley.text().to_owned(), rect))
+                }
+                _ => None,
+            })
+            .collect();
+        (ticks, tags)
+    }
+
+    /// A tick label that the last price tag or the crosshair price label overlaps is left out,
+    /// and every other tick label stays.
+    #[test]
+    fn tags_hide_the_tick_labels_they_overlap() {
+        let ctx = Context::default();
+        // The last bar closes at 197, a few pixels below the 200 tick.
+        let mut chart = chart(&[100.0], &[200.0, 197.0]);
+        chart.config_mut().show_symbol_last_val = false;
+        price_axis(&ctx, &mut chart, None);
+        let (reference, tags) = price_axis(&ctx, &mut chart, None);
+        assert!(
+            tags.is_empty() && reference.len() >= 3,
+            "{reference:?} {tags:?}"
+        );
+        let plot = chart.get_chart_mapping().rect;
+        let middle = reference[reference.len() / 2].1;
+        let tick_y = middle.center().y;
+        // One pixel more than a label's height: the text rects overlap only through the tag's padding.
+        let pad = middle.height() + 1.0;
+
+        // (last price tag shown, pointer offset from a tick label's centre)
+        for case in [
+            (true, None),
+            (false, Some(0.0)),
+            (false, Some(pad)),
+            (false, Some(-pad)),
+        ] {
+            let (last_price, offset) = case;
+            chart.config_mut().show_symbol_last_val = last_price;
+            let hover = offset.map(|dy| Pos2::new(plot.center().x, tick_y + dy));
+            price_axis(&ctx, &mut chart, hover);
+            let (ticks, tags) = price_axis(&ctx, &mut chart, hover);
+            let kept: Vec<_> = reference
+                .iter()
+                .filter(|(_, rect)| !tags.iter().any(|tag| tag.intersects(*rect)))
+                .cloned()
+                .collect();
+            assert!(
+                !tags.is_empty() && kept.len() < reference.len(),
+                "{case:?}: {tags:?}"
+            );
+            assert_eq!(ticks, kept, "{case:?}: {tags:?}");
+        }
+    }
 }

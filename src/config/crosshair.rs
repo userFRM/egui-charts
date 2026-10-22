@@ -6,7 +6,7 @@
 /// Crosshair Options.
 ///
 /// Controls crosshair behavior and appearance.
-use crate::tokens::DESIGN_TOKENS;
+use crate::theme::ThemeExt;
 use egui::Color32;
 
 /// Crosshair mode
@@ -61,10 +61,10 @@ pub struct CrosshairOptions {
     /// Show horizontal line
     pub horz_line_visible: bool,
 
-    /// Vertical line color
+    /// Vertical line color (`Color32::PLACEHOLDER`: active theme)
     pub vert_line_color: Color32,
 
-    /// Horizontal line color
+    /// Horizontal line color (`Color32::PLACEHOLDER`: active theme)
     pub horz_line_color: Color32,
 
     /// Vertical line width
@@ -76,10 +76,10 @@ pub struct CrosshairOptions {
     /// Show labels
     pub label_visible: bool,
 
-    /// Label background color
+    /// Label background color (`Color32::PLACEHOLDER`: active theme)
     pub label_background_color: Color32,
 
-    /// Label text color
+    /// Label text color (`Color32::PLACEHOLDER`: active theme)
     pub label_text_color: Color32,
 }
 
@@ -91,13 +91,34 @@ impl Default for CrosshairOptions {
             line_style: CrosshairLineStyle::Dashed,
             vert_line_visible: true,
             horz_line_visible: true,
-            vert_line_color: DESIGN_TOKENS.semantic.chart.crosshair_line,
-            horz_line_color: DESIGN_TOKENS.semantic.chart.crosshair_line,
+            vert_line_color: Color32::PLACEHOLDER,
+            horz_line_color: Color32::PLACEHOLDER,
             vert_line_width: 1.0,
             horz_line_width: 1.0,
             label_visible: true,
-            label_background_color: DESIGN_TOKENS.semantic.extended.chart_crosshair_label_bg,
-            label_text_color: DESIGN_TOKENS.semantic.extended.chart_text,
+            label_background_color: Color32::PLACEHOLDER,
+            label_text_color: Color32::PLACEHOLDER,
+        }
+    }
+}
+
+impl CrosshairOptions {
+    /// These options with `Color32::PLACEHOLDER` colours taken from the theme applied to `ctx`.
+    pub(crate) fn resolved(&self, ctx: &egui::Context) -> Self {
+        let chart = ctx.active_theme().chart;
+        let or = |color: Color32, themed: Color32| {
+            if color == Color32::PLACEHOLDER {
+                themed
+            } else {
+                color
+            }
+        };
+        Self {
+            vert_line_color: or(self.vert_line_color, chart.crosshair_line),
+            horz_line_color: or(self.horz_line_color, chart.crosshair_line),
+            label_background_color: or(self.label_background_color, chart.crosshair_label_bg),
+            label_text_color: or(self.label_text_color, chart.crosshair_label_text),
+            ..*self
         }
     }
 }

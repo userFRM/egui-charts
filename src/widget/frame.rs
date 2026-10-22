@@ -474,17 +474,11 @@ impl Chart {
             candle_border_width: self.config.candle_border_width,
         };
 
-        let formatter = if self.config.show_time_labels || self.config.show_vertical_grid {
-            Some(
-                TimeFormatterBuilder::new()
-                    .with_24_hour(true)
-                    .with_seconds(true)
-                    .with_timezone(self.chart_options.time_scale.timezone.clone())
-                    .build(),
-            )
-        } else {
-            None
-        };
+        let formatter = TimeFormatterBuilder::new()
+            .with_24_hour(true)
+            .with_seconds(true)
+            .with_timezone(self.chart_options.time_scale.timezone.clone())
+            .build();
 
         if self.config.show_vertical_grid {
             // Simple bar-index-based vertical grid - moves 1:1 with chart
@@ -696,13 +690,11 @@ impl Chart {
             );
         }
 
-        // Draw price labels
-        if self.config.show_right_axis {
-            rendering::render_price_labels(&price_ctx, &price_map, &colors);
-        }
+        // The axis labels go at these depths, painted once the crosshair's tags are placed
+        let price_labels = painter.add(egui::Shape::Noop);
 
         // Last price line & label, from the newest bar even when it is scrolled out of view
-        if self.config.show_symbol_last_val
+        let last_price_tag = if self.config.show_symbol_last_val
             && let Some(last) = self.state.data().bars.last()
         {
             rendering::render_last_price_line(
@@ -714,20 +706,13 @@ impl Chart {
                 self.config.bullish_color,
                 self.config.bearish_color,
                 self.config.show_right_axis,
-            );
-        }
+                rect.max.x,
+            )
+        } else {
+            None
+        };
 
-        // Draw time labels
-        if self.config.show_time_labels {
-            let chart_ctx = RenderContext::new(&painter, chart_rect);
-            rendering::render_time_labels(
-                &chart_ctx,
-                visible_data,
-                &coords,
-                &colors,
-                formatter.as_deref(),
-            );
-        }
+        let time_labels = painter.add(egui::Shape::Noop);
 
         // Draw OHLC info header (legend if symbol is set)
         if self.config.show_ohlc_info {
@@ -816,19 +801,24 @@ impl Chart {
         }
 
         // Draw crosshair with options from chart_options
+        let mut crosshair_tags = [None; 2];
         if let Some(hover_pos) = response.hover_pos()
             && price_rect.contains(hover_pos)
         {
             // Cache the hover bar index for multi-chart sync
             self.last_hover_bar_idx = Some(coords.x_to_idx_f32(hover_pos.x) as f64);
 
-            rendering::render_crosshair_with_options(
+            crosshair_tags = rendering::render_crosshair_with_options(
                 &price_ctx,
                 hover_pos,
                 visible_data,
                 &price_map,
                 &coords,
                 &self.chart_options.crosshair,
+                chart_rect.max.y,
+                rect.max.x,
+                last_price_tag,
+                formatter.as_ref(),
             );
 
             // Draw the OHLC/value readout for the bar under the cursor, matching
@@ -864,17 +854,39 @@ impl Chart {
                         let center_y = price_rect.center().y;
                         let synced_pos = Pos2::new(x, center_y);
 
-                        rendering::render_crosshair_with_options(
+                        crosshair_tags = rendering::render_crosshair_with_options(
                             &price_ctx,
                             synced_pos,
                             visible_data,
                             &price_map,
                             &coords,
                             &self.chart_options.crosshair,
+                            chart_rect.max.y,
+                            rect.max.x,
+                            last_price_tag,
+                            formatter.as_ref(),
                         );
                     }
                 }
             }
+        }
+
+        // Draw the axis labels, leaving out those the tags overlap
+        let tags = [last_price_tag, crosshair_tags[0], crosshair_tags[1]];
+        if self.config.show_right_axis {
+            rendering::render_price_labels(&price_ctx, &price_map, &colors, &tags, price_labels);
+        }
+        if self.config.show_time_labels {
+            let chart_ctx = RenderContext::new(&painter, chart_rect);
+            rendering::render_time_labels(
+                &chart_ctx,
+                visible_data,
+                &coords,
+                &colors,
+                formatter.as_ref(),
+                &tags,
+                time_labels,
+            );
         }
 
         // Draw box zoom rect

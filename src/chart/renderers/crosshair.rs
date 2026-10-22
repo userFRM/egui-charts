@@ -1,13 +1,20 @@
 use super::context::{ChartMapping, RenderContext};
+use super::labels::tick_decimals;
+use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, paint_axis_tag};
 use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairStyle};
 use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::model::Bar;
-use crate::scales::{PriceMap, PriceScaleMode};
-use crate::styles::typography;
+use crate::scales::{PriceMap, PriceScaleMode, TickMarkType, TimeFormatter};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, FontId, Pos2, Stroke};
+use chrono::{DateTime, Utc};
+use egui::{Align2, Color32, Pos2, Rect, Stroke};
 
 /// Renders crosshair with full customization: style, mode, color, line width, line style
+///
+/// The vertical line runs down to `chart_bottom`, the bottom of the volume pane. The price label
+/// sits in the price axis, which ends at `axis_right`, over the `last_price_tag` it overlaps, and
+/// the time label on the time axis below `chart_bottom`, written by `formatter`. Returns the rects
+/// of the price and time labels drawn.
 pub fn render_crosshair_full(
     context: &RenderContext,
     hover_pos: Pos2,
@@ -19,13 +26,17 @@ pub fn render_crosshair_full(
     crosshair_color: Color32,
     line_width: f32,
     line_style: CrosshairLineStyle,
-) {
+    label_bg: Color32,
+    label_text: Color32,
+    chart_bottom: f32,
+    axis_right: f32,
+    last_price_tag: Option<Rect>,
+    formatter: &dyn TimeFormatter,
+) -> [Option<Rect>; 2] {
     // Arrow style = no crosshair at all (just standard mouse cursor)
     if style == CrosshairStyle::Arrow {
-        return;
+        return [None; 2];
     }
-
-    let label_bg = DESIGN_TOKENS.semantic.extended.chart_crosshair_label_bg;
 
     // Convert x to a global index
     let bars_from_right = (context.rect.max.x - hover_pos.x) / coords.bar_spacing - 0.5;
@@ -34,11 +45,11 @@ pub fn render_crosshair_full(
     let first = coords.start_idx as isize;
     let last = (coords.start_idx + visible_data.len().saturating_sub(1)) as isize;
 
-    // Determine actual hover position based on mode
-    let (actual_hover_x, actual_hover_y) = if t_idx >= first && t_idx <= last {
-        let candle_idx = (t_idx as usize).saturating_sub(coords.start_idx);
-        let candle = &visible_data[candle_idx];
+    let candle = (t_idx >= first && t_idx <= last)
+        .then(|| &visible_data[(t_idx as usize).saturating_sub(coords.start_idx)]);
 
+    // Determine actual hover position based on mode
+    let (actual_hover_x, actual_hover_y) = if let Some(candle) = candle {
         match mode {
             CrosshairMode::Normal => (hover_pos.x, hover_pos.y),
             CrosshairMode::Magnet => {
@@ -68,7 +79,7 @@ pub fn render_crosshair_full(
                     context.painter.line_segment(
                         [
                             Pos2::new(actual_pos.x, context.rect.min.y),
-                            Pos2::new(actual_pos.x, context.rect.max.y),
+                            Pos2::new(actual_pos.x, chart_bottom),
                         ],
                         Stroke::new(line_width, crosshair_color),
                     );
@@ -95,7 +106,7 @@ pub fn render_crosshair_full(
                     draw_dashed_line(
                         context.painter,
                         Pos2::new(actual_pos.x, rect.min.y),
-                        Pos2::new(actual_pos.x, rect.max.y),
+                        Pos2::new(actual_pos.x, chart_bottom),
                         stroke,
                         dash,
                         gap,
@@ -128,7 +139,7 @@ pub fn render_crosshair_full(
     // Calculate price at cursor
     let price = price_scale.y_to_price(actual_pos.y);
 
-    // Price label on Y-axis with "+" alert indicator, in the axis units of the relative modes
+    // Price label, in the axis units of the relative modes and with the tick decimals otherwise
     let transform = price_scale.transform();
     let price_label = if matches!(
         transform.mode,
@@ -136,109 +147,62 @@ pub fn render_crosshair_full(
     ) {
         transform.label(price_scale.y_to_scale(actual_pos.y), 2)
     } else {
-        format!("{price:.8}")
+        let decimals = tick_decimals(price_scale, actual_pos.y);
+        format!("{price:.decimals$}")
     };
-    let price_pos = Pos2::new(
-        context.rect.max.x + DESIGN_TOKENS.sizing.crosshair.label_offset_x,
-        actual_pos.y,
-    );
-
-    // Draw label background
-    let text_size = context.painter.text(
-        price_pos,
-        egui::Align2::LEFT_CENTER,
-        &price_label,
-        FontId::proportional(typography::XS),
-        Color32::TRANSPARENT,
-    );
-
-    // Extend background to fit "+" symbol
-    let extended_bg = text_size.expand2(egui::Vec2::new(
-        DESIGN_TOKENS.sizing.crosshair.plus_symbol_spacing,
-        0.0,
-    )); // Extra space for "+"
-    context.painter.rect_filled(
-        extended_bg,
-        DESIGN_TOKENS.sizing.crosshair.label_rounding,
+    let price_tag = paint_axis_tag(
+        context.painter,
+        Pos2::new(context.rect.max.x + PRICE_LABEL_GAP, actual_pos.y),
+        Align2::LEFT_CENTER,
+        axis_right,
+        last_price_tag,
+        price_label,
+        label_text,
         label_bg,
     );
 
-    // Draw price text
-    context.painter.text(
-        price_pos,
-        egui::Align2::LEFT_CENTER,
-        price_label,
-        FontId::proportional(typography::XS),
-        Color32::WHITE,
-    );
+    let time_tag = candle.map(|candle| {
+        let bar_seconds = visible_data.get(1).map_or(1, |next| {
+            next.time
+                .signed_duration_since(visible_data[0].time)
+                .num_seconds()
+                .abs()
+        });
+        paint_axis_tag(
+            context.painter,
+            Pos2::new(actual_pos.x, chart_bottom + TIME_LABEL_GAP),
+            Align2::CENTER_TOP,
+            axis_right,
+            None,
+            time_label(candle.time, bar_seconds, formatter),
+            label_text,
+            label_bg,
+        )
+    });
 
-    // Draw "+" alert indicator
-    let plus_pos = Pos2::new(text_size.max.x + 4.0, actual_pos.y);
-    context.painter.text(
-        plus_pos,
-        egui::Align2::LEFT_CENTER,
-        "+",
-        FontId::proportional(typography::SM),
-        DESIGN_TOKENS.semantic.extended.chart_text_muted,
-    );
+    [Some(price_tag), time_tag]
+}
 
-    // Convert x to a global index using right-anchored mapping
-    let bars_from_right = (context.rect.max.x - hover_pos.x) / coords.bar_spacing - 0.5;
-    let t_float = coords.base_idx as f32 - (bars_from_right - coords.right_offset);
-    let t_idx = t_float.floor() as isize;
-    let first = coords.start_idx as isize;
-    let last = (coords.start_idx + visible_data.len().saturating_sub(1)) as isize;
-    if t_idx >= first && t_idx <= last {
-        let candle_idx = (t_idx as usize).saturating_sub(coords.start_idx);
-        let candle = &visible_data[candle_idx];
-
-        // Detect timeframe based on bar duration to choose appropriate format
-        let time_label = if visible_data.len() >= 2 {
-            let time_diff = visible_data[1]
-                .time
-                .signed_duration_since(visible_data[0].time);
-            let seconds = time_diff.num_seconds().abs();
-
-            if seconds < 1 {
-                // Sub-second: show milliseconds
-                candle.time.format("%H:%M:%S%.3f").to_string()
-            } else if seconds < 60 {
-                // Seconds: show time with seconds
-                candle.time.format("%H:%M:%S").to_string()
-            } else if seconds < 3600 {
-                // Minutes: show time
-                candle.time.format("%H:%M").to_string()
-            } else if seconds < 86400 {
-                // Hours: show date and time
-                candle.time.format("%b %d %H:%M").to_string()
-            } else {
-                // Daily or longer: show date only
-                candle.time.format("%b %d, %Y").to_string()
-            }
-        } else {
-            candle.time.format("%H:%M:%S").to_string()
-        };
-
-        let time_pos = Pos2::new(actual_pos.x, context.rect.max.y + 5.0);
-
-        // Draw label background
-        let text_size = context.painter.text(
-            time_pos,
-            egui::Align2::CENTER_TOP,
-            &time_label,
-            FontId::proportional(typography::XS),
-            Color32::TRANSPARENT,
-        );
-        context.painter.rect_filled(text_size, 2.0, label_bg);
-
-        // Draw time text
-        context.painter.text(
-            time_pos,
-            egui::Align2::CENTER_TOP,
-            time_label,
-            FontId::proportional(typography::XS),
-            Color32::WHITE,
-        );
+/// The crosshair's time label for a bar `bar_seconds` long: its date as the time axis writes
+/// it, with the year unless it is the current one, then the time of day for intraday bars.
+fn time_label(time: DateTime<Utc>, bar_seconds: i64, formatter: &dyn TimeFormatter) -> String {
+    let mut label = formatter.format(time, TickMarkType::DayOfMonth);
+    let year = formatter.format(time, TickMarkType::Year);
+    if year != formatter.format(Utc::now(), TickMarkType::Year) {
+        label = format!("{label}, {year}");
+    }
+    match bar_seconds {
+        86_400.. => label,
+        60.. => format!("{label} {}", formatter.format(time, TickMarkType::Time)),
+        1.. => format!(
+            "{label} {}",
+            formatter.format(time, TickMarkType::TimeWithSeconds)
+        ),
+        _ => format!(
+            "{label} {}{}",
+            formatter.format(time, TickMarkType::TimeWithSeconds),
+            time.format("%.3f")
+        ),
     }
 }
 
