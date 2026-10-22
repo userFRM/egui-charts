@@ -18,6 +18,7 @@
 
 use egui::{Color32, CornerRadius, Frame, InnerResponse, Margin, Ui, Visuals};
 
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
 /// Panel corner radius - sourced from DESIGN_TOKENS.rounding.sm
@@ -253,37 +254,22 @@ impl StyledPanelFrame {
 }
 
 // =============================================================================
-// Card — faint background container
+// Card: a bordered surface one step above its parent
 // =============================================================================
 
-/// Subtle card container with faint background, rounding, and padding.
+/// Card container: the theme's secondary surface with a 1 px border, rounding and padding.
 ///
-/// Replaces the common pattern:
-/// ```
-/// # use egui_charts::tokens::DESIGN_TOKENS;
-/// # egui::__run_test_ui(|ui| {
-/// egui::Frame::NONE
-///     .fill(ui.style().visuals.faint_bg_color)
-///     .inner_margin(DESIGN_TOKENS.spacing.sm)
-///     .corner_radius(DESIGN_TOKENS.rounding.sm)
-///     .show(ui, |ui| {
-///         ui.label("Content");
-///     });
-/// # });
-/// ```
-///
-/// Usage:
 /// ```
 /// # use egui_charts::ui_kit::Card;
 /// # egui::__run_test_ui(|ui| {
 /// Card::new().show(ui, |ui| {
-///     ui.label("Content in a subtle card");
+///     ui.label("Content in a card");
 /// });
 /// # });
 /// ```
 pub struct Card {
-    rounding: f32,
-    padding: f32,
+    rounding: Option<f32>,
+    padding: Option<f32>,
 }
 
 impl Default for Card {
@@ -293,34 +279,36 @@ impl Default for Card {
 }
 
 impl Card {
-    /// Create a card with default styling (sm rounding, sm padding)
+    /// Create a card with the theme's small radius and large padding
     pub fn new() -> Self {
         Self {
-            rounding: DESIGN_TOKENS.rounding.sm,
-            padding: DESIGN_TOKENS.spacing.sm,
+            rounding: None,
+            padding: None,
         }
     }
 
     /// Override the corner rounding
     #[must_use]
     pub fn rounding(mut self, r: f32) -> Self {
-        self.rounding = r;
+        self.rounding = Some(r);
         self
     }
 
     /// Override the inner padding
     #[must_use]
     pub fn padding(mut self, p: f32) -> Self {
-        self.padding = p;
+        self.padding = Some(p);
         self
     }
 
     /// Show the card with content
     pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
+        let theme = ui.active_theme();
         Frame::new()
-            .fill(ui.style().visuals.faint_bg_color)
-            .corner_radius(self.rounding)
-            .inner_margin(self.padding)
+            .fill(theme.ui.panel_bg_secondary)
+            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+            .corner_radius(self.rounding.unwrap_or(theme.radius.sm))
+            .inner_margin(self.padding.unwrap_or(theme.spacing.lg))
             .show(ui, content)
     }
 }
