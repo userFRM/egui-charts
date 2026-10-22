@@ -471,8 +471,10 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 
     /// The order book of subscription `id` was lost to a gap, an unusable update or a book deeper
-    /// than the limit: push a new snapshot with [`Sink::push_depth_snapshot`], from inside this
-    /// call if convenient. Called once per loss: after an unusable snapshot the chart does not ask
+    /// than the limit: push a new snapshot with [`Sink::push_depth_snapshot`], and keep pushing
+    /// deltas while it is fetched. The snapshot may be older than the latest delta: the chart
+    /// holds the deltas pushed while the book waits and applies those numbered above the
+    /// snapshot. Called once per loss: after an unusable snapshot the chart does not ask
     /// again, and the book stays empty until the feed pushes a usable one or the subscription
     /// restarts. The default does nothing, for feeds without depth.
     fn request_depth_snapshot(&self, id: SubscriptionId) {

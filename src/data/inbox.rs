@@ -320,7 +320,9 @@ impl Sink {
     /// below the last one applied is ignored. After a gap, before the first snapshot, or when a
     /// side would exceed 10,000 levels, the book is cleared and the chart calls
     /// [`Datafeed::request_depth_snapshot`] once; a snapshot pushed before the chart sees the loss
-    /// cancels the call.
+    /// cancels the call. Keep pushing deltas while the snapshot is fetched: those pushed while the
+    /// book waits are held, the oldest dropped beyond 10,000 levels in all, and the snapshot
+    /// applies the ones numbered above its own sequence.
     ///
     /// [`Datafeed::request_depth_snapshot`]: super::Datafeed::request_depth_snapshot
     pub fn push_depth_delta(&self, sequence: u64, changes: OrderBook) {

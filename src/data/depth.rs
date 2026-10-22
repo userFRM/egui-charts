@@ -2,17 +2,19 @@
 
 use crate::model::{OrderBook, OrderBookLevel};
 use chrono::{DateTime, Utc};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
-/// Levels per side. A deeper snapshot is rejected and a delta that makes a side deeper loses the
-/// book, so a feed cannot grow it without limit.
+/// Levels per side, and levels of the deltas held while the book waits for a snapshot. A deeper
+/// snapshot is rejected, a delta that makes a side deeper loses the book, and the oldest held
+/// deltas make room beyond it, so a feed cannot grow either count without limit.
 pub(crate) const MAX_LEVELS: usize = 10_000;
 
 /// One side of the book, keyed by [`key`] of the price.
 type Side = BTreeMap<u64, OrderBookLevel>;
 
 /// A book built from a snapshot and the deltas that follow it. Without a snapshot, or after a
-/// gap, it is empty until the feed pushes a new snapshot.
+/// gap, it is empty until the feed pushes a new snapshot, and holds the deltas pushed meanwhile
+/// for that snapshot to apply.
 #[derive(Default)]
 pub(crate) struct Book {
     /// Sequence of the last snapshot or delta applied. `None` while the book has no snapshot.
@@ -25,6 +27,10 @@ pub(crate) struct Book {
     symbol: String,
     bids: Side,
     asks: Side,
+    /// Deltas pushed while the book has no snapshot: one run of consecutive sequence numbers.
+    held: VecDeque<(u64, OrderBook)>,
+    /// Levels of the held deltas, an empty delta counting as one so a stream of them is bounded.
+    held_levels: usize,
 }
 
 /// The book was cleared and waits for a snapshot.
@@ -38,7 +44,8 @@ pub(crate) struct Lost {
 }
 
 impl Book {
-    /// Replaces the book with `book`, numbered `sequence`.
+    /// Replaces the book with `book`, numbered `sequence`, and applies the held deltas numbered
+    /// above it, so a snapshot fetched while deltas kept arriving heals the book.
     pub(crate) fn snapshot(&mut self, sequence: u64, book: OrderBook) -> Result<(), Lost> {
         if !valid(&book) || book.bids.len().max(book.asks.len()) > MAX_LEVELS {
             return Err(self.lose(true));
@@ -47,6 +54,7 @@ impl Book {
             let levels = levels.into_iter().filter(|level| level.size > 0.0);
             levels.map(|level| (key(level.price), level)).collect()
         };
+        let held = std::mem::take(&mut self.held);
         *self = Self {
             sequence: Some(sequence),
             requested: false,
@@ -55,25 +63,31 @@ impl Book {
             symbol: book.symbol,
             bids: side(book.bids),
             asks: side(book.asks),
+            ..Self::default()
         };
-        Ok(())
+        let mut applied = Ok(());
+        // Every held delta goes through `delta`, so after a gap among them the rest is held again.
+        for (sequence, changes) in held {
+            applied = applied.and(self.delta(sequence, changes));
+        }
+        applied
     }
 
     /// Applies `changes`, the levels that changed with their new size, if `sequence` follows the
     /// last one applied. A replayed delta is ignored; a gap or a delta before any snapshot loses
-    /// the book.
+    /// the book, and the delta is held for the next snapshot.
     pub(crate) fn delta(&mut self, sequence: u64, changes: OrderBook) -> Result<(), Lost> {
         if !valid(&changes) {
             return Err(self.lose(true));
         }
-        let Some(last) = self.sequence else {
-            return Err(self.lose(false));
-        };
-        if sequence <= last {
-            return Ok(());
-        }
-        if last.checked_add(1) != Some(sequence) {
-            return Err(self.lose(false));
+        match self.sequence {
+            Some(last) if sequence <= last => return Ok(()),
+            Some(last) if last.checked_add(1) == Some(sequence) => {}
+            _ => {
+                let lost = self.lose(false);
+                self.hold(sequence, changes);
+                return Err(lost);
+            }
         }
         for (side, levels) in [
             (&mut self.bids, changes.bids),
@@ -102,6 +116,28 @@ impl Book {
             bids: self.bids.values().rev().cloned().collect(),
             asks: self.asks.values().cloned().collect(),
         })
+    }
+
+    /// Holds `changes` for the next snapshot. A delta that does not extend the held run starts a
+    /// new one, since a run with a hole cannot be applied past it; a replayed one is ignored.
+    fn hold(&mut self, sequence: u64, changes: OrderBook) {
+        if let (Some(&(first, _)), Some(&(last, _))) = (self.held.front(), self.held.back()) {
+            if (first..=last).contains(&sequence) {
+                return;
+            }
+            if last.checked_add(1) != Some(sequence) {
+                self.held.clear();
+                self.held_levels = 0;
+            }
+        }
+        let levels = |changes: &OrderBook| (changes.bids.len() + changes.asks.len()).max(1);
+        self.held_levels += levels(&changes);
+        self.held.push_back((sequence, changes));
+        while self.held_levels > MAX_LEVELS
+            && let Some((_, oldest)) = self.held.pop_front()
+        {
+            self.held_levels -= levels(&oldest);
+        }
     }
 
     fn lose(&mut self, invalid: bool) -> Lost {
@@ -134,6 +170,7 @@ fn key(price: f64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::iter::{once, repeat_with};
 
     fn book(bids: &[(f64, f64)], asks: &[(f64, f64)]) -> OrderBook {
         let levels = |levels: &[(f64, f64)]| {
@@ -161,8 +198,10 @@ mod tests {
     /// Guards the depth sequence: a missed delta must clear the book and ask for one snapshot (a
     /// book that keeps going after a gap shows sizes that no longer exist), a size of 0 must remove
     /// its level (or the book grows with every price ever quoted), a replayed delta must not apply
-    /// twice, hostile values and books deeper than the limit must not enter the book, and a feed
-    /// must be asked once per loss, not on every unusable snapshot.
+    /// twice, hostile values and books deeper than the limit must not enter the book, a feed must
+    /// be asked once per loss, not on every unusable snapshot, and deltas pushed while the book
+    /// waits must apply after a snapshot older than them (or a snapshot fetched while the stream
+    /// runs never heals the book) without growing without limit.
     #[test]
     fn deltas_follow_their_snapshot_and_a_gap_asks_for_a_new_one() {
         let lost = |invalid, request| Err(Lost { invalid, request });
@@ -201,6 +240,23 @@ mod tests {
             ("a delta that makes a side deeper than the limit loses the book",
                 vec![Snapshot(10, deep(MAX_LEVELS)), Delta(11, book(&[(-1.0, 1.0)], &[]))],
                 vec![Ok(()), lost(true, true)], Some(book(&[], &[]))),
+            ("deltas pushed while waiting apply after an older snapshot",
+                vec![initial(), Delta(12, book(&[(99.0, 5.0)], &[])),
+                    Delta(13, book(&[(97.0, 9.0)], &[])), Delta(14, book(&[(98.0, 2.0)], &[])),
+                    Snapshot(12, book(&[(99.0, 1.0)], &[(100.0, 3.0)])),
+                    Delta(15, book(&[], &[(101.0, 4.0)]))],
+                vec![Ok(()), lost(false, true), lost(false, false), lost(false, false), Ok(()),
+                    Ok(())],
+                Some(book(&[(99.0, 1.0), (98.0, 2.0), (97.0, 9.0)],
+                    &[(100.0, 3.0), (101.0, 4.0)]))),
+            ("held deltas are bounded by their levels, the oldest dropped first",
+                (1..=MAX_LEVELS as u64 / 2 + 1)
+                    .map(|sequence| Delta(sequence, book(&[(99.0, 1.0)], &[(100.0, 1.0)])))
+                    .chain([Snapshot(0, book(&[], &[]))]).collect(),
+                once(lost(false, true))
+                    .chain(repeat_with(|| lost(false, false)).take(MAX_LEVELS / 2))
+                    .chain([lost(false, true)]).collect(),
+                Some(book(&[], &[]))),
         ];
         for (name, pushes, outcomes, expected) in cases {
             let mut depth = Book::default();
