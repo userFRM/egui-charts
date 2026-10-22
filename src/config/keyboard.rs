@@ -314,6 +314,21 @@ impl KeyboardAction {
         }
     }
 
+    /// The key combination [`from_key_press`](Self::from_key_press) maps to this action, for
+    /// menus to show with [`egui::Context::format_shortcut`]. `None` for the actions no menu
+    /// shows a shortcut for.
+    pub fn shortcut(&self) -> Option<egui::KeyboardShortcut> {
+        use egui::{KeyboardShortcut, Modifiers};
+        match self {
+            Self::ResetChart => Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::R)),
+            Self::CreateAlert => Some(KeyboardShortcut::new(Modifiers::ALT, Key::A)),
+            Self::DeleteSelectedDrawing => {
+                Some(KeyboardShortcut::new(Modifiers::NONE, Key::Delete))
+            }
+            _ => None,
+        }
+    }
+
     /// Key combination display text (used in shortcuts dialog badges)
     pub fn shortcut_key(&self) -> &'static str {
         match self {

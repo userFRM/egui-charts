@@ -850,8 +850,26 @@ impl TradingChart {
     /// drawing tools, crosshair, axes, and the legend. Call [`update`](Self::update)
     /// before this method each frame.
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        // The pointer still hovers the chart while a context menu is open, so hide the
+        // crosshair, its labels and the tooltip until the menu closes.
+        #[cfg(feature = "ui")]
+        let hidden = (self.context_menus.chart.is_open()
+            || self.context_menus.series.is_open()
+            || self.context_menus.drawing.is_open())
+        .then(|| {
+            let options = &mut self.chart.chart_options;
+            let saved = (options.crosshair.style, options.tooltip.enabled);
+            options.crosshair.style = crate::config::CrosshairStyle::Arrow;
+            options.tooltip.enabled = false;
+            saved
+        });
         self.chart
             .show_with_indicators(ui, self.drawing_manager.as_mut(), Some(&self.indicators));
+        #[cfg(feature = "ui")]
+        if let Some((style, enabled)) = hidden {
+            self.chart.chart_options.crosshair.style = style;
+            self.chart.chart_options.tooltip.enabled = enabled;
+        }
 
         // A click on an indicator pane's legend close "x" surfaces a remove
         // request. Apply it here so the turnkey chart removes the study and

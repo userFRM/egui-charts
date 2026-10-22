@@ -3,12 +3,18 @@
 //! Right-click context menu for the chart area. Provides trading actions,
 //! clipboard operations, chart management, and navigation options.
 
+use std::sync::Arc;
+
+use crate::config::KeyboardAction;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::Theme;
-use crate::theme::components::ContextMenuStyle;
 
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Context, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, UiBuilder, Vec2};
+use egui::text::{LayoutJob, TextWrapping};
+use egui::{
+    Color32, Context, FontId, Galley, Id, KeyboardShortcut, Pos2, Rect, Response, Sense, Stroke,
+    Ui, Vec2, WidgetInfo,
+};
 
 // ============================================================================
 // CONTEXT MENU ACTIONS
@@ -83,31 +89,37 @@ pub enum ContextMenuAction {
 // MENU ITEM DEFINITION
 // ============================================================================
 
-/// Represents a single menu item with all its properties
+/// One row of a context menu, generic over the action it resolves to.
+///
+/// The chart, series and drawing menus all build their rows from this type.
 #[derive(Clone)]
-pub struct MenuItem {
+pub struct MenuItem<A = ContextMenuAction> {
     pub label: String,
-    pub shortcut: Option<String>,
+    /// Shown right-aligned, formatted for the platform with [`Context::format_shortcut`].
+    pub shortcut: Option<KeyboardShortcut>,
     pub icon: Option<&'static Icon>,
-    pub action: ContextMenuAction,
+    pub action: A,
     pub enabled: bool,
+    /// Destructive rows paint in the theme's danger colours.
+    pub danger: bool,
     pub is_submenu: bool,
 }
 
-impl MenuItem {
-    pub fn new(label: impl Into<String>, action: ContextMenuAction) -> Self {
+impl<A> MenuItem<A> {
+    pub fn new(label: impl Into<String>, action: A) -> Self {
         Self {
             label: label.into(),
             shortcut: None,
             icon: None,
             action,
             enabled: true,
+            danger: false,
             is_submenu: false,
         }
     }
 
-    pub fn with_shortcut(mut self, shortcut: impl Into<String>) -> Self {
-        self.shortcut = Some(shortcut.into());
+    pub fn with_shortcut(mut self, shortcut: impl Into<Option<KeyboardShortcut>>) -> Self {
+        self.shortcut = shortcut.into();
         self
     }
 
@@ -120,6 +132,291 @@ impl MenuItem {
         self.enabled = false;
         self
     }
+
+    /// Mark the row as destructive.
+    pub fn danger(mut self) -> Self {
+        self.danger = true;
+        self
+    }
+
+    pub fn submenu(mut self) -> Self {
+        self.is_submenu = true;
+        self
+    }
+}
+
+/// Menu entry - either an item or separator
+pub(crate) enum MenuEntry<A> {
+    Item(MenuItem<A>),
+    Separator,
+}
+
+/// Distance between the pointer and the corner a menu opens at.
+pub(crate) const POINTER_GAP: f32 = 2.0;
+
+/// Labels wider than this are elided with "…".
+const MAX_LABEL_WIDTH: f32 = 300.0;
+
+/// Space between the label column and the shortcut column.
+const COLUMN_GAP: f32 = 24.0;
+
+/// Format a price with two decimals (more below 1) and thousands separators.
+pub(crate) fn format_price(price: f64) -> String {
+    // Use 2 decimal places for most prices, but handle very small prices
+    let formatted = if price.abs() < 0.01 {
+        format!("{price:.6}")
+    } else if price.abs() < 1.0 {
+        format!("{price:.4}")
+    } else {
+        format!("{price:.2}")
+    };
+
+    // Add thousands separators
+    let parts: Vec<&str> = formatted.split('.').collect();
+    let integer_part = parts[0];
+    let decimal_part = parts.get(1).unwrap_or(&"");
+
+    let negative = integer_part.starts_with('-');
+    let digits: String = integer_part
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect();
+
+    let with_commas: String = digits
+        .chars()
+        .rev()
+        .enumerate()
+        .fold(String::new(), |mut acc, (i, c)| {
+            if i > 0 && i % 3 == 0 {
+                acc.push(',');
+            }
+            acc.push(c);
+            acc
+        })
+        .chars()
+        .rev()
+        .collect();
+
+    if decimal_part.is_empty() {
+        if negative {
+            format!("-{with_commas}")
+        } else {
+            with_commas
+        }
+    } else if negative {
+        format!("-{with_commas}.{decimal_part}")
+    } else {
+        format!("{with_commas}.{decimal_part}")
+    }
+}
+
+/// Show an open menu next to `anchor` and return `Some` on the frame it closes: with the picked
+/// action, or with `None` when a click outside or Escape dismissed it.
+///
+/// The menu opens `gap` px right of and below the anchor and flips to the other side of the
+/// anchor on an axis where it would leave the window. `just_opened` skips the dismiss check on
+/// the frame of the click that opened it.
+pub(crate) fn show_menu<A: Clone>(
+    ctx: &Context,
+    id: Id,
+    theme: &Theme,
+    anchor: Pos2,
+    gap: f32,
+    entries: &[MenuEntry<A>],
+    just_opened: bool,
+) -> Option<Option<A>> {
+    let t = &DESIGN_TOKENS.sizing.context_menu;
+    let frame = egui::Frame::menu(&ctx.global_style())
+        .inner_margin(theme.spacing.sm)
+        .fill(theme.ui.panel_bg_floating)
+        .stroke(egui::Stroke::new(
+            DESIGN_TOKENS.stroke.hairline,
+            theme.ui.border,
+        ))
+        .corner_radius(theme.radius.sm);
+    let chrome = frame.total_margin().sum();
+    // Icons, labels and shortcuts keep `item_padding_h` from the menu edge.
+    let pad = t.item_padding_h - theme.spacing.sm;
+
+    let layout = |text: String, size: f32, max_width: f32| {
+        let mut job =
+            LayoutJob::simple_singleline(text, FontId::proportional(size), Color32::PLACEHOLDER);
+        job.wrap = TextWrapping::truncate_at_width(max_width);
+        ctx.fonts_mut(|f| f.layout_job(job))
+    };
+    // Each item's label and its trailing text: the shortcut, or the submenu arrow.
+    let rows: Vec<_> = entries
+        .iter()
+        .map(|entry| match entry {
+            MenuEntry::Item(item) => {
+                let trailing = match item.shortcut {
+                    Some(s) => Some((ctx.format_shortcut(&s), t.shortcut_font_size)),
+                    None => item
+                        .is_submenu
+                        .then(|| (">".to_owned(), t.submenu_arrow_font_size)),
+                };
+                Some((
+                    layout(item.label.clone(), t.font_size, MAX_LABEL_WIDTH),
+                    trailing.map(|(text, size)| layout(text, size, f32::INFINITY)),
+                ))
+            }
+            MenuEntry::Separator => None,
+        })
+        .collect();
+
+    let (label_width, trailing_width) = rows.iter().flatten().fold(
+        (0.0_f32, 0.0_f32),
+        |(widest, widest_trailing), (label, trailing)| {
+            let trailing = trailing.as_ref().map_or(0.0, |g| g.size().x);
+            (widest.max(label.size().x), widest_trailing.max(trailing))
+        },
+    );
+    let trailing_column = if trailing_width > 0.0 {
+        COLUMN_GAP + trailing_width
+    } else {
+        0.0
+    };
+    let row_width =
+        (2.0 * pad + t.icon_width + label_width + trailing_column).max(t.min_width - chrome.x);
+    let height: f32 = entries
+        .iter()
+        .map(|entry| match entry {
+            MenuEntry::Item(_) => t.item_height,
+            MenuEntry::Separator => t.separator_height,
+        })
+        .sum();
+    let size = Vec2::new(row_width, height) + chrome;
+    let pos = place(
+        anchor,
+        gap,
+        size,
+        ctx.content_rect().shrink(theme.spacing.lg),
+    );
+
+    let mut picked = None;
+    egui::Area::new(id)
+        .fixed_pos(pos)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            frame.show(ui, |ui| {
+                ui.spacing_mut().item_spacing = Vec2::ZERO;
+                for (entry, row) in entries.iter().zip(rows) {
+                    match (entry, row) {
+                        (MenuEntry::Item(item), Some((label, trailing))) => {
+                            if draw_item(ui, theme, item, label, trailing, row_width, pad) {
+                                picked = Some(item.action.clone());
+                            }
+                        }
+                        _ => draw_separator(ui, theme, row_width, pad),
+                    }
+                }
+            });
+        });
+
+    if picked.is_some() {
+        return Some(picked);
+    }
+    let menu_rect = Rect::from_min_size(pos, size);
+    let dismissed = !just_opened
+        && ctx.input(|i| {
+            let clicked = i.pointer.primary_clicked() || i.pointer.secondary_clicked();
+            let outside = i
+                .pointer
+                .interact_pos()
+                .is_some_and(|p| !menu_rect.contains(p));
+            (clicked && outside) || i.key_pressed(egui::Key::Escape)
+        });
+    dismissed.then_some(None)
+}
+
+/// The corner of a menu of `size`, `gap` px from `anchor` and inside `bounds`.
+///
+/// On each axis the menu goes after the anchor, or before it when it does not fit after; when
+/// it fits on neither side it is clamped into `bounds`.
+fn place(anchor: Pos2, gap: f32, size: Vec2, bounds: Rect) -> Pos2 {
+    let axis = |at: f32, len: f32, min: f32, max: f32| {
+        if at + gap + len <= max {
+            at + gap
+        } else if at - gap - len >= min {
+            at - gap - len
+        } else {
+            (max - len).max(min)
+        }
+    };
+    Pos2::new(
+        axis(anchor.x, size.x, bounds.min.x, bounds.max.x),
+        axis(anchor.y, size.y, bounds.min.y, bounds.max.y),
+    )
+}
+
+/// Draw one row and return whether it was clicked.
+fn draw_item<A>(
+    ui: &mut Ui,
+    theme: &Theme,
+    item: &MenuItem<A>,
+    label: Arc<Galley>,
+    trailing: Option<Arc<Galley>>,
+    width: f32,
+    pad: f32,
+) -> bool {
+    let t = &DESIGN_TOKENS.sizing.context_menu;
+    let c = &theme.ui;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, t.item_height), Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, item.enabled, &item.label));
+
+    let hovered = item.enabled && response.hovered();
+    // (label, icon, trailing text)
+    let (text, icon, trailing_color) = if !item.enabled {
+        (c.text_disabled, c.text_disabled, c.text_disabled)
+    } else if hovered && item.danger {
+        (c.danger_text, c.danger_text, c.danger_text)
+    } else if item.danger {
+        (c.error, c.error, c.text_secondary)
+    } else if hovered {
+        (c.text, c.text, c.text_secondary)
+    } else {
+        (c.text, c.text_secondary, c.text_secondary)
+    };
+    if hovered {
+        let fill = if item.danger {
+            c.danger_bg
+        } else {
+            c.btn_bg_hover
+        };
+        ui.painter().rect_filled(rect, theme.radius.sm, fill);
+    }
+
+    let left = rect.min.x + pad;
+    if let Some(glyph) = item.icon {
+        let icon_rect = Rect::from_min_size(
+            Pos2::new(left, rect.center().y - t.icon_size / 2.0),
+            Vec2::splat(t.icon_size),
+        );
+        glyph
+            .as_image_tinted(icon_rect.size(), icon)
+            .paint_at(ui, icon_rect);
+    }
+    let label_pos = Pos2::new(left + t.icon_width, rect.center().y - label.size().y / 2.0);
+    ui.painter().galley(label_pos, label, text);
+    if let Some(trailing) = trailing {
+        let pos = Pos2::new(
+            rect.max.x - pad - trailing.size().x,
+            rect.center().y - trailing.size().y / 2.0,
+        );
+        ui.painter().galley(pos, trailing, trailing_color);
+    }
+
+    response.clicked() && item.enabled && !item.is_submenu
+}
+
+fn draw_separator(ui: &mut Ui, theme: &Theme, width: f32, pad: f32) {
+    let t = &DESIGN_TOKENS.sizing.context_menu;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, t.separator_height), Sense::hover());
+    ui.painter().hline(
+        rect.x_range().shrink(pad),
+        rect.center().y,
+        Stroke::new(t.separator_thickness, theme.ui.border),
+    );
 }
 
 // ============================================================================
@@ -195,66 +492,16 @@ impl ChartContextMenu {
         std::mem::replace(&mut self.last_action, ContextMenuAction::None)
     }
 
-    /// Format price with appropriate precision and thousands separators
-    fn format_price(price: f64) -> String {
-        // Use 2 decimal places for most prices, but handle very small prices
-        let formatted = if price.abs() < 0.01 {
-            format!("{price:.6}")
-        } else if price.abs() < 1.0 {
-            format!("{price:.4}")
-        } else {
-            format!("{price:.2}")
-        };
-
-        // Add thousands separators
-        let parts: Vec<&str> = formatted.split('.').collect();
-        let integer_part = parts[0];
-        let decimal_part = parts.get(1).unwrap_or(&"");
-
-        let negative = integer_part.starts_with('-');
-        let digits: String = integer_part
-            .chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect();
-
-        let with_commas: String = digits
-            .chars()
-            .rev()
-            .enumerate()
-            .fold(String::new(), |mut acc, (i, c)| {
-                if i > 0 && i % 3 == 0 {
-                    acc.push(',');
-                }
-                acc.push(c);
-                acc
-            })
-            .chars()
-            .rev()
-            .collect();
-
-        if decimal_part.is_empty() {
-            if negative {
-                format!("-{with_commas}")
-            } else {
-                with_commas
-            }
-        } else if negative {
-            format!("-{with_commas}.{decimal_part}")
-        } else {
-            format!("{with_commas}.{decimal_part}")
-        }
-    }
-
     /// Build the menu items based on current state
-    fn build_menu_items(&self) -> Vec<MenuEntry> {
-        let price_str = Self::format_price(self.click_price);
+    fn build_menu_items(&self) -> Vec<MenuEntry<ContextMenuAction>> {
+        let price_str = format_price(self.click_price);
         let symbol = &self.symbol;
 
         let mut items = vec![
             // Reset chart view at top
             MenuEntry::Item(
                 MenuItem::new("Reset chart view", ContextMenuAction::ResetChart)
-                    .with_shortcut("Cmd R"),
+                    .with_shortcut(KeyboardAction::ResetChart.shortcut()),
             ),
             MenuEntry::Separator,
             // Clipboard section
@@ -262,9 +509,7 @@ impl ChartContextMenu {
                 format!("Copy price {price_str}"),
                 ContextMenuAction::CopyPrice(self.click_price),
             )),
-            MenuEntry::Item(
-                MenuItem::new("Paste", ContextMenuAction::Paste).with_shortcut("Cmd V"),
-            ),
+            MenuEntry::Item(MenuItem::new("Paste", ContextMenuAction::Paste)),
             MenuEntry::Separator,
         ];
         // Trading items need an instrument, so they are offered only with a symbol.
@@ -279,7 +524,7 @@ impl ChartContextMenu {
                         },
                     )
                     .with_icon(&embedded_icons::ALERTS)
-                    .with_shortcut("Alt A"),
+                    .with_shortcut(KeyboardAction::CreateAlert.shortcut()),
                 ),
                 MenuEntry::Item(
                     MenuItem::new(
@@ -290,8 +535,7 @@ impl ChartContextMenu {
                             quantity: 1,
                         },
                     )
-                    .with_icon(&embedded_icons::SHORT_POS)
-                    .with_shortcut("Alt Shift S"),
+                    .with_icon(&embedded_icons::SHORT_POS),
                 ),
                 MenuEntry::Item(
                     MenuItem::new(
@@ -312,8 +556,7 @@ impl ChartContextMenu {
                             price: self.click_price,
                         },
                     )
-                    .with_icon(&embedded_icons::PLUS)
-                    .with_shortcut("Shift T"),
+                    .with_icon(&embedded_icons::PLUS),
                 ),
                 MenuEntry::Separator,
             ]);
@@ -339,6 +582,7 @@ impl ChartContextMenu {
                     ),
                     ContextMenuAction::RemoveAllIndicators,
                 )
+                .danger()
             } else {
                 MenuItem::new("Remove indicators", ContextMenuAction::RemoveAllIndicators)
                     .disabled()
@@ -351,10 +595,10 @@ impl ChartContextMenu {
             )),
             MenuEntry::Separator,
             // Series settings (candle colors, price source)
-            MenuEntry::Item(MenuItem::new(
-                "Series Settings…",
-                ContextMenuAction::OpenSeriesSettings,
-            )),
+            MenuEntry::Item(
+                MenuItem::new("Series Settings…", ContextMenuAction::OpenSeriesSettings)
+                    .with_icon(&embedded_icons::CANDLESTICK),
+            ),
             // Settings - using existing Settings icon (hexagon)
             MenuEntry::Item(
                 MenuItem::new("Chart Settings…", ContextMenuAction::OpenSettings)
@@ -369,304 +613,21 @@ impl ChartContextMenu {
         if !self.is_open {
             return;
         }
-
-        let style = &ContextMenuStyle::from_theme(theme);
-        let menu_items = self.build_menu_items();
-        let (menu_width, menu_height) = Self::calculate_menu_dimensions(&menu_items);
-        let pos = Self::clamp_position_to_screen(self.position, menu_width, menu_height, ctx);
-
-        let mut should_close = false;
-        let mut sel_action = ContextMenuAction::None;
-
-        egui::Area::new(egui::Id::unique("chart_ctx_menu"))
-            .fixed_pos(pos)
-            .order(egui::Order::Foreground)
-            .interactable(true)
-            .show(ctx, |ui| {
-                let menu_rect = Rect::from_min_size(pos, Vec2::new(menu_width, menu_height));
-                Self::draw_menu_background(ui, menu_rect, style);
-                self.draw_menu_items(
-                    ui,
-                    &menu_items,
-                    style,
-                    menu_width,
-                    menu_rect,
-                    &mut sel_action,
-                    &mut should_close,
-                );
-            });
-
-        should_close |= self.handle_close_events(ctx, pos, menu_width, menu_height);
-
-        if should_close {
-            self.last_action = sel_action;
+        let entries = self.build_menu_items();
+        let just_opened = std::mem::take(&mut self.just_opened);
+        let id = Id::unique("chart_ctx_menu");
+        if let Some(action) = show_menu(
+            ctx,
+            id,
+            theme,
+            self.position,
+            POINTER_GAP,
+            &entries,
+            just_opened,
+        ) {
+            self.last_action = action.unwrap_or(ContextMenuAction::None);
             self.close();
         }
-    }
-
-    fn calculate_menu_dimensions(menu_items: &[MenuEntry]) -> (f32, f32) {
-        let height: f32 = menu_items
-            .iter()
-            .map(|entry| match entry {
-                MenuEntry::Item(_) => DESIGN_TOKENS.sizing.context_menu.item_height,
-                MenuEntry::Separator => DESIGN_TOKENS.sizing.context_menu.separator_height,
-            })
-            .sum::<f32>()
-            + DESIGN_TOKENS.sizing.context_menu.padding_v * 2.0;
-
-        let max_label_len = menu_items
-            .iter()
-            .filter_map(|entry| match entry {
-                MenuEntry::Item(item) => Some(item.label.len()),
-                MenuEntry::Separator => None,
-            })
-            .max()
-            .unwrap_or(20);
-
-        let padding = DESIGN_TOKENS.sizing.context_menu.icon_width
-            + DESIGN_TOKENS.sizing.context_menu.item_padding_h * 2.0
-            + DESIGN_TOKENS.sizing.context_menu.shortcut_width;
-        let text_width = (max_label_len as f32) * DESIGN_TOKENS.sizing.context_menu.char_width;
-        let width = (padding + text_width).clamp(
-            DESIGN_TOKENS.sizing.context_menu.min_width,
-            DESIGN_TOKENS.sizing.context_menu.max_width,
-        );
-
-        (width, height)
-    }
-
-    fn clamp_position_to_screen(pos: Pos2, width: f32, height: f32, ctx: &Context) -> Pos2 {
-        let screen = ctx.content_rect();
-        let mut result = pos;
-
-        if result.x + width > screen.max.x {
-            result.x =
-                (screen.max.x - width - DESIGN_TOKENS.sizing.context_menu.screen_edge_padding)
-                    .max(screen.min.x);
-        }
-        if result.y + height > screen.max.y {
-            result.y =
-                (screen.max.y - height - DESIGN_TOKENS.sizing.context_menu.screen_edge_padding)
-                    .max(screen.min.y);
-        }
-        if result.x < screen.min.x {
-            result.x = screen.min.x + DESIGN_TOKENS.sizing.context_menu.screen_edge_padding;
-        }
-        if result.y < screen.min.y {
-            result.y = screen.min.y + DESIGN_TOKENS.sizing.context_menu.screen_edge_padding;
-        }
-        result
-    }
-
-    fn draw_menu_background(ui: &mut Ui, rect: Rect, style: &ContextMenuStyle) {
-        // Shadow
-        ui.painter().rect_filled(
-            rect.translate(Vec2::new(
-                DESIGN_TOKENS.layout.menu_shadow_offset_x,
-                DESIGN_TOKENS.layout.menu_shadow_offset_y,
-            )),
-            DESIGN_TOKENS.sizing.context_menu.rounding,
-            Color32::from_black_alpha(60),
-        );
-        // Background
-        ui.painter()
-            .rect_filled(rect, DESIGN_TOKENS.sizing.context_menu.rounding, style.bg);
-        ui.painter().rect_stroke(
-            rect,
-            DESIGN_TOKENS.sizing.context_menu.rounding,
-            style.border,
-            egui::StrokeKind::Inside,
-        );
-    }
-
-    fn draw_menu_items(
-        &self,
-        ui: &mut Ui,
-        items: &[MenuEntry],
-        style: &ContextMenuStyle,
-        width: f32,
-        rect: Rect,
-        action: &mut ContextMenuAction,
-        should_close: &mut bool,
-    ) {
-        let inner_rect = rect.shrink2(Vec2::new(0.0, DESIGN_TOKENS.sizing.context_menu.padding_v));
-        ui.scope_builder(UiBuilder::new().max_rect(inner_rect), |ui| {
-            self.render_menu_entries(ui, items, style, width, action, should_close);
-        });
-    }
-
-    /// Render all menu entries in a vertical layout.
-    /// Extracted to reduce nesting depth in draw_menu_items.
-    fn render_menu_entries(
-        &self,
-        ui: &mut Ui,
-        items: &[MenuEntry],
-        style: &ContextMenuStyle,
-        width: f32,
-        action: &mut ContextMenuAction,
-        should_close: &mut bool,
-    ) {
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::ZERO;
-            for entry in items {
-                self.render_single_entry(ui, entry, style, width, action, should_close);
-            }
-        });
-    }
-
-    /// Render a single menu entry (item or separator).
-    /// Extracted to reduce nesting depth.
-    fn render_single_entry(
-        &self,
-        ui: &mut Ui,
-        entry: &MenuEntry,
-        style: &ContextMenuStyle,
-        width: f32,
-        action: &mut ContextMenuAction,
-        should_close: &mut bool,
-    ) {
-        match entry {
-            MenuEntry::Item(item) => {
-                let clicked_action = self.draw_menu_item(ui, item, style, width);
-                if let Some(a) = clicked_action {
-                    *action = a;
-                    *should_close = true;
-                }
-            }
-            MenuEntry::Separator => self.draw_separator(ui, style, width),
-        }
-    }
-
-    fn handle_close_events(&mut self, ctx: &Context, pos: Pos2, width: f32, height: f32) -> bool {
-        if self.just_opened {
-            self.just_opened = false;
-            return false;
-        }
-
-        let clicked = ctx.input(|i| i.pointer.primary_clicked() || i.pointer.secondary_clicked());
-        if clicked && let Some(click_pos) = ctx.input(|i| i.pointer.interact_pos()) {
-            let menu_rect = Rect::from_min_size(pos, Vec2::new(width, height));
-            if !menu_rect.contains(click_pos) {
-                return true;
-            }
-        }
-
-        ctx.input(|i| i.key_pressed(egui::Key::Escape))
-    }
-
-    /// Draw a single menu item
-    fn draw_menu_item(
-        &self,
-        ui: &mut Ui,
-        item: &MenuItem,
-        style: &ContextMenuStyle,
-        menu_width: f32,
-    ) -> Option<ContextMenuAction> {
-        let desired_size = Vec2::new(menu_width, DESIGN_TOKENS.sizing.context_menu.item_height);
-        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
-
-        // Determine colors based on state
-        let (bg_color, text_color, icon_color) = if !item.enabled {
-            (
-                Color32::TRANSPARENT,
-                style.item_text_disabled,
-                style.item_text_disabled,
-            )
-        } else if response.hovered() {
-            (style.item_bg_hover, style.item_text_hover, style.icon_hover)
-        } else {
-            (style.item_bg, style.item_text, style.icon)
-        };
-
-        // Draw background
-        if bg_color != Color32::TRANSPARENT {
-            ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.none, bg_color);
-        }
-
-        // Icon - using new Icon system
-        if let Some(icon) = &item.icon {
-            let icon_rect = Rect::from_min_size(
-                Pos2::new(
-                    rect.min.x + DESIGN_TOKENS.sizing.context_menu.item_padding_h,
-                    rect.center().y - DESIGN_TOKENS.sizing.context_menu.icon_size / 2.0,
-                ),
-                Vec2::splat(DESIGN_TOKENS.sizing.context_menu.icon_size),
-            );
-
-            // Render icon with tint color
-            icon.as_image_tinted(icon_rect.size(), icon_color)
-                .paint_at(ui, icon_rect);
-        }
-
-        // Label
-        let label_x = rect.min.x
-            + DESIGN_TOKENS.sizing.context_menu.item_padding_h
-            + DESIGN_TOKENS.sizing.context_menu.icon_width;
-        ui.painter().text(
-            Pos2::new(label_x, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            &item.label,
-            FontId::proportional(DESIGN_TOKENS.sizing.context_menu.font_size),
-            text_color,
-        );
-
-        // Shortcut (right-aligned)
-        if let Some(shortcut) = &item.shortcut {
-            ui.painter().text(
-                Pos2::new(
-                    rect.max.x - DESIGN_TOKENS.sizing.context_menu.item_padding_h,
-                    rect.center().y,
-                ),
-                egui::Align2::RIGHT_CENTER,
-                shortcut,
-                FontId::proportional(DESIGN_TOKENS.sizing.context_menu.shortcut_font_size),
-                style.shortcut_text,
-            );
-        }
-
-        // Submenu arrow
-        if item.is_submenu {
-            let arrow_x = rect.max.x
-                - DESIGN_TOKENS.sizing.context_menu.item_padding_h
-                - DESIGN_TOKENS.sizing.context_menu.submenu_arrow_size / 2.0;
-            ui.painter().text(
-                Pos2::new(arrow_x, rect.center().y),
-                egui::Align2::CENTER_CENTER,
-                ">",
-                FontId::proportional(DESIGN_TOKENS.sizing.context_menu.submenu_arrow_font_size),
-                style.submenu_arrow,
-            );
-        }
-
-        // Return action if clicked and enabled
-        if response.clicked() && item.enabled {
-            Some(item.action.clone())
-        } else {
-            None
-        }
-    }
-
-    /// Draw menu separator
-    fn draw_separator(&self, ui: &mut Ui, style: &ContextMenuStyle, menu_width: f32) {
-        let (rect, _) = ui.allocate_exact_size(
-            Vec2::new(
-                menu_width,
-                DESIGN_TOKENS.sizing.context_menu.separator_height,
-            ),
-            Sense::hover(),
-        );
-
-        let line_y = rect.center().y;
-        ui.painter().hline(
-            (rect.min.x + DESIGN_TOKENS.sizing.context_menu.separator_margin_h)
-                ..=(rect.max.x - DESIGN_TOKENS.sizing.context_menu.separator_margin_h),
-            line_y,
-            Stroke::new(
-                DESIGN_TOKENS.sizing.context_menu.separator_thickness,
-                style.separator,
-            ),
-        );
     }
 
     /// Check if chart should show context menu on right-click
@@ -677,12 +638,6 @@ impl ChartContextMenu {
             menu.open(pos, price_at_pos);
         }
     }
-}
-
-/// Menu entry - either an item or separator
-enum MenuEntry {
-    Item(MenuItem),
-    Separator,
 }
 
 /// A context-menu action surfaced by the turnkey right-click path, tagged with
@@ -700,4 +655,30 @@ pub enum ChartContextAction {
     Series(crate::ui::dialogs::SeriesContextMenuAction),
     /// An action from the drawing menu.
     Drawing(crate::ui::dialogs::DrawingContextMenuAction),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_row_shows_the_reset_chart_binding() {
+        let ctx = Context::default();
+        ctx.set_os(egui::os::OperatingSystem::Nix);
+        let shortcut = ChartContextMenu::new()
+            .build_menu_items()
+            .into_iter()
+            .find_map(|entry| match entry {
+                MenuEntry::Item(item) if item.action == ContextMenuAction::ResetChart => {
+                    item.shortcut
+                }
+                _ => None,
+            })
+            .expect("the Reset chart view row shows a shortcut");
+        assert_eq!(
+            KeyboardAction::from_key_press(shortcut.logical_key, &shortcut.modifiers),
+            Some(KeyboardAction::ResetChart)
+        );
+        assert_eq!(ctx.format_shortcut(&shortcut), "Ctrl+R");
+    }
 }
