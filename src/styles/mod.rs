@@ -12,7 +12,7 @@
 //! └── icons.rs       - Icon sizes
 //!
 //! tokens/
-//! └── mod.rs         - DESIGN_TOKENS (spacing, sizing, rounding from RON)
+//! └── mod.rs         - DESIGN_TOKENS (spacing, sizing, rounding)
 //! ```
 //!
 //! # Usage
@@ -41,7 +41,7 @@
 //!
 //! # Design Philosophy
 //!
-//! - **Single source of truth**: DESIGN_TOKENS loaded from RON files
+//! - **Single source of truth**: `DESIGN_TOKENS`, defined as Rust constants
 //! - **Semantic naming**: Use `DESIGN_TOKENS.rounding.button` not magic numbers
 //! - **IDE-friendly**: Autocomplete shows available options
 

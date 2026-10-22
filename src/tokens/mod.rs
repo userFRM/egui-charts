@@ -1,31 +1,9 @@
-//! Design Token System -- RON-based, compile-time loaded design primitives.
+//! Design tokens: the theme-independent spacing, sizing, rounding, typography,
+//! stroke, shadow and colour values used throughout the crate.
 //!
-//! This module is the foundation of the `egui-charts` design system. It provides
-//! a single global [`DESIGN_TOKENS`] instance containing all spacing, sizing,
-//! rounding, typography, stroke widths, shadow offsets, and semantic color
-//! definitions used throughout the crate.
-//!
-//! Tokens are defined in `design_tokens.ron` (embedded at compile time via
-//! `include_str!`), parsed on first access with [`once_cell::sync::Lazy`],
-//! and stored in resolved Rust structs for zero-cost access at runtime.
-//!
-//! # Architecture
-//!
-//! ```text
-//! design_tokens.ron  (RON source file, human-editable)
-//!       |  include_str! at compile time
-//!       v
-//! raw.rs    (Serde deserialization structs)
-//!       |  resolve palette references
-//!       v
-//! parser.rs (converts to Color32, builds final structs)
-//!       |
-//!       v
-//! resolved.rs + semantic.rs + sizing.rs  (public API structs)
-//!       |
-//!       v
-//! DESIGN_TOKENS  (global Lazy<DesignTokens>)
-//! ```
+//! All values live in the single static [`DESIGN_TOKENS`], a plain struct
+//! literal evaluated at compile time, so reading a token costs a memory load and
+//! nothing is parsed or allocated at startup.
 //!
 //! # Usage
 //!
@@ -49,18 +27,9 @@
 //! // Strokes
 //! let thin = DESIGN_TOKENS.stroke.hairline;
 //! ```
-//!
-//! # Customization
-//!
-//! To customize the design system, edit `design_tokens.ron` and rebuild.
-//! The RON file supports palette references (e.g., `"green_500"`) that are
-//! resolved during parsing, allowing you to define a color once and reuse
-//! it across multiple semantic tokens.
 
-use once_cell::sync::Lazy;
+use egui::Color32;
 
-mod parser;
-mod raw;
 mod resolved;
 mod semantic;
 mod sizing;
@@ -69,13 +38,521 @@ pub use resolved::*;
 pub use semantic::*;
 pub use sizing::*;
 
-/// Raw RON file contents embedded at compile time
-const TOKENS_RON: &str = include_str!("design_tokens.ron");
-
-/// Global design tokens instance - loaded once on first access
-pub static DESIGN_TOKENS: Lazy<DesignTokens> = Lazy::new(|| {
-    parser::parse_tokens(TOKENS_RON).expect(
-        "Failed to parse embedded design_tokens.ron — the RON file is malformed. \
-         Check syntax in presentation/ui_kit/tokens/design_tokens.ron",
-    )
-});
+/// The crate's design tokens.
+pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
+    spacing: SpacingTokens {
+        xs: 2.0,
+        sm: 4.0,
+        md: 6.0,
+        lg: 8.0,
+        xl: 12.0,
+        xxl: 16.0,
+        xxxl: 24.0,
+        hairline: 1.0,
+        section_lg: 40.0,
+        panel_gap: 4.0,
+    },
+    sizing: SizingTokens {
+        target_min: 24.0,
+        icon_xs: 12.0,
+        icon_14: 14.0,
+        icon_sm: 16.0,
+        icon_md: 20.0,
+        icon_btn: 22.0,
+        icon_lg: 24.0,
+        icon_xxl: 32.0,
+        button_sm: 24.0,
+        button_md: 28.0,
+        button_dialog: 32.0,
+        button_lg: 36.0,
+        button_xl: 40.0,
+        button_xxl: 48.0,
+        list_item_height: 28.0,
+        toolbar: ToolbarSizingTokens {
+            top_height: 48.0,
+            left_width: 52.0,
+            bottom_height: 28.0,
+            right_icon_width: 52.0,
+            right_panel_width: 300.0,
+            button_width: 52.0,
+            button_height: 38.0,
+            hover_margin_h: 9.0,
+            hover_margin_v: 2.0,
+            inner_rounding: 6.0,
+            icon_size: 24.0, // Icon size in toolbar buttons (the icon grid)
+            separator_margin: 8.0,
+            separator_gap: 6.0,
+            right_sidebar_width: 52.0,
+            right_btn_size: 44.0,
+            right_icon_size: 24.0, // Icon size inside the 44px buttons (the icon grid)
+            right_btn_spacing: 2.0,
+            right_hover_margin: 3.0,
+            right_hover_rounding: 8.0,
+            separator_height: 20.0,
+            separator_width: 1.0,
+        },
+        panel: PanelSizingTokens {
+            bottom_default_height: 150.0,
+            trading_panel_row_height: 28.0,
+            trading_panel_row_icon_size: 16.0,
+            trading_panel_row_btn_size: 24.0,
+        },
+        dialog: DialogSizingTokens {
+            submenu_width: 200.0,
+            submenu_item_height: 38.0,
+            color_picker_width: 160.0,
+            color_picker_height: 150.0,
+            menu_settings_width: 220.0,
+            menu_settings_height: 400.0,
+            default_width: 400.0,
+            default_height: 300.0,
+            default_min_height: 100.0,
+            confirm_width: 350.0,
+            prompt_width_sm: 350.0,
+            prompt_width_lg: 450.0,
+            alert_width: 480.0,
+            properties_height: 450.0,
+            label_width: 100.0,
+            input_width: 100.0,
+            series_sidebar_width: 140.0,
+            grid_dropdown_width: 140.0,
+            indicator_item_width: 130.0,
+            button_min_width_xs: 60.0,
+        },
+        settings_dialog: SettingsDialogSizingTokens {
+            width: 620.0,
+            height: 720.0,
+            rounding: 6.0,
+            title_height: 52.0,
+            title_font_size: 18.0,
+            title_padding_left: 24.0,
+            close_button_size: 32.0,
+            close_button_margin: 10.0,
+            close_icon_size: 10.0,
+            sidebar_width: 160.0,
+            tab_height: 40.0,
+            tab_padding_h: 16.0,
+            tab_padding_v: 8.0,
+            tab_icon_size: 20.0,
+            tab_icon_text_gap: 12.0,
+            tab_font_size: 13.0,
+            content_padding_top: 16.0,
+            content_padding_h: 24.0,
+            content_min_width: 400.0,
+            row_height: 40.0,
+            row_spacing: 4.0,
+            label_width: 110.0,
+            dropdown_width: 160.0,
+            checkbox_size: 18.0,
+            input_width_margin: 60.0,
+            section_spacing: 16.0,
+            footer_height: 60.0,
+            footer_padding_h: 24.0,
+            footer_padding_v: 12.0,
+            button_height: 36.0,
+            button_min_width: 80.0,
+            button_gap: 8.0,
+            small_dropdown_width: 80.0,
+            template_button_width: 100.0,
+            template_menu_width: 180.0,
+            template_menu_max_height: 300.0,
+            indicator_width: 3.0,
+            indicator_offset: 4.0,
+        },
+        context_menu: ContextMenuSizingTokens {
+            min_width: 220.0,
+            max_width: 380.0,
+            rounding: 6.0,
+            padding_v: 4.0,
+            item_height: 32.0,
+            item_padding_h: 12.0,
+            icon_width: 28.0,
+            icon_size: 18.0,
+            font_size: 13.0,
+            shortcut_font_size: 12.0,
+            separator_height: 9.0,
+            separator_thickness: 1.0,
+            separator_margin_h: 12.0,
+            submenu_arrow_size: 8.0,
+            shortcut_width: 70.0,
+            char_width: 7.5,
+            screen_edge_padding: 4.0,
+            submenu_arrow_font_size: 8.0,
+        },
+        symbol_header: SymbolHeaderSizingTokens {
+            height: 28.0,
+            quote_box_height: 18.0,
+        },
+        timeframe_toolbar: TimeframeToolbarSizingTokens {
+            right_section_width: 220.0,
+        },
+        candle: CandleSizingTokens {
+            body_width_ratio: 0.6,
+            wick_width: 1.0,
+            wick_width_hidpi: 2.0,
+            min_body_height: 1.0,
+            volume_alpha: 128,
+        },
+        floating_toolbar: FloatingToolbarSizingTokens {
+            default_x: 100.0,
+            default_y: 100.0,
+            drag_handle_width: 24.0,
+            button_size: 24.0,
+            color_size: 20.0,
+            separator_width: 8.0,
+            drag_handle_height: 20.0,
+            height: 32.0,
+            dot_size: 1.5,
+            dot_spacing: 4.0,
+            separator_height: 16.0,
+        },
+        command_palette: CommandPaletteSizingTokens {
+            width: 500.0,
+            height: 400.0,
+            margin_x: 40.0,
+            margin_y: 100.0,
+            input_padding: 60.0,
+            scroll_padding: 80.0,
+        },
+        replay: ReplaySizingTokens {
+            control_bar_height: 40.0,
+            button_size: 28.0,
+            speed_dropdown_width: 60.0,
+            date_display_width: 150.0,
+            progress_bar_width: 200.0,
+        },
+        drawing_toolbar_ext: DrawingToolbarExtSizingTokens {
+            submenu_width_lg: 200.0,
+            submenu_width_xl: 220.0,
+            name_offset_active: 42.0,
+            name_offset_inactive: 36.0,
+            submenu_offset_y: 70.0,
+            submenu_margin: 10.0,
+        },
+        annotation: AnnotationSizingTokens {
+            label_padding_x: 8.0,
+            label_padding_y: 4.0,
+            callout_padding_x: 10.0,
+            callout_padding_y: 6.0,
+            pointer_size: 8.0,
+            note_size: 24.0,
+            note_fold_size: 6.0,
+            table_cell_width: 70.0,
+            table_cell_height: 22.0,
+            table_header_height: 26.0,
+            signpost_padding_x: 6.0,
+            signpost_padding_y: 4.0,
+            signpost_bracket: 12.0,
+            text_padding_y: 5.0,
+        },
+        media: MediaSizingTokens {
+            image_min_width: 60.0,
+            image_min_height: 45.0,
+            image_default_width: 120.0,
+            image_default_height: 90.0,
+            checkerboard_size: 10.0,
+            tweet_card_width: 280.0,
+            tweet_card_height: 120.0,
+            idea_card_width: 200.0,
+            idea_card_height: 80.0,
+            profile_radius: 18.0,
+        },
+        crosshair: CrosshairSizingTokens {
+            dot_radius: 4.0,
+            label_offset_x: 5.0,
+            label_rounding: 2.0,
+            plus_symbol_spacing: 16.0,
+        },
+        position_tool: PositionToolSizingTokens {
+            min_width: 200.0,
+            label_info_width: 350.0,
+            label_info_height: 25.0,
+            label_target_width: 180.0,
+            label_offset_x: 10.0,
+            label_offset_y: 20.0,
+            text_offset_x: 15.0,
+        },
+        charts_ext: ChartsExtSizingTokens {
+            volume_bubbles_max_diameter: 40.0,
+            heatmap_strip_height: 24.0,
+            order_line_label_width: 120.0,
+            order_line_label_height: 20.0,
+            realtime_button_width: 110.0,
+        },
+        technical_labels: TechnicalLabelsSizingTokens {
+            gann_label_width: 28.0,
+            gann_label_height: 14.0,
+            elliott_label_size: 18.0,
+            fib_label_offset_x: 80.0,
+            channel_label_width: 70.0,
+            channel_label_height: 36.0,
+            channel_offset_x: 60.0,
+            cycle_label_width: 40.0,
+            pattern_label_width: 70.0,
+            pattern_label_height: 16.0,
+            line_label_width: 40.0,
+            line_label_height: 14.0,
+            line_arc_radius: 40.0,
+            hs_label_width: 35.0,
+        },
+        tooltip: TooltipSizingTokens {
+            cursor_offset_x: 15.0,
+        },
+        drawing: DrawingSizingTokens {
+            magnet_distance: 20.0,
+        },
+        notification: NotificationSizingTokens { panel_width: 320.0 },
+        menu: MenuSizingTokens { item_height: 28.0 },
+    },
+    rounding: RoundingTokens {
+        none: 0.0,
+        xs: 2.0,
+        sm: 4.0,
+        md: 6.0,
+        lg: 8.0,
+        xl: 12.0,
+        pill: 9999.0,
+        button: 6.0,
+        panel: 6.0,
+        dialog: 6.0,
+    },
+    typography: TypographyTokens {
+        sm: 11.0,
+        md: 13.0,
+        body: 13.0,
+        small: 11.0,
+    },
+    stroke: StrokeTokens {
+        extra_thin: 0.5,
+        light: 0.8,
+        hairline: 1.0,
+        medium: 1.5,
+        thick: 2.0,
+    },
+    shadow: ShadowTokens {
+        offset_sm: 2.0,
+        offset_md: 4.0,
+    },
+    layout: LayoutTokens {
+        menu_shadow_offset_x: 0.0,
+        menu_shadow_offset_y: 2.0,
+    },
+    semantic: SemanticTokens {
+        ui: UiSemanticTokens {
+            panel_bg_light: Color32::WHITE,
+            panel_bg_secondary_light: Color32::from_rgb(240, 243, 250),
+            text_light: Color32::from_rgb(19, 23, 34),
+            // Body, secondary and muted text keep at least 4.5:1 on panels and windows;
+            // control outlines (checkbox, radio, input, combo) keep at least 3:1.
+            text_secondary_light: Color32::from_rgb(78, 83, 96),
+            text_muted_light: Color32::from_rgb(96, 101, 114),
+            text_disabled_light: Color32::from_rgb(178, 181, 190),
+            border_light: Color32::from_rgb(224, 227, 235),
+            border_subtle_light: Color32::from_rgb(245, 245, 245),
+            border_control_light: Color32::from_rgb(134, 138, 150),
+            panel_bg_dark: Color32::from_rgb(30, 34, 45),
+            panel_bg_secondary_dark: Color32::from_rgb(55, 59, 70),
+            panel_bg_floating_dark: Color32::from_rgb(42, 46, 57), // Popups, menus, tooltips: one step above panels
+            text_dark: Color32::from_rgb(209, 212, 220),
+            text_secondary_dark: Color32::from_rgb(163, 167, 178),
+            text_muted_dark: Color32::from_rgb(152, 157, 169),
+            text_disabled_dark: Color32::from_rgb(131, 137, 151),
+            border_dark: Color32::from_rgb(55, 59, 70),
+            border_subtle_dark: Color32::from_rgb(82, 82, 82),
+            border_control_dark: Color32::from_rgb(120, 125, 138),
+            icon_light: Color32::from_rgb(131, 137, 151),
+            icon_hover_light: Color32::from_rgb(19, 23, 34),
+            icon_dark: Color32::from_rgb(179, 184, 188),
+            icon_hover_dark: Color32::WHITE,
+            icon_active: Color32::from_rgb(41, 98, 255),
+            btn_bg_light: Color32::WHITE,
+            btn_bg_hover_light: Color32::from_rgb(229, 232, 238),
+            btn_bg_active_light: Color32::from_rgb(220, 224, 233),
+            btn_bg_dark: Color32::from_rgb(30, 34, 45),
+            btn_bg_hover_dark: Color32::from_rgb(55, 59, 70),
+            btn_bg_active_dark: Color32::from_rgb(82, 82, 82),
+            accent: Color32::from_rgb(41, 98, 255),
+            accent_hover: Color32::from_rgb(51, 115, 255),
+            // Light selection: accent text on a pale accent fill, also the focused input outline
+            selection_bg_light: Color32::from_rgb(219, 229, 255),
+            selection_text_light: Color32::from_rgb(31, 78, 205),
+            // Status text, at least 4.5:1 on its theme's panels and windows
+            success_light: Color32::from_rgb(46, 125, 50),
+            warning_light: Color32::from_rgb(180, 83, 9),
+            error_light: Color32::from_rgb(198, 40, 40),
+            info_light: Color32::from_rgb(2, 119, 189),
+            success_dark: Color32::from_rgb(76, 175, 80),
+            warning_dark: Color32::from_rgb(255, 152, 0),
+            error_dark: Color32::from_rgb(247, 104, 99),
+            info_dark: Color32::from_rgb(100, 181, 246),
+        },
+        chart: ChartSemanticTokens {
+            bg: Color32::from_rgb(19, 23, 34),
+            bg_axis: Color32::from_rgb(30, 34, 45),
+            bg_selection: Color32::from_rgba_unmultiplied_const(5, 12, 30, 30),
+            grid_line: Color32::from_rgba_unmultiplied_const(255, 255, 255, 12),
+            grid_line_major: Color32::from_rgba_unmultiplied_const(255, 255, 255, 18),
+            axis_text: Color32::from_rgb(209, 212, 220),
+            axis_text_secondary: Color32::from_rgb(120, 123, 134),
+            crosshair_line: Color32::from_rgba_unmultiplied_const(178, 181, 190, 120),
+            crosshair_label_bg: Color32::from_rgb(55, 59, 70),
+            crosshair_label_text: Color32::from_rgb(209, 212, 220),
+            bullish: Color32::from_rgb(38, 166, 154),
+            bearish: Color32::from_rgb(239, 83, 80),
+            volume_up_alpha: 128,
+            volume_down_alpha: 128,
+            watermark_alpha: 60,
+            selection_text: Color32::WHITE,
+            bg_light: Color32::WHITE,
+            bg_axis_light: Color32::from_rgb(240, 243, 250),
+            bg_selection_light: Color32::from_rgba_unmultiplied_const(41, 98, 255, 20),
+            grid_line_light: Color32::from_rgba_unmultiplied_const(0, 0, 0, 12),
+            grid_line_major_light: Color32::from_rgba_unmultiplied_const(0, 0, 0, 20),
+            crosshair_line_light: Color32::from_rgba_unmultiplied_const(120, 120, 120, 150),
+        },
+        // Hover and pressed accents step darker so white text keeps 4.5:1 on all three.
+        brand: BrandSemanticTokens {
+            accent: Color32::from_rgb(41, 98, 255),
+            accent_hover: Color32::from_rgb(35, 88, 230),
+            accent_active: Color32::from_rgb(31, 78, 205),
+        },
+        status: StatusSemanticTokens {
+            error: Color32::from_rgb(244, 67, 54),
+            caution: Color32::from_rgb(255, 235, 59),
+        },
+        footprint: FootprintSemanticTokens {
+            poc: Color32::from_rgb(255, 235, 59),
+            value_area: Color32::from_rgba_unmultiplied_const(255, 193, 7, 50),
+            imbalance_buy: Color32::from_rgba_unmultiplied_const(38, 166, 154, 200),
+            imbalance_sell: Color32::from_rgba_unmultiplied_const(242, 54, 69, 200),
+        },
+        indicators: IndicatorSemanticTokens {
+            ma: Color32::from_rgb(255, 152, 0),
+            ema: Color32::from_rgb(33, 150, 243),
+            sma: Color32::from_rgb(255, 152, 0),
+            bb_upper: Color32::from_rgb(156, 39, 176),
+            bb_middle: Color32::from_rgb(120, 123, 134),
+            bb_lower: Color32::from_rgb(156, 39, 176),
+            bb_fill: Color32::from_rgba_unmultiplied_const(156, 39, 176, 30),
+            rsi: Color32::from_rgb(126, 87, 194),
+            rsi_overbought: Color32::from_rgb(239, 83, 80),
+            rsi_oversold: Color32::from_rgb(38, 166, 154),
+            macd_line: Color32::from_rgb(33, 150, 243),
+            macd_signal: Color32::from_rgb(255, 152, 0),
+            macd_hist_pos: Color32::from_rgb(38, 166, 154),
+            macd_hist_neg: Color32::from_rgb(242, 54, 69),
+            vwap: Color32::from_rgb(255, 235, 59),
+        },
+        drawings: DrawingSemanticTokens {
+            default_line: Color32::from_rgb(33, 150, 243),
+            handle: Color32::from_rgb(41, 98, 255),
+            handle_hover: Color32::from_rgb(51, 115, 255),
+            handle_active: Color32::from_rgb(51, 115, 255),
+            line_hover: Color32::from_rgb(51, 115, 255),
+            line_selected: Color32::from_rgb(41, 98, 255),
+            label_bg: Color32::from_rgb(55, 59, 70),
+            label_text: Color32::from_rgb(209, 212, 220),
+            fib_0: Color32::from_rgb(255, 82, 82),
+            fib_236: Color32::from_rgb(76, 175, 80),
+            fib_382: Color32::from_rgb(33, 150, 243),
+            fib_50: Color32::from_rgb(156, 39, 176),
+            fib_618: Color32::from_rgb(255, 152, 0),
+            fib_100: Color32::from_rgb(0, 188, 212),
+        },
+        buttons: ButtonSemanticTokens {
+            primary_bg: Color32::from_rgb(30, 34, 45),
+            primary_fg: Color32::from_rgb(245, 245, 245),
+            secondary_bg: Color32::from_rgb(212, 212, 212),
+            secondary_fg: Color32::from_rgb(30, 34, 45),
+            // Dark enough for white text at 4.5:1
+            danger_bg: Color32::from_rgb(211, 47, 47),
+            danger_bg_hover: Color32::from_rgb(198, 40, 40),
+            danger_bg_active: Color32::from_rgb(183, 28, 28),
+            danger_fg: Color32::WHITE,
+        },
+        extended: ExtendedSemanticTokens {
+            bg_active: Color32::from_rgb(230, 232, 240),
+            text_secondary: Color32::from_rgb(131, 137, 151),
+            text_muted: Color32::from_rgb(178, 181, 190),
+            accent: Color32::from_rgb(41, 98, 255),
+            accent_hover: Color32::from_rgb(51, 115, 255),
+            accent_active: Color32::from_rgb(31, 78, 205),
+            success: Color32::from_rgb(76, 175, 80),
+            success_light: Color32::from_rgb(139, 195, 74),
+            success_dark: Color32::from_rgb(46, 125, 50),
+            success_darker: Color32::from_rgb(27, 94, 32),
+            error: Color32::from_rgb(244, 67, 54),
+            error_dark: Color32::from_rgb(211, 47, 47),
+            error_darker: Color32::from_rgb(183, 28, 28),
+            warning: Color32::from_rgb(255, 152, 0),
+            caution: Color32::from_rgb(255, 235, 59),
+            info: Color32::from_rgb(33, 150, 243),
+            info_light: Color32::from_rgb(100, 181, 246),
+            disabled: Color32::from_rgb(158, 158, 158),
+            purple: Color32::from_rgb(156, 39, 176),
+            deep_purple: Color32::from_rgb(103, 58, 183),
+            cyan: Color32::from_rgb(0, 188, 212),
+            teal: Color32::from_rgb(0, 150, 136),
+            indigo: Color32::from_rgb(63, 81, 181),
+            pink: Color32::from_rgb(233, 30, 99),
+            brown: Color32::from_rgb(121, 85, 72),
+            deep_orange: Color32::from_rgb(255, 87, 34),
+            gray: Color32::from_rgb(128, 128, 128),
+            light_gray: Color32::from_rgb(224, 224, 224),
+            favorite_gold: Color32::from_rgb(255, 193, 7),
+            chart_bg: Color32::from_rgb(19, 23, 34),
+            chart_axis_bg: Color32::from_rgb(30, 34, 45),
+            chart_tooltip_bg: Color32::from_rgb(42, 46, 57),
+            chart_text: Color32::from_rgb(209, 212, 220),
+            chart_text_secondary: Color32::from_rgb(120, 123, 134),
+            chart_text_muted: Color32::from_rgb(93, 96, 107),
+            chart_crosshair_label_bg: Color32::from_rgb(55, 59, 70),
+            bullish: Color32::from_rgb(38, 166, 154),
+            bearish: Color32::from_rgb(242, 54, 69),
+        },
+        alert: AlertSemanticTokens {
+            info_bg: Color32::from_rgba_unmultiplied_const(41, 98, 255, 25),
+            info_border: Color32::from_rgba_unmultiplied_const(41, 98, 255, 100),
+            info_icon: Color32::from_rgb(41, 98, 255),
+            success_bg: Color32::from_rgba_unmultiplied_const(38, 166, 154, 25),
+            success_border: Color32::from_rgba_unmultiplied_const(38, 166, 154, 100),
+            success_icon: Color32::from_rgb(38, 166, 154),
+            warning_bg: Color32::from_rgba_unmultiplied_const(255, 193, 7, 25),
+            warning_border: Color32::from_rgba_unmultiplied_const(255, 193, 7, 100),
+            warning_icon: Color32::from_rgb(255, 193, 7),
+            error_bg: Color32::from_rgba_unmultiplied_const(239, 83, 80, 25),
+            error_border: Color32::from_rgba_unmultiplied_const(239, 83, 80, 100),
+            error_icon: Color32::from_rgb(239, 83, 80),
+        },
+        modal: ModalSemanticTokens {
+            overlay_bg: Color32::from_rgba_unmultiplied_const(0, 0, 0, 180),
+        },
+        command_palette: CommandPaletteSemanticTokens {
+            item_hover: Color32::from_rgba_unmultiplied_const(41, 98, 255, 50),
+            item_selected: Color32::from_rgba_unmultiplied_const(41, 98, 255, 100),
+            shortcut_text: Color32::from_rgb(131, 137, 151),
+        },
+        tpo: TpoSemanticTokens {
+            poc: Color32::from_rgb(255, 193, 7),
+            value_area: Color32::from_rgba_unmultiplied_const(33, 150, 243, 40),
+            initial_balance: Color32::from_rgb(156, 39, 176),
+            single_print: Color32::from_rgba_unmultiplied_const(255, 152, 0, 80),
+            session_separator: Color32::from_rgb(100, 100, 100),
+            letter_default: Color32::from_rgb(189, 189, 189),
+            opening_range: Color32::from_rgb(0, 188, 212),
+            grid: Color32::from_rgba_unmultiplied_const(255, 255, 255, 20),
+            period_1: Color32::from_rgb(239, 83, 80),
+            period_2: Color32::from_rgb(255, 152, 0),
+            period_3: Color32::from_rgb(255, 235, 59),
+            period_4: Color32::from_rgb(76, 175, 80),
+            period_5: Color32::from_rgb(33, 150, 243),
+            period_6: Color32::from_rgb(103, 58, 183),
+            period_7: Color32::from_rgb(233, 30, 99),
+            period_8: Color32::from_rgb(0, 188, 212),
+            period_9: Color32::from_rgb(139, 195, 74),
+            period_10: Color32::from_rgb(121, 85, 72),
+            period_11: Color32::from_rgb(96, 125, 139),
+            period_12: Color32::from_rgb(255, 87, 34),
+        },
+    },
+};

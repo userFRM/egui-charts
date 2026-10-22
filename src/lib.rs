@@ -51,7 +51,7 @@
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Validation** | [`validation`] | OHLC integrity checks, timestamp ordering, data quality |
-//! | **Theme system** | [`theme`], [`tokens`], [`styles`], [`theming`] | Design tokens (RON), `Theme` with dark, light and high-contrast presets |
+//! | **Theme system** | [`theme`], [`tokens`], [`styles`], [`theming`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
 //! | **Widget** | [`widget`] | `Chart` egui widget, `ChartBuilder`, `TradingChart` |
 //! | **Extensions** | [`ext`] | `UiExt`, `ContextExt`, `ResponseExt`, `HasDesignTokens` |
 //! | **Icons** | [`icons`] | Compile-time embedded SVG icons |

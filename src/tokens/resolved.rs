@@ -1,8 +1,4 @@
-//! Resolved design token structures -- the public API types.
-//!
-//! These are the final, fully-resolved structs that compose [`DesignTokens`].
-//! All palette references have been resolved to concrete [`egui::Color32`] values
-//! and all numeric tokens are plain `f32`.
+//! The root [`DesignTokens`] struct and its spacing scale.
 
 use super::semantic::SemanticTokens;
 use super::sizing::{
@@ -44,7 +40,4 @@ pub struct SpacingTokens {
     pub hairline: f32,
     pub section_lg: f32,
     pub panel_gap: f32,
-    pub button_padding: f32,
-    pub toolbar_item_gap: f32,
-    pub menu_item_padding: f32,
 }

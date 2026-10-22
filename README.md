@@ -82,7 +82,7 @@ egui-charts/src/
 ├── data.rs                    DataSource trait: pluggable data provider interface
 ├── validation/                OHLC integrity checks, timestamp ordering
 ├── theme/                     Theme value, its presets, apply_to_egui
-├── tokens/                    RON-based design tokens (colors, spacing, typography)
+├── tokens/                    Design tokens as Rust constants (colors, spacing, typography)
 ├── styles/                    Style computation from semantic tokens
 ├── widget/                    Chart egui widget, indicator panes
 ├── icons/                     Compile-time embedded SVG icons

@@ -1,6 +1,6 @@
 //! Semantic color tokens -- domain-organized color definitions.
 //!
-//! These structs hold the raw color values loaded from `design_tokens.ron`.
+//! These structs hold the color values of [`DESIGN_TOKENS`](super::DESIGN_TOKENS).
 //! They contain both light and dark variants where applicable (e.g.,
 //! `panel_bg_light` / `panel_bg_dark`). The [`theme`](crate::theme) module
 //! resolves these into single values based on the active theme preset.
@@ -28,25 +28,18 @@ pub struct SemanticTokens {
     pub footprint: FootprintSemanticTokens,
     pub indicators: IndicatorSemanticTokens,
     pub drawings: DrawingSemanticTokens,
-    pub tiers: TierSemanticTokens,
     /// Button variant colors (rerun-inspired)
     pub buttons: ButtonSemanticTokens,
-    /// List item colors (rerun-inspired)
-    pub list_item: ListItemSemanticTokens,
     /// Extended flat-access colors - replaces old theme::ui, theme::chart modules
     pub extended: ExtendedSemanticTokens,
     /// Alert component colors
     pub alert: AlertSemanticTokens,
     /// Modal component colors
     pub modal: ModalSemanticTokens,
-    /// Toast notification colors
-    pub toast: ToastSemanticTokens,
     /// Command palette colors
     pub command_palette: CommandPaletteSemanticTokens,
     /// TPO (Market Profile) chart colors
     pub tpo: TpoSemanticTokens,
-    /// Order book heatmap colors
-    pub heatmap: HeatmapSemanticTokens,
 }
 
 /// UI chrome color tokens with light and dark mode variants.
@@ -118,12 +111,8 @@ pub struct ChartSemanticTokens {
     pub crosshair_label_text: Color32,
     pub bullish: Color32,
     pub bearish: Color32,
-    pub bullish_fill: Color32,
-    pub bearish_fill: Color32,
     pub volume_up_alpha: u8,
     pub volume_down_alpha: u8,
-    pub volume: Color32,
-    pub session_break: Color32,
     pub watermark_alpha: u8,
     pub selection_text: Color32,
     // Light chart variants
@@ -147,11 +136,6 @@ pub struct BrandSemanticTokens {
 #[derive(Clone, Debug)]
 pub struct StatusSemanticTokens {
     pub error: Color32,
-    pub error_dark: Color32,
-    pub error_darker: Color32,
-    pub info: Color32,
-    pub info_light: Color32,
-    pub disabled: Color32,
     pub caution: Color32,
 }
 
@@ -196,29 +180,6 @@ pub struct TpoSemanticTokens {
     pub period_10: Color32,
     pub period_11: Color32,
     pub period_12: Color32,
-}
-
-/// Order book heatmap colors
-#[derive(Clone, Debug)]
-pub struct HeatmapSemanticTokens {
-    /// Bid gradient colors (5 levels: darkest to brightest)
-    pub bid_1: Color32,
-    pub bid_2: Color32,
-    pub bid_3: Color32,
-    pub bid_4: Color32,
-    pub bid_5: Color32,
-    /// Ask gradient colors (5 levels: darkest to brightest)
-    pub ask_1: Color32,
-    pub ask_2: Color32,
-    pub ask_3: Color32,
-    pub ask_4: Color32,
-    pub ask_5: Color32,
-    /// Mid price line color
-    pub mid_price: Color32,
-    /// Cell border color
-    pub border: Color32,
-    /// Large order highlight border color
-    pub large_order_border: Color32,
 }
 
 /// Technical indicator colors (moving averages, Bollinger Bands, RSI, MACD, VWAP).
@@ -289,17 +250,6 @@ pub struct DrawingSemanticTokens {
     pub fib_100: Color32,
 }
 
-/// Subscription tier badge colors (free, pro, premium).
-#[derive(Clone, Debug)]
-pub struct TierSemanticTokens {
-    /// Free tier badge color.
-    pub free: Color32,
-    /// Pro tier badge color.
-    pub pro: Color32,
-    /// Premium tier badge color.
-    pub premium: Color32,
-}
-
 /// Button variant colors for primary, secondary, outlined, and danger buttons.
 ///
 /// Follows the rerun-inspired variant system where each button type has
@@ -308,24 +258,12 @@ pub struct TierSemanticTokens {
 pub struct ButtonSemanticTokens {
     /// Primary button background (high emphasis, accent-colored).
     pub primary_bg: Color32,
-    /// Primary button background when hovered.
-    pub primary_bg_hover: Color32,
-    /// Primary button background when pressed.
-    pub primary_bg_active: Color32,
     /// Primary button foreground (text/icon, typically inverse of background).
     pub primary_fg: Color32,
     /// Secondary button background (medium emphasis).
     pub secondary_bg: Color32,
-    /// Secondary button background when hovered.
-    pub secondary_bg_hover: Color32,
-    /// Secondary button background when pressed.
-    pub secondary_bg_active: Color32,
     /// Secondary button foreground.
     pub secondary_fg: Color32,
-    /// Outlined button border color.
-    pub outlined_border: Color32,
-    /// Outlined button border color when hovered.
-    pub outlined_border_hover: Color32,
     /// Danger button background (destructive actions).
     pub danger_bg: Color32,
     /// Danger button background when hovered.
@@ -336,42 +274,6 @@ pub struct ButtonSemanticTokens {
     pub danger_fg: Color32,
 }
 
-/// Colors for list items and selectable rows (rerun-inspired).
-///
-/// Covers background, text, and icon colors in default, hovered, active, and
-/// on-primary-selection states.
-#[derive(Clone, Debug)]
-pub struct ListItemSemanticTokens {
-    /// Background when the item is hovered.
-    pub hovered_bg: Color32,
-    /// Background when the item is active/selected.
-    pub active_bg: Color32,
-    /// Text color in the default (resting) state.
-    pub default_text: Color32,
-    /// Text color when hovered.
-    pub hovered_text: Color32,
-    /// Text color when active/selected.
-    pub active_text: Color32,
-    /// Strong (emphasized) text color.
-    pub strong_text: Color32,
-    /// Text color for non-interactive (read-only) items.
-    pub noninteractive_text: Color32,
-    /// Text color on a primary (accent) background.
-    pub text_on_primary: Color32,
-    /// Text color on a hovered primary background.
-    pub text_on_primary_hovered: Color32,
-    /// Icon color in the default state.
-    pub default_icon: Color32,
-    /// Icon color when hovered.
-    pub hovered_icon: Color32,
-    /// Icon color when active/selected.
-    pub active_icon: Color32,
-    /// Icon color on a primary background.
-    pub icon_on_primary: Color32,
-    /// Icon color on a hovered primary background.
-    pub icon_on_primary_hovered: Color32,
-}
-
 /// Extended semantic tokens providing flat access to commonly used colors.
 ///
 /// This is a convenience collection that gathers the most frequently accessed
@@ -380,20 +282,8 @@ pub struct ListItemSemanticTokens {
 /// a single flat namespace.
 #[derive(Clone, Debug)]
 pub struct ExtendedSemanticTokens {
-    /// Outermost window/app background.
-    pub bg_outer: Color32,
-    /// Panel background.
-    pub bg_panel: Color32,
-    /// Hover state background.
-    pub bg_hover: Color32,
     /// Active/pressed state background.
     pub bg_active: Color32,
-    /// Standard border color.
-    pub border: Color32,
-    /// Subtle/secondary border color.
-    pub border_subtle: Color32,
-    /// Primary text color.
-    pub text: Color32,
     /// Secondary text color.
     pub text_secondary: Color32,
     /// Muted/dimmed text color.
@@ -506,44 +396,9 @@ pub struct ModalSemanticTokens {
     pub overlay_bg: Color32,
 }
 
-/// Colors for toast/snackbar notification popups.
-#[derive(Clone, Debug)]
-pub struct ToastSemanticTokens {
-    /// Info toast background.
-    pub info_bg: Color32,
-    /// Info toast icon color.
-    pub info_icon: Color32,
-    /// Success toast background.
-    pub success_bg: Color32,
-    /// Success toast icon color.
-    pub success_icon: Color32,
-    /// Warning toast background.
-    pub warning_bg: Color32,
-    /// Warning toast icon color.
-    pub warning_icon: Color32,
-    /// Error toast background.
-    pub error_bg: Color32,
-    /// Error toast icon color.
-    pub error_icon: Color32,
-    /// Toast message text color.
-    pub text: Color32,
-    /// Toast drop-shadow color.
-    pub shadow: Color32,
-    /// Progress bar track background.
-    pub progress_bar_bg: Color32,
-    /// Progress bar filled portion.
-    pub progress_bar_fill: Color32,
-}
-
 /// Colors for the command palette (Ctrl+K / Cmd+K) popup.
 #[derive(Clone, Debug)]
 pub struct CommandPaletteSemanticTokens {
-    /// Palette background.
-    pub bg: Color32,
-    /// Palette border.
-    pub border: Color32,
-    /// Search input background.
-    pub input_bg: Color32,
     /// Result item background when hovered.
     pub item_hover: Color32,
     /// Result item background when selected (keyboard navigation).

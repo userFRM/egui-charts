@@ -40,7 +40,7 @@ To add one: add a `ChartType` variant with its metadata, add any price transform
 
 ### A new theme
 
-A theme is a `Theme` value with public fields. The presets are literal `Theme` values in [`src/theme/presets.rs`](src/theme/presets.rs); the token layer they draw on is in [`src/tokens/`](src/tokens) (raw and semantic tokens, plus `design_tokens.ron`).
+A theme is a `Theme` value with public fields. The presets are literal `Theme` values in [`src/theme/presets.rs`](src/theme/presets.rs); the token layer they draw on is in [`src/tokens/`](src/tokens): `DESIGN_TOKENS`, a Rust constant holding the spacing, sizing and semantic colour tokens.
 
 To add one: add a `Theme::<name>()` constructor in `src/theme/presets.rs` and add it to `presets()`. The test `theme::tests::text_and_control_outlines_are_readable_in_every_preset` then checks its text and outline contrast.
 
