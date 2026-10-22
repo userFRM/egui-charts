@@ -28,10 +28,10 @@
 //! # });
 //! ```
 
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Pos2, Ui};
+use crate::ui_kit::buttons::ButtonSize;
+use egui::{Role, Sense, Ui, WidgetInfo, vec2};
 
 /// Trait for tab enum types to provide their display label.
 ///
@@ -42,8 +42,8 @@ pub trait TabLabel: Copy + PartialEq {
 
 /// Horizontal tab bar with underline indicator on the active tab.
 ///
-/// Renders clickable text labels separated by standard spacing.
-/// The active tab gets an accent-colored underline drawn via the painter.
+/// Renders clickable text labels 16 px apart over a full-width rule, starting at the content
+/// edge. The active tab's accent underline sits on the rule, and content starts 8 px below it.
 pub struct TabBar<'a, T: TabLabel> {
     tabs: &'a [T],
     active: &'a mut T,
@@ -56,47 +56,64 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
 
     /// Show the tab bar. Returns `true` if the active tab changed.
     pub fn show(self, ui: &mut Ui) -> bool {
+        let theme = ui.active_theme();
         let mut changed = false;
+        let rule_slot = ui.painter().add(egui::Shape::Noop);
 
-        ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.spacing.lg);
+        let row = ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = theme.spacing.xxl;
             for tab in self.tabs {
                 let is_active = *tab == *self.active;
-                let text_color = if is_active {
-                    ui.style().visuals.strong_text_color()
-                } else {
-                    ui.style().visuals.text_color()
-                };
-
-                let response = ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(tab.tab_label())
-                            .color(text_color)
-                            .size(typography::MD),
-                    )
-                    .sense(egui::Sense::click()),
+                let galley = ui.painter().layout_no_wrap(
+                    tab.tab_label().to_owned(),
+                    egui::FontId::proportional(theme.text.label),
+                    egui::Color32::PLACEHOLDER,
                 );
+                let (rect, response) = ui.allocate_exact_size(
+                    vec2(galley.size().x, ButtonSize::MD.pixels()),
+                    Sense::click(),
+                );
+                response.widget_info(|| {
+                    WidgetInfo::selected(Role::Button, ui.is_enabled(), is_active, galley.text())
+                });
+
+                let visuals = ui.visuals();
+                let text_color = if is_active {
+                    visuals.strong_text_color()
+                } else if response.hovered() {
+                    visuals.widgets.hovered.fg_stroke.color
+                } else {
+                    visuals.text_color()
+                };
+                let text_pos = rect.left_center() - vec2(0.0, galley.size().y / 2.0);
+                ui.painter().galley(text_pos, galley, text_color);
+
+                if is_active {
+                    let thick = DESIGN_TOKENS.stroke.thick;
+                    ui.painter().hline(
+                        rect.x_range(),
+                        rect.bottom() - thick / 2.0,
+                        egui::Stroke::new(thick, theme.ui.accent),
+                    );
+                }
+                crate::styles::focus::draw_focus_ring(ui, &response);
 
                 if response.clicked() {
                     *self.active = *tab;
                     changed = true;
                 }
-
-                // Draw underline for active tab
-                if is_active {
-                    let rect = response.rect;
-                    ui.painter().line_segment(
-                        [
-                            Pos2::new(rect.min.x, rect.max.y + 2.0),
-                            Pos2::new(rect.max.x, rect.max.y + 2.0),
-                        ],
-                        egui::Stroke::new(DESIGN_TOKENS.stroke.thick, ui.active_theme().ui.accent),
-                    );
-                }
-
-                ui.add_space(DESIGN_TOKENS.spacing.lg);
             }
         });
+
+        // The rule spans the parent's width, under the active underline.
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        let rule = egui::Shape::hline(
+            ui.max_rect().x_range(),
+            row.response.rect.bottom() - stroke.width / 2.0,
+            stroke,
+        );
+        ui.painter().set(rule_slot, rule);
+        ui.add_space(theme.spacing.lg - ui.spacing().item_spacing.y);
 
         changed
     }

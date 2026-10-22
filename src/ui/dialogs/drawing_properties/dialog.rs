@@ -97,8 +97,6 @@ impl DrawingPropertiesDialog {
         // Tabs
         ui.space_sm();
         TabBar::new(&PropertiesTab::all(), &mut self.active_tab).show(ui);
-        ui.space_sm();
-        ui.separator();
 
         // Content area
         egui::ScrollArea::vertical()

@@ -134,8 +134,6 @@ impl AlertDialog {
         // Tabs
         ui.space_sm();
         TabBar::new(&AlertTab::all(), &mut self.active_tab).show(ui);
-        ui.space_sm();
-        ui.separator();
 
         // Content area
         egui::ScrollArea::vertical()
