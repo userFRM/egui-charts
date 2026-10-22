@@ -1,11 +1,4 @@
-//! Icons Module - Legacy icon system
-//!
-//! TEXT: This module is deprecated. Use `crate::icons` instead.
-//! The new icon system uses compile-time embedding and the `Icon` struct.
-//!
-//! Migration:
-//! - `SvgIcon::TrendLine` → `icons::TREND_LINE`
-//! - `render_svg_icon(ui, icon, size, tint)` → `icon.as_image_tinted(size, tint).paint_at(ui, rect)`
+//! Icon size presets.
 
 use crate::tokens::DESIGN_TOKENS;
 
