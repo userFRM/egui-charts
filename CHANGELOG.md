@@ -13,7 +13,7 @@ All notable changes to this project are documented in this file. The format is b
 - The anchored VWAP drawing computes the volume-weighted average of the typical price from its anchor bar, with bands one and two volume-weighted standard deviations away.
 - The fixed range and anchored volume profiles are built from bar volume, spreading each bar's volume over its high-low range, with the point of control and a 70% value area. The anchored volume profile is placed with a single click and runs to the latest bar.
 - The regression trend fits the closes between its anchors by least squares and shows the resulting R² and slope.
-- Long and short position tools have a stop of their own that moves independently of the target, so risk/reward reflects the levels set; P&L replays the bars after the entry and shows the position as closed once the stop or the target trades.
+- Long and short position tools have a stop of their own that moves independently of the target, so risk/reward reflects the levels set; P&L replays the bars after the entry and shows the position as closed once the stop or the target trades. Both read n/a while the stop or the target is on the wrong side of the entry.
 - The forecast drawing shows the predicted change over its bar span and resolves to success or failure against the bars up to its target bar.
 - The bars pattern projection draws shifted copies of the selected bars.
 - The chart watermark falls back to the chart symbol and is hidden when there is none, instead of showing a placeholder.

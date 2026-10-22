@@ -44,8 +44,6 @@ impl Drawing {
                 0.0
             }
         };
-        let risk = side * (entry_price - stop_price);
-        let risk_reward = (risk > 0.0).then(|| side * (target_price - entry_price) / risk);
 
         // The tool spans from the entry bar to the right edge.
         let entry_bar = entry_at.bar_idx.round();
@@ -55,10 +53,8 @@ impl Drawing {
         } else {
             &[]
         };
-        let (exit_price, closed) =
-            position_exit(after_entry, entry_price, target_price, stop_price, is_long);
+        let exit = position_exit(after_entry, entry_price, target_price, stop_price, is_long);
         let qty = self.quantity.unwrap_or(100.0);
-        let pnl = side * (exit_price - entry_price) * f64::from(qty);
 
         // Calculate width - extend across chart
         let width = (target.x - entry.x)
@@ -95,13 +91,24 @@ impl Drawing {
         );
 
         // Draw labels
-        let risk_reward = risk_reward.map_or_else(|| "n/a".to_owned(), |rr| format!("{rr:.2}"));
-        let summary = format!(
-            "{} P&L: {pnl:.2} ({:.2}%)  •  Risk/Reward: {risk_reward}  •  Qty: {}",
-            if closed { "Closed" } else { "Open" },
-            pct(exit_price),
-            qty as i32
-        );
+        let (summary, summary_color) = match exit {
+            Some((exit_price, closed)) => {
+                let pnl = side * (exit_price - entry_price) * f64::from(qty);
+                let risk_reward = (target_price - entry_price) / (entry_price - stop_price);
+                let summary = format!(
+                    "{} P&L: {pnl:.2} ({:.2}%)  •  Risk/Reward: {risk_reward:.2}  •  Qty: {}",
+                    if closed { "Closed" } else { "Open" },
+                    pct(exit_price),
+                    qty as i32
+                );
+                let color = if pnl >= 0.0 { profit_color } else { loss_color };
+                (summary, color)
+            }
+            None => (
+                format!("P&L: n/a  •  Risk/Reward: n/a  •  Qty: {}", qty as i32),
+                entry_color,
+            ),
+        };
         let target_label = format!(
             "Target: {target_price:.2} ({:.2}%) {}",
             pct(target_price),
@@ -119,7 +126,7 @@ impl Drawing {
             stop_y,
             right,
             summary,
-            if pnl >= 0.0 { profit_color } else { loss_color },
+            summary_color,
             target_label,
             stop_label,
         );
@@ -357,7 +364,24 @@ impl Drawing {
 /// trades through the stop or the target closes it; when one bar reaches both,
 /// the stop is taken, since the order within a bar is unknown. Otherwise the
 /// position is open at the last close (at the entry when no bar follows it).
-fn position_exit(bars: &[Bar], entry: f64, target: f64, stop: f64, is_long: bool) -> (f64, bool) {
+/// `None` unless the stop and the target lie on the losing and the winning
+/// side of the entry: an order on the wrong side of the market fills at the
+/// market, not at its level.
+fn position_exit(
+    bars: &[Bar],
+    entry: f64,
+    target: f64,
+    stop: f64,
+    is_long: bool,
+) -> Option<(f64, bool)> {
+    let ordered = if is_long {
+        stop < entry && entry < target
+    } else {
+        target < entry && entry < stop
+    };
+    if !ordered {
+        return None;
+    }
     for bar in bars {
         let (stop_hit, target_hit) = if is_long {
             (bar.low <= stop, bar.high >= target)
@@ -365,13 +389,13 @@ fn position_exit(bars: &[Bar], entry: f64, target: f64, stop: f64, is_long: bool
             (bar.high >= stop, bar.low <= target)
         };
         if stop_hit {
-            return (stop, true);
+            return Some((stop, true));
         }
         if target_hit {
-            return (target, true);
+            return Some((target, true));
         }
     }
-    (bars.last().map_or(entry, |bar| bar.close), false)
+    Some((bars.last().map_or(entry, |bar| bar.close), false))
 }
 
 #[cfg(test)]
@@ -386,17 +410,23 @@ mod tests {
         let after_bar_0 = &bars[1..=5];
         let cases = [
             // Long from 11: bar 4 (high 15) reaches 14.2 before any low reaches 9.5.
-            (after_bar_0, 11.0, 14.2, 9.5, true, (14.2, true)),
+            (after_bar_0, 11.0, 14.2, 9.5, true, Some((14.2, true))),
             // Long from 11: bar 1 (low 10) reaches the stop at 10.5 first.
-            (after_bar_0, 11.0, 14.2, 10.5, true, (10.5, true)),
+            (after_bar_0, 11.0, 14.2, 10.5, true, Some((10.5, true))),
             // Bar 1 (low 10, high 13) reaches both 10.0 and 12.8: the stop is taken.
-            (after_bar_0, 11.0, 12.8, 10.0, true, (10.0, true)),
+            (after_bar_0, 11.0, 12.8, 10.0, true, Some((10.0, true))),
             // Neither level is reached: open at the close of bar 5.
-            (after_bar_0, 11.0, 20.0, 5.0, true, (12.5, false)),
+            (after_bar_0, 11.0, 20.0, 5.0, true, Some((12.5, false))),
             // Short from 13.5 at bar 3: bar 5 (low 12) reaches 12.2, no high reaches 15.5.
-            (&bars[4..=5], 13.5, 12.2, 15.5, false, (12.2, true)),
+            (&bars[4..=5], 13.5, 12.2, 15.5, false, Some((12.2, true))),
             // No bar after the entry yet.
-            (&bars[..0], 13.0, 14.0, 12.0, true, (13.0, false)),
+            (&bars[..0], 13.0, 14.0, 12.0, true, Some((13.0, false))),
+            // Long dragged down: target below the entry, stop mirrored above it.
+            (&bars[2..=2], 12.0, 11.5, 12.5, true, None),
+            // Short dragged up: target above the entry, stop mirrored below it.
+            (&bars[2..=2], 12.0, 12.5, 11.5, false, None),
+            // Long whose stop was moved above the entry.
+            (after_bar_0, 11.0, 14.2, 11.5, true, None),
         ];
         for (after, entry, target, stop, is_long, want) in cases {
             assert_eq!(position_exit(after, entry, target, stop, is_long), want);
