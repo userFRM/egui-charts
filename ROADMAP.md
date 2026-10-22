@@ -297,7 +297,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Price Channel (same values as Donchian; only the upper line is drawn)
 - [x] Historical Volatility: Annualized log-return std dev
 - [x] Chaikin Volatility
-- [x] Acceleration Bands (only the upper band is drawn)
+- [x] Acceleration Bands
 - [x] Close-to-Close Vol, OHLC Volatility (Garman-Klass), Parkinson Vol
 - [x] Volatility Index: ATR-based annualized %
 - [x] Standard Error, Standard Error Bands

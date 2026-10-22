@@ -166,6 +166,7 @@ All notable changes to this project are documented in this file. The format is b
 - Toasts are opaque and follow the theme: the window fill, border and popup shadow, text in the theme's text colour (a title in the strong text colour, its message in the secondary text colour), and the icon and progress bar in the theme's colour for the kind. They were translucent fixed-colour slabs, the same in every theme, with error text below 4.5:1. The close button can be clicked, and a timed toast's progress bar spans the toast's content instead of stopping 16 px short.
 - `Alert` takes its colours from the theme: the icon in the theme's colour for the kind, the fill and border in that colour at 10 % and 40 %, and the title in the strong text colour with the message under it in the secondary text colour. It used fixed tokens tuned for the dark theme, so several icons fell below 3:1 in the light theme and the high contrast theme showed the dark colours. Every alert fills the available width, the dismiss button can be clicked, and the text starts 8 px after the icon instead of 16 px.
 - `status_message` draws Info in the theme's info colour instead of the plain text colour, starts at the left edge of the content around it instead of 8 px in, and leaves 4 px above instead of 6 px.
+- Acceleration Bands average each bar's widened high and low, as Headley defines them, instead of widening the average high and low by the average range, and draw all three bands.
 
 ### Changed
 

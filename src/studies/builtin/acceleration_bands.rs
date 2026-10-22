@@ -1,12 +1,14 @@
 use super::clamp_param;
 use crate::model::Bar;
-/// Acceleration Bands
-/// Price envelope indicator that widens during high volatility
-/// Uses a multiplier based on high-low range
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Acceleration Bands (Price Headley), a price envelope that widens on wide bars.
+///
+/// With `r = (high - low) / (high + low)` per bar (0 when `high + low` is 0):
+/// upper = SMA(high * (1 + factor * r), period), middle = SMA(close, period),
+/// lower = SMA(low * (1 - factor * r), period).
 #[derive(Clone)]
 pub struct AccelerationBands {
     /// Period for calculation
@@ -72,31 +74,24 @@ impl Indicator for AccelerationBands {
             } else {
                 let window = &data[i + 1 - self.period..=i];
 
-                // Calculate SMA of high, low, close
-                let sma_high: f64 = window.iter().map(|b| b.high).sum::<f64>() / self.period as f64;
-                let sma_low: f64 = window.iter().map(|b| b.low).sum::<f64>() / self.period as f64;
-                let sma_close: f64 =
-                    window.iter().map(|b| b.close).sum::<f64>() / self.period as f64;
+                let n = self.period as f64;
+                let (mut upper, mut middle, mut lower) = (0.0, 0.0, 0.0);
+                for b in window {
+                    let r = if b.high + b.low != 0.0 {
+                        (b.high - b.low) / (b.high + b.low)
+                    } else {
+                        0.0
+                    };
+                    upper += b.high * (1.0 + self.factor * r);
+                    middle += b.close;
+                    lower += b.low * (1.0 - self.factor * r);
+                }
 
-                // Calculate acceleration factor
-                let range: f64 = window
-                    .iter()
-                    .map(|b| {
-                        let hl = b.high - b.low;
-                        if b.high + b.low != 0.0 {
-                            hl / (b.high + b.low)
-                        } else {
-                            0.0
-                        }
-                    })
-                    .sum::<f64>()
-                    / self.period as f64;
-
-                let upper = sma_high * (1.0 + self.factor * range);
-                let lower = sma_low * (1.0 - self.factor * range);
-
-                self.values
-                    .push(IndicatorValue::Multiple(vec![upper, sma_close, lower]));
+                self.values.push(IndicatorValue::Multiple(vec![
+                    upper / n,
+                    middle / n,
+                    lower / n,
+                ]));
             }
         }
     }
@@ -117,6 +112,10 @@ impl Indicator for AccelerationBands {
 
     fn is_overlay(&self) -> bool {
         true
+    }
+
+    fn line_cnt(&self) -> usize {
+        3
     }
 
     fn is_visible(&self) -> bool {
@@ -156,25 +155,51 @@ mod tests {
         }
     }
 
+    /// Reference values from Price Headley's definition ("Big Trends in Trading", 2002), computed
+    /// independently: upper = SMA(H * (1 + f * (H - L) / (H + L)), n), middle = SMA(C, n),
+    /// lower = SMA(L * (1 - f * (H - L) / (H + L)), n). The bar ranges vary from 1 to 12, so
+    /// averaging each bar's widened high differs from widening the average high.
     #[test]
-    fn test_acceleration_bands() {
-        let mut ab = AccelerationBands::new(5, 4.0);
+    fn matches_reference_values() {
+        let bars = [
+            (101.0, 100.0, 100.5),
+            (110.0, 98.0, 108.0),
+            (104.0, 102.0, 103.0),
+            (115.0, 105.0, 112.0),
+            (111.0, 109.5, 110.0),
+            (120.0, 108.0, 118.0),
+        ];
+        let expected = [
+            [115.47780019494263, 103.83333333333333, 90.47780019494263],
+            [126.44418041505419, 107.66666666666667, 86.44418041505419],
+            [119.32277800793752, 108.33333333333333, 96.82277800793752],
+            [131.73088565569768, 113.33333333333333, 92.56421898903102],
+        ];
 
-        let data: Vec<Bar> = (0..10)
-            .map(|i| {
-                let base = 100.0 + i as f64;
-                make_bar(base + 2.0, base - 2.0, base)
-            })
-            .collect();
-
+        let mut ab = AccelerationBands::new(3, 4.0);
+        let data: Vec<Bar> = bars.iter().map(|&(h, l, c)| make_bar(h, l, c)).collect();
         ab.calculate(&data);
 
-        assert_eq!(ab.values.len(), 10);
-
-        // Upper should be > middle > lower
-        if let IndicatorValue::Multiple(v) = ab.values.last().unwrap() {
-            assert!(v[0] > v[1], "Upper should be > middle");
-            assert!(v[1] > v[2], "Middle should be > lower");
+        let mut failures = Vec::new();
+        if ab.line_cnt() != 3 {
+            failures.push(format!("line_cnt {}, want 3", ab.line_cnt()));
         }
+        assert_eq!(ab.values.len(), bars.len());
+        assert!(matches!(
+            ab.values[..2],
+            [IndicatorValue::None, IndicatorValue::None]
+        ));
+        for (i, want) in expected.iter().enumerate() {
+            let IndicatorValue::Multiple(got) = &ab.values[i + 2] else {
+                panic!("bar {}: no value", i + 2);
+            };
+            assert_eq!(got.len(), 3, "bar {}", i + 2);
+            for (line, (g, w)) in got.iter().zip(want).enumerate() {
+                if ((g - w) / w).abs() >= 1e-12 {
+                    failures.push(format!("bar {} line {line}: got {g}, want {w}", i + 2));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
