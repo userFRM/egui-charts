@@ -458,7 +458,6 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 
 ### Other UI
 - [x] Context menu: 20 entries with icons, shortcuts, disabled state, click-outside close
-- [ ] Watermark system (Text/Image, 5 anchors plus custom, tile mode, WatermarkManager) defined but never drawn by the chart
 - [ ] Emoji picker: Structure exists but actual emoji grid rendering unverified
 - [ ] Multi-chart layout component (only ChartSyncOptions exists; module is a stub)
 - [x] Symbol header display

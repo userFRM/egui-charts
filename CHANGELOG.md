@@ -128,6 +128,7 @@ All notable changes to this project are documented in this file. The format is b
 - The `templates` module. Migration: import `SettingsTemplate` and `TemplateManager` from `ui::model`.
 - `CVDMode::TickSplit`, which computed the same estimate as `CVDMode::ClosePosition` while claiming footprint data; use `ClosePosition`. `CVD::with_histogram`, which had no effect, with no replacement.
 - `StopRunIndicator::with_reversal_window`, which only lengthened the warm-up; the reversal is tested on the breaking bar. Remove the call.
+- The `ui::watermark` module (`Watermark`, `WatermarkManager`, `TextWatermark`, `TextWatermarkLineOptions`, `ImageWatermark`, `ImageScaleMode`, `HorizontalAlign`, `VerticalAlign` and its own `WatermarkPos`), which the chart never drew. Migration: `ui::watermark` is removed; the chart's watermark is configured through `ChartConfig` (`show_watermark`, `watermark_text`, `watermark_color`, `watermark_font_size` and `watermark_pos`, a `config::WatermarkPos`). Image watermarks, custom pixel positions and a font size, colour or weight per line have no replacement; `watermark_text` may contain `\n` for several lines in one style.
 
 ## [0.2.0] - 2026-06-04
 
