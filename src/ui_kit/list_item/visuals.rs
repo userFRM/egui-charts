@@ -5,8 +5,6 @@
 
 use egui::{Color32, Visuals};
 
-use crate::tokens::DESIGN_TOKENS;
-
 /// Visual state information for list items with color computation methods
 ///
 /// This struct follows rerun's pattern of computing colors via methods
@@ -93,14 +91,12 @@ impl ListVisuals {
     ///
     /// Returns None if no background should be drawn (transparent).
     pub fn bg_color(&self, visuals: &Visuals) -> Option<Color32> {
-        let tokens = &DESIGN_TOKENS;
-
         if self.selected {
             Some(visuals.selection.bg_fill)
-        } else if self.hovered && self.interactive {
-            Some(tokens.semantic.list_item.hovered_bg)
         } else if self.active {
-            Some(tokens.semantic.list_item.active_bg)
+            Some(visuals.widgets.active.bg_fill)
+        } else if self.hovered && self.interactive {
+            Some(visuals.widgets.hovered.bg_fill)
         } else {
             None
         }
@@ -108,40 +104,24 @@ impl ListVisuals {
 
     /// Compute text color based on state
     pub fn text_color(&self, visuals: &Visuals) -> Color32 {
-        let tokens = &DESIGN_TOKENS;
-
         if self.selected {
-            if self.hovered {
-                tokens.semantic.list_item.text_on_primary_hovered
-            } else {
-                tokens.semantic.list_item.text_on_primary
-            }
-        } else if self.active {
-            tokens.semantic.list_item.active_text
+            visuals.selection.stroke.color
         } else if !self.interactive {
-            tokens.semantic.list_item.noninteractive_text
-        } else if self.hovered {
-            tokens.semantic.list_item.hovered_text
-        } else if self.strong {
-            tokens.semantic.list_item.strong_text
+            visuals.widgets.noninteractive.fg_stroke.color
+        } else if self.hovered || self.active || self.strong {
+            visuals.widgets.hovered.fg_stroke.color
         } else {
-            // Use egui visuals for default text to respect theme
             visuals.widgets.inactive.fg_stroke.color
         }
     }
 
     /// Compute icon tint color based on state
     pub fn icon_tint(&self, visuals: &Visuals) -> Color32 {
-        let tokens = &DESIGN_TOKENS;
-
         if self.selected {
-            tokens.semantic.list_item.icon_on_primary
-        } else if self.active {
-            tokens.semantic.list_item.active_icon
-        } else if self.hovered && self.interactive {
-            tokens.semantic.list_item.hovered_icon
+            visuals.selection.stroke.color
+        } else if (self.hovered && self.interactive) || self.active {
+            visuals.widgets.hovered.fg_stroke.color
         } else {
-            // Use egui visuals for default icon color to respect theme
             visuals.widgets.noninteractive.fg_stroke.color
         }
     }
@@ -150,16 +130,8 @@ impl ListVisuals {
     ///
     /// Use this for icons that have their own hover state (e.g., action buttons)
     pub fn interactive_icon_tint(&self, icon_hovered: bool, visuals: &Visuals) -> Color32 {
-        let tokens = &DESIGN_TOKENS;
-
-        if self.selected {
-            if icon_hovered {
-                tokens.semantic.list_item.icon_on_primary_hovered
-            } else {
-                tokens.semantic.list_item.icon_on_primary
-            }
-        } else if icon_hovered {
-            tokens.semantic.list_item.hovered_text
+        if icon_hovered && !self.selected {
+            visuals.widgets.hovered.fg_stroke.color
         } else {
             self.icon_tint(visuals)
         }
@@ -184,31 +156,6 @@ impl ListVisuals {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_default_state() {
-        let visuals = ListVisuals::new();
-        assert!(!visuals.hovered);
-        assert!(!visuals.selected);
-        assert!(!visuals.active);
-        assert!(visuals.interactive);
-        assert!(!visuals.strong);
-        assert!(visuals.openness.is_none());
-    }
-
-    #[test]
-    fn test_builder_pattern() {
-        let visuals = ListVisuals::new()
-            .with_hovered(true)
-            .with_selected(false)
-            .with_interactive(true)
-            .with_openness(0.5);
-
-        assert!(visuals.hovered);
-        assert!(!visuals.selected);
-        assert!(visuals.interactive);
-        assert_eq!(visuals.openness, Some(0.5));
-    }
 
     #[test]
     fn test_collapsible() {

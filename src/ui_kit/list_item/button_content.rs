@@ -1,6 +1,6 @@
 //! ButtonContent - Clickable button content for list items
 
-use egui::{Color32, Response, Sense, Ui, Vec2};
+use egui::{Color32, Response, Ui, Vec2, WidgetInfo, WidgetType};
 
 use crate::icons::Icon;
 use crate::tokens::DESIGN_TOKENS;
@@ -157,8 +157,8 @@ impl<'a> ButtonContent<'a> {
                 }
             }
             ButtonStyle::Primary => {
-                let accent = DESIGN_TOKENS.semantic.brand.accent;
-                let text = DESIGN_TOKENS.semantic.ui.text_light;
+                let accent = visuals.selection.bg_fill;
+                let text = visuals.selection.stroke.color;
                 if active {
                     (accent.gamma_multiply(0.8), text, text)
                 } else if hovered {
@@ -168,8 +168,8 @@ impl<'a> ButtonContent<'a> {
                 }
             }
             ButtonStyle::Danger => {
-                let danger = DESIGN_TOKENS.semantic.chart.bearish;
-                let text = DESIGN_TOKENS.semantic.ui.text_light;
+                let danger = visuals.error_fg_color;
+                let text = visuals.selection.stroke.color;
                 if active {
                     (danger.gamma_multiply(0.8), text, text)
                 } else if hovered {
@@ -205,35 +205,26 @@ impl<'a> ButtonContent<'a> {
 
 impl<'a> ListItemContent for ButtonContent<'a> {
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> Response {
-        let sense = if self.disabled {
-            Sense::hover()
-        } else {
-            Sense::click()
-        };
+        let response = context.response;
+        response.widget_info(|| {
+            WidgetInfo::labeled(
+                WidgetType::Button,
+                !self.disabled && ui.is_enabled(),
+                self.label.as_deref().unwrap_or_default(),
+            )
+        });
 
-        let (rect, response) = ui.allocate_exact_size(context.rect.size(), sense);
-
-        if ui.is_rect_visible(rect) {
+        if ui.is_rect_visible(response.rect) {
             let (bg_color, icon_color, text_color) =
                 self.get_colors(ui, response.hovered(), response.is_pointer_button_down_on());
 
-            // Draw background with rounded corners for Primary/Danger styles
-            let rounding = match self.style {
-                ButtonStyle::Primary | ButtonStyle::Danger => DESIGN_TOKENS.rounding.sm,
-                _ => 0.0,
-            };
-
-            let button_rect = rect.shrink2(Vec2::new(
-                DESIGN_TOKENS.spacing.xs,
-                DESIGN_TOKENS.spacing.xs,
-            ));
-
+            // The fill covers the whole row, like the list item's own hover fill.
             if bg_color != Color32::TRANSPARENT {
-                ui.painter().rect_filled(button_rect, rounding, bg_color);
+                ui.painter()
+                    .rect_filled(response.rect, DESIGN_TOKENS.rounding.sm, bg_color);
             }
 
-            // Calculate content layout
-            let content_rect = button_rect.shrink2(Vec2::new(DESIGN_TOKENS.spacing.sm, 0.0));
+            let content_rect = context.rect;
 
             // Draw icon
             let icon_rect = egui::Rect::from_min_size(
@@ -261,6 +252,10 @@ impl<'a> ListItemContent for ButtonContent<'a> {
             }
         }
 
-        response
+        response.clone()
+    }
+
+    fn interactive(&self) -> bool {
+        !self.disabled
     }
 }

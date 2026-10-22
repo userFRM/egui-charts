@@ -1,7 +1,7 @@
-//! Form layout components using `egui_extras::StripBuilder`.
+//! Form layout components.
 //!
-//! Provides a proportional two-column layout for label + widget form rows,
-//! replacing manual `set_width` + `right_to_left` patterns.
+//! Provides a two-column layout for label + widget form rows: a fixed-width
+//! label column and a right-aligned widget column.
 //!
 //! # Example
 //! ```ignore
@@ -17,15 +17,13 @@
 pub mod grid;
 
 use crate::styles::typography;
+use crate::theme::context::ThemeContextExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{RichText, Ui};
-use egui_extras::{Size, StripBuilder};
+use egui::{Align, Layout, RichText, Ui, vec2};
 
 pub use grid::FormGrid;
 
 /// A two-column form row: fixed-width label area + remainder widget area.
-///
-/// Uses `StripBuilder` for clean proportional column sizing.
 pub struct FormRow<'a> {
     label: &'a str,
     description: Option<&'a str>,
@@ -52,32 +50,28 @@ impl<'a> FormRow<'a> {
     }
 
     /// Show the form row with the given widget content.
+    ///
+    /// The row is as tall as its content, so consecutive rows stack. The label and the
+    /// widget are centred on one line; the description follows below them.
     pub fn show(self, ui: &mut Ui, add_widget: impl FnOnce(&mut Ui)) {
-        StripBuilder::new(ui)
-            .size(Size::exact(self.label_width))
-            .size(Size::remainder())
-            .horizontal(|mut strip| {
-                // Label column
-                strip.cell(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(self.label);
-                        if let Some(desc) = self.description {
-                            ui.label(
-                                RichText::new(desc)
-                                    .size(typography::SM)
-                                    .color(DESIGN_TOKENS.semantic.ui.text_muted_dark),
-                            );
-                        }
-                    });
-                });
-
-                // Widget column (right-aligned)
-                strip.cell(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        add_widget(ui);
-                    });
-                });
-            });
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                vec2(self.label_width, ui.spacing().interact_size.y),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_width(self.label_width);
+                    ui.label(self.label);
+                },
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), add_widget);
+        });
+        if let Some(desc) = self.description {
+            ui.label(
+                RichText::new(desc)
+                    .size(typography::SM)
+                    .color(ui.ctx().theme_data().ui_text_muted),
+            );
+        }
         ui.add_space(DESIGN_TOKENS.spacing.sm);
     }
 }

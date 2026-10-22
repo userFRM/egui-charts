@@ -20,10 +20,12 @@
 //! }
 //! ```
 
-use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::command_palette::fuzzy_match;
-use egui::{Color32, Id, Key, Popup, Response, ScrollArea, Sense, TextEdit, Ui, Vec2};
+use egui::{
+    Id, Key, Margin, Popup, Response, ScrollArea, Sense, TextEdit, TextStyle, Ui, Vec2, WidgetInfo,
+    WidgetType,
+};
 
 /// Result of showing the autocomplete widget
 pub struct AutocompleteResponse {
@@ -111,6 +113,8 @@ impl<'a> AutocompleteEdit<'a> {
 
     /// Show the autocomplete widget
     pub fn show(self, ui: &mut Ui) -> AutocompleteResponse {
+        // Horizontal text inset shared by the input and its suggestions.
+        let inset = DESIGN_TOKENS.spacing.lg;
         let base_id = self.id_salt.unwrap_or_else(|| ui.id().with("autocomplete"));
         let popup_id = base_id.with("popup");
         let selected_idx_id = base_id.with("selected_idx");
@@ -121,7 +125,13 @@ impl<'a> AutocompleteEdit<'a> {
             .memory(|m| m.data.get_temp(selected_idx_id).unwrap_or(0));
 
         // Create the text edit
-        let mut text_edit = TextEdit::singleline(self.text).desired_width(ui.available_width());
+        let mut text_edit = TextEdit::singleline(self.text)
+            .desired_width(ui.available_width())
+            .margin(Margin {
+                left: inset as i8,
+                right: inset as i8,
+                ..Margin::symmetric(0, 2)
+            });
 
         if let Some(ref placeholder) = self.placeholder {
             text_edit = text_edit.hint_text(placeholder);
@@ -183,24 +193,23 @@ impl<'a> AutocompleteEdit<'a> {
 
         // Show the popup using Area + Frame pattern
         if popup_open && has_suggestions {
+            let visuals = ui.visuals().clone();
+            let text_x = response.rect.left() + inset;
             let area_response = egui::Area::new(popup_id.with("area"))
                 .order(egui::Order::Foreground)
                 .fixed_pos(response.rect.left_bottom())
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(response.rect.width());
+                    let frame = egui::Frame::popup(ui.style())
+                        .inner_margin(Margin::symmetric(0, DESIGN_TOKENS.spacing.sm as i8));
+                    frame.show(ui, |ui| {
+                        // The popup, border included, is exactly as wide as the input.
+                        ui.set_width(response.rect.width() - 2.0 * frame.stroke.width);
                         ui.set_max_height(200.0);
+                        ui.spacing_mut().item_spacing.y = 0.0;
 
                         ScrollArea::vertical().show(ui, |ui| {
                             for (idx, (suggestion, _score)) in filtered.iter().enumerate() {
                                 let is_selected = idx == selected_idx;
-
-                                let bg_color = if is_selected {
-                                    DESIGN_TOKENS.semantic.list_item.hovered_bg
-                                } else {
-                                    Color32::TRANSPARENT
-                                };
-
                                 let (rect, item_response) = ui.allocate_exact_size(
                                     Vec2::new(
                                         ui.available_width(),
@@ -208,33 +217,27 @@ impl<'a> AutocompleteEdit<'a> {
                                     ),
                                     Sense::click(),
                                 );
+                                item_response.widget_info(|| {
+                                    WidgetInfo::selected(
+                                        WidgetType::SelectableLabel,
+                                        true,
+                                        is_selected,
+                                        suggestion,
+                                    )
+                                });
 
                                 if ui.is_rect_visible(rect) {
                                     let painter = ui.painter();
-
-                                    // Background
-                                    let final_bg = if item_response.hovered() && !is_selected {
-                                        DESIGN_TOKENS.semantic.list_item.active_bg
-                                    } else {
-                                        bg_color
-                                    };
-                                    painter.rect_filled(rect, 0.0, final_bg);
-
-                                    // Text
-                                    let text_color = if is_selected {
-                                        DESIGN_TOKENS.semantic.ui.text_dark
-                                    } else {
-                                        DESIGN_TOKENS.semantic.ui.text_secondary_dark
-                                    };
+                                    if is_selected || item_response.hovered() {
+                                        let fill = visuals.widgets.hovered.bg_fill;
+                                        painter.rect_filled(rect, 0.0, fill);
+                                    }
                                     painter.text(
-                                        egui::pos2(
-                                            rect.min.x + DESIGN_TOKENS.spacing.md,
-                                            rect.center().y,
-                                        ),
+                                        egui::pos2(text_x, rect.center().y),
                                         egui::Align2::LEFT_CENTER,
                                         suggestion,
-                                        egui::FontId::proportional(typography::MD),
-                                        text_color,
+                                        TextStyle::Body.resolve(ui.style()),
+                                        visuals.widgets.hovered.fg_stroke.color,
                                     );
                                 }
 

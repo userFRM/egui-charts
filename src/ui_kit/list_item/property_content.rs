@@ -1,9 +1,8 @@
 //! PropertyContent - Key-value pair display for list items
 
-use egui::{Color32, Response, Ui, Vec2};
+use egui::{Color32, Response, Ui, WidgetInfo, WidgetType};
 
 use super::content::{ContentContext, ListItemContent};
-use crate::tokens::DESIGN_TOKENS;
 
 /// Key-value pair content for displaying properties
 ///
@@ -60,9 +59,7 @@ impl ListItemContent for PropertyContent {
             .value_color
             .unwrap_or_else(|| context.visuals.text_color(&egui_visuals));
 
-        let content_rect = context
-            .rect
-            .shrink2(Vec2::new(DESIGN_TOKENS.spacing.sm, 0.0));
+        let content_rect = context.rect;
 
         // Calculate label width (reserved for future use when we implement two-column layout)
         let _label_width = self.label_width.unwrap_or_else(|| {
@@ -70,16 +67,15 @@ impl ListItemContent for PropertyContent {
             content_rect.width() * 0.4
         });
 
-        // Allocate response
-        let sense = if context.list_item.interactive {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        };
+        context.response.widget_info(|| {
+            WidgetInfo::labeled(
+                WidgetType::Label,
+                ui.is_enabled(),
+                format!("{}: {}", self.label, self.value),
+            )
+        });
 
-        let (rect, response) = ui.allocate_exact_size(context.rect.size(), sense);
-
-        if ui.is_rect_visible(rect) {
+        if ui.is_rect_visible(content_rect) {
             let y_center = content_rect.center().y;
 
             // Draw label
@@ -101,6 +97,6 @@ impl ListItemContent for PropertyContent {
             );
         }
 
-        response
+        context.response.clone()
     }
 }

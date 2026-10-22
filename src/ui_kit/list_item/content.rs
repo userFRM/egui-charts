@@ -6,7 +6,8 @@ use super::visuals::ListVisuals;
 
 /// Context provided to ListItemContent implementations when rendering
 pub struct ContentContext<'a> {
-    /// The rect allocated for the content (excluding any list item chrome)
+    /// The row rect inset by the content padding. Content paints inside it and does not
+    /// allocate space of its own: the row is already allocated.
     pub rect: Rect,
     /// Background color of the list item (computed from visuals)
     pub bg_color: Color32,
@@ -30,8 +31,13 @@ pub struct ContentContext<'a> {
 /// - [`PropertyContent`](super::PropertyContent) - Key-value pair display
 /// - [`ButtonContent`](super::ButtonContent) - Clickable button content with styles
 pub trait ListItemContent {
-    /// Render the content and return the response
+    /// Paint the content inside `context.rect` and return the row response.
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> Response;
+
+    /// Whether the row reacts to the pointer. Disabled content returns `false`.
+    fn interactive(&self) -> bool {
+        true
+    }
 }
 
 /// Reference to ListItem configuration (forward declaration)

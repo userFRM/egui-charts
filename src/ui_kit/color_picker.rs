@@ -2,9 +2,11 @@
 //!
 //! A color swatch picker with grayscale row, main colors row, and color variations.
 
-use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Id, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, epaint::StrokeKind};
+use egui::{
+    Color32, Id, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType,
+    epaint::StrokeKind,
+};
 
 // ============================================================================
 // COLOR PALETTE - exact colors
@@ -229,12 +231,16 @@ impl<'a> ColorPicker<'a> {
         // Get colors from theme
         let visuals = ui.style().visuals.clone();
         let bg_color = visuals.faint_bg_color;
-        let normal_border = visuals.widgets.noninteractive.bg_stroke.color;
-        let active_border = visuals.widgets.active.fg_stroke.color;
 
-        // Draw the color swatch button (size: icon_xxl x icon_xxl)
-        let btn_size = Vec2::splat(DESIGN_TOKENS.sizing.icon_xxl);
+        let btn_size = Vec2::splat(DESIGN_TOKENS.sizing.button_md);
         let (btn_rect, btn_res) = ui.allocate_exact_size(btn_size, Sense::click());
+        btn_res.widget_info(|| {
+            WidgetInfo::labeled(
+                WidgetType::ColorButton,
+                ui.is_enabled(),
+                hex(self.state.sel_color),
+            )
+        });
 
         // Draw dark background then blend color on top
         // This avoids the "checkered pattern" look for semi-transparent colors
@@ -245,17 +251,19 @@ impl<'a> ColorPicker<'a> {
         ui.painter()
             .rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, self.state.sel_color);
 
-        // Draw border
-        let border_color = if btn_res.hovered() || self.state.is_open {
-            active_border
+        // The border uses text colours so it stays visible whatever the swatch colour.
+        let border_color = if self.state.is_open {
+            visuals.selection.bg_fill
+        } else if btn_res.hovered() {
+            visuals.widgets.hovered.fg_stroke.color
         } else {
-            normal_border
+            visuals.widgets.noninteractive.fg_stroke.color
         };
         ui.painter().rect_stroke(
             btn_rect,
-            4.0,
+            DESIGN_TOKENS.rounding.md,
             Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
-            StrokeKind::Outside,
+            StrokeKind::Inside,
         );
 
         // Handle button click
@@ -287,12 +295,13 @@ impl<'a> ColorPicker<'a> {
         } else {
             self.config.bg_color
         };
+        // The floating border, which dialogs that restyle their widgets leave alone.
         let popup_border = if self.config.border_color == Color32::TRANSPARENT {
-            visuals.widgets.noninteractive.bg_stroke.color
+            visuals.window_stroke.color
         } else {
             self.config.border_color
         };
-        let separator_color = visuals.widgets.noninteractive.bg_stroke.color;
+        let separator_color = popup_border;
 
         // Calculate popup size
         let cols = 10;
@@ -332,9 +341,9 @@ impl<'a> ColorPicker<'a> {
                 egui::Frame::popup(ui.style())
                     .fill(popup_bg)
                     .stroke(Stroke::new(DESIGN_TOKENS.stroke.hairline, popup_border))
-                    .corner_radius(DESIGN_TOKENS.rounding.xl)
                     .inner_margin(self.config.padding)
                     .show(ui, |ui| {
+                        ui.set_width(popup_width - self.config.padding * 2.0);
                         // Grayscale row
                         if let Some(color) = self.draw_color_row(ui, &GRAYSCALE) {
                             color_changed = Some(color);
@@ -465,59 +474,64 @@ impl<'a> ColorPicker<'a> {
         selected
     }
 
+    /// The hex and opacity row; clicking it toggles the custom colour editor.
     fn draw_custom_color_btn(&mut self, ui: &mut Ui) -> bool {
-        // Get colors from theme
         let visuals = ui.style().visuals.clone();
-        let faint_bg = visuals.faint_bg_color;
-        let border_normal = visuals.widgets.noninteractive.bg_stroke.color;
-        let border_hover = visuals.widgets.hovered.bg_stroke.color;
-        let text_color = visuals.widgets.noninteractive.fg_stroke.color;
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), DESIGN_TOKENS.sizing.button_md),
+            Sense::click(),
+        );
+        response.widget_info(|| {
+            WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), "Custom colour")
+        });
 
-        let btn_height = DESIGN_TOKENS.sizing.button_md;
-        let btn_width = ui.available_width();
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(btn_width, btn_height), Sense::click());
-
-        // Draw checkerboard pattern for transparency indication
-        let checker_size = 6.0;
-        // Derive checker colors from theme
-        let dark_checker = faint_bg;
-        let light_checker = faint_bg.gamma_multiply(1.3);
-
-        for row in 0..((rect.height() / checker_size) as usize) {
-            for col in 0..((rect.width() / checker_size) as usize) {
-                let checker_rect = Rect::from_min_size(
-                    rect.min + Vec2::new(col as f32 * checker_size, row as f32 * checker_size),
-                    Vec2::splat(checker_size),
-                );
-                let is_dark = (row + col) % 2 == 0;
-                let color = if is_dark { dark_checker } else { light_checker };
-                ui.painter()
-                    .rect_filled(checker_rect.intersect(rect), 0.0, color);
-            }
-        }
-
-        // Draw border
-        let border_color = if response.hovered() {
-            border_hover
+        let border_color = if response.hovered() || self.state.custom_mode {
+            visuals.widgets.hovered.fg_stroke.color
         } else {
-            border_normal
+            visuals.window_stroke.color
         };
-        ui.painter().rect_stroke(
+        let painter = ui.painter();
+        painter.rect_stroke(
             rect,
-            4.0,
+            DESIGN_TOKENS.rounding.sm,
             Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
-            StrokeKind::Outside,
+            StrokeKind::Inside,
         );
 
-        // Draw plus icon and text
-        let center = rect.center();
-        ui.painter().text(
-            center,
-            egui::Align2::CENTER_CENTER,
-            "+",
-            egui::FontId::proportional(typography::XXL),
-            text_color,
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let label_color = visuals.widgets.noninteractive.fg_stroke.color;
+        let value_color = visuals.widgets.hovered.fg_stroke.color;
+        let gap = DESIGN_TOKENS.spacing.sm;
+        let y = rect.center().y;
+        let opacity = format!("{}%", (f32::from(self.state.sel_color.a()) / 2.55).round());
+
+        let label = painter.text(
+            egui::pos2(rect.left() + DESIGN_TOKENS.spacing.lg, y),
+            egui::Align2::LEFT_CENTER,
+            "Hex",
+            font.clone(),
+            label_color,
+        );
+        painter.text(
+            egui::pos2(label.right() + gap, y),
+            egui::Align2::LEFT_CENTER,
+            hex(self.state.sel_color),
+            font.clone(),
+            value_color,
+        );
+        let value = painter.text(
+            egui::pos2(rect.right() - DESIGN_TOKENS.spacing.lg, y),
+            egui::Align2::RIGHT_CENTER,
+            opacity,
+            font.clone(),
+            value_color,
+        );
+        painter.text(
+            egui::pos2(value.left() - gap, y),
+            egui::Align2::RIGHT_CENTER,
+            "Opacity",
+            font,
+            label_color,
         );
 
         if response.clicked() {
@@ -527,6 +541,12 @@ impl<'a> ColorPicker<'a> {
 
         false
     }
+}
+
+/// `#RRGGBB` for the colour without its alpha.
+fn hex(color: Color32) -> String {
+    let [r, g, b, _] = color.to_srgba_unmultiplied();
+    format!("#{r:02X}{g:02X}{b:02X}")
 }
 
 // ============================================================================

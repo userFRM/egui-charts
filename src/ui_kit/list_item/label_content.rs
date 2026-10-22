@@ -1,6 +1,6 @@
 //! LabelContent - Simple text content with optional icon
 
-use egui::{Response, RichText, Ui, Vec2};
+use egui::{Response, RichText, Ui, Vec2, WidgetInfo, WidgetType};
 
 use crate::icons::Icon;
 use crate::styles::icons;
@@ -100,20 +100,17 @@ impl<'a> ListItemContent for LabelContent<'a> {
             0.0
         };
 
-        let content_rect = context
-            .rect
-            .shrink2(Vec2::new(DESIGN_TOKENS.spacing.sm, 0.0));
+        let content_rect = context.rect;
+        context.response.widget_info(|| {
+            WidgetInfo::selected(
+                WidgetType::SelectableLabel,
+                ui.is_enabled(),
+                context.selected,
+                &self.text,
+            )
+        });
 
-        // Allocate response for the whole area
-        let sense = if context.list_item.interactive {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        };
-
-        let (rect, response) = ui.allocate_exact_size(context.rect.size(), sense);
-
-        if ui.is_rect_visible(rect) {
+        if ui.is_rect_visible(content_rect) {
             // Draw icon if present
             if let Some(icon) = self.icon {
                 let icon_rect = egui::Rect::from_min_size(
@@ -145,6 +142,6 @@ impl<'a> ListItemContent for LabelContent<'a> {
             );
         }
 
-        response
+        context.response.clone()
     }
 }

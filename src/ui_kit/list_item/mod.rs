@@ -62,16 +62,19 @@ impl ListItem {
     pub fn show<C: ListItemContent>(self, ui: &mut Ui, content: C) -> Response {
         let height = self.height.unwrap_or_else(default_height);
         let width = ui.available_width();
+        let interactive = self.interactive && content.interactive();
 
-        // Allocate space
+        // Rows sit flush: allocate without the trailing item spacing.
+        let spacing = std::mem::take(&mut ui.spacing_mut().item_spacing.y);
         let (rect, mut response) = ui.allocate_exact_size(
             Vec2::new(width, height),
-            if self.interactive {
+            if interactive {
                 egui::Sense::click()
             } else {
                 egui::Sense::hover()
             },
         );
+        ui.spacing_mut().item_spacing.y = spacing;
 
         if ui.is_rect_visible(rect) {
             let egui_visuals = ui.style().visuals.clone();
@@ -79,8 +82,9 @@ impl ListItem {
             // Build ListVisuals (rerun-inspired pattern)
             let list_visuals = ListVisuals::new()
                 .with_hovered(response.hovered())
+                .with_active(interactive && response.is_pointer_button_down_on())
                 .with_selected(self.selected)
-                .with_interactive(self.interactive);
+                .with_interactive(interactive);
 
             // Determine background color using ListVisuals
             let bg_color = list_visuals
@@ -95,7 +99,7 @@ impl ListItem {
 
             // Create content context
             let content_context = ContentContext {
-                rect: rect.shrink2(Vec2::new(DESIGN_TOKENS.spacing.sm, 0.0)),
+                rect: rect.shrink2(Vec2::new(DESIGN_TOKENS.spacing.lg, 0.0)),
                 bg_color,
                 selected: self.selected,
                 hovered: response.hovered(),
@@ -104,8 +108,7 @@ impl ListItem {
                 visuals: list_visuals,
             };
 
-            // Render content
-            let _content_response = content.ui(ui, &content_context);
+            content.ui(ui, &content_context);
 
             // Draw separator if requested
             if self.show_separator {
@@ -120,7 +123,7 @@ impl ListItem {
         }
 
         // Handle selection on click
-        if response.clicked() && self.interactive {
+        if response.clicked() && interactive {
             response.mark_changed();
         }
 
@@ -174,5 +177,23 @@ where
         if response.clicked() {
             *selected = Some(idx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn show_advances_by_exactly_one_row() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let top = ui.cursor().top();
+                let row = ListItem::new().show_text(ui, "Row");
+                assert_eq!(row.rect.height(), default_height());
+                assert_eq!(ui.cursor().top() - top, default_height());
+            });
+        });
     }
 }

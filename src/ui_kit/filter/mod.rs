@@ -19,7 +19,9 @@
 //! }
 //! ```
 
-use egui::{Response, TextEdit, Ui, Vec2, Widget};
+use egui::{
+    Margin, Rect, Response, Sense, TextEdit, Ui, Vec2, Widget, WidgetInfo, WidgetType, pos2,
+};
 
 use crate::icons::icons;
 use crate::tokens::DESIGN_TOKENS;
@@ -109,42 +111,15 @@ impl FilterWidget {
     /// Show the filter widget
     pub fn show(&mut self, ui: &mut Ui) -> FilterResponse {
         let old_query = self.query.clone();
-
-        let response = ui.horizontal(|ui| {
-            // Search icon
-            if self.show_icon {
-                let icon_size = DESIGN_TOKENS.sizing.icon_sm;
-                let tint = ui.style().visuals.widgets.noninteractive.fg_stroke.color;
-                ui.add(icons::QUICK_SEARCH.as_image_tinted(Vec2::splat(icon_size), tint));
-            }
-
-            // Text input
-            let text_response = TextEdit::singleline(&mut self.query)
-                .hint_text(&self.placeholder)
-                .desired_width(f32::INFINITY)
-                .ui(ui);
-
-            // Clear button
-            if self.show_clear_button && !self.query.is_empty() {
-                let clear_btn = ui.add(icons::CLOSE.as_image_tinted(
-                    Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
-                    ui.style().visuals.widgets.noninteractive.fg_stroke.color,
-                ));
-                if clear_btn.clicked() {
-                    self.query.clear();
-                }
-            }
-
-            text_response
-        });
-
-        // Handle Escape key to clear
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !self.query.is_empty() {
-            self.query.clear();
-        }
-
+        let response = search_field(
+            ui,
+            &mut self.query,
+            &self.placeholder,
+            self.show_icon,
+            self.show_clear_button,
+        );
         FilterResponse {
-            response: response.inner,
+            response,
             changed: self.query != old_query,
         }
     }
@@ -153,40 +128,76 @@ impl FilterWidget {
 /// Stateless filter input that operates on an external string
 pub fn filter_input(ui: &mut Ui, query: &mut String) -> FilterResponse {
     let old_query = query.clone();
+    let response = search_field(ui, query, "Filter...", true, true);
+    FilterResponse {
+        response,
+        changed: *query != old_query,
+    }
+}
 
-    let response = ui.horizontal(|ui| {
-        // Search icon
-        let icon_size = DESIGN_TOKENS.sizing.icon_sm;
-        let tint = ui.style().visuals.widgets.noninteractive.fg_stroke.color;
-        ui.add(icons::QUICK_SEARCH.as_image_tinted(Vec2::splat(icon_size), tint));
+/// A full-width text field with the search icon and the clear button inside its frame.
+/// Escape clears the query.
+fn search_field(
+    ui: &mut Ui,
+    query: &mut String,
+    placeholder: &str,
+    show_icon: bool,
+    show_clear: bool,
+) -> Response {
+    let icon_size = DESIGN_TOKENS.sizing.icon_sm;
+    let inset = DESIGN_TOKENS.spacing.lg;
+    let icon_slot = inset + icon_size + DESIGN_TOKENS.spacing.sm;
+    let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
 
-        // Text input
-        let text_response = TextEdit::singleline(query)
-            .hint_text("Filter...")
-            .desired_width(f32::INFINITY)
-            .ui(ui);
+    let response = ui
+        .scope(|ui| {
+            // The field keeps its size when hovered or focused.
+            let widgets = &mut ui.visuals_mut().widgets;
+            widgets.hovered.expansion = 0.0;
+            widgets.active.expansion = 0.0;
 
-        // Clear button
-        if !query.is_empty() {
-            let clear_btn = ui.add(icons::CLOSE.as_image_tinted(
-                Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
-                ui.style().visuals.widgets.noninteractive.fg_stroke.color,
-            ));
-            if clear_btn.clicked() {
-                query.clear();
-            }
+            let margin = |icon: bool| (if icon { icon_slot } else { inset }) as i8;
+            TextEdit::singleline(query)
+                .hint_text(placeholder)
+                .desired_width(f32::INFINITY)
+                .margin(Margin {
+                    left: margin(show_icon),
+                    right: margin(show_clear),
+                    ..Margin::symmetric(0, 2)
+                })
+                .ui(ui)
+        })
+        .inner;
+
+    let icon_rect = |center_x: f32| {
+        Rect::from_center_size(
+            pos2(center_x, response.rect.center().y),
+            Vec2::splat(icon_size),
+        )
+    };
+    if show_icon {
+        icons::QUICK_SEARCH
+            .as_image_tinted(Vec2::splat(icon_size), tint)
+            .paint_at(
+                ui,
+                icon_rect(response.rect.left() + inset + icon_size / 2.0),
+            );
+    }
+    if show_clear && !query.is_empty() {
+        let rect = icon_rect(response.rect.right() - inset - icon_size / 2.0);
+        let clear = ui.interact(rect, response.id.with("clear"), Sense::click());
+        clear.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Clear filter"));
+        icons::CLOSE
+            .as_image_tinted(Vec2::splat(icon_size), tint)
+            .paint_at(ui, rect);
+        if clear.clicked() {
+            query.clear();
         }
+    }
 
-        text_response
-    });
-
-    // Handle Escape key to clear
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !query.is_empty() {
         query.clear();
     }
 
-    FilterResponse {
-        response: response.inner,
-        changed: *query != old_query,
-    }
+    response
 }

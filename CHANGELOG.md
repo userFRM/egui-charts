@@ -12,6 +12,7 @@ All notable changes to this project are documented in this file. The format is b
 - `tokens::UiSemanticTokens` gains `panel_bg_floating_dark`, the fill of popups, menus and windows in dark themes. Struct literals of `UiSemanticTokens` must set it.
 - A theme toggle in the top toolbar emits `TopToolbarAction::ThemeToggle`.
 - Icons `CHECK`, `MINUS`, `CHEVRON_UP`, `CHEVRON_LEFT`, `CHEVRON_RIGHT`, `STAR_FILLED`, `CODE`, `USERS`, `CROWN`, `DATABASE`, `PENCIL` and `TEMPLATE` in `icons::icons`.
+- `ListItemContent::interactive` lets content take its row out of pointer interaction. It defaults to `true`; a disabled `ButtonContent` returns `false`, so its row is neither highlighted nor clickable.
 
 ### Fixed
 
@@ -51,6 +52,11 @@ All notable changes to this project are documented in this file. The format is b
 - The README's Rust snippets compile and run as doctests against the current API (including the `DataSource` example), and the install lines use version `0.2`.
 - The `DataSource::fetch_historical` and `QuoteSource` docs describe when they are actually called: history is fetched on the UI thread, and nothing in the crate polls quote sources.
 - Bar replay no longer panics when a frame is due more bars than remain, and `ReplayState::update` returns the number of bars actually advanced.
+- `ListItem` allocates its row once: rows are 28 px apart with no gap, hover, pressed and selected fill the whole row, and every content type starts its icon and text 8 px inside the row. Custom `ListItemContent` implementations paint inside `ContentContext::rect` and return the row response instead of allocating space of their own. Row colours come from the active theme, with a pressed state distinct from hover and on-accent text on selected rows, and rows report their role, label and selection to accessibility tools.
+- The `AutocompleteEdit` popup is exactly as wide as its input, has the popup border, aligns its suggestions with the input text and draws them in the theme's text colour.
+- `FormRow` takes the height of its content instead of the remaining height of the panel, so consecutive rows and a following `FormGrid` stay visible. The label is centred on the widget's line, and the description sits below it in the theme's muted text colour.
+- The `FilterWidget` search icon and clear button sit inside the field, 8 px from its edges, and the field no longer grows by a pixel when hovered or focused. Clicking the clear button now clears the query.
+- The `ColorPicker` swatch is 28 px with a border that stays visible on dark colours and brightens on hover. Its popup is as wide as the swatch grid and uses the popup border, and the row below the grid shows the hex value and opacity of the selected colour.
 
 ### Changed
 
