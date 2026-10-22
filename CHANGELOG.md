@@ -111,6 +111,7 @@ All notable changes to this project are documented in this file. The format is b
 - A drawing whose tool type is unknown is skipped with the error `unknown drawing tool "Name"` instead of one listing all 95 tool types.
 - `ColorType::from_hex` returns an error for input that is not six or eight hexadecimal digits, instead of panicking on a multi-byte character such as `"aÄÄb"` or accepting a sign such as `"+F+F+F"`.
 - `DataValidator` reports a bar with a NaN or infinite open, high, low, close or volume as `ValidationResult::InvalidOHLC` instead of `Valid`.
+- Ease of Movement leaves a bar with zero volume and a nonzero range out of its average instead of counting it as a bar that did not move. A bar with a NaN or infinite high, low or volume has no value, and a window without any bar with a raw value has no value.
 
 ### Changed
 

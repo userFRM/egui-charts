@@ -1,12 +1,18 @@
 use super::clamp_param;
 use crate::model::Bar;
-/// Ease of Movement (EoM / EMV)
-/// Relates price change to volume to identify the ease at which prices move
-/// Developed by Richard Arms
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Ease of Movement (EoM / EMV), Richard Arms: how easily price moves for the volume traded.
+///
+/// The raw value of a bar is its midpoint move over the previous bar divided by its box
+/// ratio, (volume / divisor) / (high - low), and the study is the mean of the raw values of
+/// the last `period` bars. A bar with zero range has a raw value of 0. A bar with zero
+/// volume and a nonzero range has no raw value (its box ratio is 0). A bar with a NaN or
+/// infinite high, low or volume has no value, and neither it nor the next bar has a raw
+/// value. The mean is taken over the bars of the window that have a raw value, and a
+/// window without one has no value.
 #[derive(Clone)]
 pub struct EaseOfMovement {
     /// SMA smoothing period (typically 14)
@@ -39,21 +45,6 @@ impl EaseOfMovement {
         self.color = color;
         self
     }
-
-    fn calculate_sma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                result.push(f64::NAN);
-            } else {
-                let sum: f64 = data[i + 1 - period..=i].iter().sum();
-                result.push(sum / period as f64);
-            }
-        }
-
-        result
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -73,48 +64,45 @@ impl Indicator for EaseOfMovement {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        let finite = |b: &Bar| b.high.is_finite() && b.low.is_finite() && b.volume.is_finite();
+        // The raw value of bar `i + 1`, or `None` where it is undefined.
+        let raw: Vec<Option<f64>> = data
+            .windows(2)
+            .map(|pair| {
+                let (prev, current) = (&pair[0], &pair[1]);
+                if !(prev.high.is_finite() && prev.low.is_finite() && finite(current)) {
+                    return None;
+                }
+                // Distance Moved = ((High + Low) / 2) - ((Prev High + Prev Low) / 2)
+                let distance_moved =
+                    (current.high + current.low) / 2.0 - (prev.high + prev.low) / 2.0;
+                let range = current.high - current.low;
+                if range == 0.0 {
+                    Some(0.0)
+                } else {
+                    // Box Ratio = (Volume / divisor) / (High - Low); zero volume makes the value infinite.
+                    let box_ratio = (current.volume / self.divisor) / range;
+                    Some(distance_moved / box_ratio).filter(|eom| eom.is_finite())
+                }
+            })
+            .collect();
 
-        if data.len() < 2 {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // Calculate raw EoM values
-        let mut raw_eom = Vec::with_capacity(data.len());
-        raw_eom.push(f64::NAN); // First bar has no previous
-
-        for i in 1..data.len() {
-            let current = &data[i];
-            let prev = &data[i - 1];
-
-            // Distance Moved = ((High + Low) / 2) - ((Prev High + Prev Low) / 2)
-            let distance_moved = (current.high + current.low) / 2.0 - (prev.high + prev.low) / 2.0;
-
-            // Box Ratio = (Volume / divisor) / (High - Low)
-            let range = current.high - current.low;
-            if range == 0.0 || current.volume == 0.0 {
-                raw_eom.push(0.0);
-            } else {
-                let box_ratio = (current.volume / self.divisor) / range;
-                let eom = distance_moved / box_ratio;
-                raw_eom.push(eom);
-            }
-        }
-
-        // Apply SMA smoothing
-        let smoothed = Self::calculate_sma(&raw_eom, self.period);
-
-        // Store results
-        for value in smoothed {
-            if value.is_nan() {
-                self.values.push(IndicatorValue::None);
-            } else {
-                self.values.push(IndicatorValue::Single(value));
-            }
-        }
+        // Bar 0 has no raw value, so the first full window ends on bar `period`.
+        self.values = (0..data.len())
+            .map(|i| {
+                if !finite(&data[i]) {
+                    return IndicatorValue::None;
+                }
+                let Some(window) = i.checked_sub(self.period).map(|start| &raw[start..i]) else {
+                    return IndicatorValue::None;
+                };
+                let defined = window.iter().flatten();
+                match defined.clone().count() {
+                    0 => IndicatorValue::None,
+                    n => IndicatorValue::Single(defined.sum::<f64>() / n as f64),
+                }
+            })
+            .collect();
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -184,6 +172,32 @@ mod tests {
             (77.40, 76.10, 650_000.0),
         ];
         let flat = [(100.0, 100.0, 1_000.0); 4];
+        let zero_volume = [
+            (10.5, 9.5, 1_000.0),
+            (12.0, 10.0, 0.0),
+            (13.0, 11.0, 1_000.0),
+        ];
+        // Bar 6 closes a window of three zero-volume bars; bar 8 has zero range and zero volume.
+        let zero_volume_windows = [
+            (10.0, 9.0, 50_000.0),
+            (11.0, 10.0, 40_000.0),
+            (12.0, 10.0, 0.0),
+            (12.5, 11.5, 60_000.0),
+            (12.0, 11.0, 0.0),
+            (13.0, 12.0, 0.0),
+            (13.0, 12.0, 0.0),
+            (14.0, 13.0, 30_000.0),
+            (14.0, 14.0, 0.0),
+            (15.0, 14.0, 20_000.0),
+        ];
+        // Bar 2 has a NaN input, so neither it nor bar 3 has a raw value.
+        let non_finite = [
+            (10.0, 9.0, 50_000.0),
+            (11.0, 10.0, 40_000.0),
+            (f64::NAN, f64::NAN, 30_000.0),
+            (13.0, 12.0, 20_000.0),
+            (14.0, 13.0, 10_000.0),
+        ];
         let cases = [
             (
                 "worked example",
@@ -205,6 +219,35 @@ mod tests {
                 ],
             ),
             ("flat", &flat[..], 2, vec![None, None, Some(0.0), Some(0.0)]),
+            (
+                "zero volume",
+                &zero_volume[..],
+                1,
+                vec![None, None, Some(20.0)],
+            ),
+            (
+                "zero volume windows",
+                &zero_volume_windows[..],
+                3,
+                vec![
+                    None,
+                    None,
+                    None,
+                    Some(0.20833333333333334),
+                    Some(0.16666666666666666),
+                    Some(0.16666666666666666),
+                    None,
+                    Some(0.3333333333333333),
+                    Some(0.16666666666666666),
+                    Some(0.19444444444444445),
+                ],
+            ),
+            (
+                "non-finite bar",
+                &non_finite[..],
+                2,
+                vec![None, None, None, None, Some(1.0)],
+            ),
         ];
 
         for (name, bars, period, expected) in cases {
