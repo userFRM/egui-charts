@@ -46,6 +46,7 @@ Some interface icons under `assets/icons/` are taken from [Lucide](https://githu
 | `ui/settings.svg` | `settings.svg` |
 | `ui/skip-back.svg` | `skip-back.svg` |
 | `ui/skip-forward.svg` | `skip-forward.svg` |
+| `ui/star-filled.svg` | `star.svg`, filled |
 | `ui/star.svg` | `star.svg` |
 | `ui/status-line.svg` | `panel-top.svg` |
 | `ui/step-back.svg` | `chevron-left.svg` |

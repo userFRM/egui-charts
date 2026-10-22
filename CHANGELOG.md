@@ -11,6 +11,7 @@ All notable changes to this project are documented in this file. The format is b
 - `ThemeContextExt::active_theme` returns the theme last passed to `apply_to_egui`, so components can resolve colours while painting. It has a default implementation returning `None`, so existing implementors of the trait still compile.
 - `tokens::UiSemanticTokens` gains `panel_bg_floating_dark`, the fill of popups, menus and windows in dark themes. Struct literals of `UiSemanticTokens` must set it.
 - A theme toggle in the top toolbar emits `TopToolbarAction::ThemeToggle`.
+- Icons `CHECK`, `MINUS`, `CHEVRON_UP`, `CHEVRON_LEFT`, `CHEVRON_RIGHT`, `STAR_FILLED`, `CODE`, `USERS`, `CROWN`, `DATABASE`, `PENCIL` and `TEMPLATE` in `icons::icons`.
 
 ### Fixed
 

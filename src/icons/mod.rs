@@ -220,7 +220,12 @@ pub mod icons {
     pub const REPLAY: Icon = crate::icon_from_path!("ui/replay.svg");
     pub const UNDO: Icon = crate::icon_from_path!("ui/undo.svg");
     pub const REDO: Icon = crate::icon_from_path!("ui/redo.svg");
+    pub const MINUS: Icon = crate::icon_from_path!("ui/minus.svg");
+    pub const CHECK: Icon = crate::icon_from_path!("ui/check.svg");
     pub const CHEVRON_DOWN: Icon = crate::icon_from_path!("ui/chevron-down.svg");
+    pub const CHEVRON_UP: Icon = crate::icon_from_path!("ui/chevron-up.svg");
+    pub const CHEVRON_LEFT: Icon = crate::icon_from_path!("ui/chevron-left.svg");
+    pub const CHEVRON_RIGHT: Icon = crate::icon_from_path!("ui/chevron-right.svg");
     pub const FULLSCREEN: Icon = crate::icon_from_path!("ui/fullscreen.svg");
     pub const THEME_TOGGLE: Icon = crate::icon_from_path!("ui/theme-toggle.svg");
     pub const QUICK_SEARCH: Icon = crate::icon_from_path!("ui/search.svg");
@@ -241,6 +246,7 @@ pub mod icons {
     pub const MAGNET: Icon = crate::icon_from_path!("ui/magnet.svg");
     pub const TRASH: Icon = crate::icon_from_path!("ui/trash.svg");
     pub const STAR_EMPTY: Icon = crate::icon_from_path!("ui/star.svg");
+    pub const STAR_FILLED: Icon = crate::icon_from_path!("ui/star-filled.svg");
     pub const LAYOUT_GRID: Icon = crate::icon_from_path!("ui/layout-grid.svg");
     pub const LAYOUT_SETUP: Icon = crate::icon_from_path!("ui/layout-setup.svg");
     pub const CLOSE: Icon = crate::icon_from_path!("ui/close.svg");
@@ -256,6 +262,14 @@ pub mod icons {
     pub const SETTINGS_SCALES_LINES: Icon = crate::icon_from_path!("ui/scales-lines.svg");
     pub const SETTINGS_CANVAS: Icon = crate::icon_from_path!("ui/canvas.svg");
     pub const SETTINGS_EVENTS: Icon = crate::icon_from_path!("ui/events.svg");
+
+    // Indicator categories and object tree groups
+    pub const CODE: Icon = crate::icon_from_path!("ui/code.svg");
+    pub const USERS: Icon = crate::icon_from_path!("ui/users.svg");
+    pub const CROWN: Icon = crate::icon_from_path!("ui/crown.svg");
+    pub const DATABASE: Icon = crate::icon_from_path!("ui/database.svg");
+    pub const PENCIL: Icon = crate::icon_from_path!("ui/pencil.svg");
+    pub const TEMPLATE: Icon = crate::icon_from_path!("ui/template.svg");
 
     // Connection status
     pub const STATUS_CONNECTED: Icon = crate::icon_from_path!("ui/connected.svg");
