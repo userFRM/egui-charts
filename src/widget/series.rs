@@ -4,7 +4,7 @@
 use super::{Chart, ChartElementId, SeriesId};
 use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
-use crate::model::{Bar, BarClock, BarData};
+use crate::model::{Bar, BarClock, BarData, Marker};
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
@@ -57,6 +57,15 @@ impl Chart {
             &self.state.data().bars
         } else {
             &[]
+        }
+    }
+
+    /// Replaces the markers drawn on the bars of `series` (trade signals, events).
+    ///
+    /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
+    pub fn set_markers(&mut self, series: SeriesId, markers: Vec<Marker>) {
+        if holds_bars(series, "set_markers") {
+            self.marks = markers;
         }
     }
 

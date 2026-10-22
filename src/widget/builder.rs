@@ -128,7 +128,6 @@ impl Chart {
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Vec::new(),
-            timescale_marks: Vec::new(),
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,
@@ -217,19 +216,10 @@ impl Chart {
         self.start_idx
     }
 
-    /// Sets a custom visual configuration (builder pattern).
-    ///
-    /// Controls colors, padding, grid visibility, volume display, and other
-    /// visual aspects. See [`ChartConfig`] for the full list of options.
-    pub fn config(mut self, config: ChartConfig) -> Self {
-        self.config = config;
-        self
-    }
-
     /// Replaces the visual configuration on a persistent chart instance.
     ///
     /// Use this when reconfiguring a long-lived chart (e.g., after the user
-    /// changes settings). For initial construction prefer [`Chart::config`].
+    /// changes settings). For initial construction prefer [`Chart::with_config`].
     pub fn update_config(&mut self, config: ChartConfig) {
         self.config = config;
     }

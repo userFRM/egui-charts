@@ -44,6 +44,7 @@ All notable changes to this project are documented in this file. The format is b
 - `TopToolbarState::can_undo` and `can_redo` disable the top toolbar's undo and redo buttons, whose tooltips then read "Nothing to undo" and "Nothing to redo"; both default to `true`. Migration: struct literals of `TopToolbarState` set both fields or use `..Default::default()`.
 - `Chart::set_data(series, bars)` replaces the bars, for history or a replay window, and `Chart::update(series, bar)` merges one bar by the rules a feed's `Sink::push_bar` follows, matched by exact open time: a bar with the open time of a stored bar replaces it, a newer one is appended and an older one is inserted in order. `Chart::bars(series)` reads the bars, and `Chart::feed_state(SeriesId::MAIN).rejected_bars` counts the bars dropped as invalid. Only `SeriesId::MAIN` holds bars; a call with another id is ignored with a warning. `SeriesId` is re-exported from `widget`.
 - `Chart` owns its studies and drawings. `Chart::add_indicator` computes a study at once and returns a `SeriesId` that stays valid when other studies are removed; `remove_series`, `set_indicator_visible`, `indicators` and `indicator_mut` take that id. `Chart::drawings` and `drawings_mut` give the drawing manager. `ChartElementId` is re-exported from `widget`.
+- `Chart::config`, `Chart::chart_options`, `Chart::price_scale_mut`, `Chart::set_markers(series, markers)` and `Chart::state` give access to what the public fields held.
 
 ### Fixed
 
@@ -267,6 +268,7 @@ All notable changes to this project are documented in this file. The format is b
 - `DrawingManager::shift_bar_indices`, `Drawing::shift_bar_indices`, `HistoryService::shift_bar_indices` and `DrawingCommand::shift_bar_indices` take the first bar index to shift, `from`, before the shift. Migration: pass `f32::NEG_INFINITY` to shift every point, as before.
 - `Chart` holds its studies as `Box<dyn Indicator>`, which is `Send` but not `Sync`, so `Chart` is no longer `Sync`. Migration: share it behind a `Mutex`; `Arc<Mutex<Chart>>` still works.
 - `TradingChart` keeps no studies or drawings of its own: `ChartBuilder::with_indicators` adds its studies to the chart. Migration: `tc.indicators.add(study)` becomes `tc.chart.add_indicator(study)`, `tc.drawing_manager` becomes `tc.chart.drawings_mut()`, `tc.remove_indicator(index)` and `tc.set_indicator_visible(index, visible)` become `tc.chart.remove_series(id)` and `tc.chart.set_indicator_visible(id, visible)` with the study's `SeriesId`, and `tc.remove_drawing(id)` becomes `tc.chart.drawings_mut().delete_drawing(id)`.
+- `Chart`'s fields are private. Migration: `chart.config` becomes `chart.config()` or `chart.config_mut()`, `chart.chart_options` becomes `chart.chart_options()`, `chart.marks = markers` becomes `chart.set_markers(SeriesId::MAIN, markers)`, `chart.state.data().bars` becomes `chart.bars(SeriesId::MAIN)`, `chart.state.price_scale_mut()` becomes `chart.price_scale_mut()` and `chart.last_rendered_price_rect` becomes `chart.get_rendered_price_rect()`. Other reads of the state, such as `revision`, `visible_range`, `visible_data`, `time_scale` and `has_zoom_history`, go through `chart.state()`; `time_scale_mut`, `fit_price_scale` and the zoom history's `push_zoom_state`, `pop_zoom_state` and `clear_zoom_history` have no public replacement, since the chart scrolls, fits and zooms itself.
 
 ### Removed
 
@@ -280,7 +282,7 @@ All notable changes to this project are documented in this file. The format is b
 - `ChartMapping::x_only` and `ChartMapping::with_price_range`, which nothing called. Migration: build the mapping with the `PriceMap` it needs.
 - `widget::apply_price_zoom` and `widget::y_to_price`, which assumed a linear axis. Migration: `PriceScale::zoom` and `PriceMap::y_to_price`.
 - `Chart::get_rendered_price_range`. Migration: `Chart::get_chart_mapping().price` maps prices exactly as the last frame drew them.
-- `Chart::apply_price_zoom`, a step of `Chart::show`. Migration: zoom the price axis with `chart.state.price_scale_mut().zoom(factor, anchor)`.
+- `Chart::apply_price_zoom`, a step of `Chart::show`. Migration: zoom the price axis with `chart.price_scale_mut().zoom(factor, anchor)`.
 - `PriceScaleOptions::{align_labels, border_visible, visible, ticks_visible, entire_text_only}`, which nothing read. Migration: remove them from struct literals; `ChartConfig::show_right_axis` shows or hides the price axis.
 - `ui_kit::buttons::button_bg` and `ui_kit::buttons::icon_color`, which had no pressed state. Migration: use `ButtonVariant::Ghost.bg_color(ui, hovered, pressed)`, or `ButtonVariant::Primary` for a selected button, and `ButtonVariant::fg_color`.
 - The Volume Footprint and Session Volume chart types, which approximated per-price volume from bar totals, with their `icons::icons::CHART_VOLUME_FOOTPRINT` and `icons::icons::CHART_SESSION_VOLUME` icons, and the unused `model::footprint` module.
@@ -305,6 +307,8 @@ All notable changes to this project are documented in this file. The format is b
 - `Chart::update_data` and `Chart::data`. Migration: `chart.update_data(BarData::from_bars(bars))` becomes `chart.set_data(SeriesId::MAIN, bars)`, or `chart.update(SeriesId::MAIN, bar)` for each new or changed bar, and `chart.data().bars` becomes `chart.bars(SeriesId::MAIN)`. The `bool` that `update_data` returned has no replacement: the chart follows the live edge itself when `ChartOptions::time_scale.shift_visible_range_on_new_bar` is set.
 - The `validation` module (`DataValidator` and its result types) and `Chart::{enable_validation, disable_validation, set_validator, is_validation_enabled}`, which only logged problems: every bar is validated and invalid ones are dropped. Migration: remove the calls; `Chart::feed_state(SeriesId::MAIN).rejected_bars` counts the dropped bars.
 - `ChartBuilder::extended` and `ChartBuilder::with_drawing_tools`: every chart has studies and drawings. Migration: use `ChartBuilder::new()`.
+- The consuming `Chart::config(self, config)`, whose name now reads the configuration. Migration: build with `Chart::with_config(data, config)` or set `*chart.config_mut() = config`.
+- `Chart::timescale_marks`, which was never drawn.
 
 ## [0.2.0] - 2026-06-04
 

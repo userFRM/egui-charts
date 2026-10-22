@@ -36,9 +36,8 @@
 //! # use egui_charts::{config::{ChartConfig, ChartOptions}, widget::Chart};
 //! # let my_chart_config = ChartConfig::default();
 //! # let opts = ChartOptions::default();
-//! let mut chart = Chart::new(bar_data)
+//! let mut chart = Chart::with_config(bar_data, my_chart_config) // Custom visual config
 //!     .visible_bars(100)          // Show 100 bars at a time
-//!     .config(my_chart_config)    // Custom visual config
 //!     .with_chart_options(opts);  // Scroll/zoom behavior
 //! ```
 //!
@@ -109,7 +108,7 @@ use crate::data::FeedState;
 use crate::drawings::DrawingManager;
 use crate::model::ChartState;
 use crate::model::ChartType;
-use crate::scales::PriceMap;
+use crate::scales::{PriceMap, PriceScale};
 use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
@@ -191,11 +190,11 @@ pub use state::{BoxZoomMode, BoxZoomState, ElasticBounceState, KineticScrollStat
 /// `crate::chart::state`.
 pub struct Chart {
     /// Backend state holding OHLCV data and coordinate system (time scale, price range).
-    pub state: ChartState,
+    pub(crate) state: ChartState,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
-    pub config: ChartConfig,
+    pub(crate) config: ChartConfig,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
-    pub chart_options: ChartOptions,
+    pub(crate) chart_options: ChartOptions,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)
@@ -251,14 +250,12 @@ pub struct Chart {
     /// Current timeframe (for legend)
     pub(crate) timeframe: String,
     /// Cursor mode state (Demonstration, Magic, Eraser effects)
-    #[doc(hidden)]
-    pub cursor_modes: CursorModeState,
+    pub(crate) cursor_modes: CursorModeState,
     /// Price mapping of the last rendered frame (includes zoom adjustments)
     pub(crate) last_price_map: PriceMap,
-    /// Last rendered price rect (actual rect used for candle rendering).
-    /// Use [`get_rendered_price_rect`](Chart::get_rendered_price_rect) instead.
-    #[doc(hidden)]
-    pub last_rendered_price_rect: Rect,
+    /// Last rendered price rect (actual rect used for candle rendering); see
+    /// [`get_rendered_price_rect`](Chart::get_rendered_price_rect).
+    pub(crate) last_rendered_price_rect: Rect,
     /// Last rendered volume rect (actual rect used for volume rendering)
     pub(crate) last_rendered_volume_rect: Rect,
     /// Last rendered indicator pane info for hit testing
@@ -275,10 +272,8 @@ pub struct Chart {
     // =========================================================================
     // Marks (Widget API)
     // =========================================================================
-    /// Bar marks (annotations on chart bars, e.g., trade signals)
-    pub marks: Vec<crate::model::Marker>,
-    /// Timescale marks (annotations on the time axis)
-    pub timescale_marks: Vec<crate::model::Marker>,
+    /// Bar marks (annotations on chart bars, e.g., trade signals); see [`Chart::set_markers`].
+    pub(crate) marks: Vec<crate::model::Marker>,
 
     // =========================================================================
     // Selection State
@@ -535,6 +530,26 @@ impl Chart {
     /// whole [`ChartConfig`]. Changes take effect on the next rendered frame.
     pub fn config_mut(&mut self) -> &mut ChartConfig {
         &mut self.config
+    }
+
+    /// The chart's visual configuration.
+    pub fn config(&self) -> &ChartConfig {
+        &self.config
+    }
+
+    /// The chart's behaviour options, set with [`Chart::with_chart_options`].
+    pub fn chart_options(&self) -> &ChartOptions {
+        &self.chart_options
+    }
+
+    /// The chart's bars, time scale, price scale and zoom history, to read them.
+    pub fn state(&self) -> &ChartState {
+        &self.state
+    }
+
+    /// The main price scale, to zoom it or change its mode and options.
+    pub fn price_scale_mut(&mut self) -> &mut PriceScale {
+        self.state.price_scale_mut()
     }
 
     /// The chart's drawings and drawing tools.
