@@ -16,9 +16,11 @@
 //! # });
 //! ```
 
-use egui::{CollapsingResponse, Id, RichText, Ui, Vec2};
+use egui::text::LayoutJob;
+use egui::{Align, CollapsingResponse, Id, RichText, TextStyle, Ui, Vec2, WidgetText};
 
 use crate::icons::Icon;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
 /// A collapsible section with header
@@ -66,35 +68,44 @@ impl Section {
         ui: &mut Ui,
         add_contents: impl FnOnce(&mut Ui) -> R,
     ) -> CollapsingResponse<R> {
-        let header_text = if self.strong_header {
-            RichText::new(&self.title).strong()
+        let theme = ui.active_theme();
+        let mut text = RichText::new(&self.title).size(theme.text.small);
+        if self.strong_header {
+            text = text.strong();
+        }
+        let icon_size = DESIGN_TOKENS.sizing.icon_sm;
+
+        let header_text: WidgetText = if self.icon.is_some() {
+            // Reserve the icon and its gap before the title, inside the header's own text.
+            let mut job = LayoutJob::default();
+            text.append_to(
+                &mut job,
+                ui.style(),
+                TextStyle::Button.into(),
+                Align::Center,
+            );
+            job.sections[0].leading_space = icon_size + theme.spacing.lg;
+            job.into()
         } else {
-            RichText::new(&self.title)
+            text.into()
         };
 
         let mut header = egui::CollapsingHeader::new(header_text)
             .id_salt(self.id)
             .default_open(self.default_open);
 
-        // If we have an icon, we need to customize the header
         if let Some(icon) = self.icon {
             header = header.icon(move |ui, openness, response| {
-                // Draw the icon
-                let icon_size = DESIGN_TOKENS.sizing.icon_sm;
-                let tint = ui.style().visuals.widgets.noninteractive.fg_stroke.color;
-
-                // Position icon to the left of the text
+                egui::collapsing_header::paint_default_icon(ui, openness, response);
+                // The header centres this rect in its indent and starts the title at the indent.
+                let left = response.rect.center().x + ui.spacing().indent / 2.0;
                 let icon_rect = egui::Rect::from_min_size(
-                    response.rect.left_center()
-                        - Vec2::new(icon_size + DESIGN_TOKENS.spacing.sm, icon_size / 2.0),
+                    egui::pos2(left, response.rect.center().y - icon_size / 2.0),
                     Vec2::splat(icon_size),
                 );
-
+                let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
                 icon.as_image_tinted(Vec2::splat(icon_size), tint)
                     .paint_at(ui, icon_rect);
-
-                // Draw default collapse arrow
-                egui::collapsing_header::paint_default_icon(ui, openness, response);
             });
         }
 
