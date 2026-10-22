@@ -7,7 +7,7 @@ Each item is marked as complete, partial, or missing.
 
 ## Chart Rendering Engine
 
-### Chart Types (17/20 complete)
+### Chart Types (17/18 complete)
 
 #### Standard OHLC
 - [x] **Candles** — Filled/hollow body, wicks, optional volume bars
