@@ -58,16 +58,20 @@ pub(super) struct RawUiSemanticTokens {
     pub text_light: RawColor,
     pub text_secondary_light: RawColor,
     pub text_muted_light: RawColor,
+    pub text_disabled_light: RawColor,
     pub border_light: RawColor,
     pub border_subtle_light: RawColor,
+    pub border_control_light: RawColor,
     pub panel_bg_dark: RawColor,
     pub panel_bg_secondary_dark: RawColor,
     pub panel_bg_floating_dark: RawColor,
     pub text_dark: RawColor,
     pub text_secondary_dark: RawColor,
     pub text_muted_dark: RawColor,
+    pub text_disabled_dark: RawColor,
     pub border_dark: RawColor,
     pub border_subtle_dark: RawColor,
+    pub border_control_dark: RawColor,
     pub icon_light: RawColor,
     pub icon_hover_light: RawColor,
     pub icon_dark: RawColor,
@@ -81,8 +85,14 @@ pub(super) struct RawUiSemanticTokens {
     pub btn_bg_active_dark: RawColor,
     pub accent: RawColor,
     pub accent_hover: RawColor,
-    pub warning: RawColor,
-    pub success: RawColor,
+    pub success_light: RawColor,
+    pub warning_light: RawColor,
+    pub error_light: RawColor,
+    pub info_light: RawColor,
+    pub success_dark: RawColor,
+    pub warning_dark: RawColor,
+    pub error_dark: RawColor,
+    pub info_dark: RawColor,
 }
 
 #[derive(Deserialize)]
@@ -345,9 +355,6 @@ pub(super) struct RawAlertSemanticTokens {
 #[derive(Deserialize)]
 pub(super) struct RawModalSemanticTokens {
     pub overlay_bg: RawColor,
-    pub panel_bg: RawColor,
-    pub panel_border: RawColor,
-    pub header_bg: RawColor,
 }
 
 #[derive(Deserialize)]

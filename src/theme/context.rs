@@ -173,8 +173,8 @@ impl Default for ThemeData {
             tpo_session_separator: tokens.tpo.session_separator,
             tpo_letter_default: tokens.tpo.letter_default,
 
-            warning: tokens.ui.warning,
-            success: tokens.ui.success,
+            warning: tokens.ui.warning_light,
+            success: tokens.ui.success_light,
 
             is_dark_ui: false,
             is_dark_chart: true,

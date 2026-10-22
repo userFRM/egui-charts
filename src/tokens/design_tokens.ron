@@ -105,20 +105,26 @@
             panel_bg_light: "white",
             panel_bg_secondary_light: (240, 243, 250),
             text_light: "gray_950",
-            text_secondary_light: "gray_500",
-            text_muted_light: (178, 181, 190),
+            // Body, secondary and muted text keep at least 4.5:1 on panels and windows;
+            // control outlines (checkbox, radio, input, combo) keep at least 3:1.
+            text_secondary_light: (78, 83, 96),
+            text_muted_light: (96, 101, 114),
+            text_disabled_light: (178, 181, 190),
             border_light: (224, 227, 235),
             border_subtle_light: "gray_100",
+            border_control_light: (134, 138, 150),
 
             // Dark mode UI
             panel_bg_dark: "gray_900",
             panel_bg_secondary_dark: "gray_800",
             panel_bg_floating_dark: (42, 46, 57), // Popups, menus, tooltips: one step above panels
             text_dark: (209, 212, 220),
-            text_secondary_dark: "gray_600",
-            text_muted_dark: "gray_500",
+            text_secondary_dark: (163, 167, 178),
+            text_muted_dark: (152, 157, 169),
+            text_disabled_dark: "gray_500",
             border_dark: "gray_800",
             border_subtle_dark: "gray_700",
+            border_control_dark: (120, 125, 138),
 
             // Icons
             icon_light: "gray_500",
@@ -139,9 +145,15 @@
             accent: "blue_500",
             accent_hover: "blue_600",
 
-            // Status
-            warning: "orange_500",
-            success: "green_500",
+            // Status text, at least 4.5:1 on its theme's panels and windows
+            success_light: "green_600",
+            warning_light: (180, 83, 9),
+            error_light: (198, 40, 40),
+            info_light: (2, 119, 189),
+            success_dark: "green_500",
+            warning_dark: "orange_500",
+            error_dark: (247, 104, 99),
+            info_dark: "info_blue_light",
         ),
 
         chart: (
@@ -387,11 +399,6 @@
         modal: (
             // Backdrop
             overlay_bg: (0, 0, 0, 180),
-
-            // Panel
-            panel_bg: "gray_800",
-            panel_border: "gray_700",
-            header_bg: "gray_900",
         ),
 
         // ==========================================================================

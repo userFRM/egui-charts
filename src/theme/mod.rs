@@ -402,9 +402,11 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     // Widget borders
     visuals.widgets.noninteractive.bg_stroke =
         egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border);
+    // egui outlines checkboxes, radios, text inputs and combo boxes with these strokes.
     visuals.widgets.inactive.bg_stroke =
-        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_subtle);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border);
+        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control);
+    visuals.widgets.hovered.bg_stroke =
+        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control);
     visuals.widgets.active.bg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.accent);
 
     // Text/foreground colors
@@ -418,6 +420,11 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     // Selection: egui paints selected labels in `selection.stroke`, on top of `bg_fill`.
     visuals.selection.bg_fill = ui.selection_bg;
     visuals.selection.stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.selection_text);
+
+    // egui fades weak text by alpha by default, which drops it below a readable contrast.
+    visuals.weak_text_color = Some(ui.text_muted);
+    visuals.error_fg_color = ui.error;
+    visuals.warn_fg_color = ui.warning;
 
     // Hyperlinks
     visuals.hyperlink_color = ui.accent;
@@ -476,18 +483,59 @@ pub fn all_themes() -> Vec<Theme> {
 mod tests {
     use super::*;
 
+    /// WCAG 2 contrast ratio of `fg` painted over the opaque `bg`.
+    fn contrast(fg: Color32, bg: Color32) -> f32 {
+        let luminance = |c: Color32| {
+            let c = egui::Rgba::from(c);
+            0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b()
+        };
+        let (a, b) = (luminance(bg.blend(fg)), luminance(bg));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
     #[test]
-    fn selected_text_is_readable_on_the_selection_fill() {
+    fn text_and_control_outlines_are_readable_in_every_preset() {
+        let mut failures = Vec::new();
         for theme in all_themes() {
             let ctx = egui::Context::default();
             apply_to_egui(&ctx, &theme);
-            let selection = ctx.style().visuals.selection;
-            assert_ne!(
-                selection.stroke.color,
-                selection.bg_fill,
-                "{}: selected labels would vanish into the selection fill",
-                theme.name()
+            let visuals = ctx.style().visuals.clone();
+            let ui = &theme.semantic.ui;
+            let mut check = |role: &str, fg: Color32, surface: &str, bg: Color32, min: f32| {
+                let ratio = contrast(fg, bg);
+                if ratio < min {
+                    failures.push(format!(
+                        "{}: {role} on {surface} is {ratio:.2}:1, below {min}:1",
+                        theme.name()
+                    ));
+                }
+            };
+            check(
+                "selected text",
+                visuals.selection.stroke.color,
+                "selection",
+                visuals.selection.bg_fill,
+                4.5,
             );
+            for (surface, bg) in [
+                ("panels", visuals.panel_fill),
+                ("windows", visuals.window_fill),
+            ] {
+                check("text", ui.text, surface, bg, 4.5);
+                check("label text", visuals.text_color(), surface, bg, 4.5);
+                check("muted text", ui.text_muted, surface, bg, 4.5);
+                check("weak text", visuals.weak_text_color(), surface, bg, 4.5);
+                check("error text", visuals.error_fg_color, surface, bg, 4.5);
+                check("warning text", visuals.warn_fg_color, surface, bg, 4.5);
+                check(
+                    "control outline",
+                    visuals.widgets.inactive.bg_stroke.color,
+                    surface,
+                    bg,
+                    3.0,
+                );
+            }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

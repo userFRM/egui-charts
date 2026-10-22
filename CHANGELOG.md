@@ -21,6 +21,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Light theme text and control outlines are readable: secondary and muted text reach at least 4.5:1 on panels and windows, unchecked checkboxes and radios, text inputs and combo boxes have a 3:1 outline, and egui's weak text uses the muted colour instead of fading by alpha. Dark theme secondary and muted text are raised to the same bar.
+- `apply_to_egui` sets `error_fg_color` and `warn_fg_color` from the theme, so error text no longer uses egui's default pure red, and the status colours (success, warning, error, info) are defined per theme with at least 4.5:1 on its panels.
 - The crate builds warning-free on current stable Rust: float literals that relied on the deprecated `f32` inference fallback are now explicitly typed.
 - The documentation examples for the `ui` module use the current crate name and module paths, and they compile and run as doctests.
 - Order line labels are shortened by rendered width with an ellipsis instead of by byte count, so labels with multi-byte characters no longer panic.
@@ -74,6 +76,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - `model::Tick` is `#[non_exhaustive]` and has an `id` field. Migration: build it with `Tick::new(ts, price, size, side)`, adding `.with_id(id)` when the feed has trade ids.
 - `model::SymbolType` is `#[non_exhaustive]`. Migration: add a wildcard arm to matches on it.
+- `tokens::UiSemanticTokens` replaces `warning` and `success` with per-theme status colours `{success,warning,error,info}_{light,dark}`, and gains `text_disabled_light`, `text_disabled_dark`, `border_control_light` and `border_control_dark`; `theme::UiSemanticTokens` gains `border_control`, the outline `apply_to_egui` gives inactive and hovered widgets. Migration: read `DESIGN_TOKENS.semantic.ui.warning_dark` and `success_dark` for the old values, or the theme's `semantic.ui.warning` and `success` to follow the active theme; struct literals must set the new fields.
 - Replaced the bundled icon set with original artwork drawn on a 24 px grid. Toolbar, chart-type and widget-bar icons now render at 24 px, and close buttons, the cross cursor, alert and toast states, move to pane, add to watchlist, the replay next-bar button, the price range tool, the arrow tool and the note, callout, comment, table, image and other annotation tools show their own icons.
 - `Drawing::render`, `Drawing::render_original`, and `DrawingManager::render_all` take a `drawings::rendering::ChartView` holding the chart's bars and coordinate mapping. Migration: build `ChartView { bars, bar_to_x, price_to_y }` from the series and the closures passed to `update_all_screen_coords`, and pass it as the last argument.
 - `Chart::handle_drawings` no longer takes the last close price.
@@ -90,6 +93,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Removed
 
+- The unused `panel_bg`, `panel_border` and `header_bg` fields of `tokens::ModalSemanticTokens`. Migration: use the theme's `semantic.ui.panel_bg_floating` and `semantic.ui.border`.
 - The Volume Footprint and Session Volume chart types, which approximated per-price volume from bar totals, with their `icons::icons::CHART_VOLUME_FOOTPRINT` and `icons::icons::CHART_SESSION_VOLUME` icons, and the unused `model::footprint` module.
 - The `chart::series_api` module (`ISeriesApi`, `IPriceScaleApi`, `ITimeScaleApi`, `IStudyApi`, their implementations and option types), which nothing constructed.
 - `TradingChart::toggle_main_series_visibility` and the series context menu "Hide" entry (`SeriesContextMenuAction::Hide`), which had no effect.

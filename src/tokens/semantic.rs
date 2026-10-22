@@ -62,16 +62,20 @@ pub struct UiSemanticTokens {
     pub text_light: Color32,
     pub text_secondary_light: Color32,
     pub text_muted_light: Color32,
+    pub text_disabled_light: Color32,
     pub border_light: Color32,
     pub border_subtle_light: Color32,
+    pub border_control_light: Color32,
     pub panel_bg_dark: Color32,
     pub panel_bg_secondary_dark: Color32,
     pub panel_bg_floating_dark: Color32,
     pub text_dark: Color32,
     pub text_secondary_dark: Color32,
     pub text_muted_dark: Color32,
+    pub text_disabled_dark: Color32,
     pub border_dark: Color32,
     pub border_subtle_dark: Color32,
+    pub border_control_dark: Color32,
     pub icon_light: Color32,
     pub icon_hover_light: Color32,
     pub icon_dark: Color32,
@@ -85,8 +89,14 @@ pub struct UiSemanticTokens {
     pub btn_bg_active_dark: Color32,
     pub accent: Color32,
     pub accent_hover: Color32,
-    pub warning: Color32,
-    pub success: Color32,
+    pub success_light: Color32,
+    pub warning_light: Color32,
+    pub error_light: Color32,
+    pub info_light: Color32,
+    pub success_dark: Color32,
+    pub warning_dark: Color32,
+    pub error_dark: Color32,
+    pub info_dark: Color32,
 }
 
 /// Chart area color tokens (dark chart is default, light chart variants included).
@@ -488,17 +498,11 @@ pub struct AlertSemanticTokens {
     pub error_icon: Color32,
 }
 
-/// Colors for modal dialog overlays and panels.
+/// Colors for modal dialog overlays.
 #[derive(Clone, Debug)]
 pub struct ModalSemanticTokens {
     /// Semi-transparent backdrop overlay behind the modal.
     pub overlay_bg: Color32,
-    /// Modal panel background.
-    pub panel_bg: Color32,
-    /// Modal panel border.
-    pub panel_border: Color32,
-    /// Modal header/title bar background.
-    pub header_bg: Color32,
 }
 
 /// Colors for toast/snackbar notification popups.

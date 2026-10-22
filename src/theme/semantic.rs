@@ -63,6 +63,8 @@ pub struct UiSemanticTokens {
     // Borders
     pub border: Color32,
     pub border_subtle: Color32,
+    /// Resting outline of checkboxes, radios, inputs and combo boxes.
+    pub border_control: Color32,
     pub border_focus: Color32,
 
     // Selection
@@ -104,16 +106,17 @@ impl UiSemanticTokens {
                 text: tokens.ui.text_dark,
                 text_secondary: tokens.ui.text_secondary_dark,
                 text_muted: tokens.ui.text_muted_dark,
-                text_disabled: tokens.ui.text_muted_dark,
+                text_disabled: tokens.ui.text_disabled_dark,
                 text_link: tokens.ui.accent,
 
                 icon: tokens.ui.icon_dark,
                 icon_hover: tokens.ui.icon_hover_dark,
                 icon_active: tokens.ui.icon_active,
-                icon_disabled: tokens.ui.text_muted_dark,
+                icon_disabled: tokens.ui.text_disabled_dark,
 
                 border: tokens.ui.border_dark,
                 border_subtle: tokens.ui.border_subtle_dark,
+                border_control: tokens.ui.border_control_dark,
                 border_focus: tokens.brand.accent,
 
                 selection_bg: tokens.brand.accent,
@@ -124,10 +127,10 @@ impl UiSemanticTokens {
                 accent_active: tokens.buttons.primary_bg_active,
                 accent_text: tokens.chart.selection_text,
 
-                success: tokens.ui.success,
-                warning: tokens.ui.warning,
-                error: tokens.status.error,
-                info: tokens.status.info,
+                success: tokens.ui.success_dark,
+                warning: tokens.ui.warning_dark,
+                error: tokens.ui.error_dark,
+                info: tokens.ui.info_dark,
             }
         } else {
             Self {
@@ -146,16 +149,17 @@ impl UiSemanticTokens {
                 text: tokens.ui.text_light,
                 text_secondary: tokens.ui.text_secondary_light,
                 text_muted: tokens.ui.text_muted_light,
-                text_disabled: tokens.ui.text_muted_light,
+                text_disabled: tokens.ui.text_disabled_light,
                 text_link: tokens.ui.accent,
 
                 icon: tokens.ui.icon_light,
                 icon_hover: tokens.ui.icon_hover_light,
                 icon_active: tokens.ui.icon_active,
-                icon_disabled: tokens.ui.text_muted_light,
+                icon_disabled: tokens.ui.text_disabled_light,
 
                 border: tokens.ui.border_light,
                 border_subtle: tokens.ui.border_subtle_light,
+                border_control: tokens.ui.border_control_light,
                 border_focus: tokens.brand.accent,
 
                 selection_bg: tokens.brand.accent,
@@ -166,10 +170,10 @@ impl UiSemanticTokens {
                 accent_active: tokens.buttons.primary_bg_active,
                 accent_text: tokens.chart.selection_text,
 
-                success: tokens.ui.success,
-                warning: tokens.ui.warning,
-                error: tokens.status.error,
-                info: tokens.status.info,
+                success: tokens.ui.success_light,
+                warning: tokens.ui.warning_light,
+                error: tokens.ui.error_light,
+                info: tokens.ui.info_light,
             }
         }
     }
