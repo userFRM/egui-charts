@@ -189,6 +189,14 @@ impl HandleService {
                     drawing.chart_points[0].bar_idx = x_to_bar(new_pos.x);
                 }
             }
+            DrawingToolType::LongPos | DrawingToolType::ShortPos => {
+                Self::update_multi_point_handle(drawing, handle, new_pos, &x_to_bar, &y_to_price);
+                // The stop line ends where the target line does; keep its handle there.
+                if drawing.points.len() > 2 && drawing.chart_points.len() > 2 {
+                    drawing.points[2].x = drawing.points[1].x;
+                    drawing.chart_points[2].bar_idx = drawing.chart_points[1].bar_idx;
+                }
+            }
             _ => {
                 Self::update_multi_point_handle(drawing, handle, new_pos, &x_to_bar, &y_to_price);
             }

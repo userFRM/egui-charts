@@ -814,7 +814,8 @@ mod tests {
     }
 
     /// A position's stop is an anchor of its own: it starts mirrored around
-    /// the entry and moves without dragging the target along.
+    /// the entry, moves without dragging the target along, and its handle
+    /// stays at the end of the stop line, which ends where the target line does.
     #[test]
     fn position_stop_moves_independently_of_target() {
         let mut manager = DrawingManager::new();
@@ -832,10 +833,16 @@ mod tests {
         assert_eq!(manager.drawings[0].chart_points[2].price, 90.0);
 
         manager.start_drag_handle(id, HandlePos::Point(2));
-        manager.update_drag_handle(Pos2::new(30.0, 105.0), x_to_bar, y_to_price);
+        manager.update_drag_handle(Pos2::new(50.0, 105.0), x_to_bar, y_to_price);
         manager.end_drag_handle();
-
         let points = &manager.drawings[0].chart_points;
         assert_eq!((points[1].price, points[2].price), (110.0, 95.0));
+        assert_eq!(points[2].bar_idx, 30.0);
+
+        manager.start_drag_handle(id, HandlePos::Point(1));
+        manager.update_drag_handle(Pos2::new(40.0, 85.0), x_to_bar, y_to_price);
+        manager.end_drag_handle();
+        let points = &manager.drawings[0].chart_points;
+        assert_eq!((points[2].bar_idx, points[2].price), (40.0, 95.0));
     }
 }
