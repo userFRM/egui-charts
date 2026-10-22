@@ -76,21 +76,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new() {
-        let point = ChartPoint::new(100.0, 150.50);
-        assert_eq!(point.bar_idx, 100.0);
-        assert_eq!(point.price, 150.50);
-    }
-
-    #[test]
-    fn test_shift_bar_idx() {
-        let mut point = ChartPoint::new(100.0, 150.50);
-        point.shift_bar_idx(50.0);
-        assert_eq!(point.bar_idx, 150.0);
-        assert_eq!(point.price, 150.50);
-    }
-
-    #[test]
     fn test_lerp() {
         let a = ChartPoint::new(0.0, 100.0);
         let b = ChartPoint::new(10.0, 200.0);

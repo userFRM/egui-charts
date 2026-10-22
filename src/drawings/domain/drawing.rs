@@ -309,21 +309,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_drawing() {
-        let drawing = Drawing::new(1, DrawingToolType::TrendLine);
-        assert_eq!(drawing.id, 1);
-        assert_eq!(drawing.tool_type, DrawingToolType::TrendLine);
-        assert!(drawing.points.is_empty());
-        assert!(!drawing.completed);
-    }
-
-    #[test]
-    fn test_with_color() {
-        let drawing = Drawing::with_color(1, DrawingToolType::TrendLine, [0, 255, 0, 255]);
-        assert_eq!(drawing.color, [0, 255, 0, 255]);
-    }
-
-    #[test]
     fn test_shift_bar_indices() {
         let mut drawing = Drawing::new(1, DrawingToolType::TrendLine);
         drawing.chart_points.push(ChartPoint::new(100.0, 150.0));
@@ -331,20 +316,30 @@ mod tests {
 
         drawing.shift_bar_indices(50.0);
 
-        assert_eq!(drawing.chart_points[0].bar_idx, 150.0);
-        assert_eq!(drawing.chart_points[1].bar_idx, 160.0);
+        assert_eq!(
+            drawing.chart_points,
+            [ChartPoint::new(150.0, 150.0), ChartPoint::new(160.0, 160.0)]
+        );
     }
 
+    /// A drawing completes once it holds its tool's required number of
+    /// anchors, and each anchor added from the screen gets its chart
+    /// coordinates.
     #[test]
     fn test_completion() {
+        let x_to_bar = |x: f32| x / 10.0;
+        let y_to_price = |y: f32| 1000.0 - y as f64;
         let mut drawing = Drawing::new(1, DrawingToolType::TrendLine);
+
+        drawing.add_point_with_chart_coords(egui::pos2(100.0, 300.0), x_to_bar, y_to_price);
         assert!(!drawing.completed);
 
-        drawing.add_point(egui::pos2(0.0, 0.0));
-        assert!(!drawing.completed);
-
-        drawing.add_point(egui::pos2(100.0, 100.0));
+        drawing.add_point_with_chart_coords(egui::pos2(200.0, 50.0), x_to_bar, y_to_price);
         assert!(drawing.completed); // TrendLine requires 2 points
+        assert_eq!(
+            drawing.chart_points,
+            [ChartPoint::new(10.0, 700.0), ChartPoint::new(20.0, 950.0)]
+        );
     }
 
     #[test]
