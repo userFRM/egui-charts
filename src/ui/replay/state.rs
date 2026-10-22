@@ -421,7 +421,7 @@ impl ReplayState {
     // Update method for frame-based playback
 
     /// Update playback state. Call this each frame.
-    /// Returns the number of bars to advance (usually 0 or 1).
+    /// Returns the number of bars actually advanced (usually 0 or 1).
     pub fn update(&mut self) -> usize {
         if !self.playback_state.is_playing() {
             return 0;
@@ -444,16 +444,13 @@ impl ReplayState {
         if bars_to_advance > 0 {
             self.accumulated_time -= bars_to_advance as f64 * self.bar_duration_secs;
 
-            // Advance bars
-            let new_bar = self.curr_bar + bars_to_advance;
-            if new_bar >= self.total_bars.saturating_sub(1) {
-                self.curr_bar = self.total_bars.saturating_sub(1);
+            let last_bar = self.total_bars.saturating_sub(1);
+            let advanced = bars_to_advance.min(last_bar.saturating_sub(self.curr_bar));
+            self.curr_bar += advanced;
+            if self.curr_bar >= last_bar {
                 self.playback_state = PlaybackState::Finished;
-                return self.total_bars.saturating_sub(1) - (self.curr_bar - bars_to_advance);
-            } else {
-                self.curr_bar = new_bar;
-                return bars_to_advance;
             }
+            return advanced;
         }
 
         0
@@ -544,6 +541,20 @@ mod tests {
 
         state.jump_to_percent(1.0);
         assert_eq!(state.curr_bar, 9);
+    }
+
+    #[test]
+    fn update_near_end_advances_only_remaining_bars() {
+        let mut state = ReplayState::new();
+        state.total_bars = 10;
+        state.curr_bar = 8;
+        state.play();
+        // A frame stall worth 100 bars with only one bar left.
+        state.accumulated_time = 100.0 * state.bar_duration_secs;
+
+        assert_eq!(state.update(), 1);
+        assert_eq!(state.curr_bar, 9);
+        assert_eq!(state.playback_state, PlaybackState::Finished);
     }
 
     #[test]
