@@ -15,9 +15,9 @@
 //! # });
 //! ```
 
-use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Pos2, Rect, Sense, Ui, Vec2};
+use egui::{Pos2, Rect, Role, Sense, Ui, Vec2, WidgetInfo};
 use egui_extras::{Size, StripBuilder};
 
 /// Two-column layout: fixed-width sidebar + flexible content area.
@@ -58,9 +58,17 @@ impl SidebarLayout {
                     );
                 });
 
-                // Content column
+                // Content column, 16 px from the divider and the top
                 strip.cell(|ui| {
-                    content(ui);
+                    let inset = ui.active_theme().spacing.xxl;
+                    let left = inset - ui.spacing().item_spacing.x;
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: left as i8,
+                            top: inset as i8,
+                            ..Default::default()
+                        })
+                        .show(ui, content);
                 });
             });
     }
@@ -107,9 +115,13 @@ impl<'a> SidebarTab<'a> {
 
     /// Show the sidebar tab. Returns `true` if clicked.
     pub fn show(self, ui: &mut Ui) -> bool {
+        let theme = ui.active_theme();
         let width = ui.available_width();
         let height = DESIGN_TOKENS.sizing.button_lg;
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+        response.widget_info(|| {
+            WidgetInfo::selected(Role::Button, ui.is_enabled(), self.is_active, self.label)
+        });
 
         let is_hovered = response.hovered();
 
@@ -128,27 +140,27 @@ impl<'a> SidebarTab<'a> {
             ui.style().visuals.text_color()
         };
 
-        // Icon
-        let mut text_x = rect.min.x + DESIGN_TOKENS.spacing.xl;
+        // Every tab reserves the icon slot, so labels line up with or without an icon.
+        let icon_size = DESIGN_TOKENS.sizing.icon_md;
+        let icon_x = rect.min.x + theme.spacing.xl;
         if let Some(icon) = self.icon {
-            let icon_size = DESIGN_TOKENS.sizing.icon_md;
             let icon_rect = Rect::from_min_size(
-                Pos2::new(text_x, rect.center().y - icon_size / 2.0),
+                Pos2::new(icon_x, rect.center().y - icon_size / 2.0),
                 Vec2::splat(icon_size),
             );
             icon.as_image_tinted(icon_rect.size(), text_color)
                 .paint_at(ui, icon_rect);
-            text_x = icon_rect.max.x + DESIGN_TOKENS.spacing.sm;
         }
 
         // Label
         ui.painter().text(
-            Pos2::new(text_x, rect.center().y),
+            Pos2::new(icon_x + icon_size + theme.spacing.sm, rect.center().y),
             egui::Align2::LEFT_CENTER,
             self.label,
-            egui::FontId::proportional(typography::MD),
+            egui::FontId::proportional(theme.text.body),
             text_color,
         );
+        crate::styles::focus::draw_focus_ring(ui, &response);
 
         response.clicked()
     }
