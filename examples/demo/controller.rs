@@ -271,7 +271,7 @@ impl DemoApp {
         }
     }
 
-    fn switch_symbol(&mut self, symbol: &str) {
+    pub(crate) fn switch_symbol(&mut self, symbol: &str) {
         let spec = DemoSymbol::find(symbol);
         self.state.symbol = spec.symbol.to_string();
         self.chart.set_symbol(spec.symbol);
@@ -674,7 +674,7 @@ impl DemoApp {
             });
     }
 
-    fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
+    pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
             TopToolbarAction::ChartStyleSelected(name) => {
                 if let Some(ct) = chart_type_from_name(&name) {
@@ -758,7 +758,7 @@ impl DemoApp {
             });
     }
 
-    fn handle_drawing_toolbar(&mut self, action: DrawingToolbarAction) {
+    pub(crate) fn handle_drawing_toolbar(&mut self, action: DrawingToolbarAction) {
         // Variants that touch the indicator registry (not the drawing manager)
         // or surface a notice are handled first, before the `dm` borrow.
         match action {

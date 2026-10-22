@@ -77,6 +77,14 @@ impl DemoSymbol {
                 start_price: 1.08,
                 seed: 53,
             },
+            // Neutral name for published screenshots: no real ticker with made-up prices.
+            DemoSymbol {
+                symbol: "SAMPLE",
+                company_name: "Sample data",
+                exchange: "Synthetic",
+                start_price: 42_500.0,
+                seed: 1,
+            },
         ]
     }
 
