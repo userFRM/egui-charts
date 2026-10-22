@@ -189,9 +189,21 @@ impl DrawingStorage {
         self
     }
 
-    /// Add a drawing
+    /// Add a drawing, or replace the drawing with the same id in place, so a
+    /// drawing saved again after an edit is stored once and the ids stay
+    /// unique, as [`Self::from_json`] requires. The replacement keeps the
+    /// position and the `created_at` of the drawing it replaces and takes
+    /// every other field, `notes` included, from `drawing`.
     pub fn add_drawing(&mut self, drawing: StoredDrawing) {
-        self.drawings.push(drawing);
+        match self.get_drawing_mut(&drawing.id) {
+            Some(existing) => {
+                *existing = StoredDrawing {
+                    created_at: existing.created_at,
+                    ..drawing
+                }
+            }
+            None => self.drawings.push(drawing),
+        }
         self.metadata.modified_at = chrono::Utc::now().timestamp_millis();
     }
 
@@ -222,11 +234,18 @@ impl DrawingStorage {
         &self.drawings
     }
 
-    /// Serialize to JSON, refusing a drawing with a non-finite number, which
-    /// JSON cannot store and which would otherwise be written as `null` and
-    /// lose the drawing on the next load.
+    /// Serialize to JSON, refusing what would lose a drawing on the next load:
+    /// a non-finite number, which JSON cannot store and which would otherwise be
+    /// written as `null`, and an id an earlier drawing already has, which
+    /// [`Self::from_json`] skips.
     pub fn to_json(&self) -> Result<String, SaveError> {
+        let mut ids = HashSet::new();
         for stored in &self.drawings {
+            if !ids.insert(stored.id.as_str()) {
+                return Err(SaveError::DuplicateId {
+                    id: stored.id.clone(),
+                });
+            }
             if let Some(field) = stored.non_finite_field() {
                 return Err(SaveError::NonFinite {
                     id: stored.id.clone(),
@@ -335,6 +354,11 @@ pub enum SaveError {
         /// The field, such as `"stroke_width"` or `"points[1].price"`.
         field: String,
     },
+    /// Two drawings have the same id, and loading keeps only the first.
+    DuplicateId {
+        /// The id of the drawing.
+        id: String,
+    },
     /// Serialization failed.
     Json(serde_json::Error),
 }
@@ -345,6 +369,7 @@ impl fmt::Display for SaveError {
             Self::NonFinite { id, field } => {
                 write!(f, "drawing {id:?} has a non-finite {field}")
             }
+            Self::DuplicateId { id } => write!(f, "duplicate drawing id {id:?}"),
             Self::Json(error) => error.fmt(f),
         }
     }
@@ -353,7 +378,7 @@ impl fmt::Display for SaveError {
 impl std::error::Error for SaveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::NonFinite { .. } => None,
+            Self::NonFinite { .. } | Self::DuplicateId { .. } => None,
             Self::Json(error) => Some(error),
         }
     }
@@ -686,40 +711,52 @@ mod tests {
     }
 
     #[test]
-    fn to_json_refuses_non_finite_values() {
-        type Spoil = fn(&mut StoredDrawing);
-        let cases: [(Spoil, &str); 5] = [
-            (|s| s.drawing.stroke_width = f32::NAN, "stroke_width"),
-            (|s| s.drawing.font_size = f32::INFINITY, "font_size"),
-            (|s| s.points[1].price = f64::NAN, "points[1].price"),
+    fn to_json_refuses_what_the_next_load_would_lose() {
+        fn first(storage: &mut DrawingStorage) -> &mut StoredDrawing {
+            &mut storage.drawings[0]
+        }
+        type Spoil = fn(&mut DrawingStorage);
+        let cases: [(Spoil, &str); 6] = [
+            (
+                |s| first(s).drawing.stroke_width = f32::NAN,
+                "non-finite stroke_width",
+            ),
+            (
+                |s| first(s).drawing.font_size = f32::INFINITY,
+                "non-finite font_size",
+            ),
+            (
+                |s| first(s).points[1].price = f64::NAN,
+                "non-finite points[1].price",
+            ),
             (
                 |s| {
-                    s.drawing.position_size = Some(PositionSize::RiskPercent {
+                    first(s).drawing.position_size = Some(PositionSize::RiskPercent {
                         account_size: 25_000.0,
                         percent: f64::NEG_INFINITY,
                     })
                 },
-                "position_size",
+                "non-finite position_size",
             ),
             (
-                |s| s.drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,
-                "fib_config.levels[0].value",
+                |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,
+                "non-finite fib_config.levels[0].value",
             ),
+            (|s| s.drawings.push(s.drawings[0].clone()), "duplicate id"),
         ];
-        for (spoil, field) in cases {
-            let mut stored = drawing_to_stored(
+        for (spoil, expected) in cases {
+            let mut storage = DrawingStorage::new("AAPL");
+            storage.add_drawing(drawing_to_stored(
                 &non_default_drawing(DrawingToolType::TrendLine),
                 bar_to_time,
-            );
-            spoil(&mut stored);
-            let mut storage = DrawingStorage::new("AAPL");
-            storage.add_drawing(stored);
-            match storage.to_json() {
-                Err(SaveError::NonFinite { id, field: got }) => {
-                    assert_eq!((id.as_str(), got.as_str()), ("7", field));
-                }
-                other => panic!("{field}: {other:?}"),
-            }
+            ));
+            spoil(&mut storage);
+            let got = match storage.to_json() {
+                Err(SaveError::NonFinite { id, field }) => format!("{id}: non-finite {field}"),
+                Err(SaveError::DuplicateId { id }) => format!("{id}: duplicate id"),
+                other => panic!("{expected}: {:?}", other.map(drop)),
+            };
+            assert_eq!(got, format!("7: {expected}"));
         }
     }
 
@@ -732,5 +769,33 @@ mod tests {
         assert!(storage.remove_drawing("1"));
         assert_eq!(storage.drawings().len(), 1);
         assert!(!storage.remove_drawing("1")); // Already removed
+    }
+
+    #[test]
+    fn adding_an_existing_id_replaces_the_drawing_and_round_trips() {
+        let mut storage = DrawingStorage::new("AAPL");
+        for (id, tool, created_at) in [
+            ("1", DrawingToolType::TrendLine, 10),
+            ("2", DrawingToolType::Ray, 20),
+            ("1", DrawingToolType::HorizontalLine, 30),
+        ] {
+            let mut stored = StoredDrawing::new(id, Drawing::new(0, tool));
+            stored.created_at = created_at;
+            storage.add_drawing(stored);
+        }
+        let (loaded, skipped) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let got: Vec<_> = loaded
+            .drawings()
+            .iter()
+            .map(|d| (d.id.as_str(), d.drawing.tool_type, d.created_at))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("1", DrawingToolType::HorizontalLine, 10),
+                ("2", DrawingToolType::Ray, 20)
+            ]
+        );
     }
 }
