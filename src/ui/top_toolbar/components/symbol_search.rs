@@ -237,13 +237,15 @@ impl SymbolSearchDialog {
 
         // egui sizes a window from outside its frame, so add the frame to the content width.
         let frame = egui::Frame::window(&ctx.global_style());
-        // Centred like the crate's other dialogs, but movable.
+        // Centred horizontally like the crate's other dialogs, but movable. The top edge is the
+        // pivot, so the window grows downwards as its content changes instead of around its centre.
+        let r = ctx.content_rect();
         egui::Window::new("Symbol Search")
             .collapsible(false)
             .resizable(false)
             .default_width(400.0 + frame.total_margin().sum().x)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
+            .pivot(egui::Align2::CENTER_TOP)
+            .default_pos(egui::pos2(r.center().x, r.top() + r.height() * 0.2))
             .show(ctx, |ui| {
                 // Search input
                 ui.horizontal(|ui| {
