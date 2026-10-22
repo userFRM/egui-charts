@@ -35,6 +35,7 @@ pub mod symbol_info;
 mod timeframe;
 mod timescale;
 pub mod tpo;
+mod trading;
 
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
@@ -78,4 +79,8 @@ pub use timescale::{LogicalRange, TimeScale};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
     derive_tick_size, to_tpo_profiles,
+};
+pub use trading::{
+    Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
+    OrderType, Position,
 };

@@ -9,45 +9,10 @@ use egui::{
 };
 
 use crate::drawings::rendering::utils::draw_dashed_line;
+pub use crate::model::{OrderId, OrderSide};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-
-/// Unique string identifier for an order, used to reference specific order lines.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct OrderId(pub String);
-
-impl OrderId {
-    /// Create a new order ID from any string-like value.
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-}
-
-impl std::fmt::Display for OrderId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Side of the order: buy or sell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OrderSide {
-    /// Long / buy order.
-    Buy,
-    /// Short / sell order.
-    Sell,
-}
-
-impl OrderSide {
-    /// Get display text
-    pub fn label(&self) -> &'static str {
-        match self {
-            OrderSide::Buy => "BUY",
-            OrderSide::Sell => "SELL",
-        }
-    }
-}
 
 /// Categorization of an order line, determining its visual style and label.
 #[derive(Debug, Clone, Copy, PartialEq)]
