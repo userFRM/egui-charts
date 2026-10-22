@@ -97,7 +97,7 @@ All notable changes to this project are documented in this file. The format is b
 - `ChartBuilder` no longer defaults the symbol to `BTCUSDT`: a chart built without `with_symbol` has an empty symbol, shows no symbol and does not subscribe to or fetch from its data source until `TradingChart::set_symbol` is called. Migration: call `with_symbol` to keep the previous behaviour.
 - `SymbolInfo::default()` (in `ui::symbol_header`) has empty fields instead of AAPL, Apple Inc, NASDAQ and 1D. Migration: set the fields explicitly.
 - Iceberg takes its tick size from `IcebergDetector::with_tick_size` instead of guessing it from the first 100 bars, and Liquidity no longer defaults to a tick size of 1.0. Without a tick size, both divide the series' price span into 1,000 levels; set the instrument's tick size to key levels on it.
-- `CompareSymbolsDialog::show` takes the symbols to suggest (`show(ctx, &symbols)`, the same `&[model::Symbol]` that `SymbolSearchDialog::show` takes) and lists only those, with an empty state when there are none, instead of a built-in list of tickers the data source may not offer. Migration: pass the symbols your data source offers.
+- `CompareSymbolsDialog::show` takes the symbols to suggest (`show(ctx, &symbols)`, the same `&[model::Symbol]` that `SymbolSearchDialog::show` takes) and lists only those, with an empty state when there are none, instead of a built-in list of tickers the data source may not offer. Added symbols have an empty `CompareSymbol::exchange`, since `Symbol` carries no exchange. Migration: pass the symbols your data source offers.
 
 ### Removed
 
