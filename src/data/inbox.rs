@@ -431,13 +431,17 @@ impl Live {
             return false;
         };
         // A system clock may lag the exchange by seconds, and a bar of a day or longer is stamped
-        // on its trading date, which can be days ahead.
-        let allowance =
-            if self.clock.timeframe().duration_ms() < TimeDelta::days(1).num_milliseconds() {
-                TimeDelta::minutes(1)
-            } else {
-                TimeDelta::weeks(2)
-            };
+        // on its trading date, which can be days ahead. A clock of unknown timeframe gets the
+        // longer allowance.
+        let intraday = self
+            .clock
+            .timeframe()
+            .is_some_and(|tf| tf.duration_ms() < TimeDelta::days(1).num_milliseconds());
+        let allowance = if intraday {
+            TimeDelta::minutes(1)
+        } else {
+            TimeDelta::weeks(2)
+        };
         let beyond = now
             .checked_add_signed(allowance)
             .is_some_and(|limit| open > limit);

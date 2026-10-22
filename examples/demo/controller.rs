@@ -10,14 +10,14 @@ use eframe::egui;
 use egui_charts::chart::builder::TradingChart;
 use egui_charts::chart::selection::SeriesId;
 use egui_charts::chart::series::SeriesSettings;
-use egui_charts::model::{Bar, BarData, ChartType, Timeframe};
+use egui_charts::model::{Bar, ChartType, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
     AlertData, AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction,
-    DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog,
-    SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
+    DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog, SeriesContextMenuAction,
+    SeriesSettingsAction, SeriesSettingsDialog,
 };
 use egui_charts::ui::dialogs::{DrawingContextMenuAction, DrawingLineStyle};
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
@@ -184,7 +184,7 @@ impl DemoApp {
             .build();
 
         let bars = generate_sample_bars(symbol, 500, timeframe);
-        tc.chart.update_data(BarData::from_bars(bars.clone()));
+        tc.chart.set_data(SeriesId::MAIN, bars.clone());
         tc.indicators.calculate_all(&bars);
 
         let spec = DemoSymbol::find(symbol);
@@ -278,7 +278,7 @@ impl DemoApp {
         self.bars = generate_sample_bars(&self.state.symbol, count, tf);
         self.trading_chart
             .chart
-            .update_data(BarData::from_bars(self.bars.clone()));
+            .set_data(SeriesId::MAIN, self.bars.clone());
         self.trading_chart.indicators.calculate_all(&self.bars);
         self.update_symbol_header();
     }
@@ -322,7 +322,7 @@ impl DemoApp {
             // Restore the full series the chart had before replay.
             self.trading_chart
                 .chart
-                .update_data(BarData::from_bars(self.bars.clone()));
+                .set_data(SeriesId::MAIN, self.bars.clone());
             self.trading_chart.indicators.calculate_all(&self.bars);
         }
     }
@@ -335,7 +335,7 @@ impl DemoApp {
             if !visible.is_empty() {
                 self.trading_chart
                     .chart
-                    .update_data(BarData::from_bars(visible.clone()));
+                    .set_data(SeriesId::MAIN, visible.clone());
                 self.trading_chart.indicators.calculate_all(&visible);
             }
         }

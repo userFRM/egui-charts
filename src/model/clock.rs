@@ -10,21 +10,36 @@ const FIRST_MONDAY_MS: i64 = 4 * DAY_MS;
 /// Bar boundaries for one timeframe, in UTC around the clock.
 #[derive(Clone, Debug)]
 pub struct BarClock {
-    timeframe: Timeframe,
+    /// `None` for a clock that matches bars by their exact open time.
+    timeframe: Option<Timeframe>,
 }
 
 impl BarClock {
     /// Clock for bars of `timeframe`.
     pub fn new(timeframe: Timeframe) -> Self {
-        Self { timeframe }
+        Self {
+            timeframe: Some(timeframe),
+        }
+    }
+
+    /// Clock in which every instant opens a bar of its own, for bars of an unknown timeframe.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget edits bars by hand")
+    )]
+    pub(crate) fn exact() -> Self {
+        Self { timeframe: None }
     }
 
     /// Open time of the bar containing `t`. Bars shorter than a day align to UTC midnight,
     /// weekly bars to Monday, monthly bars to the first day of the month, and other bars to the
     /// Unix epoch.
     pub fn bar_open(&self, t: DateTime<Utc>) -> DateTime<Utc> {
+        let Some(timeframe) = self.timeframe else {
+            return t;
+        };
         let ms = t.timestamp_millis();
-        let (period, anchor) = match self.timeframe {
+        let (period, anchor) = match timeframe {
             Timeframe::Month1 => {
                 return t
                     .date_naive()
@@ -41,8 +56,8 @@ impl BarClock {
         DateTime::from_timestamp_millis(ms - (ms - anchor).rem_euclid(period)).unwrap_or(t)
     }
 
-    /// The timeframe of the bars.
-    pub(crate) fn timeframe(&self) -> Timeframe {
+    /// The timeframe of the bars, `None` for a clock that matches bars by their exact open time.
+    pub(crate) fn timeframe(&self) -> Option<Timeframe> {
         self.timeframe
     }
 

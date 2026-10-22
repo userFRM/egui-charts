@@ -22,12 +22,12 @@
 //! # Persistent Chart (Recommended for Real-Time)
 //!
 //! ```rust
-//! # use egui_charts::{ChartType, model::BarData, widget::Chart};
+//! # use egui_charts::{ChartType, model::Bar, widget::{Chart, SeriesId}};
 //! # struct App { chart: Chart }
 //! # impl App {
-//! # fn on_frame(&mut self, new_data: BarData) {
+//! # fn on_frame(&mut self, bar: Bar) {
 //! // Store in your app struct, update each frame:
-//! self.chart.update_data(new_data);
+//! self.chart.update(SeriesId::MAIN, bar);
 //! self.chart.set_chart_type(ChartType::Candles);
 //! self.chart.enable_tracking_mode();
 //! # }
@@ -37,27 +37,29 @@
 use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::selection::SelectionState;
 use crate::config::{ChartConfig, ChartOptions};
+use crate::data::FeedState;
 use crate::model::ChartType;
 use crate::model::{BarData, ChartState};
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
-use crate::validation::DataValidator;
 
 use super::Chart;
 use super::state::{BoxZoomState, KineticScrollState};
+use std::collections::BTreeSet;
 
 impl Chart {
     /// Creates a new chart with default configuration.
     ///
     /// Initializes the chart with the provided OHLCV data and sensible defaults:
-    /// candlestick chart type, default bar spacing, data validation enabled,
-    /// and tracking mode off.
+    /// candlestick chart type, default bar spacing and tracking mode off. The
+    /// bars are cleaned as by [`Chart::set_data`].
     ///
     /// # Arguments
     ///
     /// * `data` -- The OHLCV bar data to display
     pub fn new(data: BarData) -> Self {
         let chart_options = ChartOptions::default();
-        let mut state = ChartState::new(data);
+        let (bars, rejected_bars) = super::series::clean(data.bars);
+        let mut state = ChartState::new(BarData::from_bars(bars));
 
         // Initialize TimeScale with defaults (apply all constraints)
         {
@@ -92,7 +94,11 @@ impl Chart {
             kagi_reversal_amount: 1.0,
             tracking_mode_active: false,
             mouse_in_chart: false,
-            validator: Some(DataValidator::new()),
+            feed: FeedState {
+                rejected_bars,
+                ..FeedState::default()
+            },
+            from_ticks: BTreeSet::new(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
             zoom_just_applied: false,
@@ -132,70 +138,9 @@ impl Chart {
     /// * `data` -- The OHLCV bar data to display
     /// * `config` -- Custom visual configuration (colors, padding, feature flags)
     pub fn with_config(data: BarData, config: ChartConfig) -> Self {
-        let chart_options = ChartOptions::default();
-        let mut state = ChartState::new(data);
-
-        // Initialize TimeScale with defaults (apply all constraints)
-        {
-            let ts_opt = &chart_options.time_scale;
-            state.time_scale_mut().apply_options(
-                ts_opt.bar_spacing,
-                ts_opt.min_bar_spacing,
-                ts_opt.max_bar_spacing,
-                ts_opt.fix_left_edge,
-                ts_opt.fix_right_edge,
-                ts_opt.right_offset,
-                ts_opt.right_offset_pixels,
-            );
-        }
-
-        Self {
-            state,
-            config,
-            start_idx: 0,
-            chart_options,
-            kinetic_scroll: KineticScrollState::new(),
-            scroll_start_pos: None,
-            scroll_start_offset: None,
-            prev_width: None,
-            desired_visible_bars: None,
-            last_visible_bars: 0,
-            apply_visible_bars_once: false,
-            price_axis_drag: None,
-            pending_start_idx: None,
-            chart_type: ChartType::Candles,
-            renko_brick_size: 1.0,
-            kagi_reversal_amount: 1.0,
-            tracking_mode_active: false,
-            mouse_in_chart: false,
-            validator: Some(DataValidator::new()),
-            box_zoom: BoxZoomState::new(),
-            zoom_mode_active: false,
-            zoom_just_applied: false,
-            symbol: String::new(),
-            timeframe: String::new(),
-            cursor_modes: CursorModeState::new(),
-            last_price_map: PriceMap::new(
-                PriceTransform::default(),
-                PriceRange::new(0.0, 100.0),
-                0.0,
-                0.0,
-                false,
-            ),
-            last_rendered_price_rect: egui::Rect::NOTHING,
-            last_rendered_volume_rect: egui::Rect::NOTHING,
-            last_rendered_indicator_panes: Vec::new(),
-            // Multi-chart sync
-            synced_crosshair_bar_idx: None,
-            last_hover_bar_idx: None,
-            // Marks (Widget API)
-            marks: Vec::new(),
-            timescale_marks: Vec::new(),
-            // Selection (Widget API)
-            selection: SelectionState::new(),
-            right_click: None,
-            indicator_remove: None,
-        }
+        let mut chart = Self::new(data);
+        chart.config = config;
+        chart
     }
 
     /// Sets chart behavior options (builder pattern).
@@ -274,99 +219,6 @@ impl Chart {
         self
     }
 
-    /// Updates the chart's OHLCV data for live/streaming scenarios.
-    ///
-    /// Call this each time new bars arrive or the latest bar's close price changes.
-    /// If the chart is near the live edge and `shift_visible_range_on_new_bar` is
-    /// enabled in chart options, the viewport automatically scrolls to keep the
-    /// latest bar visible.
-    ///
-    /// Returns `true` if the chart auto-scrolled to follow the live edge, `false`
-    /// if the viewport position was unchanged (user is scrolled back in history).
-    ///
-    /// # Data Validation
-    ///
-    /// When validation is enabled (default), new bars are checked for anomalies
-    /// (duplicate timestamps, suspicious price changes). Validation warnings are
-    /// logged but do not reject data.
-    pub fn update_data(&mut self, data: BarData) -> bool {
-        // Validate new data if validator is enabled. Only validate when the tail
-        // actually advances; when we prepend older bars the last bar is unchanged
-        // and validating it against itself produces a false duplicate warning.
-        if let Some(ref validator) = self.validator
-            && let (Some(new_tail), Some(old_tail)) =
-                (data.bars.last(), self.state.data().bars.last())
-            && new_tail.time > old_tail.time
-        {
-            let result = validator.validate_new_bar(Some(old_tail), new_tail);
-            if result.is_error() {
-                // keep logging behaviour but do not reject
-            }
-        }
-
-        // Loosely detect "near live edge": within ~1.5 bars from the right edge.
-        // With fix_right_edge=true we clamp right_offset <= 0, so "near live" means
-        // not farther than 1.5 bars to the left of the edge: right_offset >= -1.5.
-        let near_live = self.state.time_scale().right_offset() >= -1.5;
-
-        // Detect if new bars were appended or tail candle changed
-        let prev_len = self.state.data().len();
-        let old_tail = self.state.data().bars.last().cloned();
-        let new_tail = data.bars.last().cloned();
-
-        // CRITICAL FIX: Only consider it "appended" if TAIL moved forward in time.
-        // When prepending older historical bars, the data length increases but
-        // the tail stays the same (or moves forward), so we check if the tail
-        // timestamp actually advanced.
-        let tail_time_advanced = old_tail
-            .as_ref()
-            .zip(new_tail.as_ref())
-            .map(|(o, n)| n.time > o.time)
-            .unwrap_or(false);
-        let appended = data.len() > prev_len && tail_time_advanced;
-
-        let tail_changed = old_tail
-            .zip(new_tail)
-            .map(|(o, n)| o.time != n.time || o.close != n.close)
-            .unwrap_or(false);
-
-        // Check if we should shift for whitespace replacement
-        let is_whitespace_replacement = tail_changed && !appended;
-        let should_shift_for_whitespace = is_whitespace_replacement
-            && self
-                .chart_options
-                .time_scale
-                .allow_shift_visible_range_on_whitespace_replacement;
-
-        // Update the data (this changes bar_cnt which shifts coords)
-        self.state.set_data(data);
-
-        // IMPORTANT: When older bars are prepended (length increased but tail unchanged),
-        // NO adjustment to right_offset is needed! Here's why:
-        // - base_idx increases by N (e.g., 199 -> 589 when adding 390 bars)
-        // - Bar indices also increase by N (e.g., old bar 49 -> new bar 439)
-        // - right_offset = right_border - base_idx
-        // - Since both increase by N, right_offset stays the same
-        // - The viewport automatically shows the same bars the user was viewing
-
-        // FORCE chart to stay at live edge if:
-        // 1. shift_visible_range_on_new_bar is enabled AND
-        // 2. We were near the live edge AND
-        // 3. Either new bars were appended OR we should shift for whitespace replacement
-        let should_auto_shift = self.chart_options.time_scale.shift_visible_range_on_new_bar
-            && near_live
-            && (appended || should_shift_for_whitespace);
-
-        if should_auto_shift {
-            self.state.time_scale_mut().scroll_to_realtime();
-            // Cancel any pending start_idx to prevent override
-            self.pending_start_idx = None;
-            true // Return true to indicate we auto-followed
-        } else {
-            false
-        }
-    }
-
     /// Replaces the visual configuration on a persistent chart instance.
     ///
     /// Use this when reconfiguring a long-lived chart (e.g., after the user
@@ -436,35 +288,6 @@ impl Chart {
         self.tracking_mode_active
     }
 
-    /// Enables data validation for incoming bar data.
-    ///
-    /// When enabled, calls to [`Chart::update_data`] check new bars for
-    /// anomalies such as duplicate timestamps or suspicious price spikes.
-    /// Validation is enabled by default on new charts.
-    pub fn enable_validation(&mut self) {
-        if self.validator.is_none() {
-            self.validator = Some(DataValidator::new());
-        }
-    }
-
-    /// Disables data validation, skipping anomaly checks on new bars.
-    pub fn disable_validation(&mut self) {
-        self.validator = None;
-    }
-
-    /// Replaces the data validator with a custom-configured one.
-    ///
-    /// Use this to adjust thresholds for duplicate detection or price-spike
-    /// sensitivity beyond what the default [`DataValidator`] provides.
-    pub fn set_validator(&mut self, validator: DataValidator) {
-        self.validator = Some(validator);
-    }
-
-    /// Returns `true` if data validation is currently enabled.
-    pub fn is_validation_enabled(&self) -> bool {
-        self.validator.is_some()
-    }
-
     /// Returns the current chart type (Candles, Bars, Line, Area, Renko, or Kagi).
     pub fn chart_type(&self) -> ChartType {
         self.chart_type
@@ -494,14 +317,6 @@ impl Chart {
     /// Returns the current Kagi reversal amount in price units.
     pub fn kagi_reversal_amount(&self) -> f64 {
         self.kagi_reversal_amount
-    }
-
-    /// Returns a reference to the chart's current OHLCV data.
-    ///
-    /// Useful for progressive/historical loading where you need to inspect
-    /// the existing data range before prepending or appending bars.
-    pub fn data(&self) -> &crate::model::BarData {
-        self.state.data()
     }
 
     /// Calculates how many bars fit in the given pixel width at the current bar spacing.

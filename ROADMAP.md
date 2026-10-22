@@ -512,9 +512,8 @@ The ui_kit components are generic building blocks:
 - [x] `ui.active_theme()` (`theme::ThemeExt`) returns the theme last applied with `apply_to_egui`
 
 ### Data Validation
-- [x] `DataValidator`: Timestamp ordering, OHLC sanity checks
-- [x] `ValidationResult` variants: Valid, TsMismatch, DuplicateTs, InvalidOHLC
-- [x] Builder-style configuration
+- [x] Every bar update drops invalid bars (a non-finite value, a high or low on the wrong side of the open and close, negative volume) and counts them in `Chart::feed_state`
+- [x] Bars stay in time order, one per open time; an out-of-order bar is inserted in place
 
 ### Templates
 - [ ] `TemplateManager` keeps templates in memory only (`ui/model.rs`)

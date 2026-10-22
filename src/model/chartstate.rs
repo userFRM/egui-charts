@@ -6,7 +6,7 @@
 
 /// ChartState Backend - Pure state management (no rendering).
 /// Combines data with coordinate systems.
-use super::{BarData, TimeScale};
+use super::{Bar, BarData, TimeScale};
 use crate::scales::{PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -113,26 +113,44 @@ impl ChartState {
         self.revision
     }
 
-    /// Update data (also updates bar count in time scale)
-    pub fn set_data(&mut self, data: BarData) {
-        let kept = self.data.len().saturating_sub(1);
-        // Bitwise, so that a NaN compares equal to itself.
-        let bits = |bar: &crate::model::Bar| {
-            (
-                bar.time,
-                [bar.open, bar.high, bar.low, bar.close, bar.volume].map(f64::to_bits),
-            )
-        };
-        if data.len() < self.data.len()
-            || !data.bars[..kept]
+    /// Replaces the bars (also updates the bar count of the time scale). Returns the index of the
+    /// first bar that differs from the previous bars, counting a change of length: the shorter
+    /// length when one is a prefix of the other, `None` when they are identical.
+    pub fn set_data(&mut self, data: BarData) -> Option<usize> {
+        self.edit_bars(|bars| {
+            // Bitwise, so that a NaN compares equal to itself.
+            let bits = |bar: &Bar| {
+                (
+                    bar.time,
+                    [bar.open, bar.high, bar.low, bar.close, bar.volume].map(f64::to_bits),
+                )
+            };
+            let first = bars
                 .iter()
-                .map(bits)
-                .eq(self.data.bars[..kept].iter().map(bits))
+                .zip(&data.bars)
+                .position(|(old, new)| bits(old) != bits(new))
+                .or_else(|| (bars.len() != data.len()).then(|| bars.len().min(data.len())));
+            *bars = data.bars;
+            first
+        })
+    }
+
+    /// Runs `edit` on the bars and keeps the time scale and [`revision`](Self::revision) in step.
+    /// `edit` returns the index of the first bar it inserted, changed or removed; bars after it
+    /// may have moved.
+    pub(crate) fn edit_bars(
+        &mut self,
+        edit: impl FnOnce(&mut Vec<Bar>) -> Option<usize>,
+    ) -> Option<usize> {
+        let old_len = self.data.len();
+        let first_changed = edit(&mut self.data.bars);
+        if first_changed.is_some_and(|first| first < old_len.saturating_sub(1))
+            || self.data.len() < old_len
         {
             self.revision = next_revision();
         }
-        self.time_scale.set_bar_cnt(data.len());
-        self.data = data;
+        self.time_scale.set_bar_cnt(self.data.len());
+        first_changed
     }
 
     /// Get visible data based on current time scale

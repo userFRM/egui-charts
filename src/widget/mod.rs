@@ -44,18 +44,19 @@
 //!
 //! # Real-Time Updates
 //!
-//! For live data feeds, reuse the chart instance across frames:
+//! For live data feeds, reuse the chart instance across frames and merge each
+//! bar as it arrives:
 //!
 //! ```rust
-//! # use egui_charts::{model::BarData, widget::Chart};
+//! # use egui_charts::{model::Bar, widget::{Chart, SeriesId}};
 //! // In your app struct:
 //! struct MyApp {
 //!     chart: Chart,
 //! }
 //!
 //! impl MyApp {
-//!     fn on_new_data(&mut self, new_bar_data: BarData, ui: &mut egui::Ui) {
-//!         let auto_scrolled = self.chart.update_data(new_bar_data);
+//!     fn on_new_bar(&mut self, bar: Bar, ui: &mut egui::Ui) {
+//!         self.chart.update(SeriesId::MAIN, bar);
 //!         self.chart.show(ui);
 //!     }
 //! }
@@ -103,11 +104,14 @@ use crate::chart::renderers::ChartMapping;
 use crate::chart::selection::{ChartElementId, SelectionState};
 use crate::chart::series::SeriesSettings;
 use crate::config::{ChartConfig, ChartOptions};
+use crate::data::FeedState;
 use crate::model::ChartState;
 use crate::model::ChartType;
 use crate::scales::PriceMap;
-use crate::validation::DataValidator;
+use chrono::{DateTime, Utc};
+use std::collections::BTreeSet;
 pub mod indicator_pane;
+pub use crate::chart::selection::SeriesId;
 use egui::{Pos2, Rect, Vec2};
 pub use indicator_pane::{
     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
@@ -122,6 +126,7 @@ pub(crate) mod interaction;
 pub(crate) mod pan_zoom;
 mod panes;
 mod selection;
+mod series;
 mod sync;
 pub(crate) mod tool_interaction;
 
@@ -218,8 +223,10 @@ pub struct Chart {
     pub(crate) tracking_mode_active: bool,
     /// Mouse entered chart area (for tracking mode exit detection)
     pub(crate) mouse_in_chart: bool,
-    /// Data validator for detecting data mismatches
-    pub(crate) validator: Option<DataValidator>,
+    /// Feed state of the main series; see [`Chart::feed_state`].
+    pub(crate) feed: FeedState,
+    /// Times of main bars built from ticks, which a history bar of the same slot replaces.
+    pub(crate) from_ticks: BTreeSet<DateTime<Utc>>,
     /// Right-click box zoom state
     pub(crate) box_zoom: BoxZoomState,
     /// Whether zoom mode is currently active (controlled by zoom toolbar button)

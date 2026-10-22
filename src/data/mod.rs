@@ -61,8 +61,8 @@ pub(crate) mod depth;
 )]
 pub(crate) mod inbox;
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
+    not(any(test, feature = "widget")),
+    expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod merge;
 mod resample;

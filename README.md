@@ -80,7 +80,6 @@ egui-charts/src/
 ├── scales/                    Price scales (linear, log, %), time scales, formatters
 ├── config/                    ChartConfig, ChartOptions, crosshair, tooltip, keyboard
 ├── data.rs                    DataSource trait: pluggable data provider interface
-├── validation/                OHLC integrity checks, timestamp ordering
 ├── theme/                     Theme value, its presets, apply_to_egui
 ├── tokens/                    Design tokens as Rust constants (colors, spacing, typography)
 ├── styles/                    Focus ring, sizing, typography and icon constants
@@ -161,7 +160,7 @@ let mini = ChartBuilder::price_chart()
 
 | Feature | Default | Description |
 |---|:---:|---|
-| `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles` and `widget`. Without it the crate is the headless engine (`model`, `scales`, `data`, `services`, `tokens`, `validation` and the `Indicator` trait layer of `studies`), which does not depend on egui. Required by `icons` and `ui`. |
+| `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles` and `widget`. Without it the crate is the headless engine (`model`, `scales`, `data`, `services`, `tokens` and the `Indicator` trait layer of `studies`), which does not depend on egui. Required by `icons` and `ui`. |
 | `studies` | **on** | The built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. `Indicator`, `IndicatorValue`, `IndicatorRegistry` and `CustomIndicator` are in every build, so custom studies work without it. Required by `ui`. |
 | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
 | `ui` | **on** | Application-level UI: drawing toolbar, top toolbar, timeframe bar, replay controls, sidebars, dialogs, the `ui_kit` widget library and the `ext` helpers. Enables `icons` and `studies`. |
@@ -375,7 +374,7 @@ impl eframe::App for App {
 | Crosshair | Can follow another chart via `Chart::set_synced_crosshair_bar_idx` |
 | Keyboard | Configurable via `KeyboardOptions` |
 
-Kinetic scrolling with momentum-based panning. Real-time streaming via `chart.update_data()` with auto-scroll.
+Kinetic scrolling with momentum-based panning. Real-time streaming via `chart.update()`, which merges each bar in place and follows the live edge.
 
 ---
 

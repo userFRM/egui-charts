@@ -91,7 +91,6 @@ A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/
 - [`studies`](src/studies): technical indicators, the `Indicator` trait, and `IndicatorRegistry`.
 - [`scales`](src/scales): price and time scales, tick generators, formatters.
 - [`config`](src/config): chart configuration and options.
-- [`validation`](src/validation): OHLC integrity and data-quality checks.
 - [`theme`](src/theme) / [`tokens`](src/tokens) / [`styles`](src/styles): the design-token theme system.
 - [`widget`](src/widget): the `Chart` egui widget, with pan and zoom, keyboard and drawing input, and indicator panes.
 - [`ext`](src/ext): extension traits (`UiExt`, `ResponseExt`, widget builders), with the `ui` feature.

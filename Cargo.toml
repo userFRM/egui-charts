@@ -54,9 +54,8 @@ required-features = ["widget"]
 default = ["ui"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,
 ## theme and the `Indicator` extension point.  Without it the crate is the
-## headless engine (`model`, `scales`, `data`, `services`, `tokens`,
-## `validation` and the `Indicator` trait layer of `studies`) and does not
-## depend on egui.
+## headless engine (`model`, `scales`, `data`, `services`, `tokens` and the
+## `Indicator` trait layer of `studies`) and does not depend on egui.
 widget = ["dep:egui", "dep:web-time"]
 ## The built-in studies and `IndicatorFactory`.  Needs no egui, so a headless
 ## build can compute the same studies.

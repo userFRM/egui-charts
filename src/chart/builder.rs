@@ -33,8 +33,10 @@
 //! | [`ChartBuilder::price_chart()`] | Line chart without grid or crosshair, 50 bars visible |
 //! | [`ChartBuilder::options_chart()`] | Line chart with the time axis labels and ticks hidden |
 
+use crate::chart::selection::SeriesId;
 use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::DataSource;
+use crate::data::merge::Origin;
 use crate::drawings::DrawingManager;
 use crate::model::BarData;
 use crate::model::ChartType;
@@ -216,7 +218,7 @@ impl ChartBuilder {
     /// Attach a [`DataSource`] for live and historical data.
     ///
     /// Without a data source the chart will render but remain empty until
-    /// data is fed manually via `chart.update_data(...)`.
+    /// data is fed by hand with [`Chart::set_data`] or [`Chart::update`].
     #[must_use]
     pub fn with_data_src(mut self, source: Box<dyn DataSource>) -> Self {
         self.data_src = Some(source);
@@ -513,8 +515,7 @@ impl ChartBuilder {
                                 bars.len(),
                                 symbol
                             );
-                            let data = crate::model::BarData::from_bars(bars);
-                            chart.update_data(data);
+                            chart.set_data(SeriesId::MAIN, bars);
                         }
                     }
                     Err(e) => {
@@ -648,42 +649,19 @@ impl TradingChart {
                 use crate::data::DataUpdate;
                 match update {
                     DataUpdate::FullDataset { symbol, bars } if symbol == self.symbol => {
-                        let data = BarData::from_bars(bars);
-                        self.chart.update_data(data.clone());
-                        self.indicators.calculate_all(&data.bars);
-                        let _ = symbol; // consumed
+                        self.chart.set_data(SeriesId::MAIN, bars);
+                        self.indicators
+                            .calculate_all(self.chart.bars(SeriesId::MAIN));
                     }
                     DataUpdate::NewBars { symbol, bars }
-                        if symbol == self.symbol
-                        // LIVE DATA: Append new bars to existing data
-                        && !bars.is_empty() =>
+                        if symbol == self.symbol && !bars.is_empty() =>
                     {
-                        let mut existing_bars = self.chart.data().bars.clone();
-                        let bars_before = existing_bars.len();
-
-                        // Merge new bars: update last bar if same timestamp, otherwise append
-                        for new_bar in bars {
-                            if let Some(last) = existing_bars.last_mut() {
-                                if last.time == new_bar.time {
-                                    // Update existing bar (live bar update)
-                                    *last = new_bar;
-                                } else if new_bar.time > last.time {
-                                    // Append new completed bar
-                                    existing_bars.push(new_bar);
-                                }
-                                // Ignore bars older than last (out of order)
-                            } else {
-                                // First bar
-                                existing_bars.push(new_bar);
-                            }
-                        }
-
-                        let bars_after = existing_bars.len();
-                        let data = BarData::from_bars(existing_bars);
-                        self.chart.update_data(data.clone());
-
-                        // Recalculate indicators with updated data
-                        self.indicators.calculate_all(&data.bars);
+                        let bars_before = self.chart.bars(SeriesId::MAIN).len();
+                        self.chart
+                            .apply(bars.into_iter().map(|bar| (bar, Origin::Live)).collect());
+                        let bars_after = self.chart.bars(SeriesId::MAIN).len();
+                        self.indicators
+                            .calculate_all(self.chart.bars(SeriesId::MAIN));
 
                         // Log new bar activity
                         if bars_after > bars_before {
@@ -693,8 +671,6 @@ impl TradingChart {
                                 bars_after
                             );
                         }
-
-                        let _ = symbol; // consumed
                     }
                     _ => {}
                 }
@@ -703,7 +679,7 @@ impl TradingChart {
             // PROGRESSIVE LOADING: Check if user has scrolled close to data edge
             // If so, automatically fetch more historical data
             let start_idx = self.chart.get_start_idx();
-            let curr_bar_cnt = self.chart.data().len();
+            let curr_bar_cnt = self.chart.bars(SeriesId::MAIN).len();
 
             // Fetch more data if:
             // 1. User is within threshold of data edge
@@ -721,20 +697,19 @@ impl TradingChart {
                 self.is_fetching_historical = true;
 
                 // Get the oldest bar's ts to fetch data before it
-                let curr_data = self.chart.data();
-                if let Some(oldest_bar) = curr_data.bars.first() {
+                if let Some(oldest) = self.chart.bars(SeriesId::MAIN).first().map(|bar| bar.time) {
                     // Use larger batch size for progressive loading to reduce round trips
                     let progressive_batch_size = self.initial_bars.max(600);
                     log::info!(
                         "[TradingChart] Progressive loading: Fetching {} more bars before {}",
                         progressive_batch_size,
-                        oldest_bar.time
+                        oldest
                     );
 
                     let request = crate::data::HistoricalDataRequest {
                         symbol: self.symbol.clone(),
                         timeframe: self.timeframe,
-                        end_ts_millis: oldest_bar.time.timestamp_millis(), // Fetch data BEFORE oldest bar
+                        end_ts_millis: oldest.timestamp_millis(), // Fetch data BEFORE oldest bar
                         limit: progressive_batch_size,
                     };
 
@@ -746,9 +721,7 @@ impl TradingChart {
                             );
 
                             // Filter out any bars that overlap with existing data (avoid duplicate ts)
-                            if let Some(first_existing) = curr_data.bars.first() {
-                                older_bars.retain(|bar| bar.time < first_existing.time);
-                            }
+                            older_bars.retain(|bar| bar.time < oldest);
 
                             if older_bars.is_empty() {
                                 log::info!(
@@ -759,23 +732,29 @@ impl TradingChart {
                                 return; // Exit early, no need to update
                             }
 
-                            // Prepend older bars to existing data
-                            older_bars.extend(curr_data.bars.iter().cloned());
-                            let new_data = BarData::from_bars(older_bars);
+                            let merged = self.chart.apply(
+                                older_bars
+                                    .into_iter()
+                                    .map(|bar| (bar, Origin::History))
+                                    .collect(),
+                            );
+                            let bars_added = self.chart.bars(SeriesId::MAIN).len() - curr_bar_cnt;
 
-                            // Calculate how many bars were actually prepended
-                            let bars_added = new_data.len() - curr_bar_cnt;
-
-                            // CRITICAL: Shift drawing bar indices BEFORE updating chart data.
                             // When N bars are prepended, all existing bar indices shift by +N.
                             // Drawings must be shifted to maintain alignment with their candles.
                             if let Some(ref mut dm) = self.drawing_manager {
                                 dm.shift_bar_indices(bars_added as f32);
                             }
+                            self.indicators
+                                .calculate_all(self.chart.bars(SeriesId::MAIN));
 
-                            // Update chart with extended dataset
-                            self.chart.update_data(new_data.clone());
-                            self.indicators.calculate_all(&new_data.bars);
+                            // Paging on would request the same page again.
+                            if merged.first_changed.is_none() {
+                                log::info!(
+                                    "[TradingChart] Progressive loading: No fetched bar was valid, stopped loading older data"
+                                );
+                                self.has_more_historical_data = false;
+                            }
                         }
                         Ok(_) => {
                             log::info!(
@@ -827,8 +806,8 @@ impl TradingChart {
         // recomputes the rest; the pane layout reflows on the next frame.
         if let Some(index) = self.chart.take_indicator_remove() {
             self.indicators.remove_indicator(index);
-            let bars = self.chart.data().bars.clone();
-            self.indicators.calculate_all(&bars);
+            self.indicators
+                .calculate_all(self.chart.bars(SeriesId::MAIN));
         }
 
         #[cfg(feature = "ui")]
@@ -1037,9 +1016,9 @@ impl TradingChart {
                                 bars.len(),
                                 symbol
                             );
-                            let data = crate::model::BarData::from_bars(bars);
-                            self.chart.update_data(data.clone());
-                            self.indicators.calculate_all(&data.bars);
+                            self.chart.set_data(SeriesId::MAIN, bars);
+                            self.indicators
+                                .calculate_all(self.chart.bars(SeriesId::MAIN));
                         }
                     }
                     Err(e) => {
@@ -1078,8 +1057,7 @@ impl TradingChart {
 
         // Clear existing data - new timeframe needs fresh bars
         // This is critical: old bars at old timeframe are invalid for new timeframe
-        let empty_data = BarData::default();
-        self.chart.update_data(empty_data.clone());
+        self.chart.set_data(SeriesId::MAIN, Vec::new());
         // Reset indicators with empty data
         self.indicators.calculate_all(&[]);
 
@@ -1107,9 +1085,9 @@ impl TradingChart {
                                 bars.len(),
                                 timeframe
                             );
-                            let data = crate::model::BarData::from_bars(bars);
-                            self.chart.update_data(data.clone());
-                            self.indicators.calculate_all(&data.bars);
+                            self.chart.set_data(SeriesId::MAIN, bars);
+                            self.indicators
+                                .calculate_all(self.chart.bars(SeriesId::MAIN));
                         }
                     }
                     Err(e) => {
@@ -1131,7 +1109,7 @@ impl TradingChart {
 
     /// Get the most recent bar in the dataset, useful for displaying current price in UI.
     pub fn get_last_bar(&self) -> Option<&crate::model::Bar> {
-        self.chart.data().bars.last()
+        self.chart.bars(SeriesId::MAIN).last()
     }
 
     /// Get the current trading symbol string.
@@ -1159,10 +1137,12 @@ mod tests {
     use super::*;
     use crate::data::{DataSourceError, DataUpdate, HistoricalDataRequest};
     use crate::model::Bar;
+    use chrono::{DateTime, TimeDelta, Utc};
     use std::sync::{Arc, Mutex};
 
-    /// Records the symbol of every subscription and history request.
-    struct RecordingSource(Arc<Mutex<Vec<String>>>);
+    /// Records the symbol of every subscription and history request, and answers a request with
+    /// the page its function returns for the request's end time.
+    struct RecordingSource(Arc<Mutex<Vec<String>>>, fn(i64) -> Vec<Bar>);
 
     impl DataSource for RecordingSource {
         fn symbols(&self) -> Vec<String> {
@@ -1183,7 +1163,7 @@ mod tests {
             request: HistoricalDataRequest,
         ) -> Result<Vec<Bar>, DataSourceError> {
             self.0.lock().unwrap().push(request.symbol);
-            Ok(Vec::new())
+            Ok((self.1)(request.end_ts_millis))
         }
         fn supports_historical(&self) -> bool {
             true
@@ -1197,7 +1177,7 @@ mod tests {
     fn chart_without_symbol_requests_no_instrument() {
         let requested = Arc::new(Mutex::new(Vec::new()));
         let mut chart = ChartBuilder::new()
-            .with_data_src(Box::new(RecordingSource(requested.clone())))
+            .with_data_src(Box::new(RecordingSource(requested.clone(), |_| Vec::new())))
             .build();
         chart.set_timeframe(Timeframe::Min5);
         chart.update();
@@ -1205,5 +1185,34 @@ mod tests {
 
         assert_eq!(chart.get_symbol(), "");
         assert!(requested.lock().unwrap().is_empty());
+    }
+
+    /// Guards the end of progressive loading: a page that adds no bar, because every bar in it is
+    /// invalid, must stop the paging, or the chart requests the same page again on every frame.
+    #[test]
+    fn page_without_valid_bars_ends_progressive_loading() {
+        /// Three valid one-minute bars up to 10:03 for the first request, and three bars with a
+        /// NaN volume before the end of any older one.
+        fn page(end_ts_millis: i64) -> Vec<Bar> {
+            let edge = "2024-03-15T10:03:00Z".parse::<DateTime<Utc>>().unwrap();
+            let end = DateTime::from_timestamp_millis(end_ts_millis).unwrap();
+            let volume = if end > edge { 1.0 } else { f64::NAN };
+            (1..=3)
+                .map(|i| edge.min(end) - TimeDelta::minutes(i))
+                .map(|t| Bar::new(t, 1.0, 1.0, 1.0, 1.0, volume))
+                .collect()
+        }
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut chart = ChartBuilder::new()
+            .with_symbol("TEST")
+            .with_data_src(Box::new(RecordingSource(requests.clone(), page)))
+            .build();
+        for _ in 0..3 {
+            chart.update();
+        }
+
+        // The subscription, the first page and one older page.
+        assert_eq!(requests.lock().unwrap().len(), 3);
+        assert_eq!(chart.chart.bars(SeriesId::MAIN).len(), 3);
     }
 }

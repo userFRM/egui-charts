@@ -17,6 +17,7 @@ pub(crate) enum Origin {
 }
 
 /// What one merge changed.
+#[derive(Default)]
 pub(crate) struct Merged {
     /// Index of the first bar inserted or changed. Bars after it may have moved.
     pub(crate) first_changed: Option<usize>,
@@ -111,7 +112,7 @@ pub(crate) fn merge(
 }
 
 /// Finite values, a high at or above open and close, a low at or below them, no negative volume.
-pub(super) fn valid(bar: &Bar) -> bool {
+pub(crate) fn valid(bar: &Bar) -> bool {
     [bar.open, bar.high, bar.low, bar.close, bar.volume]
         .into_iter()
         .all(f64::is_finite)
