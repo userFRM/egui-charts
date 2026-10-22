@@ -62,30 +62,14 @@ impl Chart {
         self.right_click.take()
     }
 
-    /// Drains a pane-indicator remove request captured during the last frame.
-    ///
-    /// Returns `Some(index)` exactly once when the user clicks the close "x" on
-    /// an indicator pane's legend, where `index` is the indicator's position in
-    /// the registry passed to [`Chart::show_with_indicators`]. The chart does
-    /// not own the registry, so the host performs the actual removal (e.g.
-    /// [`IndicatorRegistry::remove_indicator`](crate::studies::IndicatorRegistry::remove_indicator)
-    /// followed by a recompute); the pane layout reflows on the next frame.
-    ///
-    /// Carries no `ui`-feature types, so it is available without the `ui`
-    /// feature.
-    pub fn take_indicator_remove(&mut self) -> Option<usize> {
-        self.indicator_remove.take()
-    }
-
     /// Draws selection handles for the element currently selected on the main
     /// chart (an overlay indicator line or a price/volume series).
     ///
-    /// Pane-indicator handles are drawn separately by `show_with_indicators`
-    /// since their panes live outside the main chart rect.
+    /// Handles of a study in a pane are drawn with its pane, which lies outside
+    /// the main chart rect.
     pub(super) fn render_main_chart_selection(
         &self,
         painter: &egui::Painter,
-        indicators: Option<&IndicatorRegistry>,
         coords: &ChartMapping,
         visible_data: &[crate::model::Bar],
         visible_range: std::ops::Range<usize>,
@@ -95,9 +79,8 @@ impl Chart {
         };
 
         match selected {
-            ChartElementId::OverlayIndicator(idx) => {
-                let Some(registry) = indicators else { return };
-                let Some(indicator) = registry.indicators().get(idx) else {
+            ChartElementId::Indicator(id) => {
+                let Some((_, indicator)) = self.indicators().find(|(study, _)| *study == id) else {
                     return;
                 };
                 if !indicator.is_visible() || !indicator.is_overlay() {
@@ -112,7 +95,7 @@ impl Chart {
                 for line_idx in 0..indicator.line_cnt() {
                     render_indicator_selection_dots(
                         painter,
-                        indicator.as_ref(),
+                        indicator,
                         line_idx,
                         visible_range.clone(),
                         coords,
@@ -161,8 +144,6 @@ impl Chart {
                     }
                 }
             }
-            // Pane indicators are handled where their panes are rendered.
-            ChartElementId::PaneIndicator(_) => {}
         }
     }
 }
@@ -170,11 +151,13 @@ impl Chart {
 /// Hit-test a click on the main chart area, applying selection priority.
 ///
 /// Overlay indicator lines take priority over the series beneath them, matching
-/// the visual stacking order. Returns the hit element and the bar index where
-/// the hit occurred, or `None` when the click landed on empty chart area.
+/// the visual stacking order. `study_ids` holds the id of each study in
+/// `studies`. Returns the hit element and the bar index where the hit occurred,
+/// or `None` when the click landed on empty chart area.
 pub(super) fn hit_test_main_chart(
     click_pos: Pos2,
-    indicators: Option<&IndicatorRegistry>,
+    studies: &IndicatorRegistry,
+    study_ids: &[SeriesId],
     coords: &ChartMapping,
     volume_coords: Option<&ChartMapping>,
     bars: &[crate::model::Bar],
@@ -186,21 +169,19 @@ pub(super) fn hit_test_main_chart(
     }
 
     // 1. Overlay indicators (drawn on top of the series).
-    if let Some(registry) = indicators {
-        for (idx, indicator) in registry.indicators().iter().enumerate() {
-            if let Some(hit) = hit_test_indicator(
-                click_pos,
-                indicator.as_ref(),
-                idx,
-                visible_range.clone(),
-                coords,
-                |price| coords.price_to_y(price),
-            ) {
-                return Some((
-                    ChartElementId::OverlayIndicator(hit.indicator_idx),
-                    hit.bar_idx,
-                ));
-            }
+    for (idx, indicator) in studies.indicators().iter().enumerate() {
+        if let Some(hit) = hit_test_indicator(
+            click_pos,
+            indicator.as_ref(),
+            idx,
+            visible_range.clone(),
+            coords,
+            |price| coords.price_to_y(price),
+        ) {
+            return Some((
+                ChartElementId::Indicator(study_ids[hit.indicator_idx]),
+                hit.bar_idx,
+            ));
         }
     }
 
@@ -285,7 +266,16 @@ mod selection_tests {
         // A point near the top of the chart, above every candle body and on no
         // indicator line.
         let pos = Pos2::new(mapping.idx_to_x(2), mapping.rect.min.y + 1.0);
-        let hit = hit_test_main_chart(pos, None, &mapping, None, &bars, 100.0, 0..bars.len());
+        let hit = hit_test_main_chart(
+            pos,
+            &IndicatorRegistry::new(),
+            &[],
+            &mapping,
+            None,
+            &bars,
+            100.0,
+            0..bars.len(),
+        );
         assert!(hit.is_none());
     }
 
@@ -296,7 +286,16 @@ mod selection_tests {
         let bar = &bars[2];
         let mid_price = (bar.open + bar.close) / 2.0;
         let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(mid_price));
-        let hit = hit_test_main_chart(pos, None, &mapping, None, &bars, 100.0, 0..bars.len());
+        let hit = hit_test_main_chart(
+            pos,
+            &IndicatorRegistry::new(),
+            &[],
+            &mapping,
+            None,
+            &bars,
+            100.0,
+            0..bars.len(),
+        );
         assert_eq!(hit, Some((ChartElementId::Series(SeriesId::MAIN), 2)));
     }
 
@@ -314,14 +313,15 @@ mod selection_tests {
         let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(bars[2].close));
         let hit = hit_test_main_chart(
             pos,
-            Some(&registry),
+            &registry,
+            &[SeriesId(2)],
             &mapping,
             None,
             &bars,
             100.0,
             0..bars.len(),
         );
-        assert_eq!(hit, Some((ChartElementId::OverlayIndicator(0), 2)));
+        assert_eq!(hit, Some((ChartElementId::Indicator(SeriesId(2)), 2)));
     }
 
     #[test]
@@ -343,7 +343,8 @@ mod selection_tests {
         let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(mid_price));
         let hit = hit_test_main_chart(
             pos,
-            Some(&registry),
+            &registry,
+            &[SeriesId(2)],
             &mapping,
             None,
             &bars,
@@ -358,22 +359,44 @@ mod selection_tests {
     fn empty_data_returns_none() {
         let (mapping, _) = fixture();
         let pos = mapping.rect.center();
-        let hit = hit_test_main_chart(pos, None, &mapping, None, &[], 100.0, 0..0);
+        let hit = hit_test_main_chart(
+            pos,
+            &IndicatorRegistry::new(),
+            &[],
+            &mapping,
+            None,
+            &[],
+            100.0,
+            0..0,
+        );
         assert!(hit.is_none());
     }
 
+    /// Guards stable study ids: with ids taken from positions, removing a study moved the
+    /// selection to the study after it, and removing the selected study must clear the
+    /// selection instead of leaving it on a study that is gone.
     #[test]
-    fn take_indicator_remove_drains_once() {
+    fn removing_a_study_keeps_the_selection_on_its_id() {
         use crate::model::BarData;
 
         let mut chart = Chart::new(BarData::default());
-        // No request pending after construction.
-        assert_eq!(chart.take_indicator_remove(), None);
-
-        // A pane legend "x" click records the indicator's registry index.
-        chart.indicator_remove = Some(2);
-        assert_eq!(chart.take_indicator_remove(), Some(2));
-        // The request is consumed exactly once, mirroring `take_right_click`.
-        assert_eq!(chart.take_indicator_remove(), None);
+        let ids: Vec<SeriesId> = ["A", "B", "C"]
+            .into_iter()
+            .map(|name| {
+                let study =
+                    CustomIndicator::new(name, |bars| vec![IndicatorValue::None; bars.len()]);
+                chart.add_indicator(Box::new(study.with_overlay(false)))
+            })
+            .collect();
+        chart
+            .selection
+            .select(ChartElementId::Indicator(ids[2]), None);
+        assert!(chart.remove_series(ids[0]));
+        assert_eq!(
+            chart.selected_element(),
+            Some(ChartElementId::Indicator(ids[2]))
+        );
+        assert!(chart.remove_series(ids[2]));
+        assert_eq!(chart.selected_element(), None);
     }
 }

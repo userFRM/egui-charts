@@ -600,26 +600,27 @@ impl DrawingManager {
         }
     }
 
-    /// Shifts all bar indices by `shift` across all drawings, the in-progress
-    /// drawing, and the undo history.
+    /// Shifts every bar index at or after `from` by `shift`, across all
+    /// drawings, the in-progress drawing, the state a handle drag restores on
+    /// undo, and the undo history.
     ///
-    /// This is called when historical data is prepended to the chart, causing
-    /// existing bar indices to shift right.
-    pub fn shift_bar_indices(&mut self, shift: f32) {
+    /// This is called when bars are inserted in front of existing ones, causing
+    /// the bar indices from there on to shift right. Pass `f32::NEG_INFINITY`
+    /// for bars inserted in front of the first bar.
+    pub fn shift_bar_indices(&mut self, from: f32, shift: f32) {
         if shift.abs() < 0.001 {
             return;
         }
         for drawing in &mut self.drawings {
-            for cp in &mut drawing.chart_points {
-                cp.bar_idx += shift;
-            }
+            drawing.shift_bar_indices(from, shift);
         }
         if let Some(ref mut curr) = self.curr_drawing {
-            for cp in &mut curr.chart_points {
-                cp.bar_idx += shift;
-            }
+            curr.shift_bar_indices(from, shift);
         }
-        self.history.shift_bar_indices(shift);
+        if let Some(old) = &mut self.drag_old_state {
+            old.shift_bar_indices(from, shift);
+        }
+        self.history.shift_bar_indices(from, shift);
     }
 
     // === Hit testing ===

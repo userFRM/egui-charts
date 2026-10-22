@@ -128,7 +128,6 @@ let chart = ChartBuilder::new()
     .with_symbol("BTCUSDT")
     .with_timeframe(Timeframe::Hour1)
     .with_theme(Theme::dark())
-    .with_drawing_tools()
     .build();
 let app = App { chart };
 ```
@@ -150,7 +149,6 @@ let mini = ChartBuilder::price_chart()
 | Constructor | Use Case |
 |---|---|
 | `ChartBuilder::new()` | Sensible defaults, auto-fetch 1000 bars |
-| `ChartBuilder::extended()` | Full trading terminal with drawings + indicators |
 | `ChartBuilder::price_chart()` | Minimal sparkline / dashboard widget |
 | `ChartBuilder::options_chart()` | Non-time-based displays (options chains) |
 
@@ -232,16 +230,18 @@ Drawings are anchored in chart coordinates (bar index and price), so they stay i
 | **Support** | Pivot Points, ZigZag, Price Channel |
 | **Statistics** | Correlation, Linear Regression, Standard Error, Rank Correlation |
 
-```rust
-use egui_charts::studies::{Indicator, IndicatorRegistry, SMA, RSI, BollingerBands};
+A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it.
 
-let mut registry = IndicatorRegistry::new();
-# let bars: Vec<egui_charts::model::Bar> = Vec::new();
-registry.add(Box::new(SMA::new(20)));
-registry.add(Box::new(RSI::new(14)));
-registry.add(Box::new(BollingerBands::new(20, 2.0)));
-registry.calculate_all(&bars);
+```rust
+use egui_charts::studies::{BollingerBands, RSI, SMA};
+# let mut chart = egui_charts::widget::Chart::new(egui_charts::model::BarData::default());
+let sma = chart.add_indicator(Box::new(SMA::new(20)));
+chart.add_indicator(Box::new(RSI::new(14)));
+chart.add_indicator(Box::new(BollingerBands::new(20, 2.0)));
+chart.remove_series(sma);
 ```
+
+Without a chart, `IndicatorRegistry` computes studies on a slice of bars.
 
 ---
 

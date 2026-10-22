@@ -203,10 +203,13 @@ impl Drawing {
         self.check_completion();
     }
 
-    /// Shift all bar indices by a delta (used when historical data is prepended)
-    pub fn shift_bar_indices(&mut self, delta: f32) {
+    /// Shift the bar indices at or after `from` by a delta (used when bars are inserted in front
+    /// of them)
+    pub fn shift_bar_indices(&mut self, from: f32, delta: f32) {
         for cp in &mut self.chart_points {
-            cp.shift_bar_idx(delta);
+            if cp.bar_idx >= from {
+                cp.shift_bar_idx(delta);
+            }
         }
     }
 
@@ -314,11 +317,11 @@ mod tests {
         drawing.chart_points.push(ChartPoint::new(100.0, 150.0));
         drawing.chart_points.push(ChartPoint::new(110.0, 160.0));
 
-        drawing.shift_bar_indices(50.0);
+        drawing.shift_bar_indices(105.0, 50.0);
 
         assert_eq!(
             drawing.chart_points,
-            [ChartPoint::new(150.0, 150.0), ChartPoint::new(160.0, 160.0)]
+            [ChartPoint::new(100.0, 150.0), ChartPoint::new(160.0, 160.0)]
         );
     }
 

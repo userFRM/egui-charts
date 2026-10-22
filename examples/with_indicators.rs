@@ -1,15 +1,15 @@
 //! # Chart with Technical Indicators
 //!
-//! Shows how to overlay technical indicators on a candlestick chart using the
-//! `IndicatorRegistry`. This example adds:
+//! Shows how to add technical indicators to a candlestick chart, which
+//! computes, updates and draws them. This example adds:
 //!
 //! - **SMA(20)** -- 20-period Simple Moving Average (price overlay)
 //! - **EMA(50)** -- 50-period Exponential Moving Average (price overlay)
 //! - **RSI(14)** -- 14-period Relative Strength Index (separate pane)
 //! - **Bollinger Bands(20, 2.0)** -- volatility bands (price overlay)
 //!
-//! Indicators are calculated once on startup and would be recalculated
-//! automatically by `TradingChart::update()` when live data arrives.
+//! Each indicator is calculated when it is added, and the chart updates it
+//! from the first changed bar whenever its bars change.
 //!
 //! Run with:
 //! ```sh
@@ -19,7 +19,7 @@
 use chrono::{Duration, Utc};
 use egui_charts::ChartType;
 use egui_charts::model::{Bar, BarData};
-use egui_charts::studies::{BollingerBands, EMA, IndicatorRegistry, RSI, SMA};
+use egui_charts::studies::{BollingerBands, EMA, RSI, SMA};
 use egui_charts::theme::Theme;
 use egui_charts::widget::Chart;
 
@@ -38,7 +38,6 @@ fn main() -> eframe::Result {
 
 struct IndicatorApp {
     chart: Chart,
-    indicators: IndicatorRegistry,
 }
 
 impl IndicatorApp {
@@ -48,23 +47,19 @@ impl IndicatorApp {
         let data = BarData::from_bars(bars);
 
         // Build chart
-        let mut chart = Chart::new(data.clone());
+        let mut chart = Chart::new(data);
         chart.set_chart_type(ChartType::Candles);
         chart.set_visible_bars(120);
         chart.set_symbol("BTCUSDT");
         chart.set_timeframe_label("1h");
 
-        // Register indicators
-        let mut indicators = IndicatorRegistry::new();
-        indicators.add(Box::new(SMA::new(20)));
-        indicators.add(Box::new(EMA::new(50)));
-        indicators.add(Box::new(RSI::new(14)));
-        indicators.add(Box::new(BollingerBands::new(20, 2.0)));
+        // Add indicators, each calculated on the bars at once
+        chart.add_indicator(Box::new(SMA::new(20)));
+        chart.add_indicator(Box::new(EMA::new(50)));
+        chart.add_indicator(Box::new(RSI::new(14)));
+        chart.add_indicator(Box::new(BollingerBands::new(20, 2.0)));
 
-        // Calculate indicators on the initial dataset
-        indicators.calculate_all(&data.bars);
-
-        Self { chart, indicators }
+        Self { chart }
     }
 }
 
@@ -76,11 +71,9 @@ impl eframe::App for IndicatorApp {
         ui.set_style(ui.ctx().global_style());
 
         egui::CentralPanel::default().show(ui, |ui| {
-            // Render the chart with indicator overlays.
-            // `show_with_indicators` draws overlay indicators (SMA, EMA, BB)
-            // on the price pane and non-overlay indicators (RSI) in sub-panes.
-            self.chart
-                .show_with_indicators(ui, None, Some(&self.indicators));
+            // Overlay indicators (SMA, EMA, BB) are drawn on the price pane
+            // and the others (RSI) in panes below it.
+            self.chart.show(ui);
         });
     }
 }

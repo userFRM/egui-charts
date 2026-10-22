@@ -64,15 +64,16 @@
 //!
 //! # Drawing Tools and Indicators
 //!
+//! The chart computes, updates and draws its studies and drawings itself:
+//!
 //! ```rust
-//! # use egui_charts::{drawings::DrawingManager, studies::IndicatorRegistry, widget::Chart};
-//! # fn example(chart: &mut Chart, ui: &mut egui::Ui, drawing_manager: &mut DrawingManager, indicator_registry: &IndicatorRegistry) {
-//! // With drawing tools and indicators:
-//! chart.show_with_indicators(
-//!     ui,
-//!     Some(drawing_manager),
-//!     Some(indicator_registry),
-//! );
+//! # use egui_charts::{drawings::DrawingToolType, studies::{EMA, RSI}, widget::Chart};
+//! # fn example(chart: &mut Chart, ui: &mut egui::Ui) {
+//! let ema = chart.add_indicator(Box::new(EMA::new(20))); // on the main pane
+//! chart.add_indicator(Box::new(RSI::new(14))); // in a pane below it
+//! chart.drawings_mut().set_active_tool(Some(DrawingToolType::TrendLine));
+//! chart.show(ui);
+//! chart.remove_series(ema);
 //! # }
 //! ```
 //!
@@ -101,17 +102,19 @@
 
 use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::renderers::ChartMapping;
-use crate::chart::selection::{ChartElementId, SelectionState};
+use crate::chart::selection::SelectionState;
 use crate::chart::series::SeriesSettings;
 use crate::config::{ChartConfig, ChartOptions};
 use crate::data::FeedState;
+use crate::drawings::DrawingManager;
 use crate::model::ChartState;
 use crate::model::ChartType;
 use crate::scales::PriceMap;
+use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 pub mod indicator_pane;
-pub use crate::chart::selection::SeriesId;
+pub use crate::chart::selection::{ChartElementId, SeriesId};
 use egui::{Pos2, Rect, Vec2};
 pub use indicator_pane::{
     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
@@ -227,6 +230,16 @@ pub struct Chart {
     pub(crate) feed: FeedState,
     /// Times of main bars built from ticks, which a history bar of the same slot replaces.
     pub(crate) from_ticks: BTreeSet<DateTime<Utc>>,
+    /// The chart's studies, in the order they were added.
+    pub(crate) studies: IndicatorRegistry,
+    /// Id of each study in `studies`.
+    pub(crate) study_ids: Vec<SeriesId>,
+    /// For each study in `studies`, the first bar it must be updated from on the next frame.
+    pub(crate) pending_from: Vec<Option<usize>>,
+    /// Id of the next study added.
+    pub(crate) next_series: usize,
+    /// The chart's drawings and the active drawing tool.
+    pub(crate) drawings: DrawingManager,
     /// Right-click box zoom state
     pub(crate) box_zoom: BoxZoomState,
     /// Whether zoom mode is currently active (controlled by zoom toolbar button)
@@ -279,17 +292,12 @@ pub struct Chart {
     /// path in `TradingChart`). Holds no UI types so the core widget builds
     /// without the `ui` feature.
     pub(crate) right_click: Option<RightClickTarget>,
-    /// Registry index of a pane indicator whose legend close "x" was clicked
-    /// during the last frame, drained by the host via
-    /// [`Chart::take_indicator_remove`]. Holds no `ui`-feature types so the core
-    /// widget builds without the `ui` feature.
-    pub(crate) indicator_remove: Option<usize>,
 }
 
 /// The object a right-click landed on, with the data needed to position and
 /// populate a context menu.
 ///
-/// Captured during [`Chart::show`]/[`Chart::show_with_indicators`] when the user
+/// Captured during [`Chart::show`] when the user
 /// right-clicks inside the chart area. Drain it once per frame with
 /// [`Chart::take_right_click`]. Right-clicking also selects the hit object (the
 /// same as a left click) so selection handles and the menu stay consistent.
@@ -330,7 +338,7 @@ pub enum RightClickTarget {
 
 /// Information about a rendered indicator pane, used for hit testing and coordinate mapping.
 ///
-/// After calling [`Chart::show_with_indicators`], each visible separate-pane indicator
+/// After calling [`Chart::show`], each visible separate-pane indicator
 /// (RSI, MACD, etc.) produces a `RenderedIndicatorPane` entry stored in the chart.
 /// Platform code can use these to implement click-on-indicator-line selection,
 /// tooltip display, or other interactive features.
@@ -338,7 +346,9 @@ pub enum RightClickTarget {
 /// Retrieve with [`Chart::get_rendered_indicator_panes`].
 #[derive(Clone, Debug)]
 pub struct RenderedIndicatorPane {
-    /// Index of the indicator in the registry
+    /// Position of the study in [`Chart::indicators`] when the pane was drawn. After a pane's
+    /// close button removed its study, that pane stays in the list until the next frame, and it
+    /// and the panes after it point one position too far.
     pub indicator_idx: usize,
     /// Full panel rect (including y-axis labels)
     pub panel_rect: Rect,
@@ -525,6 +535,17 @@ impl Chart {
     /// whole [`ChartConfig`]. Changes take effect on the next rendered frame.
     pub fn config_mut(&mut self) -> &mut ChartConfig {
         &mut self.config
+    }
+
+    /// The chart's drawings and drawing tools.
+    pub fn drawings(&self) -> &DrawingManager {
+        &self.drawings
+    }
+
+    /// The chart's drawings and drawing tools, to set the active tool or to save and load the
+    /// drawings.
+    pub fn drawings_mut(&mut self) -> &mut DrawingManager {
+        &mut self.drawings
     }
 }
 

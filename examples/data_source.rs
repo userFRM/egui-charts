@@ -1,6 +1,6 @@
 //! # Data source
 //!
-//! Builds a `TradingChart` with `ChartBuilder::extended()` and a sample `DataSource` that serves
+//! Builds a `TradingChart` with `ChartBuilder::new()` and a sample `DataSource` that serves
 //! history from memory. Replace `SampleDataSource` with a source that reads your backend: IPC, a
 //! WebSocket or a database.
 //!
@@ -42,8 +42,8 @@ impl DataSourceApp {
         // In your application, pass your own data source here.
         let data_source = SampleDataSource::new();
 
-        // A chart with the data source, drawing tools and an indicator registry.
-        let trading_chart = ChartBuilder::extended()
+        // A chart with the data source, drawing tools and studies.
+        let trading_chart = ChartBuilder::new()
             .with_symbol("BTCUSDT")
             .with_timeframe(Timeframe::Hour1)
             .with_theme(Theme::dark())

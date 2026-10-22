@@ -35,7 +35,7 @@
 //! use egui_charts::model::Timeframe;
 //!
 //! # fn example(my_data_source: impl egui_charts::DataSource + 'static, ui: &mut egui::Ui) {
-//! let mut trading_chart = ChartBuilder::extended()
+//! let mut trading_chart = ChartBuilder::new()
 //!     .with_symbol("BTCUSDT")
 //!     .with_timeframe(Timeframe::Min1)
 //!     .with_data_src(Box::new(my_data_source))

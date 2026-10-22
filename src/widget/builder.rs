@@ -38,9 +38,11 @@ use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::selection::SelectionState;
 use crate::config::{ChartConfig, ChartOptions};
 use crate::data::FeedState;
+use crate::drawings::DrawingManager;
 use crate::model::ChartType;
 use crate::model::{BarData, ChartState};
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
+use crate::studies::IndicatorRegistry;
 
 use super::Chart;
 use super::state::{BoxZoomState, KineticScrollState};
@@ -99,6 +101,12 @@ impl Chart {
                 ..FeedState::default()
             },
             from_ticks: BTreeSet::new(),
+            studies: IndicatorRegistry::new(),
+            study_ids: Vec::new(),
+            pending_from: Vec::new(),
+            // 0 and 1 are the main and volume series.
+            next_series: 2,
+            drawings: DrawingManager::new(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
             zoom_just_applied: false,
@@ -124,7 +132,6 @@ impl Chart {
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,
-            indicator_remove: None,
         }
     }
 

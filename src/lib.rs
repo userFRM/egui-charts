@@ -19,7 +19,6 @@
 //!     .with_symbol("BTCUSDT")
 //!     .with_timeframe(Timeframe::Hour1)
 //!     .with_theme(Theme::dark())
-//!     .with_drawing_tools()
 //!     .build();
 //!
 //! // In `eframe::App::ui`, with `ui: &mut egui::Ui`:

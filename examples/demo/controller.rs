@@ -53,12 +53,12 @@ use crate::sampledata::{
 const MAIN_SERIES_ID: usize = 0;
 const INDICATOR_ID_BASE: usize = 1_000_000;
 
-fn indicator_tree_id(index: usize) -> usize {
-    INDICATOR_ID_BASE + index
+fn indicator_tree_id(id: SeriesId) -> usize {
+    INDICATOR_ID_BASE + id.0
 }
 
-fn indicator_index_from_tree_id(id: usize) -> Option<usize> {
-    id.checked_sub(INDICATOR_ID_BASE)
+fn indicator_from_tree_id(id: usize) -> Option<SeriesId> {
+    id.checked_sub(INDICATOR_ID_BASE).map(SeriesId)
 }
 
 /// Which right-hand side panel is open, if any.
@@ -173,7 +173,7 @@ impl DemoApp {
         let timeframe = Timeframe::Day1;
         let symbol = "BTCUSD";
 
-        let mut tc = egui_charts::ChartBuilder::extended()
+        let mut tc = egui_charts::ChartBuilder::new()
             .with_symbol(symbol)
             .with_timeframe(timeframe)
             .with_theme(theme.clone())
@@ -185,7 +185,6 @@ impl DemoApp {
 
         let bars = generate_sample_bars(symbol, 500, timeframe);
         tc.chart.set_data(SeriesId::MAIN, bars.clone());
-        tc.indicators.calculate_all(&bars);
 
         let spec = DemoSymbol::find(symbol);
         let last = bars.last().cloned().unwrap_or_else(|| Bar {
@@ -279,7 +278,6 @@ impl DemoApp {
         self.trading_chart
             .chart
             .set_data(SeriesId::MAIN, self.bars.clone());
-        self.trading_chart.indicators.calculate_all(&self.bars);
         self.update_symbol_header();
     }
 
@@ -323,7 +321,6 @@ impl DemoApp {
             self.trading_chart
                 .chart
                 .set_data(SeriesId::MAIN, self.bars.clone());
-            self.trading_chart.indicators.calculate_all(&self.bars);
         }
     }
 
@@ -333,10 +330,7 @@ impl DemoApp {
         if let Some(replay) = self.replay.as_ref() {
             let visible: Vec<Bar> = replay.visible_bars().to_vec();
             if !visible.is_empty() {
-                self.trading_chart
-                    .chart
-                    .set_data(SeriesId::MAIN, visible.clone());
-                self.trading_chart.indicators.calculate_all(&visible);
+                self.trading_chart.chart.set_data(SeriesId::MAIN, visible);
             }
         }
     }
@@ -386,9 +380,7 @@ impl DemoApp {
     }
 
     fn open_drawing_props_for(&mut self, drawing_id: usize) {
-        let Some(dm) = self.trading_chart.drawing_manager.as_ref() else {
-            return;
-        };
+        let dm = self.trading_chart.chart.drawings();
         let Some(drawing) = dm.drawings.iter().find(|d| d.id == drawing_id) else {
             return;
         };
@@ -409,15 +401,13 @@ impl DemoApp {
         match self.indicator_dialog.show(ctx, &self.theme) {
             IndicatorDialogAction::AddConfiguredIndicator(cfg) => {
                 let indicator = self.indicator_dialog.create_indicator(cfg.indicator_type);
-                self.trading_chart.indicators.add(indicator);
-                self.recalc_indicators();
+                self.trading_chart.chart.add_indicator(indicator);
             }
             IndicatorDialogAction::AddIndicator(id) => {
                 use egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorType;
                 if let Some(kind) = IndicatorType::from_id(&id) {
                     let indicator = self.indicator_dialog.create_indicator(kind);
-                    self.trading_chart.indicators.add(indicator);
-                    self.recalc_indicators();
+                    self.trading_chart.chart.add_indicator(indicator);
                 }
             }
             _ => {}
@@ -461,7 +451,7 @@ impl DemoApp {
         match self.drawing_props.show(ctx) {
             DrawingPropertiesAction::Apply(id, props) => self.apply_drawing_props(id, props),
             DrawingPropertiesAction::Delete(id) => {
-                self.trading_chart.remove_drawing(id.0);
+                self.trading_chart.chart.drawings_mut().delete_drawing(id.0);
             }
             DrawingPropertiesAction::Clone(id) => self.clone_drawing(id.0),
             DrawingPropertiesAction::Cancel | DrawingPropertiesAction::None => {}
@@ -484,22 +474,16 @@ impl DemoApp {
         }
     }
 
-    fn recalc_indicators(&mut self) {
-        let bars = self.replay_window_or_full();
-        self.trading_chart.indicators.calculate_all(&bars);
-    }
-
-    fn replay_window_or_full(&self) -> Vec<Bar> {
-        match self.replay.as_ref() {
-            Some(replay) if !replay.visible_bars().is_empty() => replay.visible_bars().to_vec(),
-            _ => self.bars.clone(),
+    fn remove_all_indicators(&mut self) {
+        let chart = &mut self.trading_chart.chart;
+        let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+        for id in ids {
+            chart.remove_series(id);
         }
     }
 
     fn apply_drawing_props(&mut self, id: DrawingId, props: DrawingProps) {
-        let Some(dm) = self.trading_chart.drawing_manager.as_mut() else {
-            return;
-        };
+        let dm = self.trading_chart.chart.drawings_mut();
         if let Some(drawing) = dm.drawings.iter_mut().find(|d| d.id == id.0) {
             drawing.color = props.color.to_array();
             drawing.stroke_width = props.line_width;
@@ -513,9 +497,7 @@ impl DemoApp {
     }
 
     fn clone_drawing(&mut self, id: usize) {
-        let Some(dm) = self.trading_chart.drawing_manager.as_mut() else {
-            return;
-        };
+        let dm = self.trading_chart.chart.drawings_mut();
         if let Some(src) = dm.drawings.iter().find(|d| d.id == id).cloned() {
             let mut copy = src;
             for cp in &mut copy.chart_points {
@@ -651,9 +633,9 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        let drawings = self.trading_chart.drawing_manager.as_ref();
-        self.top_toolbar.state.can_undo = drawings.is_some_and(|dm| dm.can_undo());
-        self.top_toolbar.state.can_redo = drawings.is_some_and(|dm| dm.can_redo());
+        let drawings = self.trading_chart.chart.drawings();
+        self.top_toolbar.state.can_undo = drawings.can_undo();
+        self.top_toolbar.state.can_redo = drawings.can_redo();
         egui::Panel::top("toolbar")
             .exact_size(egui_charts::ui::top_toolbar::config::TOOLBAR_HEIGHT)
             .show_separator_line(false)
@@ -692,14 +674,10 @@ impl DemoApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
             }
             TopToolbarAction::Undo => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    dm.undo();
-                }
+                self.trading_chart.chart.drawings_mut().undo();
             }
             TopToolbarAction::Redo => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    dm.redo();
-                }
+                self.trading_chart.chart.drawings_mut().redo();
             }
             // Indicator templates live in the indicator dialog's Templates tab.
             TopToolbarAction::OpenIndicatorTemplates => self.indicator_dialog.open(),
@@ -772,14 +750,14 @@ impl DemoApp {
         // or surface a notice are handled first, before the `dm` borrow.
         match action {
             DrawingToolbarAction::RemoveAllIndicators | DrawingToolbarAction::RemoveAllStudies => {
-                self.trading_chart.indicators.clear();
-                self.recalc_indicators();
+                self.remove_all_indicators();
                 return;
             }
             DrawingToolbarAction::HideAllIndicators => {
-                let count = self.trading_chart.indicators.indicators().len();
-                for i in 0..count {
-                    self.trading_chart.set_indicator_visible(i, false);
+                let chart = &mut self.trading_chart.chart;
+                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                for id in ids {
+                    chart.set_indicator_visible(id, false);
                 }
                 return;
             }
@@ -798,9 +776,7 @@ impl DemoApp {
             _ => {}
         }
 
-        let Some(dm) = self.trading_chart.drawing_manager.as_mut() else {
-            return;
-        };
+        let dm = self.trading_chart.chart.drawings_mut();
         match action {
             DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
             DrawingToolbarAction::ClearSelection => {
@@ -912,27 +888,19 @@ impl DemoApp {
         ));
 
         // Live indicators.
-        for (idx, ind) in self
-            .trading_chart
-            .indicators
-            .indicators()
-            .iter()
-            .enumerate()
-        {
+        for (id, ind) in self.trading_chart.chart.indicators() {
             let color = ind.colors().first().copied().unwrap_or(egui::Color32::GRAY);
-            let mut item = SourceItem::indicator(indicator_tree_id(idx), ind.name(), color);
+            let mut item = SourceItem::indicator(indicator_tree_id(id), ind.name(), color);
             item.visible = ind.is_visible();
             items.push(item);
         }
 
         // Live drawings.
-        if let Some(dm) = self.trading_chart.drawing_manager.as_ref() {
-            for d in &dm.drawings {
-                let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
-                item.visible = d.visible;
-                item.locked = d.locked;
-                items.push(item);
-            }
+        for d in &self.trading_chart.chart.drawings().drawings {
+            let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
+            item.visible = d.visible;
+            item.locked = d.locked;
+            items.push(item);
         }
         items
     }
@@ -951,104 +919,90 @@ impl DemoApp {
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
         match action {
             ObjectTreeAction::ToggleVisibility(id) => {
-                if let Some(idx) = indicator_index_from_tree_id(id) {
-                    let now = self
-                        .trading_chart
-                        .indicators
+                let chart = &mut self.trading_chart.chart;
+                if let Some(study) = indicator_from_tree_id(id) {
+                    let now = chart
                         .indicators()
-                        .get(idx)
-                        .map(|i| i.is_visible())
-                        .unwrap_or(true);
-                    self.trading_chart.set_indicator_visible(idx, !now);
-                } else if let Some(dm) = self.trading_chart.drawing_manager.as_mut()
-                    && let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id)
+                        .find(|(id, _)| *id == study)
+                        .is_none_or(|(_, i)| i.is_visible());
+                    chart.set_indicator_visible(study, !now);
+                } else if let Some(d) = chart
+                    .drawings_mut()
+                    .drawings
+                    .iter_mut()
+                    .find(|d| d.id == id)
                 {
                     d.visible = !d.visible;
                 }
             }
             ObjectTreeAction::ToggleLock(id) => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut()
-                    && let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id)
-                {
+                let dm = self.trading_chart.chart.drawings_mut();
+                if let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id) {
                     d.locked = !d.locked;
                 }
             }
             ObjectTreeAction::Delete(id) | ObjectTreeAction::RemoveIndicator(id) => {
-                if let Some(idx) = indicator_index_from_tree_id(id) {
-                    self.trading_chart.remove_indicator(idx);
-                    self.recalc_indicators();
+                let chart = &mut self.trading_chart.chart;
+                if let Some(study) = indicator_from_tree_id(id) {
+                    chart.remove_series(study);
                 } else {
-                    self.trading_chart.remove_drawing(id);
+                    chart.drawings_mut().delete_drawing(id);
                 }
             }
             ObjectTreeAction::Select(id) => {
-                if let Some(idx) = indicator_index_from_tree_id(id) {
-                    // Indicator panes select via the registry index.
-                    let _ = idx;
-                } else if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    dm.select(id);
+                if indicator_from_tree_id(id).is_none() {
+                    self.trading_chart.chart.drawings_mut().select(id);
                 }
             }
             ObjectTreeAction::ChangeColor(id, color) => {
-                if let Some(idx) = indicator_index_from_tree_id(id) {
-                    if let Some(ind) = self.trading_chart.indicators.indicators_mut().get_mut(idx) {
+                let chart = &mut self.trading_chart.chart;
+                if let Some(study) = indicator_from_tree_id(id) {
+                    if let Some(ind) = chart.indicator_mut(study) {
                         ind.set_color(0, color);
                     }
-                } else if let Some(dm) = self.trading_chart.drawing_manager.as_mut()
-                    && let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id)
+                } else if let Some(d) = chart
+                    .drawings_mut()
+                    .drawings
+                    .iter_mut()
+                    .find(|d| d.id == id)
                 {
                     d.color = color.to_array();
                 }
             }
             ObjectTreeAction::OpenProperties(id) | ObjectTreeAction::OpenIndicatorSettings(id) => {
-                if indicator_index_from_tree_id(id).is_some() {
+                if indicator_from_tree_id(id).is_some() {
                     self.indicator_dialog.open();
                 } else {
                     self.open_drawing_props_for(id);
                 }
             }
             ObjectTreeAction::Duplicate(id) => {
-                if indicator_index_from_tree_id(id).is_none() {
+                if indicator_from_tree_id(id).is_none() {
                     self.clone_drawing(id);
                 }
             }
             ObjectTreeAction::BringToFront(id) => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    dm.bring_to_front(id);
-                }
+                self.trading_chart.chart.drawings_mut().bring_to_front(id);
             }
             ObjectTreeAction::SendToBack(id) => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    dm.send_to_back(id);
-                }
+                self.trading_chart.chart.drawings_mut().send_to_back(id);
             }
             ObjectTreeAction::HideAll => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    for d in &mut dm.drawings {
-                        d.visible = false;
-                    }
+                for d in &mut self.trading_chart.chart.drawings_mut().drawings {
+                    d.visible = false;
                 }
             }
             ObjectTreeAction::ShowAll => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    for d in &mut dm.drawings {
-                        d.visible = true;
-                    }
+                for d in &mut self.trading_chart.chart.drawings_mut().drawings {
+                    d.visible = true;
                 }
             }
             ObjectTreeAction::RemoveAllDrawings => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    dm.clear_all();
-                }
+                self.trading_chart.chart.drawings_mut().clear_all();
             }
-            ObjectTreeAction::RemoveAllIndicators => {
-                self.trading_chart.indicators.clear();
-                self.recalc_indicators();
-            }
+            ObjectTreeAction::RemoveAllIndicators => self.remove_all_indicators(),
             ObjectTreeAction::ClearSelection => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    dm.deselect();
-                }
+                self.trading_chart.chart.drawings_mut().deselect();
             }
             _ => {
                 let _ = sources;
@@ -1152,13 +1106,13 @@ impl DemoApp {
             ContextMenuAction::InsertIndicator => self.indicator_dialog.open(),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveIndicator(idx) => {
-                self.trading_chart.remove_indicator(idx);
-                self.recalc_indicators();
+                let chart = &mut self.trading_chart.chart;
+                let study = chart.indicators().nth(idx).map(|(id, _)| id);
+                if let Some(id) = study {
+                    chart.remove_series(id);
+                }
             }
-            ContextMenuAction::RemoveAllIndicators => {
-                self.trading_chart.indicators.clear();
-                self.recalc_indicators();
-            }
+            ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::ResetChart => {
                 self.trading_chart.chart.set_visible_bars(100);
@@ -1189,46 +1143,28 @@ impl DemoApp {
     fn handle_drawing_context(&mut self, action: DrawingContextMenuAction) {
         // The library selects the right-clicked drawing, so the selected id is
         // the menu's target.
-        let Some(id) = self
-            .trading_chart
-            .drawing_manager
-            .as_ref()
-            .and_then(|dm| dm.sel_drawing())
-        else {
+        let Some(id) = self.trading_chart.chart.drawings().sel_drawing() else {
             return;
         };
+        let dm = self.trading_chart.chart.drawings_mut();
         match action {
-            DrawingContextMenuAction::Delete => {
-                self.trading_chart.remove_drawing(id);
-            }
+            DrawingContextMenuAction::Delete => dm.delete_drawing(id),
             DrawingContextMenuAction::Edit => self.open_drawing_props_for(id),
             DrawingContextMenuAction::Clone | DrawingContextMenuAction::Copy => {
                 self.clone_drawing(id)
             }
             DrawingContextMenuAction::Lock => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut()
-                    && let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id)
-                {
+                if let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id) {
                     d.locked = !d.locked;
                 }
             }
             DrawingContextMenuAction::Hide => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut()
-                    && let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id)
-                {
+                if let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id) {
                     d.visible = !d.visible;
                 }
             }
-            DrawingContextMenuAction::BringToFront => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    dm.bring_to_front(id);
-                }
-            }
-            DrawingContextMenuAction::SendToBack => {
-                if let Some(dm) = self.trading_chart.drawing_manager.as_mut() {
-                    dm.send_to_back(id);
-                }
-            }
+            DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
+            DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
             DrawingContextMenuAction::None => {}
         }
     }

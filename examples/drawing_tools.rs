@@ -3,7 +3,7 @@
 //! Demonstrates how to use the drawing tools subsystem to add technical analysis
 //! annotations to a chart. This example:
 //!
-//! - Creates a chart with `DrawingManager` enabled
+//! - Creates a chart, whose `DrawingManager` holds its drawings
 //! - Programmatically adds a **trend line** between two price points
 //! - Programmatically adds a **Fibonacci retracement** between a swing low and high
 //! - Shows how to set the active tool for interactive drawing via mouse
@@ -19,7 +19,7 @@
 
 use chrono::{Duration, Utc};
 use egui_charts::ChartType;
-use egui_charts::drawings::{ChartPoint, Drawing, DrawingManager, DrawingToolType};
+use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
 use egui_charts::model::{Bar, BarData};
 use egui_charts::theme::Theme;
 use egui_charts::widget::Chart;
@@ -39,7 +39,6 @@ fn main() -> eframe::Result {
 
 struct DrawingApp {
     chart: Chart,
-    drawing_manager: DrawingManager,
 }
 
 impl DrawingApp {
@@ -53,7 +52,7 @@ impl DrawingApp {
         chart.set_symbol("ETHUSDT");
         chart.set_timeframe_label("4h");
 
-        let mut drawing_manager = DrawingManager::new();
+        let drawing_manager = chart.drawings_mut();
 
         // --- Programmatic drawing: Trend Line ---
         // A trend line from bar index 30 at price 1950 to bar index 80 at price 2100
@@ -79,10 +78,7 @@ impl DrawingApp {
         // In a full app, this would be controlled by a toolbar.
         drawing_manager.set_active_tool(Some(DrawingToolType::TrendLine));
 
-        Self {
-            chart,
-            drawing_manager,
-        }
+        Self { chart }
     }
 }
 
@@ -94,10 +90,8 @@ impl eframe::App for DrawingApp {
         ui.set_style(ui.ctx().global_style());
 
         egui::CentralPanel::default().show(ui, |ui| {
-            // Pass the drawing manager to the chart so it renders annotations
-            // and handles interactive drawing input.
-            self.chart
-                .show_with_indicators(ui, Some(&mut self.drawing_manager), None);
+            // The chart renders its drawings and handles interactive drawing input.
+            self.chart.show(ui);
         });
     }
 }

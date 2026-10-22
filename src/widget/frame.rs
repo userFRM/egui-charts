@@ -5,9 +5,7 @@ use super::{Chart, RightClickTarget};
 use crate::chart::renderers::{self, ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
-use crate::drawings::DrawingManager;
 use crate::scales::TimeFormatterBuilder;
-use crate::studies::IndicatorRegistry;
 use crate::styles::{sizing, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
@@ -136,28 +134,31 @@ impl Chart {
         painter.text(pos, anchor, text, font_id, self.config.watermark_color);
     }
 
-    /// Renders the chart with mouse interactions and optional drawing tools.
+    /// Renders the chart with its studies and drawings, and handles pan, zoom,
+    /// crosshair, keyboard shortcuts, the drawing tools and all visual elements
+    /// configured in [`ChartConfig`](crate::config::ChartConfig).
     ///
-    /// This is the mid-level rendering method. Use this when you have drawing
-    /// tools but no separate-pane indicators. For the simplest case, use
-    /// [`Chart::show`]. For full functionality, use [`Chart::show_with_indicators`].
-    pub fn show_with_drawings(
-        &mut self,
-        ui: &mut Ui,
-        drawing_manager: Option<&mut DrawingManager>,
-    ) -> Response {
-        self.show_internal(ui, drawing_manager, None)
-    }
-
-    /// Renders the chart with standard mouse interactions.
-    ///
-    /// This is the simplest way to display a chart. It handles pan, zoom,
-    /// crosshair, keyboard shortcuts, and all visual elements configured in
-    /// [`ChartConfig`](crate::config::ChartConfig). No drawing tools or separate-pane indicators are rendered.
+    /// Overlay studies (moving averages, Bollinger Bands) are drawn on the main
+    /// pane, any other visible study (RSI, MACD) in a pane below it with its
+    /// x-axis aligned to the main pane; [`Chart::get_rendered_indicator_panes`]
+    /// returns their layout. Studies are brought up to date first.
     ///
     /// Returns an [`egui::Response`] for additional interaction handling.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
-        self.show_internal(ui, None, None)
+        self.refresh_studies();
+        self.last_rendered_indicator_panes.clear();
+        // Only pane studies need the pane layout, which gives the main pane at
+        // least 200 points; without one the chart keeps the space it is given.
+        let has_panes = self
+            .studies
+            .indicators()
+            .iter()
+            .any(|study| !study.is_overlay() && study.is_visible());
+        if has_panes {
+            self.show_with_panes(ui)
+        } else {
+            self.show_internal(ui)
+        }
     }
 
     /// Resolve the timeframe used to pick a session-break granularity.
@@ -202,12 +203,7 @@ impl Chart {
     }
 
     /// Internal rendering method that orchestrates all modules
-    pub(crate) fn show_internal(
-        &mut self,
-        ui: &mut Ui,
-        mut drawing_manager: Option<&mut DrawingManager>,
-        indicators: Option<&IndicatorRegistry>,
-    ) -> Response {
+    pub(crate) fn show_internal(&mut self, ui: &mut Ui) -> Response {
         // Register the SVG image loader once per context so the embedded
         // icons used by the toolbars and panels decode without the host app
         // having to wire egui_extras itself.
@@ -296,9 +292,9 @@ impl Chart {
 
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
-        let is_drawing_interaction = drawing_manager.as_ref().is_some_and(|dm| {
-            dm.active_tool.is_some() || dm.dragging_handle.is_some() || dm.curr_drawing.is_some()
-        });
+        let is_drawing_interaction = self.drawings.active_tool.is_some()
+            || self.drawings.dragging_handle.is_some()
+            || self.drawings.curr_drawing.is_some();
         let pending_price_zoom = self.handle_mouse_wheel(
             ui,
             &response,
@@ -564,20 +560,18 @@ impl Chart {
         rendering::render_chart_type(self.chart_type, &render_ctx, &render_params, idx_to_coord);
 
         // Draw indicators
-        if let Some(indicator_registry) = indicators {
-            renderers::IndicatorRenderer::render(
-                &price_ctx,
-                indicator_registry.indicators(),
-                visible_data,
-                &price_map,
-                &coords,
-            );
-        }
+        renderers::IndicatorRenderer::render(
+            &price_ctx,
+            self.studies.indicators(),
+            visible_data,
+            &price_map,
+            &coords,
+        );
 
         // Resolve a click on the main chart area into a selection. Overlay
         // indicators take priority over the series beneath them; an empty-area
-        // click clears the selection. Pane-indicator clicks are resolved by
-        // show_with_indicators, which renders the panes outside this rect.
+        // click clears the selection. Clicks in a study's pane are resolved
+        // where the panes are rendered, outside this rect.
         let main_visible_range = start_idx..(start_idx + visible_data.len());
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
@@ -589,7 +583,8 @@ impl Chart {
             };
             let hit = hit_test_main_chart(
                 click_pos,
-                indicators,
+                &self.studies,
+                &self.study_ids,
                 &coords,
                 volume_coords.as_ref(),
                 &self.state.data().bars,
@@ -614,21 +609,15 @@ impl Chart {
         {
             let price = coords.y_to_price(click_pos.y);
 
-            // Drawings sit on top of the series, so they take priority. The
-            // drawing manager is reborrowed here; it is moved into
-            // `handle_drawings` later in the frame.
-            let drawing_hit = drawing_manager
-                .as_deref()
-                .and_then(|dm| dm.hit_test(click_pos));
+            // Drawings sit on top of the series, so they take priority.
+            let drawing_hit = self.drawings.hit_test(click_pos);
 
             self.right_click = Some(if let Some(drawing_id) = drawing_hit {
                 // Right-clicking a drawing selects it and
                 // clears any series/indicator selection so handles don't show
                 // on two objects at once.
                 self.selection.deselect();
-                if let Some(dm) = drawing_manager.as_deref_mut() {
-                    dm.select(drawing_id);
-                }
+                self.drawings.select(drawing_id);
                 RightClickTarget::Drawing {
                     drawing_id,
                     pos: click_pos,
@@ -641,7 +630,8 @@ impl Chart {
                 };
                 let element_hit = hit_test_main_chart(
                     click_pos,
-                    indicators,
+                    &self.studies,
+                    &self.study_ids,
                     &coords,
                     volume_coords.as_ref(),
                     &self.state.data().bars,
@@ -671,13 +661,7 @@ impl Chart {
 
         // Draw selection handles for whichever element is currently selected on
         // the main chart (overlay indicator line or series data points).
-        self.render_main_chart_selection(
-            &painter,
-            indicators,
-            &coords,
-            visible_data,
-            main_visible_range,
-        );
+        self.render_main_chart_selection(&painter, &coords, visible_data, main_visible_range);
 
         // Render bar marks (Widget API annotations)
         if !self.marks.is_empty() {
@@ -746,16 +730,17 @@ impl Chart {
         }
 
         // Handle drawing tools
-        if let Some(dm) = drawing_manager {
+        {
             // Clone/extract values before mutable borrow of self
             let timescale = self.state.time_scale().clone();
 
-            // Temporarily take cursor_modes to avoid borrow conflict
+            // Temporarily take cursor_modes and the drawings to avoid borrow conflict
             let mut cursor_modes = std::mem::take(&mut self.cursor_modes);
+            let mut drawings = std::mem::take(&mut self.drawings);
 
             self.handle_drawings(
                 ui,
-                dm,
+                &mut drawings,
                 &mut cursor_modes,
                 &response,
                 price_rect,
@@ -765,9 +750,10 @@ impl Chart {
             );
 
             // Render eraser highlight if in eraser mode
-            self.render_eraser_highlight(&painter, dm, &cursor_modes);
+            self.render_eraser_highlight(&painter, &drawings, &cursor_modes);
 
-            // Put cursor_modes back
+            // Put them back
+            self.drawings = drawings;
             self.cursor_modes = cursor_modes;
         }
 

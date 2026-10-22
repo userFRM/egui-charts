@@ -66,14 +66,14 @@ impl DrawingCommand {
         }
     }
 
-    /// Shift bar indices for historical data prepending
-    pub fn shift_bar_indices(&mut self, delta: f32) {
+    /// Shift the bar indices at or after `from` for bars inserted in front of them
+    pub fn shift_bar_indices(&mut self, from: f32, delta: f32) {
         match self {
             DrawingCommand::Add(d) | DrawingCommand::Delete(d) => {
-                d.shift_bar_indices(delta);
+                d.shift_bar_indices(from, delta);
             }
             DrawingCommand::Modify { old_state, .. } => {
-                old_state.shift_bar_indices(delta);
+                old_state.shift_bar_indices(from, delta);
             }
         }
     }
@@ -235,13 +235,13 @@ impl HistoryService {
         self.redo_stack.clear();
     }
 
-    /// Shift all bar indices in history (for historical data prepending)
-    pub fn shift_bar_indices(&mut self, delta: f32) {
+    /// Shift the bar indices at or after `from` in history (for bars inserted in front of them)
+    pub fn shift_bar_indices(&mut self, from: f32, delta: f32) {
         for cmd in &mut self.undo_stack {
-            cmd.shift_bar_indices(delta);
+            cmd.shift_bar_indices(from, delta);
         }
         for cmd in &mut self.redo_stack {
-            cmd.shift_bar_indices(delta);
+            cmd.shift_bar_indices(from, delta);
         }
     }
 
@@ -397,7 +397,7 @@ mod tests {
         history.push_add(anchored(2, 200.0));
         history.undo(&mut drawings); // Add(2) moves to the redo stack
 
-        history.shift_bar_indices(50.0);
+        history.shift_bar_indices(f32::NEG_INFINITY, 50.0);
 
         // Modify(1) sat on the undo stack: undo restores its old state, shifted.
         assert_eq!(history.undo(&mut drawings), Some(1));

@@ -1,8 +1,8 @@
 //! Builder pattern for constructing [`TradingChart`] instances.
 //!
 //! This module provides [`ChartBuilder`], a fluent API for creating fully-configured
-//! trading charts, and [`TradingChart`], the runtime wrapper that owns the chart widget,
-//! data source, indicator registry, and drawing manager.
+//! trading charts, and [`TradingChart`], the runtime wrapper that owns the chart widget
+//! and its data source.
 //!
 //! # Quick Start
 //!
@@ -11,8 +11,8 @@
 //! use egui_charts::model::Timeframe;
 //!
 //! # fn example(my_data_source: impl egui_charts::DataSource + 'static, ui: &mut egui::Ui) {
-//! // Chart with drawing tools and an indicator registry
-//! let mut chart = ChartBuilder::extended()
+//! // Chart with drawing tools and studies
+//! let mut chart = ChartBuilder::new()
 //!     .with_symbol("BTCUSDT")
 //!     .with_timeframe(Timeframe::Min1)
 //!     .with_data_src(Box::new(my_data_source))
@@ -29,7 +29,6 @@
 //! | Constructor | What it sets |
 //! |------------|----------|
 //! | [`ChartBuilder::new()`] | Candles, 100 bars visible; fetches 1000 bars when built if a symbol is set and the data source supports history |
-//! | [`ChartBuilder::extended()`] | `new()` plus drawing tools and an empty indicator registry |
 //! | [`ChartBuilder::price_chart()`] | Line chart without grid or crosshair, 50 bars visible |
 //! | [`ChartBuilder::options_chart()`] | Line chart with the time axis labels and ticks hidden |
 
@@ -37,7 +36,6 @@ use crate::chart::selection::SeriesId;
 use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::DataSource;
 use crate::data::merge::Origin;
-use crate::drawings::DrawingManager;
 use crate::model::BarData;
 use crate::model::ChartType;
 use crate::model::Timeframe;
@@ -48,7 +46,7 @@ use log;
 
 /// Fluent builder for constructing a [`TradingChart`].
 ///
-/// Use one of the constructor methods ([`new`](Self::new), [`extended`](Self::extended),
+/// Use one of the constructor methods ([`new`](Self::new),
 /// [`price_chart`](Self::price_chart), [`options_chart`](Self::options_chart)) and chain
 /// configuration calls before calling [`build`](Self::build) to produce the final chart.
 ///
@@ -79,7 +77,6 @@ pub struct ChartBuilder {
     config: ChartConfig,
     chart_options: ChartOptions,
     indicators: Option<IndicatorRegistry>,
-    drawing_manager: Option<DrawingManager>,
     visible_candles: usize,
     /// Number of bars to fetch on initial load (None = no auto-fetch)
     initial_bars: Option<usize>,
@@ -105,22 +102,11 @@ impl ChartBuilder {
             config: ChartConfig::default(),
             chart_options: ChartOptions::default(),
             indicators: None,
-            drawing_manager: None,
             visible_candles: 100,
             initial_bars: Some(1000), // Default: auto-fetch 1000 bars
             auto_fetch_on_symbol_change: true,
             auto_fetch_on_timeframe_change: true,
         }
-    }
-
-    /// Creates a chart with drawing tools and an empty indicator registry.
-    ///
-    /// Add studies to [`TradingChart::indicators`] or pass a registry with
-    /// [`with_indicators`](Self::with_indicators).
-    pub fn extended() -> Self {
-        Self::new()
-            .with_drawing_tools()
-            .with_indicators(IndicatorRegistry::new())
     }
 
     /// Creates a line chart with the time axis labels and ticks hidden.
@@ -189,7 +175,7 @@ impl ChartBuilder {
     ///
     /// # Note
     ///
-    /// For drawing tools and an indicator registry, use [`ChartBuilder::extended()`] instead.
+    /// For drawing tools and studies, use [`ChartBuilder::new()`] instead.
     pub fn price_chart() -> Self {
         use crate::config::CrosshairOptions;
 
@@ -284,20 +270,11 @@ impl ChartBuilder {
         self
     }
 
-    /// Attach an [`IndicatorRegistry`] for technical studies (SMA, RSI, MACD, etc.).
+    /// Add the studies of `registry` (SMA, RSI, MACD, etc.) to the chart, which computes,
+    /// updates and draws them.
     #[must_use]
     pub fn with_indicators(mut self, registry: IndicatorRegistry) -> Self {
         self.indicators = Some(registry);
-        self
-    }
-
-    /// Enable the drawing tools subsystem (trend lines, Fibonacci, channels, etc.).
-    ///
-    /// Creates a fresh [`DrawingManager`]. Without this, the chart will not
-    /// support user-drawn annotations.
-    #[must_use]
-    pub fn with_drawing_tools(mut self) -> Self {
-        self.drawing_manager = Some(DrawingManager::new());
         self
     }
 
@@ -525,13 +502,16 @@ impl ChartBuilder {
             }
         }
 
+        let mut studies = self.indicators.unwrap_or_default();
+        while let Some(study) = studies.remove_indicator(0) {
+            chart.add_indicator(study);
+        }
+
         TradingChart {
             chart,
             data_src: self.data_src,
             symbol,
             timeframe: self.timeframe,
-            indicators: self.indicators.unwrap_or_default(),
-            drawing_manager: self.drawing_manager,
             initial_bars: self.initial_bars.unwrap_or(1000),
             auto_fetch_on_symbol_change: self.auto_fetch_on_symbol_change,
             auto_fetch_on_timeframe_change: self.auto_fetch_on_timeframe_change,
@@ -552,7 +532,7 @@ impl Default for ChartBuilder {
     }
 }
 
-/// A fully assembled trading chart with data source, indicators, and drawing tools.
+/// A fully assembled trading chart with its data source.
 ///
 /// `TradingChart` is the runtime owner produced by [`ChartBuilder::build`]. It wraps
 /// the core [`Chart`] widget and adds:
@@ -560,8 +540,6 @@ impl Default for ChartBuilder {
 /// - **Live data polling** via the [`DataSource`] trait
 /// - **Progressive historical loading**: prefetches older bars as the user scrolls
 ///   left, so history keeps loading
-/// - **Indicator calculation**: recalculates all registered studies when data changes
-/// - **Drawing tool management**: an optional [`DrawingManager`] for annotations
 ///
 /// # Usage
 ///
@@ -585,10 +563,6 @@ pub struct TradingChart {
     pub symbol: String,
     /// Current timeframe for bar aggregation.
     pub timeframe: Timeframe,
-    /// Registry of technical indicators (SMA, EMA, RSI, etc.).
-    pub indicators: IndicatorRegistry,
-    /// Optional drawing tool manager for annotations and technical drawings.
-    pub drawing_manager: Option<DrawingManager>,
     /// Number of bars to fetch when auto-fetching
     initial_bars: usize,
     /// Auto-fetch on symbol change
@@ -629,16 +603,15 @@ impl TradingChart {
     /// Poll the data source for updates and handle progressive historical loading.
     ///
     /// This method should be called **once per frame**, before [`show`](Self::show).
-    /// It performs three key tasks:
+    /// It performs two key tasks:
     ///
     /// 1. **Polls real-time updates**: processes `FullDataset` and `NewBars` events
     ///    from the data source, merging live bars into the existing dataset.
-    /// 2. **Recalculates indicators**: whenever data changes, all registered
-    ///    indicators are recalculated on the updated bar slice.
-    /// 3. **Progressive loading**: when the user scrolls close to the oldest bar
+    /// 2. **Progressive loading**: when the user scrolls close to the oldest bar
     ///    (within `historical_fetch_threshold`), automatically fetches more
-    ///    historical data and prepends it, shifting drawing indices to maintain
-    ///    alignment.
+    ///    historical data and prepends it.
+    ///
+    /// The chart updates its studies and drawings with its bars.
     pub fn update(&mut self) {
         if !self.symbol.is_empty()
             && let Some(ref mut source) = self.data_src
@@ -650,8 +623,6 @@ impl TradingChart {
                 match update {
                     DataUpdate::FullDataset { symbol, bars } if symbol == self.symbol => {
                         self.chart.set_data(SeriesId::MAIN, bars);
-                        self.indicators
-                            .calculate_all(self.chart.bars(SeriesId::MAIN));
                     }
                     DataUpdate::NewBars { symbol, bars }
                         if symbol == self.symbol && !bars.is_empty() =>
@@ -660,8 +631,6 @@ impl TradingChart {
                         self.chart
                             .apply(bars.into_iter().map(|bar| (bar, Origin::Live)).collect());
                         let bars_after = self.chart.bars(SeriesId::MAIN).len();
-                        self.indicators
-                            .calculate_all(self.chart.bars(SeriesId::MAIN));
 
                         // Log new bar activity
                         if bars_after > bars_before {
@@ -732,22 +701,13 @@ impl TradingChart {
                                 return; // Exit early, no need to update
                             }
 
+                            // The chart moves the drawings with their bars.
                             let merged = self.chart.apply(
                                 older_bars
                                     .into_iter()
                                     .map(|bar| (bar, Origin::History))
                                     .collect(),
                             );
-                            let bars_added = self.chart.bars(SeriesId::MAIN).len() - curr_bar_cnt;
-
-                            // When N bars are prepended, all existing bar indices shift by +N.
-                            // Drawings must be shifted to maintain alignment with their candles.
-                            if let Some(ref mut dm) = self.drawing_manager {
-                                dm.shift_bar_indices(bars_added as f32);
-                            }
-                            self.indicators
-                                .calculate_all(self.chart.bars(SeriesId::MAIN));
-
                             // Paging on would request the same page again.
                             if merged.first_changed.is_none() {
                                 log::info!(
@@ -793,21 +753,11 @@ impl TradingChart {
             options.tooltip.enabled = false;
             saved
         });
-        self.chart
-            .show_with_indicators(ui, self.drawing_manager.as_mut(), Some(&self.indicators));
+        self.chart.show(ui);
         #[cfg(feature = "ui")]
         if let Some((style, enabled)) = hidden {
             self.chart.chart_options.crosshair.style = style;
             self.chart.chart_options.tooltip.enabled = enabled;
-        }
-
-        // A click on an indicator pane's legend close "x" surfaces a remove
-        // request. Apply it here so the turnkey chart removes the study and
-        // recomputes the rest; the pane layout reflows on the next frame.
-        if let Some(index) = self.chart.take_indicator_remove() {
-            self.indicators.remove_indicator(index);
-            self.indicators
-                .calculate_all(self.chart.bars(SeriesId::MAIN));
         }
 
         #[cfg(feature = "ui")]
@@ -839,7 +789,7 @@ impl TradingChart {
                 RightClickTarget::Background { pos, price } => {
                     self.context_menus
                         .chart
-                        .set_indicator_cnt(self.indicators.indicators().len());
+                        .set_indicator_cnt(self.chart.indicators().count());
                     self.context_menus.chart.set_symbol(self.symbol.clone());
                     self.context_menus.chart.open(pos, price);
                 }
@@ -885,11 +835,11 @@ impl TradingChart {
         // is the object-level menu (settings, hide, etc.).
         let label = match id {
             ChartElementId::Series(_) => self.symbol.clone(),
-            ChartElementId::OverlayIndicator(idx) | ChartElementId::PaneIndicator(idx) => self
-                .indicators
+            ChartElementId::Indicator(id) => self
+                .chart
                 .indicators()
-                .get(idx)
-                .map(|ind| ind.name().to_string())
+                .find(|(study, _)| *study == id)
+                .map(|(_, study)| study.name().to_string())
                 .unwrap_or_else(|| self.symbol.clone()),
         };
         let series_id = match id {
@@ -903,8 +853,12 @@ impl TradingChart {
     /// Configures and opens the drawing context menu for a hit drawing.
     #[cfg(feature = "ui")]
     fn open_drawing_menu(&mut self, drawing_id: usize, pos: egui::Pos2) {
-        if let Some(dm) = self.drawing_manager.as_ref()
-            && let Some(drawing) = dm.drawings.iter().find(|d| d.id == drawing_id)
+        if let Some(drawing) = self
+            .chart
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == drawing_id)
         {
             let type_name = drawing.tool_type.as_str().to_string();
             self.context_menus
@@ -942,51 +896,11 @@ impl TradingChart {
         self.chart.apply_series_settings(settings);
     }
 
-    /// Removes the indicator at `index` from the registry, returning it if present.
-    ///
-    /// The registry holds independent studies, so removal alone needs no
-    /// recompute of the others.
-    pub fn remove_indicator(&mut self, index: usize) -> Option<Box<dyn crate::studies::Indicator>> {
-        self.indicators.remove_indicator(index)
-    }
-
-    /// Sets the visibility of the indicator at `index`.
-    ///
-    /// Hidden indicators are retained in the registry (and keep their computed
-    /// values) but are skipped during rendering. Returns `false` if `index` is
-    /// out of bounds.
-    pub fn set_indicator_visible(&mut self, index: usize, visible: bool) -> bool {
-        match self.indicators.indicators_mut().get_mut(index) {
-            Some(indicator) => {
-                indicator.set_visible(visible);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Removes the drawing with the given id, returning `true` if one was removed.
-    ///
-    /// No-op (returns `false`) when there is no drawing manager or no drawing
-    /// matches `drawing_id`.
-    pub fn remove_drawing(&mut self, drawing_id: usize) -> bool {
-        let Some(dm) = self.drawing_manager.as_mut() else {
-            return false;
-        };
-        if dm.drawings.iter().any(|d| d.id == drawing_id) {
-            dm.delete_drawing(drawing_id);
-            true
-        } else {
-            false
-        }
-    }
-
     /// Change the active trading symbol.
     ///
     /// This clears the progressive loading state, subscribes to the new symbol
     /// on the data source, optionally fetches historical bars (if
-    /// `auto_fetch_on_symbol_change` is enabled), recalculates indicators, and
-    /// updates the chart legend.
+    /// `auto_fetch_on_symbol_change` is enabled), and updates the chart legend.
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
         let symbol = symbol.into();
 
@@ -1017,8 +931,6 @@ impl TradingChart {
                                 symbol
                             );
                             self.chart.set_data(SeriesId::MAIN, bars);
-                            self.indicators
-                                .calculate_all(self.chart.bars(SeriesId::MAIN));
                         }
                     }
                     Err(e) => {
@@ -1038,8 +950,8 @@ impl TradingChart {
     ///
     /// Old bars are cleared because they belong to the previous timeframe.
     /// A new subscription is created on the data source, historical data is
-    /// fetched if `auto_fetch_on_timeframe_change` is enabled, and indicators
-    /// are recalculated. No-ops if `timeframe` equals the current value.
+    /// fetched if `auto_fetch_on_timeframe_change` is enabled. No-ops if
+    /// `timeframe` equals the current value.
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
         // Skip if same timeframe
         if self.timeframe == timeframe {
@@ -1058,8 +970,6 @@ impl TradingChart {
         // Clear existing data - new timeframe needs fresh bars
         // This is critical: old bars at old timeframe are invalid for new timeframe
         self.chart.set_data(SeriesId::MAIN, Vec::new());
-        // Reset indicators with empty data
-        self.indicators.calculate_all(&[]);
 
         if !self.symbol.is_empty()
             && let Some(ref mut source) = self.data_src
@@ -1086,8 +996,6 @@ impl TradingChart {
                                 timeframe
                             );
                             self.chart.set_data(SeriesId::MAIN, bars);
-                            self.indicators
-                                .calculate_all(self.chart.bars(SeriesId::MAIN));
                         }
                     }
                     Err(e) => {

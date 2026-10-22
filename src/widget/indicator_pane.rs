@@ -7,7 +7,7 @@
 //!
 //! # Usage
 //!
-//! Indicator panes are typically managed by [`super::Chart::show_with_indicators`], but
+//! Indicator panes are typically drawn by [`super::Chart::show`], but
 //! they can also be used standalone:
 //!
 //! ```rust
