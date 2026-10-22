@@ -266,22 +266,21 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1000.0, 800.0));
         let frame = || {
             let mut row = egui::Rect::NOTHING;
+            let mut window = egui::Id::NULL;
             let input = egui::RawInput {
                 screen_rect: Some(screen),
                 ..Default::default()
             };
             let _ = ctx.run_ui(input, |ui| {
                 DialogFrame::new("d", Vec2::new(420.0, 240.0)).show(ui.ctx(), |ui| {
+                    window = ui.layer_id().id;
                     ui.label("Body");
                     DialogFooter::new("Apply")
                         .secondary("Cancel")
                         .show_with_left(ui, |ui| row = ui.max_rect());
                 });
             });
-            (
-                ctx.memory(|m| m.area_rect(egui::Id::new("d"))).unwrap(),
-                row,
-            )
+            (ctx.memory(|m| m.area_rect(window)).unwrap(), row)
         };
         frame(); // sizing pass
         let first = frame();

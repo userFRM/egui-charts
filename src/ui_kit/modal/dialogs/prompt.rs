@@ -53,7 +53,7 @@ pub struct PromptDialog {
 
 impl PromptDialog {
     /// Create a new prompt dialog
-    pub fn new(id: impl std::hash::Hash, title: impl Into<String>) -> Self {
+    pub fn new(id: impl std::hash::Hash + std::fmt::Debug, title: impl Into<String>) -> Self {
         Self {
             id: Id::new(id),
             title: title.into(),
@@ -175,7 +175,7 @@ impl PromptDialog {
 /// Show a simple prompt dialog
 pub fn prompt(
     ctx: &Context,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     title: impl Into<String>,
     open: &mut bool,
 ) -> PromptResult {
@@ -185,7 +185,7 @@ pub fn prompt(
 /// Show a prompt dialog with a message
 pub fn prompt_with_message(
     ctx: &Context,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     title: impl Into<String>,
     message: impl Into<String>,
     open: &mut bool,

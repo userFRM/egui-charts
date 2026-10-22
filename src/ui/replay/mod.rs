@@ -39,7 +39,7 @@
 //!
 //! // In your UI loop:
 //! # egui::__run_test_ui(|ui| {
-//! egui::Panel::bottom("replay").show_inside(ui, |ui| {
+//! egui::Panel::bottom("replay").show(ui, |ui| {
 //!     let controls = ReplayControls::new(&controller.config);
 //!     let action = controls.show(ui, &mut controller.state);
 //!     controller.handle_action(action);

@@ -117,7 +117,7 @@ struct App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             self.chart.update(); // poll the data source, load older bars
             self.chart.show(ui); // render the chart
         });
@@ -345,7 +345,7 @@ impl eframe::App for App {
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ui.ctx().global_style());
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             self.chart.update();
             self.chart.show(ui);
         });

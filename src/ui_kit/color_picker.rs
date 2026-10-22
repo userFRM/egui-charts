@@ -211,7 +211,10 @@ pub struct ColorPicker<'a> {
 }
 
 impl<'a> ColorPicker<'a> {
-    pub fn new(state: &'a mut ColorPickerState, id_src: impl std::hash::Hash) -> Self {
+    pub fn new(
+        state: &'a mut ColorPickerState,
+        id_src: impl std::hash::Hash + std::fmt::Debug,
+    ) -> Self {
         Self {
             config: ColorPickerConfig::default(),
             state,
@@ -558,7 +561,7 @@ fn hex(color: Color32) -> String {
 pub fn color_picker_btn(
     ui: &mut Ui,
     color: &mut Color32,
-    id_src: impl std::hash::Hash,
+    id_src: impl std::hash::Hash + std::fmt::Debug,
 ) -> Response {
     // Create temporary state
     let id = Id::new(id_src);

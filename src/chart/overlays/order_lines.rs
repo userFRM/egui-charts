@@ -478,7 +478,7 @@ mod tests {
 
         let ctx = egui::Context::default();
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 overlay.render(ui, ui.max_rect(), |_| 100.0);
             });
         });

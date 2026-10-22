@@ -84,7 +84,7 @@ impl<'a> AutocompleteEdit<'a> {
     }
 
     /// Set a unique ID salt for this widget
-    pub fn id_salt(mut self, id: impl std::hash::Hash) -> Self {
+    pub fn id_salt(mut self, id: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id_salt = Some(Id::new(id));
         self
     }

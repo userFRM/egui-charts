@@ -649,7 +649,7 @@ impl DemoApp {
             .exact_size(38.0)
             .show_separator_line(false)
             .frame(panel_frame(bg))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let action = self.top_toolbar.show_with_state(ui, &self.state);
                 self.handle_top_toolbar(ui.ctx(), action);
             });
@@ -741,7 +741,7 @@ impl DemoApp {
             .exact_size(38.0)
             .show_separator_line(true)
             .frame(panel_frame(bg))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 self.symbol_header.show(ui);
             });
     }
@@ -752,7 +752,7 @@ impl DemoApp {
             .default_size(52.0)
             .show_separator_line(true)
             .frame(panel_frame(bg))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let action = self.drawing_toolbar.show_with_action(ui);
                 self.handle_drawing_toolbar(action);
             });
@@ -842,7 +842,7 @@ impl DemoApp {
             .exact_size(52.0)
             .show_separator_line(true)
             .frame(panel_frame(bg))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let action = self.widget_bar.show(ui);
                 if let WidgetBarAction::Clicked(icon) = action {
                     self.toggle_panel(icon);
@@ -876,7 +876,7 @@ impl DemoApp {
             .resizable(true)
             .default_size(280.0)
             .min_size(220.0)
-            .show_inside(ui, |ui| match which {
+            .show(ui, |ui| match which {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
             });
@@ -1087,7 +1087,7 @@ impl DemoApp {
             .exact_size(38.0)
             .show_separator_line(true)
             .frame(panel_frame(bg))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let action = self.timeframe_toolbar.show(ui);
                 self.handle_timeframe_toolbar(action);
             });
@@ -1115,7 +1115,7 @@ impl DemoApp {
     fn show_chart(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::CentralPanel::default()
             .frame(panel_frame(bg))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 self.trading_chart.show(ui);
             });
         // Right-click context actions resolve after the chart is shown.

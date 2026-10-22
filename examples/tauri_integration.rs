@@ -93,7 +93,7 @@ impl eframe::App for TauriApp {
         self.trading_chart.update();
 
         // 3. Render the chart
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             self.trading_chart.show(ui);
         });
 

@@ -20,7 +20,7 @@
 //!
 //! // Show the chart in your egui update loop
 //! # egui::__run_test_ui(|ui| {
-//! egui::CentralPanel::default().show_inside(ui, |ui| {
+//! egui::CentralPanel::default().show(ui, |ui| {
 //!     chart.show(ui);
 //! });
 //! # });
@@ -149,7 +149,7 @@ pub use state::{BoxZoomMode, BoxZoomState, ElasticBounceState, KineticScrollStat
 /// let mut chart = Chart::new(bar_data);
 ///
 /// # egui::__run_test_ui(|ui| {
-/// egui::CentralPanel::default().show_inside(ui, |ui| {
+/// egui::CentralPanel::default().show(ui, |ui| {
 ///     let response = chart.show(ui);
 ///     // response can be used for additional interaction handling
 /// });
@@ -552,7 +552,7 @@ pub(crate) mod test_frames {
             ..Default::default()
         };
         let _ = ctx.run_ui(input, |ui| {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 chart.show(ui);
             });
         });

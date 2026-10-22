@@ -59,7 +59,7 @@ pub enum PanelPosition {
 /// let visuals = ui.visuals().clone();
 ///
 /// // Method 1: Show both frames with content
-/// egui::CentralPanel::default().show_inside(ui, |ui| {
+/// egui::CentralPanel::default().show(ui, |ui| {
 ///     StyledPanelFrame::left(&visuals).show(ui, |ui| {
 ///         ui.label("Panel content");
 ///     });
@@ -69,7 +69,7 @@ pub enum PanelPosition {
 /// let frame = StyledPanelFrame::left(&visuals);
 /// egui::Panel::left("left")
 ///     .frame(frame.outer_frame())
-///     .show_inside(ui, |ui| {
+///     .show(ui, |ui| {
 ///         frame.inner_frame().show(ui, |ui| {
 ///             ui.label("Panel content");
 ///         });

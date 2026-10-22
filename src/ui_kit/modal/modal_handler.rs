@@ -26,7 +26,7 @@ impl<T> Default for ModalHandler<T> {
 
 impl<T> ModalHandler<T> {
     /// Create a new modal handler with the given ID
-    pub fn new(id: impl std::hash::Hash) -> Self {
+    pub fn new(id: impl std::hash::Hash + std::fmt::Debug) -> Self {
         Self {
             id: Id::new(id),
             open: false,

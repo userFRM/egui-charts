@@ -198,7 +198,7 @@ mod tests {
     fn show_advances_by_exactly_one_row() {
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let top = ui.cursor().top();
                 let row = ListItem::new().show_text(ui, "Row");
                 assert_eq!(row.rect.height(), default_height());

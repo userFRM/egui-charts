@@ -93,7 +93,7 @@ impl eframe::App for DrawingApp {
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ui.ctx().global_style());
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // Pass the drawing manager to the chart so it renders annotations
             // and handles interactive drawing input.
             self.chart

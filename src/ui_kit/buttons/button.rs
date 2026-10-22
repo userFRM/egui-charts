@@ -336,7 +336,7 @@ mod tests {
         let label = "Größe ändern";
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(Default::default(), |ui| {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let font = egui::TextStyle::Button.resolve(ui.style());
                 let text_width = ui
                     .painter()

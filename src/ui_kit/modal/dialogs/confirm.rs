@@ -49,7 +49,7 @@ pub struct ConfirmDialog {
 impl ConfirmDialog {
     /// Create a new confirm dialog
     pub fn new(
-        id: impl std::hash::Hash,
+        id: impl std::hash::Hash + std::fmt::Debug,
         title: impl Into<String>,
         message: impl Into<String>,
     ) -> Self {
@@ -115,7 +115,7 @@ impl ConfirmDialog {
 /// Show a simple confirm dialog
 pub fn confirm(
     ctx: &Context,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     title: impl Into<String>,
     message: impl Into<String>,
     open: &mut bool,
@@ -126,7 +126,7 @@ pub fn confirm(
 /// Show a danger confirm dialog
 pub fn confirm_danger(
     ctx: &Context,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     title: impl Into<String>,
     message: impl Into<String>,
     open: &mut bool,

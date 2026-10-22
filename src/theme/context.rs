@@ -126,7 +126,7 @@ mod tests {
         ] {
             let _ = ctx.run_ui(Default::default(), |ui| {
                 apply_to_egui(ui.ctx(), &theme);
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     themed.show(ui);
                     custom.show(ui);
                 });

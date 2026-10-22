@@ -75,7 +75,7 @@ impl eframe::App for IndicatorApp {
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ui.ctx().global_style());
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // Render the chart with indicator overlays.
             // `show_with_indicators` draws overlay indicators (SMA, EMA, BB)
             // on the price pane and non-overlay indicators (RSI) in sub-panes.

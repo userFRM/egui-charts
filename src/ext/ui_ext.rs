@@ -157,7 +157,7 @@ pub trait UiExt {
     /// ```
     fn combo_select<T: PartialEq + Clone>(
         &mut self,
-        id_salt: impl std::hash::Hash,
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
         value: &mut T,
         options: impl IntoIterator<Item = T>,
         display: impl Fn(&T) -> String,
@@ -166,7 +166,7 @@ pub trait UiExt {
     /// Combo box for selecting from typed options with explicit width.
     fn combo_select_width<T: PartialEq + Clone>(
         &mut self,
-        id_salt: impl std::hash::Hash,
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
         value: &mut T,
         options: impl IntoIterator<Item = T>,
         display: impl Fn(&T) -> String,
@@ -184,7 +184,7 @@ pub trait UiExt {
     /// ```
     fn combo_str_select(
         &mut self,
-        id_salt: impl std::hash::Hash,
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
         value: &mut String,
         options: &[&str],
     ) -> bool;
@@ -192,7 +192,7 @@ pub trait UiExt {
     /// Combo box for selecting a `String` value from `&str` options with explicit width.
     fn combo_str_select_width(
         &mut self,
-        id_salt: impl std::hash::Hash,
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
         value: &mut String,
         options: &[&str],
         width: f32,
@@ -650,7 +650,7 @@ impl UiExt for Ui {
 
     fn combo_select<T: PartialEq + Clone>(
         &mut self,
-        id_salt: impl std::hash::Hash,
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
         value: &mut T,
         options: impl IntoIterator<Item = T>,
         display: impl Fn(&T) -> String,
@@ -672,7 +672,7 @@ impl UiExt for Ui {
 
     fn combo_select_width<T: PartialEq + Clone>(
         &mut self,
-        id_salt: impl std::hash::Hash,
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
         value: &mut T,
         options: impl IntoIterator<Item = T>,
         display: impl Fn(&T) -> String,
@@ -696,7 +696,7 @@ impl UiExt for Ui {
 
     fn combo_str_select(
         &mut self,
-        id_salt: impl std::hash::Hash,
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
         value: &mut String,
         options: &[&str],
     ) -> bool {
@@ -718,7 +718,7 @@ impl UiExt for Ui {
 
     fn combo_str_select_width(
         &mut self,
-        id_salt: impl std::hash::Hash,
+        id_salt: impl std::hash::Hash + std::fmt::Debug,
         value: &mut String,
         options: &[&str],
         width: f32,

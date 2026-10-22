@@ -52,7 +52,7 @@ pub struct ResponsiveToolbar {
 
 impl ResponsiveToolbar {
     /// Create a new horizontal toolbar with the given ID
-    pub fn horizontal(id: impl Hash) -> Self {
+    pub fn horizontal(id: impl Hash + std::fmt::Debug) -> Self {
         Self {
             id: Id::new(id),
             orientation: Orientation::Horizontal,
@@ -61,7 +61,7 @@ impl ResponsiveToolbar {
     }
 
     /// Create a new vertical toolbar with the given ID
-    pub fn vertical(id: impl Hash) -> Self {
+    pub fn vertical(id: impl Hash + std::fmt::Debug) -> Self {
         Self {
             id: Id::new(id),
             orientation: Orientation::Vertical,

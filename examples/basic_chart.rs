@@ -60,7 +60,7 @@ impl eframe::App for BasicChartApp {
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ui.ctx().global_style());
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // Render the chart -- it handles pan, zoom, and crosshair automatically
             self.chart.show(ui);
         });

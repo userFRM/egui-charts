@@ -19,7 +19,7 @@ pub struct Modal {
 
 impl Modal {
     /// Create a new modal with the given title
-    pub fn new(id: impl std::hash::Hash, title: impl Into<String>) -> Self {
+    pub fn new(id: impl std::hash::Hash + std::fmt::Debug, title: impl Into<String>) -> Self {
         Self {
             id: Id::new(id),
             title: title.into(),
@@ -122,7 +122,7 @@ pub struct SimpleModal {
 
 impl SimpleModal {
     /// Create a new simple modal
-    pub fn new(id: impl std::hash::Hash, title: impl Into<String>) -> Self {
+    pub fn new(id: impl std::hash::Hash + std::fmt::Debug, title: impl Into<String>) -> Self {
         Self {
             modal: Modal::new(id, title),
             open: false,
@@ -179,7 +179,7 @@ impl SimpleModal {
 /// Helper function to show a centered modal with standard styling
 pub fn show_modal<R>(
     ctx: &Context,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     title: impl Into<String>,
     open: &mut bool,
     add_contents: impl FnOnce(&mut Ui) -> R,

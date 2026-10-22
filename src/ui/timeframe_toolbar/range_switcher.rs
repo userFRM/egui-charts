@@ -282,7 +282,7 @@ impl RangeSwitcher {
     }
 
     /// Create with custom ID (for multiple instances)
-    pub fn with_id(mut self, id: impl std::hash::Hash) -> Self {
+    pub fn with_id(mut self, id: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id = egui::Id::new(id);
         self
     }
