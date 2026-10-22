@@ -113,6 +113,10 @@ impl TimezoneId {
     pub fn name(&self) -> &str {
         self.0.name()
     }
+
+    pub(crate) fn tz(&self) -> Tz {
+        self.0
+    }
 }
 
 /// Trading hours: the windows in which an instrument trades.

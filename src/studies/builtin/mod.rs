@@ -240,7 +240,7 @@ pub use acc_dist::AccumulationDistribution;
 pub use cmf::ChaikinMoneyFlow;
 pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
-pub use vwap::VolumeWeightedAvgPrice;
+pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
 
 // Re-exports - Trend indicators
 pub use adx::ADX;

@@ -421,7 +421,7 @@ mod tests {
             Box::new(ZeroTrendVol::new(l(0))),
             Box::new(CommoditySelectionIndex::new(l(0), x(1.0))),
             Box::new(OnBalanceVolume::new()),
-            Box::new(VolumeWeightedAvgPrice::new()),
+            Box::new(VolumeWeightedAvgPrice::new().with_std_dev_bands([x(1.0), x(2.0)])),
             Box::new(AnchoredVWAP::new(0)),
             Box::new(MoneyFlowIndex::new(l(0))),
             Box::new(AccumulationDistribution::new()),
