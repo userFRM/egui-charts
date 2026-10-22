@@ -1,11 +1,16 @@
 use crate::model::Bar;
-/// Rainbow Moving Avg Oscillator
-/// Measures distance of price from multiple moving avgs
-/// Creates a "rainbow" effect with layered MAs
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Rainbow Oscillator (Mel Widner, "Rainbow Charts", Technical Analysis of Stocks & Commodities,
+/// July 1997): the close's distance from a stack of recursive moving averages, relative to the
+/// recent range of the close.
+///
+/// The first average is the `base_period` SMA of the close and each further one the same SMA of
+/// the one before, `levels` averages in all:
+/// `100 * (close - mean of the averages) / (highest close - lowest close over the last levels bars)`.
+/// A bar whose range is zero has no value, so a single level never gives one.
 #[derive(Clone)]
 pub struct RainbowOscillator {
     /// Number of MA levels (typically 10)
@@ -91,19 +96,21 @@ impl Indicator for RainbowOscillator {
             level_cnt += 1;
         }
 
-        // Calculate the oscillator
-        // Rainbow Oscillator = 100 * (Close - Avg of all SMAs) / Avg of all SMAs
+        // 100 * (close - mean of the averages) / (highest - lowest close over the last `levels` bars)
         for i in 0..data.len() {
-            if missing[i] {
+            if missing[i] || i + 1 < self.levels {
                 self.values.push(IndicatorValue::None);
+                continue;
+            }
+            let window = &closes[i + 1 - self.levels..=i];
+            let highest = window.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let lowest = window.iter().copied().fold(f64::INFINITY, f64::min);
+            let range = highest - lowest;
+            if range > 0.0 {
+                let osc = 100.0 * (closes[i] - sums[i] / level_cnt as f64) / range;
+                self.values.push(IndicatorValue::Single(osc));
             } else {
-                let avg_sma = sums[i] / level_cnt as f64;
-                if avg_sma == 0.0 {
-                    self.values.push(IndicatorValue::None);
-                } else {
-                    let osc = 100.0 * (closes[i] - avg_sma) / avg_sma;
-                    self.values.push(IndicatorValue::Single(osc));
-                }
+                self.values.push(IndicatorValue::None);
             }
         }
     }
@@ -159,23 +166,54 @@ mod tests {
         }
     }
 
+    /// Reference values from Mel Widner's published definition ("Rainbow Charts", Technical
+    /// Analysis of Stocks & Commodities, July 1997), computed independently in double precision:
+    /// `100 * (C - mean of ten recursive 2-bar SMAs) / (HHV(C, 10) - LLV(C, 10))`.
     #[test]
-    fn test_rainbow_calculation() {
-        let mut rainbow = RainbowOscillator::new(5, 2);
+    fn rainbow_matches_published_definition() {
+        let mut closes = vec![10.0, 11.0, 13.0, 12.0, 14.0, 15.0, 13.0, 16.0, 17.0, 15.0];
+        closes.extend([18.0; 11]);
+        closes.extend([20.0, 19.0, 21.0]);
+        let expected: [Option<f64>; 24] = [
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(36.67689732142857),
+            Some(30.81705729166669),
+            Some(20.88704427083332),
+            Some(15.666015624999972),
+            Some(8.736328124999986),
+            Some(4.130859375),
+            Some(2.5781250000000235),
+            Some(0.6998697916666666),
+            Some(0.12044270833335702),
+            // Ten equal closes: the range is zero, so there is no value.
+            None,
+            None,
+            Some(90.00976562500007),
+            Some(25.1220703125),
+            Some(70.48502604166664),
+        ];
 
-        let data: Vec<Bar> = (0..20).map(|i| make_bar(100.0 + i as f64)).collect();
+        let mut rainbow = RainbowOscillator::default();
+        rainbow.calculate(&closes.iter().map(|&c| make_bar(c)).collect::<Vec<_>>());
 
-        rainbow.calculate(&data);
-
-        assert_eq!(rainbow.values.len(), 20);
-
-        // Should have valid values
-        let valid_cnt = rainbow
-            .values
-            .iter()
-            .filter(|v| !matches!(v, IndicatorValue::None))
-            .count();
-
-        assert!(valid_cnt > 0);
+        assert_eq!(rainbow.values.len(), expected.len());
+        for (i, (got, want)) in rainbow.values.iter().zip(expected).enumerate() {
+            match (got, want) {
+                (IndicatorValue::None, None) => {}
+                (IndicatorValue::Single(g), Some(w)) => {
+                    assert!((g - w).abs() < 1e-12, "bar {i}: got {g}, want {w}")
+                }
+                _ => panic!("bar {i}: got {got:?}, want {want:?}"),
+            }
+        }
     }
 }
