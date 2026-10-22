@@ -74,40 +74,30 @@ impl Indicator for RainbowOscillator {
         // Get closes
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
-        // Calculate recursive SMAs (each SMA is applied to the previous)
-        let mut all_smas: Vec<Vec<f64>> = Vec::new();
-        all_smas.push(Self::calculate_sma(&closes, self.base_period));
-
-        for i in 1..self.levels {
-            let prev_sma = &all_smas[i - 1];
-            // A level with no values leaves every deeper level, and so the oscillator, empty
-            if prev_sma.iter().all(|v| v.is_nan()) {
-                break;
+        // Sum the recursive SMAs (each applied to the previous) bar by bar, keeping only
+        // the latest level, so memory stays a few series whatever the level count.
+        let mut level = Self::calculate_sma(&closes, self.base_period);
+        let mut sums = level.clone();
+        let mut missing: Vec<bool> = level.iter().map(|v| v.is_nan()).collect();
+        let mut level_cnt = 1;
+        // With a base period of 1 every level equals the closes, and once every bar misses a
+        // level no deeper level can add a value: either way deeper levels change nothing.
+        while level_cnt < self.levels && self.base_period > 1 && missing.contains(&false) {
+            level = Self::calculate_sma(&level, self.base_period);
+            for ((sum, m), v) in sums.iter_mut().zip(missing.iter_mut()).zip(&level) {
+                *sum += v;
+                *m |= v.is_nan();
             }
-            let smoothed = Self::calculate_sma(prev_sma, self.base_period);
-            all_smas.push(smoothed);
+            level_cnt += 1;
         }
 
         // Calculate the oscillator
         // Rainbow Oscillator = 100 * (Close - Avg of all SMAs) / Avg of all SMAs
         for i in 0..data.len() {
-            let mut sum = 0.0;
-            let mut count = 0;
-            let mut any_nan = false;
-
-            for sma in &all_smas {
-                if sma[i].is_nan() {
-                    any_nan = true;
-                    break;
-                }
-                sum += sma[i];
-                count += 1;
-            }
-
-            if any_nan || count == 0 {
+            if missing[i] {
                 self.values.push(IndicatorValue::None);
             } else {
-                let avg_sma = sum / count as f64;
+                let avg_sma = sums[i] / level_cnt as f64;
                 if avg_sma == 0.0 {
                     self.values.push(IndicatorValue::None);
                 } else {
