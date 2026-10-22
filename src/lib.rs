@@ -49,6 +49,7 @@
 //! |---|---|---|
 //! | **Domain model** | [`model`] | `Bar`, `BarData`, `Symbol`, `Timeframe`, `ChartType`, Renko/Kagi/P&F transforms |
 //! | **Data** | [`data`] | `DataSource` trait, `DataUpdate`, historical/live data abstractions |
+//! | **Host services** | [`services`] | Traits a host implements to supply services such as storage |
 //! | **Chart engine** | [`chart`] | Pan/zoom, hit-testing, coordinate mapping, series rendering, interaction |
 //! | **Drawing tools** | [`drawings`] | 95 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
 //! | **Indicators** | [`studies`] | 128 indicator names in `IndicatorFactory`, `Indicator` trait, `IndicatorRegistry` |
@@ -70,7 +71,7 @@
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
-//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`studies`], [`tokens`], [`validation`]. Required by `icons` and `ui`. |
+//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`services`], [`studies`], [`tokens`], [`validation`]. Required by `icons` and `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
 //! | `ui` | off | Application-level UI: toolbars, panels, sidebars, dialogs, and the reusable `ui_kit` widget library they are built on. Enable this when you are building a full trading-terminal interface around the chart engine. |
 //!
@@ -131,6 +132,7 @@ pub mod studies;
 #[cfg(feature = "widget")]
 pub mod config;
 pub mod data;
+pub mod services;
 pub mod validation;
 
 // ─── Theme & design system ───────────────────────────────────────────────────
