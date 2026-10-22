@@ -115,6 +115,7 @@ pub(super) fn render_heikin_ashi(
     colors: &StyleColors,
     visible_data: &[Bar],
     full_data: &[Bar],
+    revision: u64,
     start_idx: usize,
     bar_width: f32,
     wick_width: f32,
@@ -130,7 +131,7 @@ pub(super) fn render_heikin_ashi(
     }
 
     // Slice the visible window out of the cached full-series transform.
-    let ha_window = heikin_ashi::window(full_data, start_idx, visible_data.len());
+    let ha_window = heikin_ashi::window(full_data, revision, start_idx, visible_data.len());
 
     let painter = price_ctx.painter;
     let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_ctx.rect);

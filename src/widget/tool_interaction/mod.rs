@@ -121,6 +121,7 @@ impl Chart {
         // Render existing drawings against the chart's bars
         let view = ChartView {
             bars: &self.state.data().bars,
+            revision: self.state.revision(),
             bar_to_x: &bar_to_x,
             price_to_y: &price_to_y,
         };

@@ -22,6 +22,8 @@ pub struct CandleDataContext<'a> {
     /// Heikin-Ashi, a cumulative recurrence) compute over `full_data` and slice
     /// the window out, so their output is invariant under panning and zooming.
     pub full_data: &'a [Bar],
+    /// [`ChartState::revision`](crate::model::ChartState::revision) of `full_data`.
+    pub revision: u64,
     /// Index of the first visible bar within `full_data`.
     pub start_idx: usize,
 }

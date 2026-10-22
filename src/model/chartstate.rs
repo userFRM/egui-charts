@@ -7,6 +7,15 @@
 /// ChartState Backend - Pure state management (no rendering).
 /// Combines data with coordinate systems.
 use super::{BarData, TimeScale};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Source of [`ChartState::revision`] values, so that no two chart states or
+/// histories ever share one.
+static REVISIONS: AtomicU64 = AtomicU64::new(0);
+
+fn next_revision() -> u64 {
+    REVISIONS.fetch_add(1, Ordering::Relaxed)
+}
 
 /// A snapshot of zoom parameters, used for undo/redo of zoom operations.
 ///
@@ -38,7 +47,7 @@ pub struct ZoomState {
 /// let state = ChartState::new(data);
 /// assert!(state.visible_data().is_empty());
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ChartState {
     /// The OHLCV bar dataset.
     data: BarData,
@@ -50,6 +59,22 @@ pub struct ChartState {
     price_range: Option<(f64, f64)>,
     /// Stack of previous zoom snapshots for the "zoom out" button.
     zoom_history: Vec<ZoomState>,
+    /// See [`revision`](Self::revision).
+    revision: u64,
+}
+
+impl Clone for ChartState {
+    /// A copy with a revision of its own, since its bars change independently.
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            time_scale: self.time_scale.clone(),
+            price_auto_scale: self.price_auto_scale,
+            price_range: self.price_range,
+            zoom_history: self.zoom_history.clone(),
+            revision: next_revision(),
+        }
+    }
 }
 
 impl ChartState {
@@ -64,6 +89,7 @@ impl ChartState {
             price_auto_scale: true,
             price_range: None,
             zoom_history: Vec::new(),
+            revision: next_revision(),
         }
     }
 
@@ -82,8 +108,32 @@ impl ChartState {
         &self.time_scale
     }
 
+    /// Identifies the bars before the last one. It changes when any of them
+    /// changes or bars are removed, and stays the same when bars are appended
+    /// or the last bar is updated, so results computed from the bars can be
+    /// cached under it and extended as the series streams.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Update data (also updates bar count in time scale)
     pub fn set_data(&mut self, data: BarData) {
+        let kept = self.data.len().saturating_sub(1);
+        // Bitwise, so that a NaN compares equal to itself.
+        let bits = |bar: &crate::model::Bar| {
+            (
+                bar.time,
+                [bar.open, bar.high, bar.low, bar.close, bar.volume].map(f64::to_bits),
+            )
+        };
+        if data.len() < self.data.len()
+            || !data.bars[..kept]
+                .iter()
+                .map(bits)
+                .eq(self.data.bars[..kept].iter().map(bits))
+        {
+            self.revision = next_revision();
+        }
         self.time_scale.set_bar_cnt(data.len());
         self.data = data;
     }

@@ -2,13 +2,14 @@
 
 use super::draw_dashed_hline;
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::{ChartView, SpanCache, bars_between};
-use crate::model::Bar;
+use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
+use crate::model::{Bar, SpanCache};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Shape, Stroke, epaint::StrokeKind};
 use std::cell::RefCell;
 use std::ops::Range;
+use std::rc::Rc;
 
 /// Price rows in a volume profile.
 const PROFILE_ROWS: usize = 24;
@@ -19,12 +20,10 @@ const VWAP_CHECKPOINT: usize = 1024;
 
 thread_local! {
     static VWAP_CHECKPOINTS: RefCell<SpanCache<Vec<VwapSums>>> =
-        const { RefCell::new(SpanCache::new()) };
-    static PROFILES: RefCell<SpanCache<Option<VolumeProfile>>> =
-        const { RefCell::new(SpanCache::new()) };
-    /// Profiles of each span without its last bar, which may be forming.
-    static OPENING_PROFILES: RefCell<SpanCache<Option<VolumeProfile>>> =
-        const { RefCell::new(SpanCache::new()) };
+        const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
+    /// Profiles by their number of rows.
+    static PROFILES: RefCell<SpanCache<Option<VolumeProfile>, usize>> =
+        const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
 }
 
 impl Drawing {
@@ -78,8 +77,9 @@ impl Drawing {
         // The checkpoints only cover whole blocks before the last bar, so the
         // forming bar's updates reuse them.
         let covered = (bars.len() - 1) / VWAP_CHECKPOINT * VWAP_CHECKPOINT;
-        let checkpoints = VWAP_CHECKPOINTS
-            .with_borrow_mut(|cache| cache.get(first, &bars[..covered], vwap_checkpoints));
+        let checkpoints = VWAP_CHECKPOINTS.with_borrow_mut(|cache| {
+            cache.get((), first, &bars[..covered], view.revision, vwap_checkpoints)
+        });
         let mut lines: [Vec<Pos2>; 5] = Default::default();
         let mut last_vwap = None;
         for (i, value) in (from..to).zip(anchored_vwap(bars, &checkpoints, from..to)) {
@@ -178,23 +178,24 @@ impl Drawing {
         left: f32,
         right: f32,
     ) {
-        let profile = PROFILES
-            .with_borrow_mut(|cache| cache.get(first, bars, |bars| span_profile(first, bars)));
+        let profile = span_profile(view, PROFILE_ROWS, first, bars);
         let Some(profile) = profile.as_ref() else {
+            return;
+        };
+        let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(VALUE_AREA_SHARE) else {
             return;
         };
         let y_at_row =
             |row: usize| (view.price_to_y)(profile.low + row as f64 * profile.row_height);
         let max_width = (right - left) * 0.9;
-        let max_volume = profile.volume[profile.poc];
-        let (va_low, va_high) = profile.value_area;
+        let max_volume = profile.volume[poc];
 
         for (row, &volume) in profile.volume.iter().enumerate() {
             let (top, bottom) = (y_at_row(row + 1), y_at_row(row));
             let width = (volume / max_volume) as f32 * max_width;
 
             // Color coding: POC is bright, Value Area is medium, outside is dim
-            let bar_color = if row == profile.poc {
+            let bar_color = if row == poc {
                 DESIGN_TOKENS.semantic.extended.favorite_gold
             } else if (va_low..=va_high).contains(&row) {
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180)
@@ -213,10 +214,10 @@ impl Drawing {
         }
 
         let rect = Rect::from_min_max(
-            Pos2::new(left, y_at_row(PROFILE_ROWS)),
+            Pos2::new(left, y_at_row(profile.volume.len())),
             Pos2::new(right, y_at_row(0)),
         );
-        let poc_y = (y_at_row(profile.poc) + y_at_row(profile.poc + 1)) / 2.0;
+        let poc_y = (y_at_row(poc) + y_at_row(poc + 1)) / 2.0;
         self.draw_volume_profile_lines(
             painter,
             &rect,
@@ -378,7 +379,7 @@ fn anchored_vwap<'a>(
 }
 
 /// Volume traded at each price row of a span of bars.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct VolumeProfile {
     /// Price at the bottom of row 0.
     low: f64,
@@ -387,86 +388,99 @@ struct VolumeProfile {
     row_height: f64,
     /// Volume per row, lowest prices first.
     volume: Vec<f64>,
-    /// Row with the most volume (point of control).
-    poc: usize,
-    /// Lowest and highest row of the value area.
-    value_area: (usize, usize),
 }
 
-/// Profile of the span of bars that starts at bar `first`. While the last
-/// bar, which may be forming, trades inside the range of the bars before it,
-/// their profile is reused, so a tick costs one bar instead of the span.
-fn span_profile(first: usize, bars: &[Bar]) -> Option<VolumeProfile> {
-    if let Some((last, opening)) = bars.split_last() {
-        let base = OPENING_PROFILES.with_borrow_mut(|cache| {
-            cache.get(first, opening, |bars| volume_profile(bars, PROFILE_ROWS))
-        });
-        if let Some(base) = base.as_ref()
-            && base.low <= last.low
-            && last.high <= base.high
-        {
-            let mut volume = base.volume.clone();
-            spread_volume(&mut volume, base.low, base.row_height, last);
-            return VolumeProfile::from_rows(base.low, base.high, base.row_height, volume);
-        }
-    }
-    volume_profile(bars, PROFILE_ROWS)
-}
-
-/// Spreads each bar's volume evenly over its high-low range across `rows`
-/// equal price rows (a bar without range puts it in the row of its price).
-/// `None` when the bars span no price range or trade no volume.
-fn volume_profile(bars: &[Bar], rows: usize) -> Option<VolumeProfile> {
-    let low = bars.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
-    let high = bars
-        .iter()
-        .map(|b| b.high)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let row_height = (high - low) / rows as f64;
-    if !row_height.is_finite() || row_height <= 0.0 {
-        return None;
-    }
-    let mut volume = vec![0.0; rows];
-    for bar in bars {
-        spread_volume(&mut volume, low, row_height, bar);
-    }
-    VolumeProfile::from_rows(low, high, row_height, volume)
-}
-
-/// Adds the volume of `bar` to the rows of `row_height` from `low` that its
-/// high-low range covers, in proportion to the overlap.
-fn spread_volume(volume: &mut [f64], low: f64, row_height: f64, bar: &Bar) {
-    let top_row = volume.len() - 1;
-    let row_of = |price: f64| (((price - low) / row_height) as usize).min(top_row);
-    if bar.high > bar.low {
-        let (first, last) = (row_of(bar.low), row_of(bar.high));
-        for (row, row_volume) in volume.iter_mut().enumerate().take(last + 1).skip(first) {
-            let row_low = low + row as f64 * row_height;
-            let overlap = bar.high.min(row_low + row_height) - bar.low.max(row_low);
-            *row_volume += bar.volume * overlap.max(0.0) / (bar.high - bar.low);
-        }
-    } else {
-        volume[row_of(bar.low)] += bar.volume;
-    }
+/// Profile of `bars`, the span that starts at bar `first`, with `rows` rows.
+/// While the last bar, which may be forming, trades inside the range of the
+/// bars before it, their profile is reused, so a tick or a new bar costs one
+/// bar instead of the span.
+fn span_profile(
+    view: &ChartView,
+    rows: usize,
+    first: usize,
+    bars: &[Bar],
+) -> Rc<Option<VolumeProfile>> {
+    PROFILES.with_borrow_mut(|cache| {
+        view.cached(
+            cache,
+            rows,
+            first,
+            bars,
+            |bars| VolumeProfile::of(bars, rows),
+            |profile, bar| profile.as_ref()?.with(bar).map(Some),
+        )
+    })
 }
 
 impl VolumeProfile {
-    /// The profile of the row volumes; `None` when they hold no volume.
-    fn from_rows(low: f64, high: f64, row_height: f64, volume: Vec<f64>) -> Option<Self> {
+    /// Spreads each bar's volume evenly over its high-low range across
+    /// `rows` equal price rows (a bar without range puts it in the row of its
+    /// price). `None` when the bars span no price range.
+    fn of(bars: &[Bar], rows: usize) -> Option<Self> {
+        let low = bars.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
+        let high = bars
+            .iter()
+            .map(|b| b.high)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let row_height = (high - low) / rows as f64;
+        if !row_height.is_finite() || row_height <= 0.0 {
+            return None;
+        }
+        let mut profile = Self {
+            low,
+            high,
+            row_height,
+            volume: vec![0.0; rows],
+        };
+        bars.iter().for_each(|bar| profile.add(bar));
+        Some(profile)
+    }
+
+    /// This profile with `bar` added; `None` when the bar trades outside the
+    /// profile's price range, which would move the rows.
+    fn with(&self, bar: &Bar) -> Option<Self> {
+        (self.low <= bar.low && bar.high <= self.high).then(|| {
+            let mut profile = self.clone();
+            profile.add(bar);
+            profile
+        })
+    }
+
+    /// Adds the volume of `bar` to the rows that its high-low range covers,
+    /// in proportion to the overlap.
+    fn add(&mut self, bar: &Bar) {
+        let (low, row_height) = (self.low, self.row_height);
+        let top_row = self.volume.len() - 1;
+        let row_of = |price: f64| (((price - low) / row_height) as usize).min(top_row);
+        if bar.high > bar.low {
+            let (first, last) = (row_of(bar.low), row_of(bar.high));
+            for (row, row_volume) in self
+                .volume
+                .iter_mut()
+                .enumerate()
+                .take(last + 1)
+                .skip(first)
+            {
+                let row_low = low + row as f64 * row_height;
+                let overlap = bar.high.min(row_low + row_height) - bar.low.max(row_low);
+                *row_volume += bar.volume * overlap.max(0.0) / (bar.high - bar.low);
+            }
+        } else {
+            self.volume[row_of(bar.low)] += bar.volume;
+        }
+    }
+
+    /// The row with the most volume (point of control), and the lowest and
+    /// highest row of the value area, which holds `share` of the volume;
+    /// `None` when no volume traded.
+    fn poc_and_value_area(&self, share: f64) -> Option<(usize, (usize, usize))> {
+        let volume = &self.volume;
         let total: f64 = volume.iter().sum();
         if !total.is_finite() || total <= 0.0 {
             return None;
         }
         let poc = (0..volume.len()).max_by(|&a, &b| volume[a].total_cmp(&volume[b]))?;
-        let value_area = value_area(&volume, poc, total * VALUE_AREA_SHARE);
-        Some(Self {
-            low,
-            high,
-            row_height,
-            volume,
-            poc,
-            value_area,
-        })
+        Some((poc, value_area(volume, poc, total * share)))
     }
 }
 
@@ -575,11 +589,12 @@ mod tests {
 
     /// Reference: rows of 1.5 from 9.0, each bar's volume split by how much of
     /// its range falls in the row, the zero-range bar whole in the row of 13.0.
-    /// The value area takes the two rows below the POC (433.3) over the one row
-    /// above it (397.5); comparing single rows would take the row above.
+    /// The value area takes the two rows below the POC (433.3) over
+    /// the one row above it (397.5); comparing single rows would take the row
+    /// above.
     #[test]
     fn volume_profile_matches_reference() {
-        let profile = volume_profile(&sample_bars(), 4).unwrap();
+        let profile = VolumeProfile::of(&sample_bars(), 4).unwrap();
         assert_close(profile.low, 9.0);
         assert_close(profile.row_height, 1.5);
         for (got, want) in
@@ -590,26 +605,36 @@ mod tests {
         {
             assert_close(*got, want);
         }
-        assert_eq!(profile.poc, 2);
-        assert_eq!(profile.value_area, (0, 2));
+        assert_eq!(profile.poc_and_value_area(0.7), Some((2, (0, 2))));
     }
 
-    /// Ticks on the last bar inside the range of the bars before it reuse
-    /// their profile; a tick past that range rebuilds the rows. Either way
-    /// the profile is the one built from all the bars.
+    /// The profile of a span that ends on the forming bar follows its ticks
+    /// and the next bar, extending the cached profile of the bars before it
+    /// while they trade inside its range and rebuilding the rows otherwise.
+    /// Either way it is the profile built from all the bars.
     #[test]
-    fn span_profile_follows_ticks_on_the_last_bar() {
+    fn span_profile_follows_the_forming_bar() {
+        let check = |bars: &[Bar], case: &str| {
+            let view = ChartView {
+                bars,
+                revision: 0,
+                bar_to_x: &|x| x,
+                price_to_y: &|price| price as f32,
+            };
+            let want = VolumeProfile::of(&bars[1..], 24);
+            assert_eq!(*span_profile(&view, 24, 1, &bars[1..]), want, "{case}");
+        };
         let mut bars = sample_bars();
-        let last = bars.len() - 1;
-        for (high, low, volume) in [(14.0, 12.5, 90.0), (14.5, 12.0, 130.0), (16.0, 12.0, 150.0)] {
-            bars[last].high = high;
-            bars[last].low = low;
-            bars[last].volume = volume;
-            assert_eq!(
-                span_profile(0, &bars),
-                volume_profile(&bars, PROFILE_ROWS),
-                "last bar {low}..{high}"
-            );
+        check(&bars, "first frame");
+        for (high, low, volume) in [(16.0, 12.0, 150.0), (14.0, 12.5, 90.0), (14.5, 12.0, 130.0)] {
+            let forming = bars.last_mut().unwrap();
+            (forming.high, forming.low, forming.volume) = (high, low, volume);
+            check(&bars, &format!("tick {low}..{high}"));
         }
+        // The bar closes on a trade that was not drawn, and the next one opens.
+        bars.last_mut().unwrap().volume += 10.0;
+        let time = bars.last().unwrap().time + chrono::Duration::minutes(1);
+        bars.push(Bar::new(time, 13.0, 13.5, 12.5, 13.2, 20.0));
+        check(&bars, "new bar");
     }
 }

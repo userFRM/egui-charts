@@ -3,15 +3,17 @@
 //! Includes: parallel channel, disjoint channel, regression trend, and flat top/bottom.
 
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::{ChartView, SpanCache, bars_between};
-use crate::model::Bar;
+use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
+use crate::model::{Bar, SpanCache};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 use std::cell::RefCell;
+use std::rc::Rc;
 
 thread_local! {
-    static FITS: RefCell<SpanCache<Option<LinearFit>>> = const { RefCell::new(SpanCache::new()) };
+    static MOMENTS: RefCell<SpanCache<Moments>> =
+        const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
 }
 
 impl Drawing {
@@ -76,7 +78,7 @@ impl Drawing {
         let color = self.color32();
 
         if let Some((first, bars)) = bars_between(view.bars, a.bar_idx, b.bar_idx)
-            && let Some(fit) = *FITS.with_borrow_mut(|cache| cache.get(first, bars, linear_fit))
+            && let Some(fit) = span_moments(view, first, bars).fit()
         {
             self.draw_regression_channel(painter, view, first, bars.len(), &fit, color);
         }
@@ -547,30 +549,89 @@ struct LinearFit {
     r_squared: f64,
 }
 
-/// Fits the closes of `bars`; `None` for fewer than two bars.
-fn linear_fit(bars: &[Bar]) -> Option<LinearFit> {
-    if bars.len() < 2 {
-        return None;
-    }
-    let n = bars.len() as f64;
-    let mean_x = (n - 1.0) / 2.0;
-    let mean_y = bars.iter().map(|bar| bar.close).sum::<f64>() / n;
-    let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
-    for (i, bar) in bars.iter().enumerate() {
-        let (dx, dy) = (i as f64 - mean_x, bar.close - mean_y);
-        sxx += dx * dx;
-        sxy += dx * dy;
-        syy += dy * dy;
-    }
-    let slope = sxy / sxx;
-    let residual = (syy - slope * sxy).max(0.0);
-    Some(LinearFit {
-        slope,
-        intercept: mean_y - slope * mean_x,
-        sigma: (residual / (n - 1.0)).sqrt(),
-        // Flat closes are fitted exactly.
-        r_squared: if syy > 0.0 { 1.0 - residual / syy } else { 1.0 },
+/// Means of the closes of a span of bars and of their positions in it, and
+/// the sums of the products of their deviations from those means.
+#[derive(Clone, Copy, Default)]
+struct Moments {
+    n: f64,
+    mean_x: f64,
+    mean_y: f64,
+    sxx: f64,
+    sxy: f64,
+    syy: f64,
+}
+
+/// Moments of `bars`, the span that starts at bar `first`. A tick on the
+/// forming bar, or a new bar, adds one bar to the moments of the bars before
+/// it instead of refitting the span.
+fn span_moments(view: &ChartView, first: usize, bars: &[Bar]) -> Rc<Moments> {
+    MOMENTS.with_borrow_mut(|cache| {
+        view.cached(cache, (), first, bars, Moments::of, |moments, bar| {
+            Some(moments.with(bar.close))
+        })
     })
+}
+
+impl Moments {
+    /// Moments of the closes of `bars`, in two passes.
+    fn of(bars: &[Bar]) -> Self {
+        let n = bars.len() as f64;
+        if bars.is_empty() {
+            return Self::default();
+        }
+        let mean_x = (n - 1.0) / 2.0;
+        let mean_y = bars.iter().map(|bar| bar.close).sum::<f64>() / n;
+        let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
+        for (i, bar) in bars.iter().enumerate() {
+            let (dx, dy) = (i as f64 - mean_x, bar.close - mean_y);
+            sxx += dx * dx;
+            sxy += dx * dy;
+            syy += dy * dy;
+        }
+        Self {
+            n,
+            mean_x,
+            mean_y,
+            sxx,
+            sxy,
+            syy,
+        }
+    }
+
+    /// These moments with the close `y` of the next bar added (Welford's update).
+    fn with(&self, y: f64) -> Self {
+        let n = self.n + 1.0;
+        let (dx, dy) = (self.n - self.mean_x, y - self.mean_y);
+        let (mean_x, mean_y) = (self.mean_x + dx / n, self.mean_y + dy / n);
+        Self {
+            n,
+            mean_x,
+            mean_y,
+            sxx: self.sxx + dx * (self.n - mean_x),
+            sxy: self.sxy + dx * (y - mean_y),
+            syy: self.syy + dy * (y - mean_y),
+        }
+    }
+
+    /// The least-squares line; `None` for fewer than two bars.
+    fn fit(&self) -> Option<LinearFit> {
+        if self.n < 2.0 {
+            return None;
+        }
+        let slope = self.sxy / self.sxx;
+        let residual = (self.syy - slope * self.sxy).max(0.0);
+        Some(LinearFit {
+            slope,
+            intercept: self.mean_y - slope * self.mean_x,
+            sigma: (residual / (self.n - 1.0)).sqrt(),
+            // Flat closes are fitted exactly.
+            r_squared: if self.syy > 0.0 {
+                1.0 - residual / self.syy
+            } else {
+                1.0
+            },
+        })
+    }
 }
 
 #[cfg(test)]
@@ -580,16 +641,25 @@ mod tests {
 
     /// Reference: ordinary least squares of the closes of bars 0..=5 against
     /// 0..=5, residual standard deviation over n - 1, R² = 1 - SSres / SStot.
+    /// The moments give the same fit in two
+    /// passes, streamed bar by bar, or with the last bar added to the others.
     #[test]
     fn linear_fit_matches_reference() {
-        let fit = linear_fit(&sample_bars()[..6]).unwrap();
-        for (got, want) in [
-            (fit.slope, 0.45714285714285713),
-            (fit.intercept, 11.190476190476192),
-            (fit.sigma, 0.9139136147569393),
-            (fit.r_squared, 0.4668693009118541),
-        ] {
-            assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
+        let bars = &sample_bars()[..6];
+        let streamed = bars
+            .iter()
+            .fold(Moments::default(), |moments, bar| moments.with(bar.close));
+        let extended = Moments::of(&bars[..5]).with(bars[5].close);
+        for moments in [Moments::of(bars), streamed, extended] {
+            let fit = moments.fit().unwrap();
+            for (got, want) in [
+                (fit.slope, 0.45714285714285713),
+                (fit.intercept, 11.190476190476192),
+                (fit.sigma, 0.9139136147569393),
+                (fit.r_squared, 0.4668693009118541),
+            ] {
+                assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
+            }
         }
     }
 }

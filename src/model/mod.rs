@@ -34,7 +34,7 @@ mod timescale;
 pub mod tpo;
 
 pub use annotations::{Annotation, MarkerType};
-pub(crate) use bar::SeriesFingerprint;
+pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarData};
 pub use chart_type::{ChartType, ChartTypeCategory, ChartTypeParams};
 pub use chartstate::{ChartState, ZoomState};

@@ -17,7 +17,7 @@
 
 use std::cell::RefCell;
 
-use crate::model::{Bar, SeriesFingerprint};
+use crate::model::{Bar, SpanCache};
 
 /// Transform a full OHLC series into its Heikin-Ashi representation.
 ///
@@ -64,66 +64,26 @@ pub fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
     ha_bars
 }
 
-/// Bounded set of recently computed Heikin-Ashi series.
-///
-/// Keyed by [`SeriesFingerprint`] so that several charts sharing the render
-/// thread each keep their own cached series instead of thrashing a single slot.
-struct HeikinAshiCache {
-    entries: Vec<(SeriesFingerprint, Vec<Bar>)>,
-}
-
-/// Maximum number of distinct datasets cached per render thread. Charts are
-/// rendered one at a time in immediate mode, so a small bound covers realistic
-/// multi-chart layouts while keeping memory bounded.
-const MAX_CACHED_SERIES: usize = 8;
-
-impl HeikinAshiCache {
-    const fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
-
-    /// Return the cached Heikin-Ashi series for `full_data`, computing and
-    /// storing it only if this dataset has not been seen (or has changed).
-    fn series(&mut self, full_data: &[Bar]) -> Vec<Bar> {
-        let fingerprint = SeriesFingerprint::of(full_data);
-
-        if let Some(pos) = self.entries.iter().position(|(fp, _)| *fp == fingerprint) {
-            // Move the hit to the back so the eviction policy is least-recently-used.
-            let entry = self.entries.remove(pos);
-            let series = entry.1.clone();
-            self.entries.push(entry);
-            return series;
-        }
-
-        let series = transform_to_heikin_ashi(full_data);
-
-        if self.entries.len() >= MAX_CACHED_SERIES {
-            self.entries.remove(0);
-        }
-        self.entries.push((fingerprint, series.clone()));
-        series
-    }
-}
-
 thread_local! {
-    static HEIKIN_ASHI_CACHE: RefCell<HeikinAshiCache> = const { RefCell::new(HeikinAshiCache::new()) };
+    /// Heikin-Ashi series of recently drawn datasets. Charts are rendered one
+    /// at a time in immediate mode, so a small bound covers realistic
+    /// multi-chart layouts while keeping memory bounded.
+    static HEIKIN_ASHI_CACHE: RefCell<SpanCache<Vec<Bar>>> = const { RefCell::new(SpanCache::new(8)) };
 }
 
-/// Heikin-Ashi values for the visible window `[start_idx, start_idx + len)`.
+/// Heikin-Ashi values for the visible window `[start_idx, start_idx + len)`
+/// of `full_data`, a series at `revision` (see [`ChartState::revision`](crate::model::ChartState::revision)).
 ///
 /// The full-series transform is computed once per dataset and cached on the
 /// render thread; this returns the requested sub-window sliced out of it, so the
 /// values are invariant under panning and zooming. Indices outside the dataset
 /// are clamped, never panicking.
-pub fn window(full_data: &[Bar], start_idx: usize, len: usize) -> Vec<Bar> {
-    HEIKIN_ASHI_CACHE.with(|cache| {
-        let series = cache.borrow_mut().series(full_data);
-        let start = start_idx.min(series.len());
-        let end = start.saturating_add(len).min(series.len());
-        series[start..end].to_vec()
-    })
+pub fn window(full_data: &[Bar], revision: u64, start_idx: usize, len: usize) -> Vec<Bar> {
+    let series = HEIKIN_ASHI_CACHE
+        .with_borrow_mut(|cache| cache.get((), 0, full_data, revision, transform_to_heikin_ashi));
+    let start = start_idx.min(series.len());
+    let end = start.saturating_add(len).min(series.len());
+    series[start..end].to_vec()
 }
 
 #[cfg(test)]
@@ -169,7 +129,7 @@ mod tests {
 
         for start in 0..full.len() {
             let len = full.len() - start;
-            let win = window(&full, start, len);
+            let win = window(&full, 0, start, len);
             assert_eq!(win.len(), len, "start={start}");
             for (i, w) in win.iter().enumerate() {
                 assert_bars_eq(w, &ha_full[start + i], &format!("start={start}, i={i}"));
@@ -192,29 +152,16 @@ mod tests {
         );
     }
 
-    /// Re-requesting the same dataset reuses the cached series and yields stable
-    /// values across calls.
-    #[test]
-    fn cache_returns_stable_values() {
-        let full = sample_series();
-        let first = window(&full, 1, 3);
-        let second = window(&full, 1, 3);
-        assert_eq!(first.len(), second.len());
-        for (a, b) in first.iter().zip(second.iter()) {
-            assert_bars_eq(a, b, "stable");
-        }
-    }
-
     /// Appending to the dataset invalidates the cached series for the new shape.
     #[test]
     fn cache_invalidates_on_data_change() {
         let series_a = sample_series();
-        let win_a = window(&series_a, 0, series_a.len());
+        let win_a = window(&series_a, 0, 0, series_a.len());
         assert_eq!(win_a.len(), series_a.len());
 
         let mut series_b = sample_series();
         series_b.push(bar(6, 10.0, 10.5, 9.0, 9.5));
-        let win_b = window(&series_b, 0, series_b.len());
+        let win_b = window(&series_b, 0, 0, series_b.len());
         assert_eq!(win_b.len(), series_b.len());
         assert_ne!(win_a.len(), win_b.len());
     }
@@ -223,14 +170,14 @@ mod tests {
     #[test]
     fn window_clamps_out_of_range() {
         let full = sample_series();
-        assert!(window(&full, 100, 10).is_empty());
-        let tail = window(&full, full.len() - 1, 50);
+        assert!(window(&full, 0, 100, 10).is_empty());
+        let tail = window(&full, 0, full.len() - 1, 50);
         assert_eq!(tail.len(), 1);
     }
 
     /// An empty dataset yields an empty window without panicking.
     #[test]
     fn empty_series_is_empty() {
-        assert!(window(&[], 0, 10).is_empty());
+        assert!(window(&[], 0, 0, 10).is_empty());
     }
 }

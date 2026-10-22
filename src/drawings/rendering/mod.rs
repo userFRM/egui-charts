@@ -40,12 +40,13 @@
 //! #     painter: &egui::Painter,
 //! #     price_rect: egui::Rect,
 //! #     bars: &[egui_charts::model::Bar],
+//! #     revision: u64,
 //! #     bar_to_x: impl Fn(f32) -> f32,
 //! #     price_to_y: impl Fn(f64) -> f32,
 //! # ) {
 //! let drawing = Drawing::new(1, DrawingToolType::TrendLine);
 //! // After setting up points and calling update_screen_coords:
-//! let view = ChartView { bars, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
+//! let view = ChartView { bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
 //! drawing.render(painter, price_rect, &view);
 //! # }
 //! ```
@@ -69,7 +70,7 @@ pub(crate) mod utils;
 pub use traits::DrawingRenderer;
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
-use crate::model::{Bar, SeriesFingerprint};
+use crate::model::{Bar, SpanCache};
 use egui::Rect;
 use std::rc::Rc;
 
@@ -81,6 +82,10 @@ use std::rc::Rc;
 pub struct ChartView<'a> {
     /// The series that drawing anchors index into.
     pub bars: &'a [Bar],
+    /// [`ChartState::revision`](crate::model::ChartState::revision) of `bars`.
+    /// Results computed from the bars are cached under it, so it must change
+    /// whenever a bar before the last one changes.
+    pub revision: u64,
     /// Screen x of a (fractional) bar index.
     pub bar_to_x: &'a dyn Fn(f32) -> f32,
     /// Screen y of a price.
@@ -101,49 +106,29 @@ pub(crate) fn bars_between(bars: &[Bar], a: f32, b: f32) -> Option<(usize, &[Bar
     (first <= end).then(|| (first, &bars[first..=end]))
 }
 
-/// Results computed from a span of bars, kept per render thread so that a
-/// steady frame does no work proportional to the span. An entry is keyed by
-/// the index of the span's first bar and the [`SeriesFingerprint`] of its
-/// bars, so it is recomputed when an anchor moves or the span's length,
-/// endpoints or last bar change; the least recently used entry is evicted
-/// first.
-pub(crate) struct SpanCache<T> {
-    entries: Vec<((usize, SeriesFingerprint), Rc<T>)>,
-}
-
-/// Entries kept per kind of result, more than the drawings of one kind on screen.
-const MAX_CACHED_SPANS: usize = 32;
-
-impl<T> SpanCache<T> {
-    pub(crate) const fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
-
-    /// The result for `bars`, the span that starts at bar `first`, computed
-    /// with `compute` unless it is cached.
-    pub(crate) fn get(
-        &mut self,
+impl ChartView<'_> {
+    /// `build` of `bars`, the span that starts at bar `first`, cached in
+    /// `cache`. A span that ends on the last bar, which may be forming, is
+    /// extended one bar at a time with `extend` as the series streams.
+    pub(crate) fn cached<T, P: Copy + PartialEq>(
+        &self,
+        cache: &mut SpanCache<T, P>,
+        param: P,
         first: usize,
         bars: &[Bar],
-        compute: impl FnOnce(&[Bar]) -> T,
+        build: impl Fn(&[Bar]) -> T,
+        extend: impl Fn(&T, &Bar) -> Option<T>,
     ) -> Rc<T> {
-        let key = (first, SeriesFingerprint::of(bars));
-        let entry = match self.entries.iter().position(|(cached, _)| *cached == key) {
-            Some(pos) => self.entries.remove(pos),
-            None => {
-                if self.entries.len() >= MAX_CACHED_SPANS {
-                    self.entries.remove(0);
-                }
-                (key, Rc::new(compute(bars)))
-            }
-        };
-        let value = Rc::clone(&entry.1);
-        self.entries.push(entry);
-        value
+        if first + bars.len() == self.bars.len() {
+            cache.get_extended(param, first, bars, self.revision, build, extend)
+        } else {
+            cache.get(param, first, bars, self.revision, build)
+        }
     }
 }
+
+/// Results kept per kind of drawing, more than the drawings of one kind on screen.
+pub(crate) const MAX_CACHED_SPANS: usize = 32;
 
 impl Drawing {
     /// Main rendering dispatcher - routes to category-specific render methods
@@ -326,22 +311,4 @@ pub(crate) fn sample_bars() -> Vec<Bar> {
         Bar::new(time, o, h, l, c, v)
     })
     .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A cached result follows the bars it was computed from: more volume on
-    /// the forming bar at an unchanged price, or another anchor, recomputes it.
-    #[test]
-    fn span_cache_recomputes_when_bars_change() {
-        let mut cache = SpanCache::new();
-        let total_volume = |bars: &[Bar]| bars.iter().map(|bar| bar.volume).sum::<f64>();
-        let mut bars = sample_bars();
-        assert_eq!(*cache.get(1, &bars[1..], total_volume), 1350.0);
-        bars[6].volume += 10.0;
-        assert_eq!(*cache.get(1, &bars[1..], total_volume), 1360.0);
-        assert_eq!(*cache.get(2, &bars[2..], total_volume), 1160.0);
-    }
 }

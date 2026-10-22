@@ -21,6 +21,7 @@ All notable changes to this project are documented in this file. The format is b
 - `model::Tick` implements `PartialEq`.
 - `DialogFooter::danger` fills the primary action with the danger colour.
 - `scales::TimezoneMode`, the time axis timezone mode, now lives next to the time formatters that use it. `config::TimezoneMode` remains as a re-export of the same type.
+- `ChartState::revision` identifies the bars before the last one: it changes when one of them is corrected or bars are removed, and stays the same when bars are appended or the last bar updates.
 
 ### Fixed
 
@@ -38,6 +39,8 @@ All notable changes to this project are documented in this file. The format is b
 - The anchored VWAP drawing computes the volume-weighted average of the typical price from its anchor bar, with bands one and two volume-weighted standard deviations away.
 - The fixed range and anchored volume profiles are built from bar volume, spreading each bar's volume over its high-low range, with the point of control and a 70% value area. The anchored volume profile is placed with a single click and runs to the latest bar.
 - The regression trend fits the closes between its anchors by least squares and shows the resulting R² and slope.
+- The anchored VWAP, the volume profiles, the regression trend and Heikin-Ashi candles recompute when a bar inside their span is corrected, instead of showing values from the old bars until an anchor moved or the span grew. `ChartState::set_data` compares the new bars with the current ones to tell a correction from an append or a last-bar update, one pass over the bars per call.
+- A live volume profile or regression trend no longer recomputes its whole span when the forming bar ticks or a new bar opens, or after another drawing was dragged: it adds that bar to the cached result for the bars before it (a profile only while the bar trades inside the profile's price range). At 1,000,000 bars a new bar costs about 0.002 ms instead of 20 ms for a profile, and a tick 0.001 ms instead of 5 ms for a regression trend. Heikin-Ashi candles no longer copy the whole transformed series on every frame.
 - Long and short position tools have a stop of their own that moves independently of the target, so risk/reward reflects the levels set; P&L replays the bars after the entry and shows the position as closed once the stop or the target trades. Both read n/a while the stop or the target is on the wrong side of the entry.
 - The forecast drawing shows the predicted change over its bar span and resolves to success once a bar reaches the target by the target bar, or to failure once the target bar has closed without that.
 - The bars pattern projection draws shifted copies of the selected bars.
@@ -95,6 +98,7 @@ All notable changes to this project are documented in this file. The format is b
 - The theme's `accent_active` (pressed accent) is a darker accent, (31, 78, 205), instead of the grey `buttons.primary_bg_active`, and `accent_hover` is (35, 88, 230) instead of the lighter `blue_600`. `tokens::BrandSemanticTokens` gains `accent_active`; struct literals must set it. The `buttons.danger_bg`, `danger_bg_hover` and `danger_bg_active` tokens are darker reds.
 - Replaced the bundled icon set with original artwork drawn on a 24 px grid. Toolbar, chart-type and widget-bar icons now render at 24 px, and close buttons, the cross cursor, alert and toast states, move to pane, add to watchlist, the replay next-bar button, the price range tool, the arrow tool and the note, callout, comment, table, image and other annotation tools show their own icons.
 - `Drawing::render`, `Drawing::render_original`, and `DrawingManager::render_all` take a `drawings::rendering::ChartView` holding the chart's bars and coordinate mapping. Migration: build `ChartView { bars, bar_to_x, price_to_y }` from the series and the closures passed to `update_all_screen_coords`, and pass it as the last argument.
+- `drawings::rendering::ChartView` has a `revision` field, under which results computed from the bars are cached. Migration: set it to `ChartState::revision()` of the state the bars come from, or to a value that changes whenever a bar before the last one changes.
 - `Chart::handle_drawings` no longer takes the last close price.
 - `TooltipOptions::default()` leaves `background_color`, `text_color` and `tracking_bar_background` as `Color32::PLACEHOLDER`, which resolves from the active theme; set them explicitly to keep fixed colours.
 - `SymbolHeaderConfig::default()` text, label and separator colours are `Color32::PLACEHOLDER` and follow the egui style; `SymbolHeaderConfig::from_theme` now uses the theme it is given.

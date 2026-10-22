@@ -70,6 +70,7 @@ pub fn render_chart_type(
                 ctx.colors,
                 ctx.visible_data,
                 ctx.full_data,
+                ctx.revision,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),
