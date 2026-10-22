@@ -5,7 +5,8 @@
 use egui::{Context, Id};
 
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::buttons::{Button, ButtonVariant};
+use crate::ui_kit::dialog::DialogFooter;
+use crate::ui_kit::modal::Modal;
 
 /// Result of showing a confirm dialog
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +75,7 @@ impl ConfirmDialog {
         self
     }
 
-    /// Mark this as a dangerous action (red confirm button)
+    /// Mark this as a dangerous action (confirm button in the danger colour)
     pub fn danger(mut self) -> Self {
         self.danger = true;
         self
@@ -82,93 +83,31 @@ impl ConfirmDialog {
 
     /// Show the confirm dialog
     ///
-    /// Returns the result of the dialog interaction.
+    /// Returns the result of the dialog interaction. Escape, the close button and a click on
+    /// the backdrop cancel.
     pub fn show(self, ctx: &Context, open: &mut bool) -> ConfirmResult {
-        if !*open {
+        let footer = DialogFooter::new(&self.confirm_text).secondary(&self.cancel_text);
+        let footer = if self.danger { footer.danger() } else { footer };
+
+        let Some(response) = Modal::new(self.id, &self.title)
+            .width(DESIGN_TOKENS.sizing.dialog.confirm_width)
+            .show(ctx, open, |ui| {
+                ui.label(&self.message);
+                footer.show(ui)
+            })
+        else {
             return ConfirmResult::None;
+        };
+
+        let result = match response.inner {
+            (true, _) => ConfirmResult::Confirmed,
+            (_, true) => ConfirmResult::Cancelled,
+            _ if response.close_requested => ConfirmResult::Cancelled,
+            _ => ConfirmResult::None,
+        };
+        if result != ConfirmResult::None {
+            *open = false;
         }
-
-        let mut result = ConfirmResult::None;
-
-        egui::Area::new(self.id)
-            .fixed_pos(egui::pos2(0.0, 0.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                let screen_rect = ctx.content_rect();
-
-                // Dim background
-                ui.painter()
-                    .rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(180));
-
-                // Backdrop click - do nothing for confirm dialogs (force explicit choice)
-
-                // Handle Escape key as cancel
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    result = ConfirmResult::Cancelled;
-                    *open = false;
-                    return;
-                }
-
-                // Modal window
-                egui::Window::new(&self.title)
-                    .id(self.id.with("_window"))
-                    .fixed_pos(screen_rect.center() - egui::vec2(175.0, 75.0))
-                    .fixed_size(egui::vec2(350.0, 0.0))
-                    .collapsible(false)
-                    .resizable(false)
-                    .title_bar(true)
-                    .show(ctx, |ui| {
-                        ui.add_space(DESIGN_TOKENS.spacing.md);
-
-                        // Message
-                        ui.label(&self.message);
-
-                        ui.add_space(DESIGN_TOKENS.spacing.xl);
-
-                        // Buttons
-                        ui.horizontal(|ui| {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    // Confirm button
-                                    let confirm_variant = if self.danger {
-                                        ButtonVariant::Danger
-                                    } else {
-                                        ButtonVariant::Primary
-                                    };
-
-                                    if ui
-                                        .add(
-                                            Button::new(&self.confirm_text)
-                                                .variant(confirm_variant),
-                                        )
-                                        .clicked()
-                                    {
-                                        result = ConfirmResult::Confirmed;
-                                        *open = false;
-                                    }
-
-                                    ui.add_space(DESIGN_TOKENS.spacing.md);
-
-                                    // Cancel button
-                                    if ui
-                                        .add(
-                                            Button::new(&self.cancel_text)
-                                                .variant(ButtonVariant::Secondary),
-                                        )
-                                        .clicked()
-                                    {
-                                        result = ConfirmResult::Cancelled;
-                                        *open = false;
-                                    }
-                                },
-                            );
-                        });
-
-                        ui.add_space(DESIGN_TOKENS.spacing.md);
-                    });
-            });
-
         result
     }
 }

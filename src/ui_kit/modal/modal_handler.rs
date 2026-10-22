@@ -4,6 +4,9 @@
 
 use egui::{Context, Id, Ui};
 
+use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::dialog::dialog_frame;
+
 /// Manages modal open/close state
 pub struct ModalHandler<T = ()> {
     id: Id,
@@ -75,48 +78,16 @@ impl<T> ModalHandler<T> {
 
     /// Show the modal if open
     ///
+    /// The content is drawn in the dialog frame, centred above a dimmed backdrop. Escape or a
+    /// click on the backdrop closes the modal.
+    ///
     /// Returns the result of the content function if the modal was shown.
     pub fn show<R>(
         &mut self,
         ctx: &Context,
         add_contents: impl FnOnce(&mut Ui, Option<&T>) -> R,
     ) -> Option<R> {
-        if !self.open {
-            return None;
-        }
-
-        let mut result = None;
-
-        egui::Area::new(self.id)
-            .fixed_pos(egui::pos2(0.0, 0.0))
-            .show(ctx, |ui| {
-                // Dim background
-                let screen_rect = ctx.content_rect();
-                let dim_color = egui::Color32::from_black_alpha(180);
-                ui.painter().rect_filled(screen_rect, 0.0, dim_color);
-
-                // Capture clicks on backdrop to close
-                let backdrop_response = ui.allocate_rect(screen_rect, egui::Sense::click());
-                if backdrop_response.clicked() {
-                    self.close();
-                    return;
-                }
-
-                // Center the modal content
-                let modal_rect = egui::Rect::from_center_size(
-                    screen_rect.center(),
-                    egui::vec2(
-                        crate::tokens::DESIGN_TOKENS.sizing.dialog.default_width,
-                        crate::tokens::DESIGN_TOKENS.sizing.dialog.default_height,
-                    ),
-                );
-
-                // Create a child UI for the modal content
-                let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(modal_rect));
-                result = Some(add_contents(&mut child_ui, self.payload.as_ref()));
-            });
-
-        result
+        self.show_mut(ctx, |ui, payload| add_contents(ui, payload.map(|p| &*p)))
     }
 
     /// Show the modal with mutable payload access
@@ -129,34 +100,14 @@ impl<T> ModalHandler<T> {
             return None;
         }
 
-        let mut result = None;
-
-        egui::Area::new(self.id)
-            .fixed_pos(egui::pos2(0.0, 0.0))
-            .show(ctx, |ui| {
-                let screen_rect = ctx.content_rect();
-                let dim_color = egui::Color32::from_black_alpha(180);
-                ui.painter().rect_filled(screen_rect, 0.0, dim_color);
-
-                let backdrop_response = ui.allocate_rect(screen_rect, egui::Sense::click());
-                if backdrop_response.clicked() {
-                    self.close();
-                    return;
-                }
-
-                let modal_rect = egui::Rect::from_center_size(
-                    screen_rect.center(),
-                    egui::vec2(
-                        crate::tokens::DESIGN_TOKENS.sizing.dialog.default_width,
-                        crate::tokens::DESIGN_TOKENS.sizing.dialog.default_height,
-                    ),
-                );
-
-                let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(modal_rect));
-                result = Some(add_contents(&mut child_ui, self.payload.as_mut()));
-            });
-
-        result
+        let response = egui::Modal::new(self.id)
+            .frame(dialog_frame(&ctx.style()))
+            .backdrop_color(DESIGN_TOKENS.semantic.modal.overlay_bg)
+            .show(ctx, |ui| add_contents(ui, self.payload.as_mut()));
+        if response.should_close() {
+            self.close();
+        }
+        Some(response.inner)
     }
 }
 

@@ -5,7 +5,8 @@
 use egui::{Context, Id, TextEdit, Widget};
 
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::buttons::{Button, ButtonVariant};
+use crate::ui_kit::dialog::DialogFooter;
+use crate::ui_kit::modal::Modal;
 
 /// Result of showing a prompt dialog
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,8 +49,6 @@ pub struct PromptDialog {
     submit_text: String,
     cancel_text: String,
     multiline: bool,
-    // Internal state
-    input_value: String,
 }
 
 impl PromptDialog {
@@ -64,7 +63,6 @@ impl PromptDialog {
             submit_text: "OK".to_string(),
             cancel_text: "Cancel".to_string(),
             multiline: false,
-            input_value: String::new(),
         }
     }
 
@@ -82,9 +80,7 @@ impl PromptDialog {
 
     /// Set the initial value
     pub fn initial_value(mut self, value: impl Into<String>) -> Self {
-        let value = value.into();
-        self.initial_value = value.clone();
-        self.input_value = value;
+        self.initial_value = value.into();
         self
     }
 
@@ -107,118 +103,71 @@ impl PromptDialog {
     }
 
     /// Show the prompt dialog
-    pub fn show(mut self, ctx: &Context, open: &mut bool) -> PromptResult {
+    ///
+    /// The typed text is kept between frames while the dialog is open. Enter in a single-line
+    /// input submits; Escape, the close button and a click on the backdrop cancel.
+    pub fn show(self, ctx: &Context, open: &mut bool) -> PromptResult {
+        let value_id = self.id.with("value");
         if !*open {
+            ctx.data_mut(|d| d.remove::<String>(value_id));
             return PromptResult::None;
         }
+        let mut value = ctx
+            .data_mut(|d| d.remove_temp::<String>(value_id))
+            .unwrap_or(self.initial_value);
 
-        let mut result = PromptResult::None;
+        let width = if self.multiline {
+            DESIGN_TOKENS.sizing.dialog.prompt_width_lg
+        } else {
+            DESIGN_TOKENS.sizing.dialog.prompt_width_sm
+        };
 
-        egui::Area::new(self.id)
-            .fixed_pos(egui::pos2(0.0, 0.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                let screen_rect = ctx.content_rect();
-
-                // Dim background
-                ui.painter()
-                    .rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(180));
-
-                // Handle Escape key as cancel
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    result = PromptResult::Cancelled;
-                    *open = false;
-                    return;
+        let Some(response) = Modal::new(self.id, &self.title)
+            .width(width)
+            .show(ctx, open, |ui| {
+                if let Some(msg) = &self.message {
+                    ui.label(msg);
+                    ui.add_space(DESIGN_TOKENS.spacing.sm);
                 }
 
-                // Modal window
-                let width = if self.multiline { 450.0 } else { 350.0 };
+                let text_edit = if self.multiline {
+                    TextEdit::multiline(&mut value).desired_rows(4)
+                } else {
+                    TextEdit::singleline(&mut value)
+                };
+                let input = text_edit
+                    .hint_text(&self.placeholder)
+                    .desired_width(f32::INFINITY)
+                    .ui(ui);
+                // Enter in a single-line input surrenders focus; read that before refocusing.
+                let entered = !self.multiline
+                    && input.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if !entered && !input.has_focus() {
+                    input.request_focus();
+                }
 
-                egui::Window::new(&self.title)
-                    .id(self.id.with("_window"))
-                    .fixed_pos(screen_rect.center() - egui::vec2(width / 2.0, 100.0))
-                    .fixed_size(egui::vec2(width, 0.0))
-                    .collapsible(false)
-                    .resizable(false)
-                    .title_bar(true)
-                    .show(ctx, |ui| {
-                        ui.add_space(DESIGN_TOKENS.spacing.md);
+                let (submit, cancel) = DialogFooter::new(&self.submit_text)
+                    .secondary(&self.cancel_text)
+                    .show(ui);
+                (submit || entered, cancel)
+            })
+        else {
+            return PromptResult::None;
+        };
 
-                        // Message
-                        if let Some(msg) = &self.message {
-                            ui.label(msg);
-                            ui.add_space(DESIGN_TOKENS.spacing.md);
-                        }
-
-                        // Input field
-                        let text_edit = if self.multiline {
-                            TextEdit::multiline(&mut self.input_value)
-                                .hint_text(&self.placeholder)
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(4)
-                        } else {
-                            TextEdit::singleline(&mut self.input_value)
-                                .hint_text(&self.placeholder)
-                                .desired_width(f32::INFINITY)
-                        };
-
-                        let response = text_edit.ui(ui);
-
-                        // Focus the text field on first show
-                        if !response.has_focus() {
-                            response.request_focus();
-                        }
-
-                        // Handle Enter key in single-line mode
-                        if !self.multiline
-                            && response.lost_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        {
-                            result = PromptResult::Submitted(self.input_value.clone());
-                            *open = false;
-                            return;
-                        }
-
-                        ui.add_space(DESIGN_TOKENS.spacing.xl);
-
-                        // Buttons
-                        ui.horizontal(|ui| {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    // Submit button
-                                    if ui
-                                        .add(
-                                            Button::new(&self.submit_text)
-                                                .variant(ButtonVariant::Primary),
-                                        )
-                                        .clicked()
-                                    {
-                                        result = PromptResult::Submitted(self.input_value.clone());
-                                        *open = false;
-                                    }
-
-                                    ui.add_space(DESIGN_TOKENS.spacing.md);
-
-                                    // Cancel button
-                                    if ui
-                                        .add(
-                                            Button::new(&self.cancel_text)
-                                                .variant(ButtonVariant::Secondary),
-                                        )
-                                        .clicked()
-                                    {
-                                        result = PromptResult::Cancelled;
-                                        *open = false;
-                                    }
-                                },
-                            );
-                        });
-
-                        ui.add_space(DESIGN_TOKENS.spacing.md);
-                    });
-            });
-
+        let result = match response.inner {
+            (true, _) => PromptResult::Submitted(value),
+            (_, true) => PromptResult::Cancelled,
+            _ if response.close_requested => PromptResult::Cancelled,
+            _ => {
+                ctx.data_mut(|d| d.insert_temp(value_id, value));
+                PromptResult::None
+            }
+        };
+        if result != PromptResult::None {
+            *open = false;
+        }
         result
     }
 }
@@ -244,4 +193,38 @@ pub fn prompt_with_message(
     PromptDialog::new(id, title)
         .message(message)
         .show(ctx, open)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, Key, Modifiers, RawInput};
+
+    #[test]
+    fn enter_submits_the_typed_text() {
+        let ctx = Context::default();
+        let mut open = true;
+        let mut frame = |events: Vec<Event>| {
+            let mut result = PromptResult::None;
+            let input = RawInput {
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                result = PromptDialog::new("p", "Name").show(ctx, &mut open)
+            });
+            result
+        };
+        frame(vec![]); // the input takes focus
+        frame(vec![Event::Text("x".into())]);
+        let enter = Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        assert_eq!(frame(vec![enter]), PromptResult::Submitted("x".into()));
+        assert!(!open);
+    }
 }

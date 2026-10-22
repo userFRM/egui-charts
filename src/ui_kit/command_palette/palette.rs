@@ -139,11 +139,6 @@ impl CommandPalette {
             .height
             .min(screen_rect.height() - DESIGN_TOKENS.sizing.command_palette.margin_y);
 
-        // Dark overlay
-        let layer_id = egui::LayerId::new(Order::Foreground, egui::Id::new("command_palette_bg"));
-        let painter = ctx.layer_painter(layer_id);
-        painter.rect_filled(screen_rect, 0.0, DESIGN_TOKENS.semantic.modal.overlay_bg);
-
         // Modal window
         egui::Area::new(egui::Id::new("command_palette"))
             .order(Order::Foreground)
@@ -152,6 +147,13 @@ impl CommandPalette {
                 Vec2::new(0.0, DESIGN_TOKENS.sizing.command_palette.margin_y),
             )
             .show(ctx, |ui| {
+                // The scrim goes in the palette's own layer before its frame, so it dims only
+                // what lies below the palette.
+                ui.ctx().layer_painter(ui.layer_id()).rect_filled(
+                    screen_rect,
+                    0.0,
+                    DESIGN_TOKENS.semantic.modal.overlay_bg,
+                );
                 egui::Frame::new()
                     .fill(ui.visuals().window_fill)
                     .stroke(ui.visuals().window_stroke)

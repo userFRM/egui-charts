@@ -1,19 +1,34 @@
-//! Dialog components — reusable building blocks for modal dialogs.
+//! Dialog chrome shared by every dialog in the crate.
 //!
-//! Provides composable pieces for constructing dialogs with consistent styling:
-//! - `DialogFrame`: Centered frameless window with standard rounding
-//! - `dialog_header`: Title bar with close button
-//! - `DialogFooter`: Right-aligned action buttons with optional left content
+//! - `DialogFrame`: centred, non-modal window in the dialog frame
+//! - `dialog_header`: title row with a close button
+//! - `DialogFooter`: a rule above right-aligned action buttons, with optional left content
+//!
+//! The kit `Modal`, `ConfirmDialog` and `PromptDialog` use the same frame, header and footer
+//! over a scrim.
 
-use egui::{Align2, Context, RichText, Ui, Vec2};
+use egui::{
+    Align, Align2, Context, Frame, Layout, RichText, Style, Ui, UiBuilder, UiStackInfo, Vec2,
+};
 
+use crate::icons::icons;
+use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::buttons::dialog_close_button;
+use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 
-/// A centered, frameless dialog window with standard styling.
+/// Marks the content Ui of a fixed-height [`DialogFrame`].
+const FIXED_HEIGHT_TAG: &str = "egui_charts::dialog_frame::fixed_height";
+
+/// The dialog surface: the theme's window fill, border, radius and shadow, padded 16 px.
+pub(crate) fn dialog_frame(style: &Style) -> Frame {
+    Frame::window(style).inner_margin(DESIGN_TOKENS.spacing.xxl)
+}
+
+/// A centered dialog window with standard styling.
 ///
-/// Replaces the repeated `Window::new(...).anchor(...).fixed_size(...).title_bar(false).frame(...)`
-/// boilerplate found across all modal dialogs.
+/// The requested size is the preferred size of the content inside the 16 px padding: the content
+/// area is at least that large, grows with its content, and is never sized beyond the application
+/// window.
 ///
 /// # Example
 /// ```
@@ -39,7 +54,7 @@ pub struct DialogFrame {
 }
 
 impl DialogFrame {
-    /// Create a centered dialog with a fixed size.
+    /// Create a centered dialog with a preferred size.
     pub fn new(id: impl Into<String>, size: Vec2) -> Self {
         Self {
             id: id.into(),
@@ -49,7 +64,7 @@ impl DialogFrame {
         }
     }
 
-    /// Create a centered dialog with a fixed width and auto-height.
+    /// Create a centered dialog with a preferred width and auto-height.
     pub fn with_width(id: impl Into<String>, width: f32) -> Self {
         Self {
             id: id.into(),
@@ -59,7 +74,7 @@ impl DialogFrame {
         }
     }
 
-    /// Override the corner radius (default: `DESIGN_TOKENS.sizing.settings_dialog.rounding`)
+    /// Override the corner radius (default: the theme's window radius)
     pub fn rounding(mut self, r: f32) -> Self {
         self.rounding = Some(r);
         self
@@ -67,52 +82,75 @@ impl DialogFrame {
 
     /// Show the dialog. The closure receives `&mut Ui` for the dialog content.
     pub fn show(self, ctx: &Context, add_contents: impl FnOnce(&mut Ui)) {
-        let rounding = self
-            .rounding
-            .unwrap_or(DESIGN_TOKENS.sizing.settings_dialog.rounding);
+        let mut frame = dialog_frame(&ctx.style());
+        if let Some(r) = self.rounding {
+            frame = frame.corner_radius(r);
+        }
+        let max = ctx.content_rect().shrink(DESIGN_TOKENS.spacing.xxxl).size()
+            - frame.total_margin().sum();
+        let inner = self.size.min(max).max(Vec2::ZERO);
 
-        let mut window = egui::Window::new(&self.id)
+        let window = egui::Window::new(&self.id)
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
-            .frame(egui::Frame::window(&ctx.style()).corner_radius(rounding));
-
-        if self.auto_height {
-            window = window.default_width(self.size.x);
+            .frame(frame);
+        let window = if self.auto_height {
+            window.default_width(inner.x)
         } else {
-            window = window.fixed_size(self.size);
-        }
+            window.fixed_size(inner)
+        };
 
-        window.show(ctx, add_contents);
+        let auto_height = self.auto_height;
+        window.show(ctx, |ui| {
+            // A non-resizable window shrinks to its content, so hold the preferred size here.
+            ui.set_min_size(inner);
+            if auto_height {
+                add_contents(ui);
+            } else {
+                // The tag lets a `DialogFooter` drawn directly in this Ui sit at the bottom.
+                let info = UiStackInfo::default().with_tag(FIXED_HEIGHT_TAG);
+                ui.scope_builder(UiBuilder::new().ui_stack_info(info), add_contents);
+            }
+        });
     }
 }
 
-/// Standard dialog title bar: left-padded heading + right-aligned close button.
+/// Standard dialog title row: left-aligned title and a close button centred on it.
 ///
 /// Returns `true` if the close button was clicked.
 pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
-    let mut close_clicked = false;
-    ui.horizontal(|ui| {
-        ui.add_space(DESIGN_TOKENS.spacing.lg);
-        ui.heading(title);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(DESIGN_TOKENS.spacing.sm);
-            if dialog_close_button(ui).clicked() {
-                close_clicked = true;
-            }
-        });
-    });
+    title_row(ui, title, true)
+}
+
+/// Title row shared with the modal dialogs, which hide the close button when not closable.
+pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
+    // Fix the row height before placing the title so the title centres on the button.
+    let row = Vec2::new(ui.available_width(), ButtonSize::MD.pixels());
+    let close = ui
+        .allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
+            ui.label(RichText::new(title).strong().size(typography::LG));
+            closable
+                && ui
+                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        IconButton::new(&icons::CLOSE)
+                            .tooltip("Close")
+                            .show(ui)
+                            .clicked()
+                    })
+                    .inner
+        })
+        .inner;
     ui.add_space(DESIGN_TOKENS.spacing.sm);
-    close_clicked
+    close
 }
 
 /// Standard dialog footer with right-aligned action buttons.
 ///
-/// Renders a separator, then a horizontal row with:
-/// - Optional left-side content (via `left_content`)
-/// - Right-aligned primary button (filled with selection color)
-/// - Optional secondary button
+/// Renders a rule, then a row with optional left content and, on the right, the secondary
+/// (outlined) button followed by the primary (filled) button. Shown directly in a
+/// [`DialogFrame`] content Ui, the footer sits at the bottom of the frame.
 ///
 /// # Example
 /// ```
@@ -129,6 +167,7 @@ pub struct DialogFooter {
     primary_label: String,
     secondary_label: Option<String>,
     primary_enabled: bool,
+    danger: bool,
 }
 
 impl DialogFooter {
@@ -137,6 +176,7 @@ impl DialogFooter {
             primary_label: primary_label.into(),
             secondary_label: None,
             primary_enabled: true,
+            danger: false,
         }
     }
 
@@ -152,50 +192,15 @@ impl DialogFooter {
         self
     }
 
+    /// Mark the primary action as destructive: it is filled with the danger colour.
+    pub fn danger(mut self) -> Self {
+        self.danger = true;
+        self
+    }
+
     /// Show the footer. Returns `(primary_clicked, secondary_clicked)`.
     pub fn show(self, ui: &mut Ui) -> (bool, bool) {
-        let mut primary_clicked = false;
-        let mut secondary_clicked = false;
-
-        ui.add_space(DESIGN_TOKENS.spacing.sm);
-        ui.separator();
-        ui.add_space(DESIGN_TOKENS.spacing.sm);
-
-        ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.spacing.lg);
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(DESIGN_TOKENS.spacing.lg);
-
-                // Primary button (rightmost)
-                let btn = egui::Button::new(
-                    RichText::new(&self.primary_label)
-                        .color(ui.style().visuals.selection.stroke.color),
-                )
-                .fill(ui.style().visuals.selection.bg_fill)
-                .min_size(Vec2::new(
-                    DESIGN_TOKENS.sizing.button_min_width_xs,
-                    DESIGN_TOKENS.sizing.button_md,
-                ));
-                if ui.add_enabled(self.primary_enabled, btn).clicked() {
-                    primary_clicked = true;
-                }
-
-                // Secondary button
-                if let Some(ref label) = self.secondary_label {
-                    let btn = egui::Button::new(label.as_str()).min_size(Vec2::new(
-                        DESIGN_TOKENS.sizing.button_min_width_xs,
-                        DESIGN_TOKENS.sizing.button_md,
-                    ));
-                    if ui.add(btn).clicked() {
-                        secondary_clicked = true;
-                    }
-                }
-            });
-        });
-        ui.add_space(DESIGN_TOKENS.spacing.sm);
-
-        (primary_clicked, secondary_clicked)
+        self.show_with_left(ui, |_| ())
     }
 
     /// Show the footer with left-side content. Returns `(primary_clicked, secondary_clicked)`.
@@ -204,50 +209,88 @@ impl DialogFooter {
         ui: &mut Ui,
         left_content: impl FnOnce(&mut Ui) -> R,
     ) -> (bool, bool) {
-        let mut primary_clicked = false;
-        let mut secondary_clicked = false;
+        // In a fixed-height `DialogFrame`, the free space goes between the content and the rule.
+        // The footer height is measured on the previous frame; the window's sizing pass measures
+        // it unpinned, so the first visible frame already has the window at its final size.
+        let pinned = ui.stack().tags().contains(FIXED_HEIGHT_TAG);
+        let height_id = ui.id().with("dialog_footer_height");
+        if pinned && !ui.is_sizing_pass() {
+            let height = ui.data(|d| d.get_temp::<f32>(height_id)).unwrap_or(0.0);
+            ui.add_space((ui.available_height() - height).max(0.0));
+        }
+        let top = ui.cursor().top();
 
-        ui.add_space(DESIGN_TOKENS.spacing.sm);
+        ui.add_space(DESIGN_TOKENS.spacing.lg);
         ui.separator();
-        ui.add_space(DESIGN_TOKENS.spacing.sm);
+        ui.add_space(DESIGN_TOKENS.spacing.lg);
 
-        ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.spacing.lg);
-
-            // Left content
+        let row = ui.horizontal(|ui| {
             left_content(ui);
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(DESIGN_TOKENS.spacing.lg);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.lg;
 
-                // Primary button (rightmost)
-                let btn = egui::Button::new(
-                    RichText::new(&self.primary_label)
-                        .color(ui.style().visuals.selection.stroke.color),
-                )
-                .fill(ui.style().visuals.selection.bg_fill)
-                .min_size(Vec2::new(
-                    DESIGN_TOKENS.sizing.button_min_width_xs,
-                    DESIGN_TOKENS.sizing.button_md,
-                ));
-                if ui.add_enabled(self.primary_enabled, btn).clicked() {
-                    primary_clicked = true;
-                }
+                let primary = Button::new(&self.primary_label).enabled(self.primary_enabled);
+                let primary = if self.danger {
+                    primary.danger()
+                } else {
+                    primary.primary()
+                };
+                let primary_clicked = primary.show(ui).clicked();
 
-                // Secondary button
-                if let Some(ref label) = self.secondary_label {
-                    let btn = egui::Button::new(label.as_str()).min_size(Vec2::new(
-                        DESIGN_TOKENS.sizing.button_min_width_xs,
-                        DESIGN_TOKENS.sizing.button_md,
-                    ));
-                    if ui.add(btn).clicked() {
-                        secondary_clicked = true;
-                    }
-                }
-            });
+                let secondary_clicked = self
+                    .secondary_label
+                    .as_ref()
+                    .is_some_and(|label| Button::new(label).outlined().show(ui).clicked());
+
+                (primary_clicked, secondary_clicked)
+            })
+            .inner
         });
-        ui.add_space(DESIGN_TOKENS.spacing.sm);
 
-        (primary_clicked, secondary_clicked)
+        if pinned {
+            let height = row.response.rect.bottom() - top;
+            ui.data_mut(|d| d.insert_temp(height_id, height));
+        }
+        row.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn footer_sits_at_the_bottom_of_a_fixed_frame_from_the_first_visible_frame() {
+        let ctx = Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1000.0, 800.0));
+        let frame = || {
+            let mut row = egui::Rect::NOTHING;
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                DialogFrame::new("d", Vec2::new(420.0, 240.0)).show(ctx, |ui| {
+                    ui.label("Body");
+                    DialogFooter::new("Apply")
+                        .secondary("Cancel")
+                        .show_with_left(ui, |ui| row = ui.max_rect());
+                });
+            });
+            (
+                ctx.memory(|m| m.area_rect(egui::Id::new("d"))).unwrap(),
+                row,
+            )
+        };
+        frame(); // sizing pass
+        let first = frame();
+        let second = frame();
+        assert_eq!(
+            first.0, second.0,
+            "the window moved after its first visible frame"
+        );
+        let inner_bottom = second.0.bottom() - DESIGN_TOKENS.spacing.xxl;
+        assert!((second.1.top() + ButtonSize::MD.pixels() - inner_bottom).abs() <= 1.5);
     }
 }

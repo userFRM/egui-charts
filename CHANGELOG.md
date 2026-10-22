@@ -19,6 +19,7 @@ All notable changes to this project are documented in this file. The format is b
 - Order book depth on the `Datafeed` contract: `Sink::push_depth_snapshot` and `Sink::push_depth_delta` carry a sequence number; a gap, a delta before any snapshot or an invalid update clears the book until the feed pushes a new snapshot, which is asked for once through `Datafeed::request_depth_snapshot`. A level with size 0 is removed, and a book is limited to 10,000 levels per side. Rejected updates are counted in `FeedState::rejected_depth`.
 - `model::Instrument` describes the instrument type, tick size, price decimals, currency, exchange time zone (`model::TimezoneId`) and trading hours (`model::Session`, `model::SessionWindow`), each unknown by default and set with a `with_` method.
 - `model::Tick` implements `PartialEq`.
+- `DialogFooter::danger` fills the primary action with the danger colour.
 
 ### Fixed
 
@@ -82,6 +83,8 @@ All notable changes to this project are documented in this file. The format is b
 - `Button` is as wide as its laid-out label plus 12 px on each side, instead of an estimate from the byte length, so every label gets the same padding and labels with multi-byte characters fit.
 - `SplitButton` points its chevron down whether or not it is expanded.
 - The `ui_kit` buttons report their role, label (the tooltip for icon-only buttons), and enabled and selected state to accessibility tools, and show their tooltip while disabled.
+- The kit `Modal`, `ConfirmDialog`, `PromptDialog` and the command palette draw their dimming backdrop below their window instead of over it, so the dialog is shown at full contrast. Clicking the backdrop closes a closable modal.
+- `PromptDialog` keeps the text typed into it between frames instead of resetting it to the initial value, so Enter and the submit button return what was typed.
 
 ### Changed
 
@@ -107,6 +110,7 @@ All notable changes to this project are documented in this file. The format is b
 - `IconButton`, `SplitButton` and `Button` icons are 16, 20 or 24 px for small, medium and larger buttons (20 px at the default 28 px) instead of 60% of the button size; `icon_scale` still overrides this.
 - `SplitButton` occupies the same square cell as an `IconButton` of its size, with the chevron in the cell's corner, instead of a cell 10 px wider.
 - `dialog_close_button` is an `IconButton` showing `icons::CLOSE` with a "Close" tooltip.
+- `DialogFrame`, `dialog_header`, `DialogFooter`, `Modal`, `ConfirmDialog`, `PromptDialog` and `ModalHandler` share one dialog chrome: the theme's window fill, border, radius and shadow with 16 px padding, a title row with a left-aligned 14 px title and an icon close button centred on it, and a footer whose buttons are 28 px high, 8 px apart, with a filled primary and an outlined secondary. The size passed to `DialogFrame::new` is the preferred content size inside the padding: the dialog is at least that large, grows with its content and is limited to the application window. A `DialogFooter` shown directly in a `DialogFrame::new` frame sits at the bottom of the frame, with any free space above its rule. Modals are centred and sized to their content, and `Modal::width` and `Modal::min_height` set the outer size including the padding (before, the content size); `ConfirmDialog` is cancelled by Escape, the close button or a backdrop click, and `ModalHandler` closes on Escape.
 
 ### Removed
 
