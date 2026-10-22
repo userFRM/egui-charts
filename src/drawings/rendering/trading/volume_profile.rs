@@ -2,16 +2,30 @@
 
 use super::draw_dashed_hline;
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::{ChartView, bars_between};
+use crate::drawings::rendering::{ChartView, SpanCache, bars_between};
 use crate::model::Bar;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Shape, Stroke, epaint::StrokeKind};
+use std::cell::RefCell;
+use std::ops::Range;
 
 /// Price rows in a volume profile.
 const PROFILE_ROWS: usize = 24;
 /// Share of the profile's volume inside the value area.
 const VALUE_AREA_SHARE: f64 = 0.7;
+/// Bars between the saved running sums of an anchored VWAP.
+const VWAP_CHECKPOINT: usize = 1024;
+
+thread_local! {
+    static VWAP_CHECKPOINTS: RefCell<SpanCache<Vec<VwapSums>>> =
+        const { RefCell::new(SpanCache::new()) };
+    static PROFILES: RefCell<SpanCache<Option<VolumeProfile>>> =
+        const { RefCell::new(SpanCache::new()) };
+    /// Profiles of each span without its last bar, which may be forming.
+    static OPENING_PROFILES: RefCell<SpanCache<Option<VolumeProfile>>> =
+        const { RefCell::new(SpanCache::new()) };
+}
 
 impl Drawing {
     /// Renders the anchored VWAP from the anchor bar to the last bar, with
@@ -47,20 +61,30 @@ impl Drawing {
         const OFFSETS: [f64; 5] = [0.0, 1.0, -1.0, 2.0, -2.0];
         const NAMES: [&str; 4] = ["+1σ", "-1σ", "+2σ", "-2σ"];
 
-        // Only bars inside the clip rect (plus one on each side) become points.
+        // Only bars inside the clip rect (plus one on each side) become
+        // points; bar_to_x is linear, so they are found without a scan.
+        let x0 = (view.bar_to_x)(first as f32);
+        let step = (view.bar_to_x)(first as f32 + 1.0) - x0;
+        if step.is_nan() || step <= 0.0 {
+            return;
+        }
         let clip = painter.clip_rect();
-        let margin = ((view.bar_to_x)(1.0) - (view.bar_to_x)(0.0)).abs() + 1.0;
+        let from = (((clip.left() - x0) / step).floor() - 1.0).max(0.0) as usize;
+        let to = ((((clip.right() - x0) / step).ceil() + 2.0).max(0.0) as usize).min(bars.len());
+        if from >= to {
+            return;
+        }
+
+        // The checkpoints only cover whole blocks before the last bar, so the
+        // forming bar's updates reuse them.
+        let covered = (bars.len() - 1) / VWAP_CHECKPOINT * VWAP_CHECKPOINT;
+        let checkpoints = VWAP_CHECKPOINTS
+            .with_borrow_mut(|cache| cache.get(first, &bars[..covered], vwap_checkpoints));
         let mut lines: [Vec<Pos2>; 5] = Default::default();
         let mut last_vwap = None;
-        for (i, value) in anchored_vwap(bars).into_iter().enumerate() {
-            let x = (view.bar_to_x)((first + i) as f32);
-            if x > clip.right() + margin {
-                break;
-            }
+        for (i, value) in (from..to).zip(anchored_vwap(bars, &checkpoints, from..to)) {
             let Some((vwap, sigma)) = value else { continue };
-            if x < clip.left() - margin {
-                continue;
-            }
+            let x = (view.bar_to_x)((first + i) as f32);
             for (line, k) in lines.iter_mut().zip(OFFSETS) {
                 line.push(Pos2::new(x, (view.price_to_y)(vwap + k * sigma)));
             }
@@ -122,8 +146,9 @@ impl Drawing {
             return;
         };
         let color = self.color32();
-        if let Some((_, bars)) = bars_between(view.bars, a.bar_idx, b.bar_idx) {
-            self.draw_volume_profile(painter, view, bars, p1.x.min(p2.x), p1.x.max(p2.x));
+        if let Some((first, bars)) = bars_between(view.bars, a.bar_idx, b.bar_idx) {
+            let (left, right) = (p1.x.min(p2.x), p1.x.max(p2.x));
+            self.draw_volume_profile(painter, view, first, bars, left, right);
         }
         self.draw_volume_profile_anchors(painter, &[p1, p2], color);
     }
@@ -136,22 +161,26 @@ impl Drawing {
         };
         if let Some((first, bars)) = bars_between(view.bars, anchor_at.bar_idx, f32::INFINITY) {
             let right = (view.bar_to_x)((first + bars.len() - 1) as f32);
-            self.draw_volume_profile(painter, view, bars, anchor.x, right);
+            self.draw_volume_profile(painter, view, first, bars, anchor.x, right);
         }
         self.draw_volume_profile_anchors(painter, &[anchor], self.color32());
     }
 
-    /// Draws the profile of `bars` as rows growing right from `left`, boxed
-    /// from `left` to `right` across the bars' price range.
+    /// Draws the profile of `bars`, the span that starts at bar `first`, as
+    /// rows growing right from `left`, boxed from `left` to `right` across the
+    /// bars' price range.
     fn draw_volume_profile(
         &self,
         painter: &egui::Painter,
         view: &ChartView,
+        first: usize,
         bars: &[Bar],
         left: f32,
         right: f32,
     ) {
-        let Some(profile) = volume_profile(bars, PROFILE_ROWS) else {
+        let profile = PROFILES
+            .with_borrow_mut(|cache| cache.get(first, bars, |bars| span_profile(first, bars)));
+        let Some(profile) = profile.as_ref() else {
             return;
         };
         let y_at_row =
@@ -289,29 +318,72 @@ impl Drawing {
     }
 }
 
-/// VWAP of the typical price from the first bar, with the volume-weighted
-/// standard deviation around it, at each bar; `None` until volume trades.
-fn anchored_vwap(bars: &[Bar]) -> Vec<Option<(f64, f64)>> {
-    let (mut volume, mut price_volume, mut square_volume) = (0.0, 0.0, 0.0);
-    bars.iter()
-        .map(|bar| {
-            let price = bar.typical_price();
-            volume += bar.volume;
-            price_volume += price * bar.volume;
-            square_volume += price * price * bar.volume;
-            (volume > 0.0).then(|| {
-                let vwap = price_volume / volume;
-                (vwap, (square_volume / volume - vwap * vwap).max(0.0).sqrt())
-            })
+/// Running sums of volume, typical price times volume, and squared typical
+/// price times volume.
+#[derive(Clone, Copy, Default)]
+struct VwapSums {
+    volume: f64,
+    price_volume: f64,
+    square_volume: f64,
+}
+
+impl VwapSums {
+    fn add(&mut self, bar: &Bar) {
+        let price = bar.typical_price();
+        self.volume += bar.volume;
+        self.price_volume += price * bar.volume;
+        self.square_volume += price * price * bar.volume;
+    }
+
+    /// VWAP and the volume-weighted standard deviation around it; `None`
+    /// until volume trades.
+    fn value(&self) -> Option<(f64, f64)> {
+        (self.volume > 0.0).then(|| {
+            let vwap = self.price_volume / self.volume;
+            let variance = self.square_volume / self.volume - vwap * vwap;
+            (vwap, variance.max(0.0).sqrt())
         })
-        .collect()
+    }
+}
+
+/// The running sums at the start of the span and after every block of
+/// `VWAP_CHECKPOINT` bars of `prefix`, the span's leading whole blocks, so the
+/// VWAP at any bar takes fewer than `VWAP_CHECKPOINT` further additions.
+fn vwap_checkpoints(prefix: &[Bar]) -> Vec<VwapSums> {
+    let mut sums = VwapSums::default();
+    let mut checkpoints = vec![sums];
+    for block in prefix.chunks(VWAP_CHECKPOINT) {
+        block.iter().for_each(|bar| sums.add(bar));
+        checkpoints.push(sums);
+    }
+    checkpoints
+}
+
+/// VWAP from the first bar of the span, with its standard deviation, at each
+/// bar of the non-empty `range`, resuming from the checkpoint before it.
+fn anchored_vwap<'a>(
+    bars: &'a [Bar],
+    checkpoints: &[VwapSums],
+    range: Range<usize>,
+) -> impl Iterator<Item = Option<(f64, f64)>> + 'a {
+    let checkpoint = range.start / VWAP_CHECKPOINT;
+    let mut sums = checkpoints[checkpoint];
+    bars[checkpoint * VWAP_CHECKPOINT..range.start]
+        .iter()
+        .for_each(|bar| sums.add(bar));
+    bars[range].iter().map(move |bar| {
+        sums.add(bar);
+        sums.value()
+    })
 }
 
 /// Volume traded at each price row of a span of bars.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct VolumeProfile {
     /// Price at the bottom of row 0.
     low: f64,
+    /// Highest price of the bars.
+    high: f64,
     row_height: f64,
     /// Volume per row, lowest prices first.
     volume: Vec<f64>,
@@ -319,6 +391,26 @@ struct VolumeProfile {
     poc: usize,
     /// Lowest and highest row of the value area.
     value_area: (usize, usize),
+}
+
+/// Profile of the span of bars that starts at bar `first`. While the last
+/// bar, which may be forming, trades inside the range of the bars before it,
+/// their profile is reused, so a tick costs one bar instead of the span.
+fn span_profile(first: usize, bars: &[Bar]) -> Option<VolumeProfile> {
+    if let Some((last, opening)) = bars.split_last() {
+        let base = OPENING_PROFILES.with_borrow_mut(|cache| {
+            cache.get(first, opening, |bars| volume_profile(bars, PROFILE_ROWS))
+        });
+        if let Some(base) = base.as_ref()
+            && base.low <= last.low
+            && last.high <= base.high
+        {
+            let mut volume = base.volume.clone();
+            spread_volume(&mut volume, base.low, base.row_height, last);
+            return VolumeProfile::from_rows(base.low, base.high, base.row_height, volume);
+        }
+    }
+    volume_profile(bars, PROFILE_ROWS)
 }
 
 /// Spreads each bar's volume evenly over its high-low range across `rows`
@@ -334,35 +426,48 @@ fn volume_profile(bars: &[Bar], rows: usize) -> Option<VolumeProfile> {
     if !row_height.is_finite() || row_height <= 0.0 {
         return None;
     }
-    let row_of = |price: f64| (((price - low) / row_height) as usize).min(rows - 1);
-
     let mut volume = vec![0.0; rows];
     for bar in bars {
-        if bar.high > bar.low {
-            let (first, last) = (row_of(bar.low), row_of(bar.high));
-            for (row, row_volume) in volume.iter_mut().enumerate().take(last + 1).skip(first) {
-                let row_low = low + row as f64 * row_height;
-                let overlap = bar.high.min(row_low + row_height) - bar.low.max(row_low);
-                *row_volume += bar.volume * overlap.max(0.0) / (bar.high - bar.low);
-            }
-        } else {
-            volume[row_of(bar.low)] += bar.volume;
-        }
+        spread_volume(&mut volume, low, row_height, bar);
     }
+    VolumeProfile::from_rows(low, high, row_height, volume)
+}
 
-    let total: f64 = volume.iter().sum();
-    if !total.is_finite() || total <= 0.0 {
-        return None;
+/// Adds the volume of `bar` to the rows of `row_height` from `low` that its
+/// high-low range covers, in proportion to the overlap.
+fn spread_volume(volume: &mut [f64], low: f64, row_height: f64, bar: &Bar) {
+    let top_row = volume.len() - 1;
+    let row_of = |price: f64| (((price - low) / row_height) as usize).min(top_row);
+    if bar.high > bar.low {
+        let (first, last) = (row_of(bar.low), row_of(bar.high));
+        for (row, row_volume) in volume.iter_mut().enumerate().take(last + 1).skip(first) {
+            let row_low = low + row as f64 * row_height;
+            let overlap = bar.high.min(row_low + row_height) - bar.low.max(row_low);
+            *row_volume += bar.volume * overlap.max(0.0) / (bar.high - bar.low);
+        }
+    } else {
+        volume[row_of(bar.low)] += bar.volume;
     }
-    let poc = (0..rows).max_by(|&a, &b| volume[a].total_cmp(&volume[b]))?;
-    let value_area = value_area(&volume, poc, total * VALUE_AREA_SHARE);
-    Some(VolumeProfile {
-        low,
-        row_height,
-        volume,
-        poc,
-        value_area,
-    })
+}
+
+impl VolumeProfile {
+    /// The profile of the row volumes; `None` when they hold no volume.
+    fn from_rows(low: f64, high: f64, row_height: f64, volume: Vec<f64>) -> Option<Self> {
+        let total: f64 = volume.iter().sum();
+        if !total.is_finite() || total <= 0.0 {
+            return None;
+        }
+        let poc = (0..volume.len()).max_by(|&a, &b| volume[a].total_cmp(&volume[b]))?;
+        let value_area = value_area(&volume, poc, total * VALUE_AREA_SHARE);
+        Some(Self {
+            low,
+            high,
+            row_height,
+            volume,
+            poc,
+            value_area,
+        })
+    }
 }
 
 /// Rows around the POC that hold `target` volume. Market Profile rule: grow
@@ -411,7 +516,8 @@ mod tests {
             (12.775641025641026, 0.8255305309085764),
             (12.78395061728395, 0.8112060000493586),
         ];
-        let got = anchored_vwap(&sample_bars()[1..]);
+        let bars = &sample_bars()[1..];
+        let got: Vec<_> = anchored_vwap(bars, &vwap_checkpoints(&[]), 0..bars.len()).collect();
         assert_eq!(got.len(), want.len());
         for (got, (vwap, sigma)) in got.into_iter().zip(want) {
             let (got_vwap, got_sigma) = got.unwrap();
@@ -421,6 +527,49 @@ mod tests {
                 (got_sigma - sigma).abs() < 1e-6,
                 "sigma {got_sigma}, want {sigma}"
             );
+        }
+
+        // Windows that start inside a block or on a block boundary resume
+        // from a checkpoint: compare with the definition over a series three
+        // blocks long, the forming bar in the third block.
+        let long: Vec<Bar> = (0..3 * VWAP_CHECKPOINT)
+            .map(|i| {
+                let close = 100.0 + (i * 37 % 101) as f64 / 10.0;
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                let volume = (1 + i % 7) as f64;
+                Bar::new(time, close, close + 1.0, close - 1.5, close, volume)
+            })
+            .collect();
+        let checkpoints = vwap_checkpoints(&long[..2 * VWAP_CHECKPOINT]);
+        for window in [
+            VWAP_CHECKPOINT + 5..VWAP_CHECKPOINT + 9,
+            2 * VWAP_CHECKPOINT..2 * VWAP_CHECKPOINT + 4,
+        ] {
+            let got = anchored_vwap(&long, &checkpoints, window.clone());
+            for (i, got) in window.zip(got) {
+                let prefix = &long[..=i];
+                let volume: f64 = prefix.iter().map(|b| b.volume).sum();
+                let vwap = prefix
+                    .iter()
+                    .map(|b| b.typical_price() * b.volume)
+                    .sum::<f64>()
+                    / volume;
+                let variance = prefix
+                    .iter()
+                    .map(|b| b.volume * (b.typical_price() - vwap).powi(2))
+                    .sum::<f64>()
+                    / volume;
+                let (got_vwap, got_sigma) = got.unwrap();
+                assert!(
+                    (got_vwap - vwap).abs() < 1e-9,
+                    "bar {i}: vwap {got_vwap}, want {vwap}"
+                );
+                assert!(
+                    (got_sigma - variance.sqrt()).abs() < 1e-6,
+                    "bar {i}: sigma {got_sigma}, want {}",
+                    variance.sqrt()
+                );
+            }
         }
     }
 
@@ -443,5 +592,24 @@ mod tests {
         }
         assert_eq!(profile.poc, 2);
         assert_eq!(profile.value_area, (0, 2));
+    }
+
+    /// Ticks on the last bar inside the range of the bars before it reuse
+    /// their profile; a tick past that range rebuilds the rows. Either way
+    /// the profile is the one built from all the bars.
+    #[test]
+    fn span_profile_follows_ticks_on_the_last_bar() {
+        let mut bars = sample_bars();
+        let last = bars.len() - 1;
+        for (high, low, volume) in [(14.0, 12.5, 90.0), (14.5, 12.0, 130.0), (16.0, 12.0, 150.0)] {
+            bars[last].high = high;
+            bars[last].low = low;
+            bars[last].volume = volume;
+            assert_eq!(
+                span_profile(0, &bars),
+                volume_profile(&bars, PROFILE_ROWS),
+                "last bar {low}..{high}"
+            );
+        }
     }
 }

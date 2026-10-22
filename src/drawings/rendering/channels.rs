@@ -3,11 +3,16 @@
 //! Includes: parallel channel, disjoint channel, regression trend, and flat top/bottom.
 
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::{ChartView, bars_between};
+use crate::drawings::rendering::{ChartView, SpanCache, bars_between};
 use crate::model::Bar;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
+use std::cell::RefCell;
+
+thread_local! {
+    static FITS: RefCell<SpanCache<Option<LinearFit>>> = const { RefCell::new(SpanCache::new()) };
+}
 
 impl Drawing {
     pub(crate) fn render_parallel_channel(&self, painter: &egui::Painter) {
@@ -71,7 +76,7 @@ impl Drawing {
         let color = self.color32();
 
         if let Some((first, bars)) = bars_between(view.bars, a.bar_idx, b.bar_idx)
-            && let Some(fit) = linear_fit(bars)
+            && let Some(fit) = *FITS.with_borrow_mut(|cache| cache.get(first, bars, linear_fit))
         {
             self.draw_regression_channel(painter, view, first, bars.len(), &fit, color);
         }
@@ -530,6 +535,7 @@ impl Drawing {
 
 /// Least-squares line through the closes of a span of bars, against their
 /// position in the span.
+#[derive(Clone, Copy)]
 struct LinearFit {
     /// Price change per bar.
     slope: f64,

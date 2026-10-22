@@ -17,7 +17,7 @@
 
 use std::cell::RefCell;
 
-use crate::model::Bar;
+use crate::model::{Bar, SeriesFingerprint};
 
 /// Transform a full OHLC series into its Heikin-Ashi representation.
 ///
@@ -62,44 +62,6 @@ pub fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
     }
 
     ha_bars
-}
-
-/// Identity fingerprint of a source dataset, used to decide when a cached
-/// Heikin-Ashi series must be recomputed.
-///
-/// The full recurrence is `O(n)`; recomputing it every frame would be wasteful.
-/// The fingerprint captures the length plus the timestamps and closing prices of
-/// the first and last bars, which changes whenever the dataset is replaced,
-/// appended to, or its endpoints are mutated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SeriesFingerprint {
-    len: usize,
-    first_time: i64,
-    last_time: i64,
-    first_close: u64,
-    last_close: u64,
-}
-
-impl SeriesFingerprint {
-    fn of(bars: &[Bar]) -> Self {
-        match (bars.first(), bars.last()) {
-            (Some(first), Some(last)) => Self {
-                len: bars.len(),
-                first_time: first.time.timestamp_millis(),
-                last_time: last.time.timestamp_millis(),
-                first_close: first.close.to_bits(),
-                last_close: last.close.to_bits(),
-            },
-            // An empty dataset has a well-defined empty fingerprint.
-            _ => Self {
-                len: 0,
-                first_time: 0,
-                last_time: 0,
-                first_close: 0,
-                last_close: 0,
-            },
-        }
-    }
 }
 
 /// Bounded set of recently computed Heikin-Ashi series.

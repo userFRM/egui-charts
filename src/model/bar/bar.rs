@@ -194,6 +194,46 @@ impl Bar {
     }
 }
 
+/// Identity fingerprint of a series of bars, used to decide when a result
+/// cached from the series (such as a Heikin-Ashi transform or a drawing's
+/// volume profile) must be recomputed.
+///
+/// The fingerprint captures the length, the timestamps of the first and last
+/// bars, the first close, and every value of the last bar, so it changes when
+/// bars are appended or removed, the endpoints change, or the forming last bar
+/// updates. An edit to a bar between the first and the last is not seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeriesFingerprint {
+    len: usize,
+    first_time: i64,
+    last_time: i64,
+    first_close: u64,
+    last_bar: [u64; 5],
+}
+
+impl SeriesFingerprint {
+    pub(crate) fn of(bars: &[Bar]) -> Self {
+        match (bars.first(), bars.last()) {
+            (Some(first), Some(last)) => Self {
+                len: bars.len(),
+                first_time: first.time.timestamp_millis(),
+                last_time: last.time.timestamp_millis(),
+                first_close: first.close.to_bits(),
+                last_bar: [last.open, last.high, last.low, last.close, last.volume]
+                    .map(f64::to_bits),
+            },
+            // An empty dataset has a well-defined empty fingerprint.
+            _ => Self {
+                len: 0,
+                first_time: 0,
+                last_time: 0,
+                first_close: 0,
+                last_bar: [0; 5],
+            },
+        }
+    }
+}
+
 impl fmt::Display for Bar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(

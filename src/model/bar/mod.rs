@@ -37,5 +37,6 @@ mod patterns;
 
 // Re-export main types
 pub use bar::Bar;
+pub(crate) use bar::SeriesFingerprint;
 pub use bar_data::{BarData, MAX_BARS, MAX_VISIBLE_BARS};
 pub use patterns::CandlePatterns;

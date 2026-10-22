@@ -61,8 +61,9 @@ pub(crate) mod utils;
 pub use traits::DrawingRenderer;
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
-use crate::model::Bar;
+use crate::model::{Bar, SeriesFingerprint};
 use egui::Rect;
+use std::rc::Rc;
 
 /// The bars and coordinate mapping that drawings are rendered against.
 ///
@@ -86,6 +87,50 @@ pub(crate) fn bars_between(bars: &[Bar], a: f32, b: f32) -> Option<(usize, &[Bar
     let first = a.min(b).round().max(0.0);
     let end = a.max(b).round().min(last);
     (first <= end).then(|| (first as usize, &bars[first as usize..=end as usize]))
+}
+
+/// Results computed from a span of bars, kept per render thread so that a
+/// steady frame does no work proportional to the span. An entry is keyed by
+/// the index of the span's first bar and the [`SeriesFingerprint`] of its
+/// bars, so it is recomputed when an anchor moves or the span's length,
+/// endpoints or last bar change; the least recently used entry is evicted
+/// first.
+pub(crate) struct SpanCache<T> {
+    entries: Vec<((usize, SeriesFingerprint), Rc<T>)>,
+}
+
+/// Entries kept per kind of result, more than the drawings of one kind on screen.
+const MAX_CACHED_SPANS: usize = 32;
+
+impl<T> SpanCache<T> {
+    pub(crate) const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// The result for `bars`, the span that starts at bar `first`, computed
+    /// with `compute` unless it is cached.
+    pub(crate) fn get(
+        &mut self,
+        first: usize,
+        bars: &[Bar],
+        compute: impl FnOnce(&[Bar]) -> T,
+    ) -> Rc<T> {
+        let key = (first, SeriesFingerprint::of(bars));
+        let entry = match self.entries.iter().position(|(cached, _)| *cached == key) {
+            Some(pos) => self.entries.remove(pos),
+            None => {
+                if self.entries.len() >= MAX_CACHED_SPANS {
+                    self.entries.remove(0);
+                }
+                (key, Rc::new(compute(bars)))
+            }
+        };
+        let value = Rc::clone(&entry.1);
+        self.entries.push(entry);
+        value
+    }
 }
 
 impl Drawing {
@@ -269,4 +314,22 @@ pub(crate) fn sample_bars() -> Vec<Bar> {
         Bar::new(time, o, h, l, c, v)
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cached result follows the bars it was computed from: more volume on
+    /// the forming bar at an unchanged price, or another anchor, recomputes it.
+    #[test]
+    fn span_cache_recomputes_when_bars_change() {
+        let mut cache = SpanCache::new();
+        let total_volume = |bars: &[Bar]| bars.iter().map(|bar| bar.volume).sum::<f64>();
+        let mut bars = sample_bars();
+        assert_eq!(*cache.get(1, &bars[1..], total_volume), 1350.0);
+        bars[6].volume += 10.0;
+        assert_eq!(*cache.get(1, &bars[1..], total_volume), 1360.0);
+        assert_eq!(*cache.get(2, &bars[2..], total_volume), 1160.0);
+    }
 }
