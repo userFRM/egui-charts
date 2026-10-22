@@ -1,7 +1,7 @@
 //! Reusable UI components for building chart interfaces.
 //!
 //! Generic, domain-agnostic building blocks: buttons, toolbars, dialogs,
-//! forms, modals, etc. The chart-specific UI in [`crate::ui`] composes
+//! forms, modals, etc. The chart-specific UI in the `ui` module composes
 //! these components with domain logic.
 
 pub mod alert;

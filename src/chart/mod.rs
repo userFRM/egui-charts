@@ -37,10 +37,9 @@
 //!
 //! # Internal Modules (crate-only)
 //!
-//! The remaining sub-modules (`state`, `interaction`, `pan_zoom`, `helpers`,
-//! `hit_test`, `indicators`, `selection`, `cursor_modes`, `tool_interaction`,
-//! `renderers`, `rendering`) are implementation details and not part of the
-//! public API.
+//! The remaining sub-modules (`state`, `helpers`, `hit_test`, `indicators`,
+//! `selection`, `cursor_modes`, `renderers`, `rendering`) are implementation
+//! details and not part of the public API.
 //!
 //! # Getting Started
 //!
@@ -71,9 +70,6 @@ pub(crate) mod cursor_modes;
 pub(crate) mod helpers;
 pub(crate) mod hit_test;
 pub(crate) mod indicators;
-pub(crate) mod interaction;
-pub(crate) mod pan_zoom;
 pub(crate) mod renderers;
 pub(crate) mod rendering;
 pub(crate) mod state;
-pub(crate) mod tool_interaction;

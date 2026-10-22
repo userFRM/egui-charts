@@ -17,8 +17,8 @@
 use egui::{Pos2, Rect, Response, Ui};
 use web_time::Instant;
 
-use super::helpers::{apply_price_zoom, y_to_price};
-use super::state::BoxZoomMode;
+use crate::chart::helpers::{apply_price_zoom, y_to_price};
+use crate::chart::state::BoxZoomMode;
 use crate::widget::Chart;
 
 impl Chart {
