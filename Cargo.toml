@@ -46,8 +46,8 @@ path = "examples/drawing_tools.rs"
 required-features = ["widget"]
 
 [[example]]
-name = "tauri_integration"
-path = "examples/tauri_integration.rs"
+name = "data_source"
+path = "examples/data_source.rs"
 required-features = ["widget"]
 
 [features]

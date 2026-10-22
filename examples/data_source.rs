@@ -1,33 +1,12 @@
-//! # Tauri Integration Skeleton
+//! # Data source
 //!
-//! Shows the recommended architecture for embedding `egui-charts` inside a
-//! [Tauri](https://tauri.app) desktop application. This file compiles as a
-//! standalone eframe app for demonstration, but the patterns translate directly
-//! to a Tauri + egui setup.
-//!
-//! ## Key integration points
-//!
-//! 1. **DataSource** -- Implement the `DataSource` trait to bridge your Tauri
-//!    backend (IPC commands, WebSocket relay) to the chart's data layer.
-//!
-//! 2. **ChartBuilder** -- Use `ChartBuilder::extended()` for a full trading
-//!    terminal, or `ChartBuilder::new()` for a simpler chart.
-//!
-//! 3. **Theme** -- Call `apply_to_egui()` once per frame to propagate the
-//!    design-token theme into egui's visual system.
-//!
-//! 4. **Update loop** -- Call `trading_chart.update()` then
-//!    `trading_chart.show(ui)` inside your `eframe::App::ui`.
-//!
-//! ## In a real Tauri app
-//!
-//! Replace `SampleDataSource` below with your own `DataSource` implementation
-//! that fetches data via Tauri IPC commands or a WebSocket connection managed
-//! by the Rust backend.
+//! Builds a `TradingChart` with `ChartBuilder::extended()` and a sample `DataSource` that serves
+//! history from memory. Replace `SampleDataSource` with a source that reads your backend: IPC, a
+//! WebSocket or a database.
 //!
 //! Run with:
 //! ```sh
-//! cargo run --example tauri_integration
+//! cargo run --example data_source
 //! ```
 
 use chrono::{Duration, Utc};
@@ -38,17 +17,15 @@ use egui_charts::theme::Theme;
 use egui_charts::{ChartBuilder, TradingChart};
 
 fn main() -> eframe::Result {
-    // In a real Tauri app, this would be inside your eframe integration.
-    // See: https://docs.rs/tauri-plugin-egui or use tauri::Builder with egui.
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
         ..Default::default()
     };
 
     eframe::run_native(
-        "egui-charts: Tauri Integration",
+        "egui-charts: data source",
         options,
-        Box::new(|_cc| Ok(Box::new(TauriApp::new()))),
+        Box::new(|_cc| Ok(Box::new(DataSourceApp::new()))),
     )
 }
 
@@ -56,19 +33,16 @@ fn main() -> eframe::Result {
 // Application state
 // ===========================================================================
 
-struct TauriApp {
+struct DataSourceApp {
     trading_chart: TradingChart,
 }
 
-impl TauriApp {
+impl DataSourceApp {
     fn new() -> Self {
-        // In Tauri, you would pass your real data source here.
-        // For example:
-        //   let data_source = TauriIpcDataSource::new(app_handle.clone());
+        // In your application, pass your own data source here.
         let data_source = SampleDataSource::new();
 
-        // Build a full-featured trading chart with data source, drawing tools,
-        // and indicator support.
+        // A chart with the data source, drawing tools and an indicator registry.
         let trading_chart = ChartBuilder::extended()
             .with_symbol("BTCUSDT")
             .with_timeframe(Timeframe::Hour1)
@@ -81,7 +55,7 @@ impl TauriApp {
     }
 }
 
-impl eframe::App for TauriApp {
+impl eframe::App for DataSourceApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // 1. Apply theme at the start of each frame
         let theme = Theme::dark();
@@ -97,7 +71,7 @@ impl eframe::App for TauriApp {
             self.trading_chart.show(ui);
         });
 
-        // In Tauri, you might also handle IPC events here:
+        // In your application, you might also react to your backend here:
         // - Symbol changes from the frontend: trading_chart.set_symbol("ETHUSDT")
         // - Timeframe changes: trading_chart.set_timeframe(Timeframe::Min15)
         // - Chart type switches: trading_chart.set_chart_type(ChartType::Line)
@@ -108,8 +82,8 @@ impl eframe::App for TauriApp {
 // Sample DataSource implementation
 // ===========================================================================
 //
-// In a real Tauri application, replace this with a DataSource that:
-// - Calls Tauri IPC commands to fetch historical data from your backend
+// In your application, replace this with a DataSource that:
+// - Fetches historical data from your backend
 // - Receives live bar updates via a WebSocket or SSE connection
 // - Implements symbol search by querying your backend API
 
@@ -152,15 +126,11 @@ impl DataSource for SampleDataSource {
         &mut self,
         request: HistoricalDataRequest,
     ) -> Result<Vec<Bar>, DataSourceError> {
-        // Return bars that are older than the requested end timestamp
-        let filtered: Vec<Bar> = self
+        // The newest `limit` bars before the requested end, oldest first.
+        let end = self
             .bars
-            .iter()
-            .filter(|b| b.time.timestamp_millis() < request.end_ts_millis)
-            .take(request.limit)
-            .cloned()
-            .collect();
-        Ok(filtered)
+            .partition_point(|bar| bar.time.timestamp_millis() < request.end_ts_millis);
+        Ok(self.bars[end.saturating_sub(request.limit)..end].to_vec())
     }
 
     fn supports_historical(&self) -> bool {
