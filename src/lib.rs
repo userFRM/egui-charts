@@ -60,7 +60,6 @@
 //! | **Extensions** | [`ext`] | `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt` |
 //! | **Icons** | [`icons`] | Compile-time embedded SVG icons |
 //! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
-//! | **Backtest** | `backtest` | *(feature `backtest`)* Strategy backtesting on historical data |
 //!
 //! ## Feature flags
 //!
@@ -71,10 +70,9 @@
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
-//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`studies`], [`tokens`], [`validation`], and `backtest` when enabled. Required by `icons` and `ui`. |
+//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`studies`], [`tokens`], [`validation`]. Required by `icons` and `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
 //! | `ui` | off | Application-level UI: toolbars, panels, sidebars, dialogs, and the reusable `ui_kit` widget library they are built on. Enable this when you are building a full trading-terminal interface around the chart engine. |
-//! | `backtest` | off | Backtesting framework for strategy evaluation on historical data. |
 //!
 //! ## Integrating with Tauri
 //!
@@ -168,11 +166,6 @@ pub mod ui_kit;
 /// `ui` feature to access this module.
 #[cfg(feature = "ui")]
 pub mod ui;
-
-// ─── Optional domain modules (feature-gated) ─────────────────────────────────
-
-#[cfg(feature = "backtest")]
-pub mod backtest;
 
 // ─── Convenience re-exports ──────────────────────────────────────────────────
 

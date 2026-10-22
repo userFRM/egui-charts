@@ -71,7 +71,7 @@ body:
     id: feature-flags
     attributes:
       label: Feature flags enabled
-      description: Which Cargo features were on (default is `icons`). Examples: `icons`, `ui`, `backtest`, or `--all-features`.
+      description: Which Cargo features were on (default is `icons`). Examples: `icons`, `ui`, or `--all-features`.
       placeholder: icons, ui
     validations:
       required: false

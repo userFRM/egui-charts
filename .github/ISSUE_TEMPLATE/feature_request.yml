@@ -39,7 +39,6 @@ body:
         - indicators
         - drawings
         - ui
-        - backtest
         - docs
     validations:
       required: false

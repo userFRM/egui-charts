@@ -23,7 +23,7 @@ pub enum SeriesContextMenuAction {
     AddAlert,
     /// Add a trading order
     AddOrder,
-    /// Add an indicator or strategy
+    /// Add an indicator
     AddIndicator,
     /// Add a financial metric overlay
     AddFinancialMetric,
@@ -225,7 +225,7 @@ impl SeriesContextMenu {
         items.extend([
             MenuEntry::Item(
                 MenuItem::new(
-                    format!("Add indicator/strategy{}…", of_symbol("on")),
+                    format!("Add indicator{}…", of_symbol("on")),
                     SeriesContextMenuAction::AddIndicator,
                 )
                 .with_icon(&embedded_icons::INDICATORS),

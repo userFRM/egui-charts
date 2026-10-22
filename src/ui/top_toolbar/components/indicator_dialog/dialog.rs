@@ -134,7 +134,7 @@ impl IndicatorDialog {
         // Corner radius - desktop style
         let corner_radius = DESIGN_TOKENS.rounding.lg;
 
-        Window::new("Indicators, metrics, and strategies")
+        Window::new("Indicators")
             .open(&mut is_open)
             .resizable(false)
             .collapsible(false)

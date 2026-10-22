@@ -88,8 +88,7 @@ egui-charts/src/
 ├── icons/                     Compile-time embedded SVG icons
 ├── ext/                       UiExt, ResponseExt, widget builder extensions
 ├── ui/          [feature: ui] Toolbars, panels, dialogs, replay controls
-├── ui_kit/      [feature: ui] Reusable widget library: buttons, forms, color pickers
-└── backtest/    [feature: backtest] Strategy backtesting
+└── ui_kit/      [feature: ui] Reusable widget library: buttons, forms, color pickers
 ```
 
 </details>
@@ -162,10 +161,9 @@ let mini = ChartBuilder::price_chart()
 
 | Feature | Default | Description |
 |---|:---:|---|
-| `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine (`model`, `scales`, `data`, `studies`, `tokens`, `validation`, and `backtest` when enabled), which does not depend on egui. Required by `icons` and `ui`. |
+| `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine (`model`, `scales`, `data`, `studies`, `tokens`, `validation`), which does not depend on egui. Required by `icons` and `ui`. |
 | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. Use `default-features = false, features = ["widget"]` to drop egui_extras and save binary size. |
 | `ui` | off | Application-level UI: drawing toolbar, top toolbar, timeframe bar, replay controls, sidebars, dialogs, and the `ui_kit` widget library. |
-| `backtest` | off | Strategy backtesting on historical data. |
 
 ```toml
 # Core chart only (default)
@@ -174,11 +172,8 @@ egui-charts = "0.2"
 # Full trading terminal UI
 egui-charts = { version = "0.2", features = ["ui"] }
 
-# Headless engine: bars, studies and backtests without egui
-egui-charts = { version = "0.2", default-features = false, features = ["backtest"] }
-
-# Everything
-egui-charts = { version = "0.2", features = ["ui", "backtest"] }
+# Headless engine: bars and studies without egui
+egui-charts = { version = "0.2", default-features = false }
 ```
 
 egui-charts does not enable egui's default features, so fonts are the application's choice (eframe enables egui's `default_fonts` by default). The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.

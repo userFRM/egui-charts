@@ -102,7 +102,6 @@ The default build is the core engine, theme system, chart widget, and compile-ti
 
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
 - `ui` (off): application-level UI (toolbars, panels, sidebars, dialogs) and the `ui_kit` widget library it is built on. Enable this when building a full trading-terminal interface around the engine.
-- `backtest` (off): backtesting framework for strategy evaluation on historical data.
 
 ## Contribution workflow
 
@@ -122,7 +121,7 @@ CI mirrors these checks exactly. Run them from the repository root and make sure
 cargo fmt --all -- --check
 cargo clippy --all-features -- -D warnings
 cargo clippy -- -D warnings
-cargo clippy --no-default-features --features backtest --all-targets -- -D warnings
+cargo clippy --no-default-features --all-targets -- -D warnings
 cargo test --all-features --lib
 cargo test --doc
 cargo build --all-features

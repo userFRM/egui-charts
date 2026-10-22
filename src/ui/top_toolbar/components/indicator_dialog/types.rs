@@ -8,8 +8,6 @@
 pub enum IndicatorTab {
     /// Technical indicators (SMA, RSI, MACD, etc.)
     Indicators,
-    /// Trading strategies
-    Strategies,
     /// Indicator profiles (saved combinations)
     Profiles,
     /// Chart patterns (head-and-shoulders, triangles, etc.)
@@ -21,7 +19,6 @@ impl IndicatorTab {
     pub fn all() -> &'static [IndicatorTab] {
         &[
             IndicatorTab::Indicators,
-            IndicatorTab::Strategies,
             IndicatorTab::Profiles,
             IndicatorTab::Patterns,
         ]
@@ -31,7 +28,6 @@ impl IndicatorTab {
     pub fn name(&self) -> &'static str {
         match self {
             IndicatorTab::Indicators => "Indicators",
-            IndicatorTab::Strategies => "Strategies",
             IndicatorTab::Profiles => "Profiles",
             IndicatorTab::Patterns => "Patterns",
         }

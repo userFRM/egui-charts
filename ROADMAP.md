@@ -379,7 +379,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Modal overlay with dim background
 - [x] Left category sidebar
 - [x] Search bar with case-insensitive substring filtering
-- [x] Tabs: Indicators, Strategies, Profiles, Patterns
+- [x] Tabs: Indicators, Profiles, Patterns
 - [x] Favorite toggling
 - [x] Configuration panel for parameters
 
@@ -514,12 +514,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 - [x] Design token system (RON-based, ~300+ tokens)
 - [x] Token categories: sizing, spacing, rounding, stroke widths, semantic colors
 - [x] Theme helpers: `toolbar_bg()`, `icon_color()`, `sel_color()`, `hover_color()`
-
-### Backtesting
-- [x] Config, Engine, Metrics, Portfolio, Strategy, Trade modules
-- [x] Strategy metrics struct (total_trades, win_rate, net_profit, max_drawdown)
-- [ ] Full trade execution loop completeness unverified
-- [ ] No broker simulation (commission models, slippage)
 
 ### Data Validation
 - [x] `DataValidator`: Timestamp ordering, OHLC sanity checks

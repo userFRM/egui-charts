@@ -37,7 +37,7 @@ jobs:
       - name: Clippy (all features)
         run: cargo clippy --all-features --all-targets -- -D warnings
       - name: Clippy (headless engine)
-        run: cargo clippy --no-default-features --features backtest --all-targets -- -D warnings
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
 
   test:
     name: Test
