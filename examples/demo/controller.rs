@@ -3,7 +3,8 @@
 //!
 //! The chart engine is pure: widgets return `Action` enums and never touch the
 //! chart themselves. This controller is the host half that consumes those
-//! actions, so that no visible control in the demo is a no-op.
+//! actions. Controls that need a broker, an account or a multi-chart layout show
+//! a notice instead, and the context menu entries it does not model do nothing.
 
 use eframe::egui;
 use egui_charts::chart::builder::TradingChart;
@@ -580,7 +581,7 @@ impl DemoApp {
         {
             let _ = save_path;
             log::info!(
-                "[demo] CSV export ({} bytes) — browser download not wired",
+                "[demo] CSV export ({} bytes): browser download not wired",
                 out.len()
             );
         }
@@ -588,7 +589,7 @@ impl DemoApp {
 }
 
 // ---------------------------------------------------------------------------
-// eframe::App — per-frame update orchestrating panels, toolbars, and dialogs.
+// eframe::App: per-frame update that drives the panels, toolbars and dialogs.
 // ---------------------------------------------------------------------------
 
 impl eframe::App for DemoApp {
@@ -717,10 +718,10 @@ impl DemoApp {
             // per-button visibility flag, so rather than swallow the click we
             // surface an honest notice describing the missing dependency.
             TopToolbarAction::OpenTradingPanel => {
-                self.notify("Trading panel needs a broker connection — not available in this demo")
+                self.notify("Trading panel needs a broker connection, which the demo does not have")
             }
             TopToolbarAction::Publish => {
-                self.notify("Publishing requires an account backend — not available in this demo")
+                self.notify("Publishing needs an account backend, which the demo does not have")
             }
             TopToolbarAction::ChartGridChanged(_) | TopToolbarAction::SetSyncOptions(_) => {
                 self.notify("Multi-chart layouts are not part of this single-chart demo")
@@ -789,7 +790,9 @@ impl DemoApp {
                 return;
             }
             DrawingToolbarAction::HideAllPoss | DrawingToolbarAction::HideAllOrders => {
-                self.notify("Positions and orders need a trading account — not in this demo");
+                self.notify(
+                    "Positions and orders need a trading account, which the demo does not have",
+                );
                 return;
             }
             _ => {}
@@ -1384,7 +1387,7 @@ impl DemoApp {
         // A browser download requires Blob/anchor plumbing beyond this demo's
         // scope; log the capture so the control still does observable work.
         log::info!(
-            "[demo] screenshot captured ({}x{}) — browser download not wired",
+            "[demo] screenshot captured ({}x{}): browser download not wired",
             image.size[0],
             image.size[1]
         );

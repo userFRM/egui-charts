@@ -1,7 +1,8 @@
-//! egui-charts demo: a complete charting application.
+//! egui-charts demo: a charting application built from the crate's widgets.
 //!
-//! Every toolbar button, menu item, dialog, side panel, right-click action, and
-//! the bar-replay engine is wired to real chart behavior in [`controller`].
+//! The chart with the `ui` toolbars, dialogs, side panels, context menus and bar
+//! replay, wired in [`controller`]. Controls that need a backend the demo does not
+//! have show a notice, and some context menu entries do nothing yet.
 //!
 //! Build (web):    `trunk build --release` from this directory
 //! Serve (web):    `trunk serve`

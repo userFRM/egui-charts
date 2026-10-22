@@ -230,7 +230,7 @@ pub fn visible_bars_for_range(
     want.clamp(10, total.max(10))
 }
 
-/// Deterministic pseudo-random f64 in `[0, 1)` with two seeds — no `rand` dep.
+/// Deterministic pseudo-random f64 in `[0, 1)` from two seeds, without the `rand` crate.
 fn hash_f64(index: usize, salt: usize) -> f64 {
     let mut x = (index.wrapping_mul(2654435761) ^ salt) as u32;
     x ^= x << 13;
