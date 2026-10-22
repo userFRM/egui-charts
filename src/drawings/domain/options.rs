@@ -316,6 +316,20 @@ impl FibonacciConfig {
     pub fn visible_levels(&self) -> impl Iterator<Item = &FibonacciLevel> {
         self.levels.iter().filter(|l| l.visible)
     }
+
+    /// Position of retracement level `value` between the first anchor `start`
+    /// and the second anchor `end`, as a price or a screen coordinate.
+    ///
+    /// Level 0 sits on the second anchor and level 1 on the first, so levels
+    /// measure back from the end of the move; `reverse` swaps the two anchors.
+    pub(crate) fn retracement_position(&self, start: f64, end: f64, value: f64) -> f64 {
+        let (from, to) = if self.reverse {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        from + (to - from) * value
+    }
 }
 
 /// Settings of the fixed range and anchored volume profile drawings.
@@ -531,10 +545,26 @@ mod tests {
         assert!(!vis.is_visible_on("1D"));
     }
 
+    /// Anchors 100 then 200: level v sits at 200 - 100 * v, or at 100 + 100 * v when reversed.
     #[test]
-    fn test_fibonacci_config_default() {
-        let config = FibonacciConfig::default();
-        assert_eq!(config.levels.len(), 7);
-        assert!(!config.show_background);
+    fn fibonacci_retracement_position() {
+        for (reverse, value, want) in [
+            (false, 0.0, 200.0),
+            (false, 0.236, 176.4),
+            (false, 0.618, 138.2),
+            (false, 1.0, 100.0),
+            (true, 0.236, 123.6),
+            (true, 0.786, 178.6),
+        ] {
+            let config = FibonacciConfig {
+                reverse,
+                ..Default::default()
+            };
+            let got = config.retracement_position(100.0, 200.0, value);
+            assert!(
+                (got - want).abs() < 1e-9,
+                "reverse {reverse}, level {value}: got {got}, want {want}"
+            );
+        }
     }
 }

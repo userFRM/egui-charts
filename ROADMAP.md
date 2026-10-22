@@ -111,7 +111,7 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [ ] Inside Pitchfork: draws the same lines as the Andrews pitchfork
 
 ### Fibonacci (9/11)
-- [x] Fibonacci Retracement: default levels with price labels; custom levels and extend only through the fib_config field set by host code; level 0 at the first anchor, Reverse not applied
+- [x] Fibonacci Retracement: default levels with price labels, level 0 on the second anchor and Reverse measuring from the first; custom levels, extend and Reverse only through the fib_config field set by host code
 - [x] Fibonacci Extension: two-point extension levels; no third anchor to project from
 - [x] Fibonacci Channel: levels parallel to the base line; always drawn on one side regardless of the third point
 - [ ] Pitchfan: two-point fan of 7 lines over a fixed 90 degree spread, not built from a pitchfork

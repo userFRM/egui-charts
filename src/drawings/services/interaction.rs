@@ -282,9 +282,33 @@ impl DrawingInteraction {
                     }
                 }
                 // Fibonacci tools
-                DrawingToolType::FibonacciRetracement
-                | DrawingToolType::FibonacciExtension
-                | DrawingToolType::FibonacciChannel => {
+                DrawingToolType::FibonacciRetracement => {
+                    if drawing.points.len() >= 2 {
+                        let p1 = drawing.points[0];
+                        let p2 = drawing.points[1];
+
+                        // Check main diagonal line
+                        if point_to_line_distance(point, p1, p2) <= hit_distance {
+                            return Some(drawing.id);
+                        }
+
+                        // Check the drawn levels, placed as the renderer places them
+                        let config = drawing.fib_config.clone().unwrap_or_default();
+                        let in_x_range = point.x >= p1.x.min(p2.x) && point.x <= p1.x.max(p2.x);
+                        let on_level = config.visible_levels().any(|level| {
+                            let y = config.retracement_position(
+                                f64::from(p1.y),
+                                f64::from(p2.y),
+                                f64::from(level.value),
+                            ) as f32;
+                            (point.y - y).abs() <= hit_distance
+                        });
+                        if in_x_range && on_level {
+                            return Some(drawing.id);
+                        }
+                    }
+                }
+                DrawingToolType::FibonacciExtension | DrawingToolType::FibonacciChannel => {
                     if drawing.points.len() >= 2 {
                         let p1 = drawing.points[0];
                         let p2 = drawing.points[1];
@@ -432,6 +456,26 @@ mod tests {
             Pos2::new(100.0, 50.0),
         );
         assert!((dist - 10.0).abs() < 0.01);
+    }
+
+    /// Anchors at y 400 then 100: the 23.6% level is at 100 + 300 * 0.236 = 170.8, or at
+    /// 400 - 300 * 0.236 = 329.2 when reversed.
+    #[test]
+    fn fib_retracement_hit_follows_level_orientation() {
+        let interaction = DrawingInteraction::new();
+        let mut fib = Drawing::new(7, DrawingToolType::FibonacciRetracement);
+        fib.points = vec![Pos2::new(0.0, 400.0), Pos2::new(300.0, 100.0)];
+        let hit = |fib: &Drawing, y| {
+            interaction.hit_test(Pos2::new(150.0, y), std::slice::from_ref(fib), "1D")
+        };
+
+        assert_eq!(hit(&fib, 170.8), Some(7));
+        fib.fib_config = Some(crate::drawings::FibonacciConfig {
+            reverse: true,
+            ..Default::default()
+        });
+        assert_eq!(hit(&fib, 170.8), None);
+        assert_eq!(hit(&fib, 329.2), Some(7));
     }
 
     #[test]

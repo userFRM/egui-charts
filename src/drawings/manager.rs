@@ -765,9 +765,9 @@ mod tests {
         fib.completed = true;
         manager.drawings.push(fib);
 
-        // 0.236 level: y = 100 + (200-100)*0.236 = 123.6, sampled at x = 180.
-        // This point is > 50px from Start, End, and Middle handles.
-        let click = Pos2::new(180.0, 123.6);
+        // 0.236 level: y = 200 + (100 - 200) * 0.236 = 176.4, sampled at x = 180.
+        // This point is more than 30 px from the Start, End and Middle handles.
+        let click = Pos2::new(180.0, 176.4);
         for handle in [
             Pos2::new(100.0, 100.0),
             Pos2::new(300.0, 200.0),

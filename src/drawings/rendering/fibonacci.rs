@@ -30,6 +30,10 @@ impl Drawing {
         } else {
             (0.0, 0.0) // Fallback
         };
+        let level_y = |value: f32| {
+            config.retracement_position(f64::from(start.y), f64::from(end.y), f64::from(value))
+                as f32
+        };
 
         // Draw filled zones between levels if enabled
         if config.show_background && visible_levels.len() > 1 {
@@ -37,8 +41,8 @@ impl Drawing {
                 let level1 = visible_levels[i];
                 let level2 = visible_levels[i + 1];
 
-                let y1 = start.y + (end.y - start.y) * level1.value;
-                let y2 = start.y + (end.y - start.y) * level2.value;
+                let y1 = level_y(level1.value);
+                let y2 = level_y(level2.value);
 
                 // Fill with semi-transparent color using config opacity
                 let fill_color = Color32::from_rgba_unmultiplied(
@@ -74,14 +78,14 @@ impl Drawing {
                 level.color[3],
             );
 
-            let y = start.y + (end.y - start.y) * level.value;
+            let y = level_y(level.value);
 
             // Draw line with extend support
             painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
             // Calculate actual price at this level
             let price_at_lvl = if start_price != 0.0 || end_price != 0.0 {
-                start_price + (end_price - start_price) * (level.value as f64)
+                config.retracement_position(start_price, end_price, f64::from(level.value))
             } else {
                 0.0
             };
