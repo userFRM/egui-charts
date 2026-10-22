@@ -31,7 +31,11 @@ pub(super) fn render_renko(
     let brick_count = bricks.len().min(MAX_ELEMENTS);
     let spacing = calc_spacing(price_rect.width(), brick_count, bar_width);
 
-    for (i, brick) in bricks.iter().take(MAX_ELEMENTS).enumerate() {
+    for (i, brick) in bricks
+        .iter()
+        .skip(bricks.len().saturating_sub(MAX_ELEMENTS))
+        .enumerate()
+    {
         let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
         if !in_range(x, price_rect) {
             continue;
@@ -96,7 +100,11 @@ pub(super) fn render_line_break(
     let spacing = price_rect.width() / line_count as f32;
     let actual_width = (spacing * 0.85).min(bar_width).max(3.0);
 
-    for (i, line) in lines.iter().take(MAX_ELEMENTS).enumerate() {
+    for (i, line) in lines
+        .iter()
+        .skip(lines.len().saturating_sub(MAX_ELEMENTS))
+        .enumerate()
+    {
         let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
         if !in_range(x, price_rect) {
             continue;
@@ -143,7 +151,11 @@ pub(super) fn render_point_and_figure(
     let spacing = price_rect.width() / column_count as f32;
     let symbol_size = (spacing * 0.7).min(bar_width * 0.8).max(4.0);
 
-    for (i, column) in columns.iter().take(1000).enumerate() {
+    for (i, column) in columns
+        .iter()
+        .skip(columns.len().saturating_sub(1000))
+        .enumerate()
+    {
         let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
         if !in_range(x, price_rect) {
             continue;
@@ -213,7 +225,11 @@ fn collect_kagi_points(
 
     let mut points: Vec<(Pos2, KagiThickness)> = Vec::new();
 
-    for (i, line) in lines.iter().take(MAX_ELEMENTS).enumerate() {
+    for (i, line) in lines
+        .iter()
+        .skip(lines.len().saturating_sub(MAX_ELEMENTS))
+        .enumerate()
+    {
         let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
         if !in_range(x, price_rect) {
             continue;

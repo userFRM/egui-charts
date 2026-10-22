@@ -101,7 +101,7 @@ impl KagiConfig {
 /// Transform bars into Kagi lines
 ///
 /// # Safety Limits
-/// - Maximum 10,000 lines to prevent memory issues
+/// - At most the newest 10,000 lines
 /// - Auto-adjusts reversal amount if too small relative to price range
 pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
     if bars.is_empty() {
@@ -159,11 +159,6 @@ pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
                     },
                 });
 
-                // Safety check
-                if lines.len() >= MAX_LINES {
-                    return lines;
-                }
-
                 // Start new line going down
                 line_start_price = curr_price;
                 curr_price = price;
@@ -197,11 +192,6 @@ pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
                     },
                 });
 
-                // Safety check
-                if lines.len() >= MAX_LINES {
-                    return lines;
-                }
-
                 // Start new line going up
                 line_start_price = curr_price;
                 curr_price = price;
@@ -230,6 +220,7 @@ pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
         });
     }
 
+    lines.drain(..lines.len().saturating_sub(MAX_LINES));
     lines
 }
 

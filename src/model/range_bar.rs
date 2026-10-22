@@ -196,7 +196,7 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
 /// Convert OHLC bars to range bars (approximation)
 ///
 /// # Safety Limits
-/// - Maximum 5,000 range bars to prevent memory issues
+/// - At most the newest 5,000 range bars
 /// - Auto-adjusts range size if too small relative to price range
 pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<RangeBar> {
     if data.is_empty() {
@@ -237,20 +237,10 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
     };
 
     for bar in data.iter().skip(1) {
-        // Safety check
-        if bars.len() >= MAX_BARS {
-            break;
-        }
-
         // Simulate processing this bar's range
         let prices = [bar.open, bar.high, bar.low, bar.close];
 
         for &price in &prices {
-            // Safety check inside inner loop
-            if bars.len() >= MAX_BARS {
-                break;
-            }
-
             curr_bar.high = curr_bar.high.max(price);
             curr_bar.low = curr_bar.low.min(price);
 
@@ -275,9 +265,9 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
                 curr_bar.end_time = bar.time;
                 bars.push(curr_bar.clone());
 
-                // Safety check
-                if bars.len() >= MAX_BARS {
-                    return bars;
+                // Bound memory by dropping the oldest bars; `curr_bar` never reads them.
+                if bars.len() == 2 * MAX_BARS {
+                    bars.drain(..MAX_BARS);
                 }
 
                 // Start new bar
@@ -302,10 +292,11 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
     }
 
     // Add incomplete bar
-    if curr_bar.tick_cnt > 0 && bars.len() < MAX_BARS {
+    if curr_bar.tick_cnt > 0 {
         bars.push(curr_bar);
     }
 
+    bars.drain(..bars.len().saturating_sub(MAX_BARS));
     bars
 }
 

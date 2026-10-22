@@ -83,7 +83,7 @@ impl LineBreakLine {
 /// Convert bar data to Line Break lines
 ///
 /// # Safety Limits
-/// - Maximum 10,000 lines to prevent memory issues
+/// - At most the newest 10,000 lines
 pub fn to_line_break_lines(data: &[Bar], config: &LineBreakConfig) -> Vec<LineBreakLine> {
     if data.is_empty() {
         return Vec::new();
@@ -108,10 +108,6 @@ pub fn to_line_break_lines(data: &[Bar], config: &LineBreakConfig) -> Vec<LineBr
     });
 
     for bar in data.iter().skip(1) {
-        if lines.is_empty() || lines.len() >= MAX_LINES {
-            continue;
-        }
-
         let last_line = lines.last().unwrap();
         let curr_direction = last_line.direction;
 
@@ -175,6 +171,7 @@ pub fn to_line_break_lines(data: &[Bar], config: &LineBreakConfig) -> Vec<LineBr
         }
     }
 
+    lines.drain(..lines.len().saturating_sub(MAX_LINES));
     lines
 }
 

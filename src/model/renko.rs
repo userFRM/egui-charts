@@ -88,7 +88,7 @@ impl RenkoConfig {
 /// last brick's open, so a reversal needs a two-brick move.
 ///
 /// # Safety Limits
-/// - Maximum 10,000 bricks to prevent memory issues
+/// - At most the newest 10,000 bricks
 /// - Auto-adjusts brick size if too small relative to price range
 pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
     if bars.is_empty() {
@@ -145,13 +145,14 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
             });
             last = (brick_open, brick_close);
 
-            // Safety check
-            if bricks.len() >= MAX_BRICKS {
-                return bricks;
+            // Bound memory by dropping the oldest bricks; `last` never reads them.
+            if bricks.len() == 2 * MAX_BRICKS {
+                bricks.drain(..MAX_BRICKS);
             }
         }
     }
 
+    bricks.drain(..bricks.len().saturating_sub(MAX_BRICKS));
     bricks
 }
 

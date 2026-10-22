@@ -86,3 +86,67 @@ pub use trading::{
     Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
     OrderType, Position,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{DateTime, Duration, TimeZone, Utc};
+
+    /// One-minute bars from 2024-01-01 whose open, high, low and close are each price.
+    fn flat_bars(prices: impl Iterator<Item = f64>) -> Vec<Bar> {
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        prices
+            .enumerate()
+            .map(|(i, p)| Bar {
+                time: start + Duration::minutes(i as i64),
+                open: p,
+                high: p,
+                low: p,
+                close: p,
+                volume: 0.0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn price_based_charts_keep_their_newest_elements_over_the_limit() {
+        let alternating = |n: usize| flat_bars((0..n).map(|i| [100.0, 110.0][i % 2]));
+        // Each series produces more elements than the limit, twice as many for Renko and range bars.
+        let (short, long) = (alternating(201), alternating(20_001));
+        let rising = flat_bars((0..20_001).map(|i| 100.0 + i as f64));
+        type Run = dyn Fn(&[Bar]) -> (usize, Option<DateTime<Utc>>);
+        let cases: [(&str, &[Bar], usize, &Run); 5] = [
+            ("renko", &short, 10_000, &|b| {
+                let v = to_renko_bricks(b, &RenkoConfig::new(0.05));
+                (v.len(), v.last().map(|e| e.ts))
+            }),
+            ("range bars", &short, 5_000, &|b| {
+                let v = to_range_bars_from_ohlc(b, &RangeBarConfig::new(0.05));
+                (v.len(), v.last().map(|e| e.end_time))
+            }),
+            ("kagi", &long, 10_000, &|b| {
+                let v = to_kagi_lines(b, &KagiConfig::new(0.02));
+                (v.len(), v.last().map(|e| e.ts))
+            }),
+            ("point and figure", &long, 5_000, &|b| {
+                let v = to_pnf_columns(b, &PointFigureConfig::new(0.02, 3));
+                (v.len(), v.last().map(|e| e.end_time))
+            }),
+            ("line break", &rising, 10_000, &|b| {
+                let v = to_line_break_lines(b, &LineBreakConfig::new(3));
+                (v.len(), v.last().map(|e| e.ts))
+            }),
+        ];
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|&(name, bars, limit, run)| {
+                let (len, last) = run(bars);
+                let want = bars.last().map(|b| b.time);
+                (len != limit || last != want).then(|| {
+                    format!("{name}: {len} elements ending {last:?}, want {limit} ending {want:?}")
+                })
+            })
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+}

@@ -80,7 +80,12 @@ pub(super) fn render_range_bars(
     };
     let range_bars = to_range_bars_from_ohlc(visible_data, &config);
 
-    for (i, range_bar) in range_bars.iter().enumerate() {
+    // Range bars can outnumber the visible bars: draw the newest ones in the visible slots.
+    for (i, range_bar) in range_bars
+        .iter()
+        .skip(range_bars.len().saturating_sub(visible_data.len()))
+        .enumerate()
+    {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
 
         let y_open = price_scale.price_to_y(range_bar.open);

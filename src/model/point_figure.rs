@@ -125,7 +125,7 @@ impl PnfColumn {
 /// Convert bar data to Point and Figure columns
 ///
 /// # Safety Limits
-/// - Maximum 5,000 columns to prevent memory issues
+/// - At most the newest 5,000 columns
 /// - Auto-adjusts box size if too small relative to price range
 pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn> {
     if data.is_empty() {
@@ -197,11 +197,6 @@ pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn
                     // Complete current column and start new one
                     columns.push(curr_column.clone());
 
-                    // Safety check
-                    if columns.len() >= MAX_COLUMNS {
-                        return columns;
-                    }
-
                     curr_column = PnfColumn {
                         start_price: curr_column.end_price - box_size,
                         end_price: new_low,
@@ -233,11 +228,6 @@ pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn
                     // Complete current column and start new one
                     columns.push(curr_column.clone());
 
-                    // Safety check
-                    if columns.len() >= MAX_COLUMNS {
-                        return columns;
-                    }
-
                     curr_column = PnfColumn {
                         start_price: curr_column.end_price + box_size,
                         end_price: new_high,
@@ -257,6 +247,7 @@ pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn
     // Add the final column
     columns.push(curr_column);
 
+    columns.drain(..columns.len().saturating_sub(MAX_COLUMNS));
     columns
 }
 
