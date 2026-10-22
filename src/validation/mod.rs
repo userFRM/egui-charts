@@ -4,8 +4,9 @@
 //!
 //! - **Timestamp ordering**: bars must be in the expected chronological order.
 //! - **Duplicate timestamps**: consecutive bars must not share the same time.
-//! - **OHLC invariants**: `high >= max(open, close)`, `low <= min(open, close)`,
-//!   and volume is non-negative.
+//! - **OHLC invariants**: every price and the volume are finite,
+//!   `high >= max(open, close)`, `low <= min(open, close)`, and volume is
+//!   non-negative.
 //!
 //! Use [`validate_sequence`](DataValidator::validate_sequence) to check a batch
 //! of bars, or [`validate_new_bar`](DataValidator::validate_new_bar) to
@@ -46,7 +47,8 @@ pub enum ValidationResult {
         /// Index of the second occurrence.
         index: usize,
     },
-    /// An OHLC relationship invariant was violated (e.g., `high < low`).
+    /// An OHLC relationship invariant was violated (e.g., `high < low`), or a
+    /// price or the volume is NaN or infinite.
     InvalidOHLC {
         /// Index of the offending bar.
         index: usize,
@@ -169,6 +171,20 @@ impl DataValidator {
 
     /// Validate OHLC relationships for a single bar
     fn validate_ohlc_bar(&self, bar: &Bar, index: usize) -> Option<ValidationResult> {
+        // Every comparison below is false for NaN, so non-finite values are rejected first.
+        if ![bar.open, bar.high, bar.low, bar.close, bar.volume]
+            .iter()
+            .all(|v| v.is_finite())
+        {
+            return Some(ValidationResult::InvalidOHLC {
+                index,
+                reason: format!(
+                    "Open ({}), High ({}), Low ({}), Close ({}) or Volume ({}) is not finite",
+                    bar.open, bar.high, bar.low, bar.close, bar.volume
+                ),
+            });
+        }
+
         // High must be >= Open, Close, Low
         if bar.high < bar.open || bar.high < bar.close || bar.high < bar.low {
             return Some(ValidationResult::InvalidOHLC {
@@ -389,33 +405,35 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_ohlc_high_too_low() {
+    fn invalid_bars_are_rejected() {
         let validator = DataValidator::new().with_logging(false);
-        let bar = create_bar(
-            Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap(),
-            100.0,
-            95.0, // High less than open!
-            90.0,
-            98.0,
-        );
-
-        let result = validator.validate_new_bar(None, &bar);
-        assert!(matches!(result, ValidationResult::InvalidOHLC { .. }));
-    }
-
-    #[test]
-    fn test_invalid_ohlc_low_too_high() {
-        let validator = DataValidator::new().with_logging(false);
-        let bar = create_bar(
-            Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap(),
-            100.0,
-            110.0,
-            105.0, // Low greater than open!
-            102.0,
-        );
-
-        let result = validator.validate_new_bar(None, &bar);
-        assert!(matches!(result, ValidationResult::InvalidOHLC { .. }));
+        let ts = Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap();
+        let nan = f64::NAN;
+        let inf = f64::INFINITY;
+        // (open, high, low, close, volume)
+        let cases = [
+            (100.0, 95.0, 90.0, 98.0, 1000.0),
+            (100.0, 110.0, 105.0, 102.0, 1000.0),
+            (nan, 105.0, 95.0, 102.0, 1000.0),
+            (100.0, nan, 95.0, 102.0, 1000.0),
+            (100.0, 105.0, nan, 102.0, 1000.0),
+            (100.0, 105.0, 95.0, nan, 1000.0),
+            (100.0, 105.0, 95.0, 102.0, nan),
+            (100.0, inf, 95.0, 102.0, 1000.0),
+            (100.0, 105.0, -inf, 102.0, 1000.0),
+            (100.0, 105.0, 95.0, 102.0, inf),
+        ];
+        for (open, high, low, close, volume) in cases {
+            let bar = Bar {
+                volume,
+                ..create_bar(ts, open, high, low, close)
+            };
+            let result = validator.validate_new_bar(None, &bar);
+            assert!(
+                matches!(result, ValidationResult::InvalidOHLC { .. }),
+                "{bar:?} gave {result:?}"
+            );
+        }
     }
 
     #[test]

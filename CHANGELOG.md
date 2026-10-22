@@ -107,6 +107,7 @@ All notable changes to this project are documented in this file. The format is b
 - Every drawing tool's display name parses back to that tool with `FromStr`, ignoring case; the Fibonacci extension, time zone, speed resistance fan, trend-based time and speed resistance arcs tools and the five Elliott wave tools were not parsed.
 - A drawing whose tool type is unknown is skipped with the error `unknown drawing tool "Name"` instead of one listing all 95 tool types.
 - `ColorType::from_hex` returns an error for input that is not six or eight hexadecimal digits, instead of panicking on a multi-byte character such as `"aÄÄb"` or accepting a sign such as `"+F+F+F"`.
+- `DataValidator` reports a bar with a NaN or infinite open, high, low, close or volume as `ValidationResult::InvalidOHLC` instead of `Valid`.
 
 ### Changed
 
