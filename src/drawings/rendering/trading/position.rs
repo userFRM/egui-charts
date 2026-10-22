@@ -61,9 +61,14 @@ impl Drawing {
         let qty_text = qty.map_or_else(
             || "n/a".to_owned(),
             |qty| {
-                // Four decimals, or four significant digits below 0.1.
-                let scale = 10f64.powi((3 - qty.log10().floor() as i32).clamp(4, 300));
-                ((qty * scale).round() / scale).to_string()
+                // Four decimals, or four significant digits below 0.1, where that
+                // rounding is exact; an exponent beyond it.
+                let scale = 10f64.powi(3 - qty.log10().floor() as i32).max(1e4);
+                if scale <= 1e22 && qty < 1e15 {
+                    ((qty * scale).round() / scale).to_string()
+                } else {
+                    format!("{qty:e}")
+                }
             },
         );
 
