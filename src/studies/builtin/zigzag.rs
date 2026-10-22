@@ -128,16 +128,17 @@ impl Indicator for ZigZag {
                 last_pivot_idx = i;
                 last_pivot_price = high;
                 is_looking_for_high = false; // Found high, now look for low
-                self.values[i] = IndicatorValue::Single(high);
                 break;
             } else if (low - initial_low).abs() < 1e-10 {
                 last_pivot_idx = i;
                 last_pivot_price = low;
                 is_looking_for_high = true; // Found low, now look for high
-                self.values[i] = IndicatorValue::Single(low);
                 break;
             }
         }
+
+        // Pivots in bar order; the last one is the extreme of the current leg.
+        let mut pivots = vec![(last_pivot_idx, last_pivot_price)];
 
         // Main calculation loop
         for i in last_pivot_idx + 1..data.len() {
@@ -150,14 +151,14 @@ impl Indicator for ZigZag {
 
                 if change >= self.deviation_percent && i - last_pivot_idx >= self.depth {
                     // Found significant high
-                    self.values[i] = IndicatorValue::Single(high);
+                    pivots.push((i, high));
                     last_pivot_idx = i;
                     last_pivot_price = high;
                     is_looking_for_high = false;
                 } else if low < last_pivot_price {
                     // New lower low, update the last pivot
-                    self.values[last_pivot_idx] = IndicatorValue::None;
-                    self.values[i] = IndicatorValue::Single(low);
+                    pivots.pop();
+                    pivots.push((i, low));
                     last_pivot_idx = i;
                     last_pivot_price = low;
                 }
@@ -167,17 +168,27 @@ impl Indicator for ZigZag {
 
                 if change >= self.deviation_percent && i - last_pivot_idx >= self.depth {
                     // Found significant low
-                    self.values[i] = IndicatorValue::Single(low);
+                    pivots.push((i, low));
                     last_pivot_idx = i;
                     last_pivot_price = low;
                     is_looking_for_high = true;
                 } else if high > last_pivot_price {
                     // New higher high, update the last pivot
-                    self.values[last_pivot_idx] = IndicatorValue::None;
-                    self.values[i] = IndicatorValue::Single(high);
+                    pivots.pop();
+                    pivots.push((i, high));
                     last_pivot_idx = i;
                     last_pivot_price = high;
                 }
+            }
+        }
+
+        // Renderers join values on adjacent bars, so fill each leg with a
+        // straight line between its pivots. A lone pivot is not a swing.
+        for leg in pivots.windows(2) {
+            let ((start, from), (end, to)) = (leg[0], leg[1]);
+            for i in start..=end {
+                let t = (i - start) as f64 / (end - start) as f64;
+                self.values[i] = IndicatorValue::Single(from + (to - from) * t);
             }
         }
     }
@@ -236,34 +247,74 @@ mod tests {
         }
     }
 
+    /// Expected values from an independent percentage-filter reference
+    /// (Merrill's filtered waves, drawn as straight lines between pivots).
     #[test]
-    fn test_zigzag_basic() {
-        let mut zz = ZigZag::new(5.0, 2);
-
-        // Create data with clear swings
-        let data = vec![
-            make_bar(100.0, 98.0, 99.0),   // Start
-            make_bar(102.0, 99.0, 101.0),  // Up
-            make_bar(110.0, 105.0, 108.0), // High (10% up)
-            make_bar(108.0, 102.0, 104.0), // Down
-            make_bar(105.0, 95.0, 96.0),   // Low (13% down from 110)
-            make_bar(100.0, 96.0, 99.0),   // Up
-            make_bar(115.0, 108.0, 112.0), // High (21% up from 95)
+    fn zigzag_draws_lines_between_pivots() {
+        // (name, (high, low) per bar, expected value per bar)
+        type Case<'a> = (&'a str, &'a [(f64, f64)], &'a [Option<f64>]);
+        let nan = f64::NAN;
+        let cases: &[Case] = &[
+            (
+                // Warm-up bar, NaN bar inside a leg, bars after the last pivot.
+                "swings",
+                &[
+                    (99.0, 98.5),
+                    (100.0, 98.0),
+                    (99.0, 96.0),
+                    (97.0, 94.0),
+                    (96.0, 93.0),
+                    (nan, nan),
+                    (97.0, 94.0),
+                    (99.0, 95.0),
+                    (101.0, 97.0),
+                    (100.0, 96.0),
+                    (98.0, 95.0),
+                    (97.0, 95.5),
+                    (96.0, 95.2),
+                ],
+                &[
+                    None,
+                    Some(100.0),
+                    Some(97.666_666_666_666_67),
+                    Some(95.333_333_333_333_33),
+                    Some(93.0),
+                    Some(95.0),
+                    Some(97.0),
+                    Some(99.0),
+                    Some(101.0),
+                    Some(98.0),
+                    Some(95.0),
+                    None,
+                    None,
+                ],
+            ),
+            ("flat", &[(100.0, 100.0); 6], &[None; 6]),
         ];
 
-        zz.calculate(&data);
-
-        assert_eq!(zz.values.len(), 7);
-
-        // Count pivot points (non-None values)
-        let pivots: Vec<_> = zz
-            .values
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| matches!(v, IndicatorValue::Single(_)))
-            .collect();
-
-        assert!(pivots.len() >= 2, "Should find at least 2 pivot points");
+        for (name, bars, expected) in cases {
+            let data: Vec<Bar> = bars.iter().map(|&(h, l)| make_bar(h, l, l)).collect();
+            let mut zz = ZigZag::new(5.0, 1);
+            zz.calculate(&data);
+            let got: Vec<Option<f64>> = zz
+                .values()
+                .iter()
+                .map(|v| match v {
+                    IndicatorValue::Single(x) => Some(*x),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(got.len(), expected.len(), "{name}");
+            for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+                match (g, e) {
+                    (Some(g), Some(e)) => {
+                        assert!((g - e).abs() < 1e-9, "{name} bar {i}: {g} != {e}")
+                    }
+                    (None, None) => {}
+                    _ => panic!("{name} bar {i}: got {g:?}, expected {e:?}\n  got {got:?}"),
+                }
+            }
+        }
     }
 
     #[test]

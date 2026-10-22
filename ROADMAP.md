@@ -331,9 +331,9 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Advance/Decline Line (simulated from single symbol)
 - [x] 52-Week High/Low %
 
-### Support / Resistance (1/2)
+### Support / Resistance (2/2)
 - [x] Pivot Points: Standard, Fibonacci, Woodie, Camarilla, DeMark formulas over a rolling N-bar window; only the pivot line is drawn
-- [ ] ZigZag: percentage swing detection computes pivots, but they are isolated values and nothing is drawn
+- [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; the last leg follows the current extreme until the next reversal
 
 ### Order Flow (4/4, estimated from bars; no trade or order book data)
 - [x] Iceberg Detector: 0 to 1 score in its own pane for bars closing at a price level that enough of the last N bars touched with heavy volume, each bar's volume spread evenly over its range; it cannot see hidden orders. Levels use the tick size set with `with_tick_size`, otherwise the price span of the bars so far in about 1,000 levels
