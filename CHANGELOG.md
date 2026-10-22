@@ -139,6 +139,8 @@ All notable changes to this project are documented in this file. The format is b
 - The crosshair line and labels follow the theme (`chart.crosshair_line`, `chart.crosshair_label_bg` and `chart.crosshair_label_text`); the light and high contrast themes showed the dark theme's. The `CrosshairOptions` colours, including the label colours that nothing read, default to `Color32::PLACEHOLDER`, the theme's colour, and override it when set. The light theme's crosshair line is darker, 3.2:1 on white.
 - The floating tooltip shows its labels and values in two aligned columns in the proportional font, prices with the legend's decimals (at most `price_precision`), and a 1 px border in the theme's border colour instead of a 2 px ring in the candle colour. It sits in the top corner of the price pane away from the pointer instead of next to it, so it no longer covers the hovered bar. `TooltipOptions::border_color_bullish` and `border_color_bearish` default to `Color32::PLACEHOLDER`, the theme's border colour; the tracking bar and the magnifier take the candle, crosshair and text colours from the theme.
 - Price and time axis labels use one font size, so month and day labels share a baseline.
+- The selected drawing's handles are round, an accent ring around the chart background like the selection dots of a series, instead of white squares with a dark outline; the handle being dragged is filled with the accent. `HandleConfig::color` and `selected_color` default to `Color32::PLACEHOLDER.to_array()`, the theme's accent.
+- A new drawing is pink (`DrawingManagerOptions::default_color`), a colour no default study uses, instead of a blue close to the EMA's.
 
 ### Changed
 

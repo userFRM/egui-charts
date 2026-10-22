@@ -58,6 +58,10 @@ pub struct DrawingState {
     pub eraser_mode: bool,
 }
 
+/// Colour of a new drawing: a pink that no default study uses, at 4:1 or better on the dark,
+/// light and high contrast chart backgrounds.
+const DEFAULT_DRAWING_COLOR: [u8; 4] = [233, 30, 99, 255];
+
 /// Configuration options for the [`DrawingManager`].
 ///
 /// Controls default colors, snapping behavior, magnet mode thresholds, and
@@ -83,7 +87,7 @@ pub struct DrawingManagerOptions {
 impl Default for DrawingManagerOptions {
     fn default() -> Self {
         Self {
-            default_color: [41, 98, 255, 255],
+            default_color: DEFAULT_DRAWING_COLOR,
             snap_to_price: true,
             snap_to_time: true,
             snap_distance: DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs,

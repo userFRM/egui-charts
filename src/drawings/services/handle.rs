@@ -8,21 +8,23 @@
 //!   handle (if any) is under the cursor.
 //! - **Dragging** -- [`HandleService::update_handle`] moves a handle and
 //!   updates both screen and chart coordinates.
-//! - **Rendering** -- [`HandleService::render_handles`] draws handle squares
+//! - **Rendering** -- [`HandleService::render_handles`] draws round handles
 //!   with selection highlighting.
 
 use crate::drawings::domain::{Drawing, DrawingToolType, HandlePos};
-use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use crate::theme::ThemeExt;
+use egui::{Color32, Pos2};
 
 /// Configuration for selection handle appearance and hit testing.
 #[derive(Clone, Debug)]
 pub struct HandleConfig {
-    /// Handle size in pixels (width and height of the square).
+    /// Handle diameter in pixels.
     pub size: f32,
-    /// Normal handle color as RGBA bytes.
+    /// Ring color of a handle as RGBA bytes (`Color32::PLACEHOLDER.to_array()`: the theme's
+    /// accent).
     pub color: [u8; 4],
-    /// Color for handles that are being actively dragged, as RGBA bytes.
+    /// Fill color of the handle being dragged as RGBA bytes
+    /// (`Color32::PLACEHOLDER.to_array()`: the theme's accent).
     pub selected_color: [u8; 4],
     /// Whether to render handles at all (can be disabled for screenshot mode, etc.).
     pub show_handles: bool,
@@ -32,8 +34,8 @@ impl Default for HandleConfig {
     fn default() -> Self {
         Self {
             size: 8.0,
-            color: [255, 255, 255, 255],
-            selected_color: [41, 98, 255, 255],
+            color: Color32::PLACEHOLDER.to_array(),
+            selected_color: Color32::PLACEHOLDER.to_array(),
             show_handles: true,
         }
     }
@@ -43,7 +45,7 @@ impl Default for HandleConfig {
 ///
 /// All methods are static (`&self`-free) since `HandleService` carries no state.
 /// It computes handle positions, performs hit testing, updates handle positions
-/// during drags, and renders handle squares onto the chart.
+/// during drags, and renders the handles onto the chart.
 pub struct HandleService;
 
 impl HandleService {
@@ -345,10 +347,11 @@ impl HandleService {
         }
     }
 
-    /// Renders selection handles as filled squares with dark borders.
+    /// Renders selection handles like the selection dots of a series: an accent ring around
+    /// the chart background.
     ///
-    /// The actively dragged handle (if any) is rendered in the
-    /// [`HandleConfig::selected_color`]; all others use [`HandleConfig::color`].
+    /// The actively dragged handle (if any) is filled with
+    /// [`HandleConfig::selected_color`]; the others are ringed with [`HandleConfig::color`].
     pub fn render_handles(
         painter: &egui::Painter,
         drawing: &Drawing,
@@ -359,42 +362,29 @@ impl HandleService {
             return;
         }
 
-        let handles = Self::get_handles(drawing);
-        let size = config.size;
-
-        for (pos, point) in handles {
-            let is_dragging = dragging_handle.map(|h| h == pos).unwrap_or(false);
-
-            let color = if is_dragging {
-                Color32::from_rgba_unmultiplied(
-                    config.selected_color[0],
-                    config.selected_color[1],
-                    config.selected_color[2],
-                    config.selected_color[3],
-                )
+        let theme = painter.ctx().active_theme();
+        let color = |[r, g, b, a]: [u8; 4]| {
+            if [r, g, b, a] == Color32::PLACEHOLDER.to_array() {
+                theme.ui.accent
             } else {
-                Color32::from_rgba_unmultiplied(
-                    config.color[0],
-                    config.color[1],
-                    config.color[2],
-                    config.color[3],
-                )
-            };
+                Color32::from_rgba_unmultiplied(r, g, b, a)
+            }
+        };
+        let radius = config.size / 2.0;
 
-            let rect = Rect::from_center_size(point, egui::vec2(size, size));
-            painter.rect_filled(rect, 1.0, color);
-            painter.rect_stroke(
-                rect,
-                1.0,
-                Stroke::new(
-                    DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.extended.chart_bg,
-                ),
-                StrokeKind::Outside,
-            );
+        for (pos, point) in Self::get_handles(drawing) {
+            if dragging_handle == Some(pos) {
+                painter.circle_filled(point, radius, color(config.selected_color));
+            } else {
+                painter.circle_filled(point, radius, color(config.color));
+                painter.circle_filled(point, radius - RING_WIDTH, theme.chart.bg);
+            }
         }
     }
 }
+
+/// Width of a handle's ring, as on a series' selection dots.
+const RING_WIDTH: f32 = 2.0;
 
 #[cfg(test)]
 mod tests {
