@@ -7,7 +7,7 @@ Each item is marked as complete, partial, or missing.
 
 ## Chart Rendering Engine
 
-### Chart Types (18/18 complete)
+### Chart Types
 
 #### Standard OHLC
 - [x] **Candles**: Filled body with optional border, wicks, optional volume bars
@@ -58,18 +58,17 @@ Each item is marked as complete, partial, or missing.
 - [x] Dot crosshair
 - [x] Arrow mode (no crosshair)
 - [x] Line styles: solid, dashed, dotted
-- [x] Price label on Y-axis with a decorative "+" glyph (not clickable)
+- [x] Price label on the Y-axis at the crosshair and for the last price
 - [x] Time label on X-axis with adaptive format
 
 ### Scales
 - [x] Linear (normal) price scale
-- [ ] Logarithmic price scale (conversion math in src/scales, not used by rendering)
-- [ ] Percentage price scale (conversion math in src/scales, not used by rendering)
-- [ ] Indexed-to-100 price scale (conversion math in src/scales, not used by rendering)
+- [x] Logarithmic price scale
+- [x] Percentage price scale (relative to the first visible close)
+- [x] Indexed-to-100 price scale (relative to the first visible close)
 - [x] Auto-scale with a fixed 10% margin
 - [x] Manual range override
-- [ ] Inverted scale (setting exists, rendering ignores it)
-- [ ] Dual price scale manager (left/right): type exists, not used by the chart
+- [x] Inverted scale
 - [x] Hierarchical time tick generation with weight system
 - [x] Price mark generation
 - [ ] Price formatters (default, currency, percentage, scientific, volume, custom) defined but not used by axis labels
@@ -83,11 +82,11 @@ Each item is marked as complete, partial, or missing.
 
 ---
 
-## Drawing Tools (74/88 working as described, 3 placeholders)
+## Drawing Tools
 
 Note: tools with a fixed point count (parallel channel, pitchforks, triangle, harmonic and chart patterns, Elliott waves) currently complete one click early with the last anchor duplicated; drag that handle to set the final point.
 
-### Lines (9/9)
+### Lines
 - [x] Trend Line: Segment distance hit test, start/end/middle handles
 - [x] Ray: extends to the right edge; a ray drawn leftward points the wrong way
 - [x] Extended Line: Extends both directions
@@ -98,19 +97,19 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [x] Trend Angle: Line + dashed reference + arc + angle/slope label
 - [x] Measure: colored rect, arrows and info box with price change, percent and bar count; pips assume a 0.01 tick, time assumes one-minute bars, volume not shown
 
-### Channels (4/4)
+### Channels
 - [x] Parallel Channel: Two parallel lines + connectors, explicit hit test
 - [x] Flat Top/Bottom: Trend line + horizontal + Support/Resistance labels
 - [x] Disjoint Channel: Two parallel segments + dashed connectors + width label
 - [x] Regression Trend: least-squares line through the closes between the anchors, bands a configurable number of standard deviations away, R² and Pearson correlation label
 
-### Pitchforks (2/4)
+### Pitchforks
 - [x] Pitchfork (Andrews)
 - [ ] Schiff Pitchfork: median origin not moved off the first anchor, so the geometry is wrong
 - [x] Modified Schiff Pitchfork
 - [ ] Inside Pitchfork: draws the same lines as the Andrews pitchfork
 
-### Fibonacci (9/11)
+### Fibonacci
 - [x] Fibonacci Retracement: default levels with price labels, level 0 on the second anchor and Reverse measuring from the first; custom levels, extend and Reverse only through the fib_config field set by host code
 - [x] Fibonacci Extension: two-point extension levels; no third anchor to project from
 - [x] Fibonacci Channel: levels parallel to the base line; always drawn on one side regardless of the third point
@@ -123,13 +122,13 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [ ] Fibonacci Wedge: placeholder of fixed-length rays at fractions of the anchor angle
 - [x] Trend-Based Fib Time: vertical lines at ratio multiples of the two-anchor span; no third anchor
 
-### Gann (3/4)
+### Gann
 - [ ] Gann Fan: 9 lines at their labelled price to time ratios; a line whose end at the right edge of the chart is more than 200 px off the chart is skipped, and the fan always opens to the right of its first anchor
 - [x] Gann Square: Grid with diagonals, inscribed circle, degree labels
 - [x] Gann Box: 8x8 grid with diagonals; angle lines from the top-left corner only
 - [x] Gann Fixed: 1:1 forced-square with 4x4 grid
 
-### Patterns (3/6)
+### Patterns
 - [x] XABCD Pattern: Labels, filled triangles, Fibonacci ratio display
 - [ ] Head and Shoulders: labels drawn, but the neckline joins the shoulders instead of the troughs, so the target is wrong
 - [x] ABCD Pattern: Labels, fill, CD/AB ratio with color coding
@@ -137,19 +136,19 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [ ] Three Drives: completes at 6 points, so the PRZ box (drawn at 7) never appears
 - [ ] **Cypher Pattern**: Delegates entirely to XABCD renderer; Cypher-specific ratios not visually distinct
 
-### Elliott Waves (5/5)
+### Elliott Waves
 - [x] Elliott Impulse: 6 points, motive/corrective fill, Fibonacci 1.618 target
 - [x] Elliott Correction: 4 points (5-A-B-C), corrective fill
 - [x] Elliott Triangle: 5 points (A-E), converging trendlines
 - [x] Elliott Double Combo: 5 points, only the first 3 labelled (W-X-Y)
 - [x] Elliott Triple Combo: 7 points, only the first 5 labelled (W-X-Y-X-Z)
 
-### Cycles (3/3)
+### Cycles
 - [x] Cyclic Lines: Repeating vertical lines, cycle numbers, period label
 - [x] Time Cycles: Concentric semicircular arcs (0.5x-3x), mesh fills
 - [x] Sine Line: Full sine wave with amplitude guides
 
-### Projection / Trading (5/6)
+### Projection / Trading
 - [x] Long Position: entry, target and independent stop zones; risk/reward from the levels, P&L from the bars after the entry, quantity fixed or sized from the amount or account share at risk
 - [x] Short Position
 - [x] Forecast: price change over the bar span, resolved against the bars up to the target bar
@@ -157,29 +156,29 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [x] Bars Pattern: copies the selected bars to the projection anchor
 - [x] Projection Tool: two-point measured move with labels; the AB=CD start point is synthesized, not user placed
 
-### Volume / VWAP (3/3)
+### Volume / VWAP
 - [x] Anchored VWAP: VWAP of the typical price from the anchor bar, with 1σ and 2σ volume-weighted bands
 - [x] Fixed Range Volume Profile: each bar's volume spread over its high-low range, POC and value area; row count and value area share are settings (24 rows, 70% by default)
 - [x] Anchored Volume Profile: the same profile from the anchor bar to the latest bar
 
-### Measurements (4/4)
+### Measurements
 - [x] Price Range: Two hlines + vertical connector + price diff label
 - [x] Date Range: Two vlines + horizontal connector + bar count
 - [x] Date and Price Range: Filled rect + combined label
 - [x] Info Line: angled line and info box with price change, percent and bars; time assumes one-minute bars, angle sign inverted
 
-### Brushes / Freehand (2/3)
+### Brushes / Freehand
 - [x] Brush: Freehand stroke with connected segments
 - [x] Highlighter: Wider semi-transparent stroke
 - [ ] **Paintbrush**: Identical implementation to Brush (calls `render_brush()`)
 
-### Arrows (4/4)
+### Arrows
 - [x] Arrow: Line + arrowhead
 - [x] Arrow Marker: Colored filled triangle
 - [x] Arrow Mark Up
 - [x] Arrow Mark Down
 
-### Shapes (8/10)
+### Shapes
 - [x] Rectangle: Fill, dashed midlines, dimension labels, 4-corner handles
 - [x] Circle
 - [x] Ellipse: Path approximation
@@ -191,7 +190,7 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [ ] **Rotated Rectangle**: Renders as axis-aligned only; rotation not implemented
 - [ ] **Double Curve**: Uses sine offset approximation, not true cubic bezier
 
-### Annotations (10/11)
+### Annotations
 - [x] Text Label: Background box + border + text + anchor marker
 - [x] Anchored Text: Background box + anchor icon + text
 - [x] Note: Sticky note with folded corner + tooltip
@@ -204,12 +203,12 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [ ] Table: fixed grid of 3 columns by 4 rows (header included) with placeholder headers and cell text
 - [x] Signpost: Dashed vertical + sign plate + arrow
 
-### Content / Media (0/3)
+### Content / Media
 - [ ] **Image**: Decorative placeholder only (checkerboard + icon); no image loading
 - [ ] **Tweet**: Decorative card only; no API integration
 - [ ] **Idea**: Decorative card only; no service connection
 
-### Icons (0/1)
+### Icons
 - [ ] Font Icon: renderer exists (text glyph sized from stroke width) but no toolbar control selects the tool
 - Note: Icons module is feature-gated behind `icons` feature (enabled by default)
 
@@ -220,7 +219,7 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 
 #### Hit Testing
 - [x] Geometry-accurate hit tests for: TrendLine, Measure, HorizontalLine, VerticalLine, Rect, Fibonacci (3 variants), GannFan, ParallelChannel
-- [ ] 80+ tools use point-proximity fallback only (must click on anchor point, not on drawing body)
+- [ ] Every other tool uses the point-proximity fallback (click on an anchor point, not on the drawing body)
 
 #### Handle System
 - [x] Coordinate-aware handles for: TrendLine, Measure, Rect, HorizontalLine, VerticalLine, Fib Retracement/Extension/Channel, Gann Fan/Square/Box
@@ -253,7 +252,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [ ] Volume Profile outputs `IndicatorValue::Multiple` but there is no horizontal bar chart renderer
 - [ ] Multi-line studies that keep the default line count of 1 draw only their first line (signal lines, second DI or VI line, lower bands, pivot levels)
 
-### Moving Averages (22/22)
+### Moving Averages
 - [x] SMA, EMA, WMA, DEMA, TEMA, HMA, ALMA, VWMA, LSMA, SWMA
 - [x] KAMA, Smoothed MA (Wilder), McGinley Dynamic, VIDYA, ZLEMA
 - [x] Hamming MA
@@ -262,12 +261,13 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] MA Cross, EMA Cross
 - [x] MA Channel, Envelopes
 
-### Momentum Oscillators (37/37)
+### Momentum Oscillators
 - [x] RSI, MACD, VW-MACD, Stochastic, Stochastic RSI
 - [x] Williams %R, CCI, ROC, Momentum, Aroon, Awesome Oscillator
 - [x] Ultimate Oscillator, Connors RSI, Coppock Curve
 - [x] DPO, TRIX (signal line not drawn), Mass Index, Chande Momentum (CMO)
 - [x] Know Sure Thing (KST): only the first line is drawn (no signal line)
+- [x] True Strength Index (TSI) with its signal line, KDJ with its K, D and J lines
 - [x] Schaff Trend Cycle, Double Stochastic, Elder Ray (Bear Power not drawn)
 - [x] Fisher Transform (signal not drawn), Ehlers Fisher (trigger not drawn), Force Index
 - [x] Center of Gravity (signal not drawn), Pretty Good Oscillator, Rainbow Oscillator
@@ -275,7 +275,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Ultimate Momentum, Trend Intensity Index, Qstick
 - [x] Elder Impulse System, Trend Detection Index
 
-### Trend / Overlay (8/8)
+### Trend / Overlay
 - [x] ADX: ADX, +DI, -DI lines
 - [x] SuperTrend: ATR-based trailing stop
 - [x] Ichimoku Cloud: Tenkan and Kijun; Senkou A/B plotted the displacement ahead and Chikou the displacement behind; the part of the cloud projected past the last bar is not drawn
@@ -285,7 +285,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Choppiness Index: ATR sum / range
 - [x] Linear Regression: Rolling LinReg endpoint overlay
 
-### Volatility (19/19)
+### Volatility
 - [x] Bollinger Bands: SMA +/- k*StdDev
 - [x] ATR: Wilder smoothed true range
 - [x] Keltner Channels: EMA +/- ATR*multiplier
@@ -302,7 +302,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Volatility Index: ATR-based annualized %
 - [x] Standard Error, Standard Error Bands
 
-### Volume (21/23)
+### Volume
 - [x] OBV, VWAP (optional reset on UTC date change; the indicator dialog builds it without reset, so it is cumulative), Anchored VWAP
 - [x] MFI, A/D Line, CMF, Klinger Oscillator
 - [x] Ease of Movement, Net Volume, Volume ROC, Volume Oscillator
@@ -314,33 +314,33 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Market Facilitation Index (Bill Williams)
 - [x] Commodity Selection Index
 
-### Correlation / Statistics (9/9)
+### Correlation / Statistics
 - [x] Correlation with time (Pearson of close vs bar index), Correlation Log Returns (log returns vs bar index)
 - [x] Linear Regression, Linear Regression Slope
 - [x] Rank Correlation Index (Spearman)
 - [x] Standard Error, Standard Error Bands
 - [x] Majority Rule, Accumulation Swing Index
 
-### Price Derivatives (9/9)
+### Price Derivatives
 - [x] Typical Price, Weighted Close, Median Price
 - [x] OHLC4, HLC3, HL2
 - [x] True Range
 - [x] Spread Study (bar high minus low), Ratio Study (close/open percent change); single symbol only
 
-### Market Structure (2/2)
+### Market Structure
 - [x] Advance/Decline Line (simulated from single symbol)
 - [x] 52-Week High/Low %
 
-### Support / Resistance (2/2)
+### Support / Resistance
 - [x] Pivot Points: Standard, Fibonacci, Woodie, Camarilla, DeMark formulas over a rolling N-bar window; only the pivot line is drawn
 - [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; the last leg follows the current extreme until the next reversal
 
-### Price Oscillators (1/1)
+### Price Oscillators
 - [x] PPO: Price Oscillator (signal line computed, not drawn)
 
 ### Factory Coverage
 - [x] `IndicatorFactory` registers all 128 built-in indicators by name
-- [ ] The indicator dialog offers 24 fixed entries; the other indicators are reachable only from code
+- [ ] The indicator dialog offers a fixed subset (`IndicatorType::all()`); the other indicators are reachable only from code
 
 ---
 
@@ -373,7 +373,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Modal overlay with dim background
 - [x] Left category sidebar
 - [x] Search bar with case-insensitive substring filtering
-- [x] Tabs: Indicators, Profiles, Patterns
+- [ ] Tabs: Indicators, Profiles and Patterns render, but every tab lists the same indicators; the Community category lists every indicator and Premium none
 - [x] Favorite toggling
 - [x] Configuration panel for parameters
 
@@ -416,7 +416,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] **Alert Dialog**: 3 tabs (Price, Indicator, Volume) with form validation
 - [x] **Series Settings**: 7 tabs (Symbol, Status Line, Scales, Canvas, Trading, Alerts, Events)
 - [x] **Drawing Properties**: 4 tabs (Style, Coordinates, Visibility, Text); only color, width, line style, extend and label are applied
-- [x] **Keyboard Shortcuts**: help dialog listing the KeyboardAction table; chart and drawing keys are hardcoded in chart/interaction.rs and chart/tool_interaction/
+- [x] **Keyboard Shortcuts**: help dialog listing the KeyboardAction table; chart and drawing keys are hardcoded in widget/interaction.rs and widget/tool_interaction/
 - [x] **Drawing Context Menu**
 - [x] **Series Context Menu** (Settings, Add indicator and Add alert work; the other 12 entries do nothing)
 
@@ -449,7 +449,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [ ] No actual PNG/SVG rendering logic
 
 ### Other UI
-- [x] Context menu: 20 entries with icons, shortcuts, disabled state, click-outside close
+- [x] Context menu: entries with icons, shortcuts, disabled state, click-outside close
 - [ ] Emoji picker: Structure exists but actual emoji grid rendering unverified
 - [ ] Multi-chart layout component (only ChartSyncOptions exists; module is a stub)
 - [x] Symbol header display
@@ -460,7 +460,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 
 ## UI Kit (Reusable Components)
 
-All ui_kit components are **fully implemented** generic building blocks:
+The ui_kit components are generic building blocks:
 
 - [x] Button (themed, variant-based: Primary/Secondary/Outlined/Danger/Ghost)
 - [x] IconButton (SVG icon + optional label)
@@ -494,10 +494,12 @@ All ui_kit components are **fully implemented** generic building blocks:
 ### Data Layer
 - [x] `DataSource` trait defined with error types (8 variants)
 - [x] `DataSourceError` with `is_recoverable()` and `is_conn_error()` helpers
+- [ ] `data::Datafeed` (callback contract for history, live bars, trades and depth) is defined, but no chart consumes it yet
+- [ ] `services::Storage`, `SymbolSearch`, `Signals`, `Alerts` and `Broker` are defined, but nothing calls them yet
 - [ ] No in-crate `DataSource` implementations (streaming, tick feeds, symbol search all in host)
 
 ### Configuration
-- [x] `ChartConfig`: Comprehensive chart configuration
+- [x] `ChartConfig`: chart configuration
 - [x] `ChartOptions`: User-facing options
 - [x] `CrosshairOptions`: Crosshair style/mode/color
 - [x] `KeyboardOptions` (enable, pan amount, zoom step); key bindings are fixed, `KeyboardAction` is a display table for the help dialog
@@ -505,9 +507,9 @@ All ui_kit components are **fully implemented** generic building blocks:
 ### Theming
 - [x] `Theme` value with public fields
 - [x] Dark, light and high-contrast presets
-- [x] Design token system (RON-based, ~300+ tokens)
+- [x] Design tokens as Rust constants (`tokens::DESIGN_TOKENS`), evaluated at compile time
 - [x] Token categories: sizing, spacing, rounding, stroke widths, semantic colors
-- [x] Theme helpers: `toolbar_bg()`, `icon_color()`, `sel_color()`, `hover_color()`
+- [x] `ui.active_theme()` (`theme::ThemeExt`) returns the theme last applied with `apply_to_egui`
 
 ### Data Validation
 - [x] `DataValidator`: Timestamp ordering, OHLC sanity checks
@@ -528,13 +530,12 @@ All ui_kit components are **fully implemented** generic building blocks:
 | Medium | MACD histogram renders as line, not bars | `chart/renderers/indicator.rs` |
 | Medium | Ichimoku cloud renders as lines, not filled regions | `chart/renderers/indicator.rs` |
 | Medium | Parabolic SAR renders as line, not dots | `chart/renderers/indicator.rs` |
-| Medium | 80+ drawing tools use point-proximity hit test only | `drawings/services/interaction.rs` |
+| Medium | Drawing tools without a geometric hit test use point proximity only | `drawings/services/interaction.rs` |
 | Medium | Magnet snapping never applied to drawings | `drawings/manager.rs` |
 | Medium | Rotated Rectangle renders as axis-aligned | `drawings/rendering/shapes.rs` |
 | Low | Double Curve uses sine offset, not bezier | `drawings/rendering/shapes.rs` |
 | Low | Paintbrush identical to Brush | `drawings/rendering/shapes.rs` |
 | Low | Cypher Pattern identical to XABCD | `drawings/rendering/patterns.rs` |
-| Low | Export browse button uses placeholder path | `ui/export.rs` |
 
 ---
 
@@ -542,12 +543,12 @@ All ui_kit components are **fully implemented** generic building blocks:
 
 ### What's built
 - 18 of 18 chart types render
-- Pan/zoom and crosshair; the price axis renders on a linear scale only
-- 74 of 88 drawing tools work as described, several with limits noted above (95 total incl. 4 cursor modes + 3 placeholders)
-- 128 registered indicators with calculation code; multi-line studies draw only their first line
+- Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
+- `DrawingToolType` defines 95 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
+- 128 registered indicators with calculation code; studies that keep the default line count of 1 draw only their first line
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
-- 24 reusable ui_kit building blocks
-- Theme system with 300+ design tokens and multiple presets
+- Reusable ui_kit building blocks
+- Theme system with design tokens and dark, light and high-contrast presets
 - Data validation, configuration
 
 ### What needs work (P1: core functionality gaps)
@@ -557,8 +558,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 
 ### What needs work (P2: polish and completeness)
 - [ ] Improve drawing hit testing (line-body hit tests for all tools)
-- [ ] Serialize all drawing styling properties (line_style, fill_color, font_size, etc.)
-- [ ] Serialize `FibonacciConfig` custom levels
 - [ ] Implement Rotated Rectangle with actual rotation
 - [ ] Implement Double Curve with proper bezier geometry
 - [ ] Differentiate Cypher Pattern from XABCD
@@ -572,7 +571,7 @@ All ui_kit components are **fully implemented** generic building blocks:
 - [ ] Accessibility (a11y)
 - [ ] Image drawing tool (load and display user images on chart)
 - [ ] Social features (Tweet embed, Idea sharing)
-- [ ] Real-time data streaming protocol
+- [ ] Charts consume `data::Datafeed` for live data (the contract exists; `TradingChart` reads only `DataSource`)
 - [ ] Server-side rendering for chart snapshots
 - [ ] Chart comparison / overlay mode
 - [ ] Multi-symbol data correlation
