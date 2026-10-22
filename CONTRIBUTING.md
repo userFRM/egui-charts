@@ -4,7 +4,7 @@ Thanks for your interest in `egui-charts`, a financial charting engine for [egui
 
 This project is actively evolving and genuinely open to pull requests. Whether you are fixing a one-line bug or adding a brand-new chart type, your contribution is welcome. We especially love creative additions: new indicators, drawing tools, chart types, and themes are exactly the kind of thing this engine is built to grow. If you have an idea that makes charts more useful or more beautiful, open an issue and let's talk about it.
 
-The live WebAssembly demo is at <https://userfrm.github.io/egui-charts/>, the API docs are at <https://docs.rs/egui-charts>, and the source lives at <https://github.com/userFRM/egui-charts>.
+The live WebAssembly demo is at <https://userfrm.github.io/egui-charts/demo/>, the API docs are at <https://docs.rs/egui-charts>, and the source lives at <https://github.com/userFRM/egui-charts>.
 
 ## Ways to contribute
 
@@ -149,7 +149,7 @@ CI runs clippy with warnings denied. Its `stable` toolchain is current stable, w
 
 - **Issues:** open one before you start: <https://github.com/userFRM/egui-charts/issues>
 - **License:** dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), your choice. Contributions are accepted under the same dual license.
-- **Live demo:** <https://userfrm.github.io/egui-charts/>
+- **Live demo:** <https://userfrm.github.io/egui-charts/demo/>
 - **API docs:** <https://docs.rs/egui-charts>
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 
