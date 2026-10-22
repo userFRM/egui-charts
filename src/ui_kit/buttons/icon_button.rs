@@ -4,7 +4,6 @@
 
 use super::{ButtonSize, ButtonVariant, finish};
 use crate::icons::Icon;
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Rect, Response, Sense, Ui, Vec2};
 
@@ -125,9 +124,9 @@ impl<'a> IconButton<'a> {
             let icon_color = if self.selected {
                 variant.fg_color(ui)
             } else if hovered || pressed {
-                theming::icon_hover_color(ui)
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::icon_normal(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
             let icon_size = Vec2::splat(self.size.icon_pixels(self.icon_scale));
             self.icon

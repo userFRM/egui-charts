@@ -39,7 +39,6 @@ use super::{
     state::TopToolbarState,
 };
 use crate::model::ChartType;
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 
 /// Top toolbar widget
@@ -339,34 +338,20 @@ impl TopToolbar {
                 ui.painter().rect_filled(
                     rect,
                     DESIGN_TOKENS.rounding.button,
-                    theming::hover_color(ui),
+                    ui.visuals().widgets.hovered.bg_fill,
                 );
             }
 
             // Menu icon
             let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
             let icon_color = if response.hovered() {
-                theming::active_icon_color(ui)
+                ui.visuals().widgets.active.fg_stroke.color
             } else {
-                theming::icon_color(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
             embedded_icons::MENU
                 .as_image_tinted(Vec2::splat(icon_size), icon_color)
                 .paint_at(ui, icon_rect);
-
-            // Optional: Notification badge
-            // Uncomment and customize if needed
-            // let badge_size = Vec2::new(16.0, 14.0);
-            // let badge_pos = Pos2::new(rect.right() - 4.0, rect.top() - 2.0);
-            // let badge_rect = Rect::from_min_size(badge_pos, badge_size);
-            // ui.painter().rect_filled(badge_rect, 7.0, theming::publish_button_bg(ui));
-            // ui.painter().text(
-            //     badge_rect.center(),
-            //     egui::Align2::CENTER_CENTER,
-            //     "10",
-            //     egui::FontId::proportional(9.0),
-            //     egui::Color32::WHITE,
-            // );
         }
 
         if response.clicked() {
@@ -408,11 +393,14 @@ impl TopToolbar {
         if ui.is_rect_visible(rect) {
             // Background (use theme-aware pill color)
             let bg_color = if response.is_pointer_button_down_on() {
-                theming::btn_bg_pressed(ui)
+                ui.visuals().widgets.active.bg_fill
             } else if response.hovered() {
-                theming::btn_bg_hover(ui)
+                ui.visuals().widgets.hovered.bg_fill
             } else {
-                theming::pill_bg(ui)
+                // 10% of the way from the panel fill to white.
+                let panel = ui.visuals().panel_fill;
+                let lift = |c: u8| c + ((255 - c) as f32 * 0.1) as u8;
+                egui::Color32::from_rgb(lift(panel.r()), lift(panel.g()), lift(panel.b()))
             };
 
             ui.painter()
@@ -424,9 +412,9 @@ impl TopToolbar {
             let icon_pos = Pos2::new(x, rect.center().y - icon_size / 2.0);
             let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
             let icon_color = if response.hovered() {
-                theming::icon_hover_color(ui)
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::icon_normal(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
             embedded_icons::QUICK_SEARCH
                 .as_image_tinted(Vec2::splat(icon_size), icon_color)
@@ -439,7 +427,7 @@ impl TopToolbar {
                 egui::Align2::LEFT_CENTER,
                 symbol,
                 egui::FontId::proportional(typography::MD),
-                theming::text_color(ui),
+                ui.visuals().text_color(),
             );
             x += text_width + separator_padding;
 
@@ -449,7 +437,7 @@ impl TopToolbar {
             ui.painter().rect_filled(
                 Rect::from_min_size(Pos2::new(x, sep_y), Vec2::new(separator_width, sep_height)),
                 DESIGN_TOKENS.rounding.none,
-                theming::separator_color(ui),
+                ui.visuals().widgets.noninteractive.bg_stroke.color,
             );
             x += separator_width + separator_padding;
 

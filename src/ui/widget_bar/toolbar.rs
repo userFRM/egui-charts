@@ -2,10 +2,9 @@
 //!
 //! Vertical strip of icon btns on the far right edge of the screen.
 
-use crate::ext::HasDesignTokens;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::typography;
-use crate::theming;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Sense, Ui, Vec2};
 
@@ -139,11 +138,11 @@ impl WidgetBar {
 
         // Get colors from theme at render time (not cached)
         let bg_color = ui.style().visuals.panel_fill;
-        let icon_color = ui.icon_color();
-        let icon_hover_color = ui.icon_hover();
-        let active_color = ui.accent_color();
-        let hover_bg = ui.hover_bg();
-        let pressed_bg = ui.active_bg();
+        let icon_color = ui.visuals().widgets.noninteractive.fg_stroke.color;
+        let icon_hover_color = ui.visuals().widgets.hovered.fg_stroke.color;
+        let active_color = ui.active_theme().ui.accent;
+        let hover_bg = ui.visuals().widgets.hovered.bg_fill;
+        let pressed_bg = ui.visuals().widgets.active.bg_fill;
         let error_color = ui.style().visuals.error_fg_color;
         let separator_color = ui.style().visuals.widgets.noninteractive.bg_fill;
 
@@ -327,7 +326,7 @@ impl WidgetBar {
                 let badge_galley = painter.layout_no_wrap(
                     cnt_text,
                     egui::FontId::proportional(typography::XS),
-                    theming::badge_text_color(ui),
+                    ui.active_theme().ui.danger_text,
                 );
                 painter.galley(
                     Pos2::new(

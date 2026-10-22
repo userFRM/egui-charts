@@ -5,7 +5,7 @@
 
 use egui::{RichText, Ui};
 
-use crate::ext::HasDesignTokens;
+use crate::theme::ThemeExt;
 
 use super::types::DataWindowInfo;
 use crate::ext::UiExt;
@@ -70,9 +70,9 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
 /// Render the OHLCV grid
 fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
     let change_color = if data.is_bullish() {
-        ui.bullish_color()
+        ui.active_theme().chart.candle_up
     } else {
-        ui.bearish_color()
+        ui.active_theme().chart.candle_down
     };
 
     egui::Grid::new("ohlcv_grid")

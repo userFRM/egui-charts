@@ -33,10 +33,10 @@
 //! at exactly the same x-coordinates as the corresponding candlesticks above.
 
 use crate::drawings::rendering::utils::draw_dashed_line;
-use crate::ext::HasDesignTokens;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui};
 use std::ops::Range;
@@ -245,13 +245,14 @@ impl IndicatorPane {
         }
 
         // Get chart background and text colors from theme
-        let chart_bg = ui.chart_bg();
+        let colors = ui.active_theme().chart;
+        let chart_bg = colors.bg;
         let text_color = ui.style().visuals.text_color();
-        let grid_color = ui.chart_grid();
+        let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
-        let bullish = ui.bullish_color();
-        let bearish = ui.bearish_color();
+        let bullish = colors.candle_up;
+        let bearish = colors.candle_down;
 
         // Allocate the panel area
         let available_width = ui.available_width();
@@ -325,13 +326,14 @@ impl IndicatorPane {
         }
 
         // Get chart background and text colors from theme
-        let chart_bg = ui.chart_bg();
+        let colors = ui.active_theme().chart;
+        let chart_bg = colors.bg;
         let text_color = ui.style().visuals.text_color();
-        let grid_color = ui.chart_grid();
+        let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
-        let bullish = ui.bullish_color();
-        let bearish = ui.bearish_color();
+        let bullish = colors.candle_up;
+        let bearish = colors.candle_down;
 
         // Allocate the panel area
         let available_width = ui.available_width();
@@ -417,13 +419,14 @@ impl IndicatorPane {
         }
 
         // Get chart background and text colors from theme
-        let chart_bg = ui.chart_bg();
+        let colors = ui.active_theme().chart;
+        let chart_bg = colors.bg;
         let text_color = ui.style().visuals.text_color();
-        let grid_color = ui.chart_grid();
+        let grid_color = colors.grid_line;
 
         // Get live theme colors for zones
-        let bullish = ui.bullish_color();
-        let bearish = ui.bearish_color();
+        let bullish = colors.candle_up;
+        let bearish = colors.candle_down;
 
         // Allocate the panel area with click sense
         let available_width = ui.available_width();

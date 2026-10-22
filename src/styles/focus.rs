@@ -7,9 +7,11 @@ use egui::{Color32, Response, Stroke, Ui, epaint::StrokeKind};
 
 use crate::tokens::DESIGN_TOKENS;
 
-/// The focus ring colour: the selection stroke, which egui also uses to outline a focused text input.
+/// The focus ring colour: the applied theme's `ui.focus`, or the selection stroke when no theme
+/// has been applied.
 pub fn focus_ring_color(ui: &Ui) -> Color32 {
-    ui.visuals().selection.stroke.color
+    crate::theme::applied_theme(ui.ctx())
+        .map_or(ui.visuals().selection.stroke.color, |theme| theme.ui.focus)
 }
 
 /// Draw a focus ring around a response if it has keyboard focus.

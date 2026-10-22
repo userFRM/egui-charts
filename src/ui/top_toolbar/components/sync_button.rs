@@ -5,8 +5,7 @@
 
 use crate::icons::icons as embedded_icons;
 use crate::styles::typography;
-use crate::theme::ThemeUiExt;
-use crate::theming;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::multi_chart::ChartSyncOptions;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
@@ -80,7 +79,7 @@ impl SyncButton {
         let visuals = ui.style().visuals.clone();
         let hover_color = visuals.widgets.hovered.bg_fill;
         let border_color = visuals.widgets.noninteractive.bg_stroke.color;
-        let accent_color = ui.theme_accent();
+        let accent_color = ui.active_theme().ui.accent;
 
         // Check if any sync is enabled
         let any_sync_enabled = self.options.sync_time_axis
@@ -115,9 +114,9 @@ impl SyncButton {
         let icon_color = if any_sync_enabled {
             accent_color
         } else if response.hovered() {
-            theming::icon_hover_color(ui)
+            ui.visuals().widgets.hovered.fg_stroke.color
         } else {
-            theming::icon_normal(ui)
+            ui.visuals().widgets.noninteractive.fg_stroke.color
         };
         embedded_icons::LAYOUT_GRID
             .as_image_tinted(Vec2::splat(DESIGN_TOKENS.sizing.icon_sm), icon_color)
@@ -143,8 +142,8 @@ impl SyncButton {
         let border_color = visuals.widgets.noninteractive.bg_stroke.color;
         let hover_color = visuals.widgets.hovered.bg_fill;
         let text_color = visuals.text_color();
-        let accent_color = ui.theme_accent();
-        let check_color = ui.theme_data().ui_accent_text;
+        let colors = ui.active_theme().ui;
+        let (accent_color, check_color) = (colors.accent, colors.accent_text);
 
         let dropdown_rect = self.dropdown_rect(btn_rect);
 

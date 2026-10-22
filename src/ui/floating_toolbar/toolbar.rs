@@ -7,7 +7,6 @@
 //! for these actions (settings, duplicate, lock, visibility, delete), the
 //! `render_icon_button` helper should migrate to ui_kit's `IconButton`.
 
-use crate::ext::HasDesignTokens;
 use crate::ext::UiExt;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
@@ -185,7 +184,7 @@ impl FloatingSelectionToolbar {
             .order(egui::Order::Foreground)
             .interactable(true)
             .show(ui.ctx(), |ui| {
-                let toolbar_bg = ui.panel_fill();
+                let toolbar_bg = ui.visuals().panel_fill;
                 let border_color = ui.style().visuals.widgets.noninteractive.bg_stroke.color;
 
                 egui::Frame::new()

@@ -25,7 +25,6 @@
 pub mod grid;
 
 use crate::styles::typography;
-use crate::theme::context::ThemeContextExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align, Layout, RichText, Ui, vec2};
 
@@ -77,7 +76,7 @@ impl<'a> FormRow<'a> {
             ui.label(
                 RichText::new(desc)
                     .size(typography::SM)
-                    .color(ui.ctx().theme_data().ui_text_muted),
+                    .color(ui.visuals().weak_text_color()),
             );
         }
         ui.add_space(DESIGN_TOKENS.spacing.sm);

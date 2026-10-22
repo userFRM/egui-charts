@@ -4,7 +4,6 @@
 //! toggles, and actions.
 
 use crate::icons::Icon;
-use crate::theming;
 use egui::{Color32, Response, Sense, Ui, Vec2};
 
 use super::svg_helpers::render_svg_at_rect_themed;
@@ -39,11 +38,11 @@ pub fn draw_icon_btn(
     crate::styles::focus::draw_focus_ring(ui, &response);
 
     let bg_color = if is_active && response.hovered() {
-        theming::active_hover_color(ui)
+        super::active_hover_color(ui)
     } else if is_active {
-        theming::sel_color(ui)
+        ui.visuals().widgets.active.bg_fill
     } else if response.hovered() {
-        theming::hover_color(ui)
+        ui.visuals().widgets.hovered.bg_fill
     } else {
         Color32::TRANSPARENT // Let parent Frame's background show through
     };
@@ -115,11 +114,11 @@ pub fn draw_icon_button_padded(
 
     // Add pressed state for click feedback
     let bg_color = if is_active {
-        theming::sel_color(ui)
+        ui.visuals().widgets.active.bg_fill
     } else if response.is_pointer_button_down_on() {
-        theming::active_hover_color(ui)
+        super::active_hover_color(ui)
     } else if response.hovered() {
-        theming::hover_color(ui)
+        ui.visuals().widgets.hovered.bg_fill
     } else {
         Color32::TRANSPARENT // Let parent Frame's background show through
     };
@@ -186,11 +185,11 @@ pub fn draw_tool_button(ui: &mut Ui, icon: &Icon, tooltip: &str, is_selected: bo
         // Background only on hover or selected
         if is_selected || response.hovered() {
             let bg = if is_selected && response.hovered() {
-                theming::active_hover_color(ui)
+                super::active_hover_color(ui)
             } else if is_selected {
-                theming::sel_color(ui)
+                ui.visuals().widgets.active.bg_fill
             } else {
-                theming::hover_color(ui)
+                ui.visuals().widgets.hovered.bg_fill
             };
             ui.painter().rect_filled(inner_rect, inner_rounding, bg);
         }

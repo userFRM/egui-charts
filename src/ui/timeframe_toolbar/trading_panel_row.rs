@@ -5,7 +5,6 @@
 
 use crate::icons::icons as embedded_icons;
 use crate::styles::typography;
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Sense, Ui, Vec2};
 
@@ -93,10 +92,10 @@ impl TradingPanelRow {
         let mut action = TradingPanelRowAction::None;
 
         // Get colors from theme
-        let text_color = theming::text_color(ui);
-        let text_muted = theming::muted_color(ui);
-        let hover_bg = theming::btn_bg_hover(ui);
-        let separator_color = theming::separator_color(ui);
+        let text_color = ui.visuals().text_color();
+        let text_muted = ui.visuals().widgets.noninteractive.fg_stroke.color;
+        let hover_bg = ui.visuals().widgets.hovered.bg_fill;
+        let separator_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
 
         let available_width = ui.available_width();
         let (response, painter) = ui.allocate_painter(

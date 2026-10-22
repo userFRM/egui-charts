@@ -5,7 +5,6 @@
 
 use crate::icons::{Icon, icons};
 use crate::styles::icons as icon_sizes;
-use crate::theme::context::ThemeContextExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::ConnectionState;
 use egui::{Color32, Response, RichText, Ui, Vec2, Widget};
@@ -40,7 +39,7 @@ impl<'a> ConnectionStatusIndicator<'a> {
             ConnectionState::Connected => DESIGN_TOKENS.semantic.extended.bullish,
             ConnectionState::Connecting => DESIGN_TOKENS.semantic.status.caution,
             ConnectionState::Reconnecting { .. } => DESIGN_TOKENS.semantic.status.caution,
-            ConnectionState::Disconnected => ui.ctx().theme_data().ui_text_muted,
+            ConnectionState::Disconnected => ui.visuals().weak_text_color(),
             ConnectionState::Failed(_) => DESIGN_TOKENS.semantic.extended.bearish,
         }
     }

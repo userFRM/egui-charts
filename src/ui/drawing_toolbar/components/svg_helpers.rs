@@ -4,7 +4,6 @@
 //! theme colors based on hover/active state.
 
 use crate::icons::Icon;
-use crate::theming;
 use egui::{Rect, Ui, Vec2};
 
 /// Render SVG icon centered in a rect with theme-aware colors.
@@ -30,12 +29,10 @@ pub fn render_svg_at_rect_themed(
     is_active: bool,
 ) {
     // Get theme-aware color
-    let color = if is_active {
-        theming::icon_active(ui)
-    } else if is_hovered {
-        theming::icon_hover_color(ui)
+    let color = if is_active || is_hovered {
+        ui.visuals().widgets.hovered.fg_stroke.color
     } else {
-        theming::icon_normal(ui)
+        ui.visuals().widgets.noninteractive.fg_stroke.color
     };
 
     // Render icon with PERFECT SQUARE aspect ratio

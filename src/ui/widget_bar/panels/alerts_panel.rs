@@ -1,8 +1,8 @@
 //! Alerts panel UI
 //!
 //! Widget for managing and displaying price, indicator, volume, and event alerts.
-use crate::ext::HasDesignTokens;
 use crate::ext::UiExt;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::{
     AlertCondition, AlertManager, AlertStatus, EventAlert, IndicatorAlert, IndicatorCondition,
@@ -802,9 +802,9 @@ impl AlertStatusWidget {
                 .count();
 
         let color = if triggered_cnt > 0 {
-            ui.warning_color()
+            ui.visuals().warn_fg_color
         } else if active_cnt > 0 {
-            ui.success_color()
+            ui.active_theme().ui.success
         } else {
             ui.visuals().weak_text_color()
         };
@@ -853,7 +853,7 @@ impl AlertNotification {
                         ui.label(
                             RichText::new("Alert Triggered")
                                 .strong()
-                                .color(ui.warning_color()),
+                                .color(ui.visuals().warn_fg_color),
                         );
                         ui.label(RichText::new(&self.symbol).strong().size(typography::XXL));
                         ui.label(format!("{} @ ${:.2}", self.condition, self.price));

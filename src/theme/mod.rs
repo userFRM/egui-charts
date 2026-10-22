@@ -16,11 +16,12 @@
 //! ```
 
 pub mod components;
-pub mod context;
+mod context;
 mod presets;
 
 pub use components::{ContextMenuStyle, DialogStyle, SettingsDialogStyle};
-pub use context::{ThemeContextExt, ThemeData, ThemeUiExt};
+pub use context::ThemeExt;
+pub(crate) use context::applied_theme;
 #[cfg(feature = "ui")]
 pub(crate) use context::{ThemeDerived, follow_active_theme, theme_derived};
 pub use presets::presets;
@@ -94,7 +95,7 @@ pub struct UiColors {
     pub selection_bg: Color32,
     /// Text on `selection_bg`; egui also outlines a focused text input with it.
     pub selection_text: Color32,
-    /// Keyboard focus ring. Not yet drawn; the focus ring uses `selection_text`.
+    /// Keyboard focus ring.
     pub focus: Color32,
     /// Fill of primary actions, and the colour of links and active icons.
     pub accent: Color32,
@@ -353,7 +354,7 @@ pub(crate) fn contrast(fg: Color32, bg: Color32) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-/// Apply `theme` to egui's visuals and store it for the crate's widgets.
+/// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
 ///
 /// Call it once at startup and again after the theme changes.
 pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
@@ -442,7 +443,6 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     ctx.set_style(style);
 
     // Store the theme so components resolve their colours from it while painting.
-    ctx.set_theme_data(ThemeData::from_theme(theme));
     context::set_active_theme(ctx, theme.clone());
 }
 
@@ -471,18 +471,22 @@ mod tests {
                 Theme::light().with_accent(purple),
             ),
         ]);
-        let mut failures = Vec::new();
-        for (name, theme) in themes {
-            let ctx = egui::Context::default();
-            apply_to_egui(&ctx, &theme);
-            let visuals = ctx.style().visuals.clone();
-            let ui = &theme.ui;
+        let focus_ring_of = |ctx: &egui::Context| {
             let mut focus_ring = Color32::TRANSPARENT;
             let _ = ctx.run(Default::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     focus_ring = crate::styles::focus::focus_ring_color(ui);
                 });
             });
+            focus_ring
+        };
+        let mut failures = Vec::new();
+        for (name, theme) in themes {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &theme);
+            let visuals = ctx.style().visuals.clone();
+            let ui = &theme.ui;
+            let focus_ring = focus_ring_of(&ctx);
             // High contrast holds every text level to 7:1 and outlines to 4.5:1 (WCAG AAA).
             let (text_min, outline_min) = if name == "high-contrast" {
                 (7.0, 4.5)
@@ -562,6 +566,16 @@ mod tests {
                 );
                 check("keyboard focus ring", focus_ring, surface, bg, outline_min);
             }
+        }
+        // An app that styles egui itself and never applies a theme keeps a visible ring.
+        let ctx = egui::Context::default();
+        ctx.set_theme(egui::Theme::Light);
+        let (focus_ring, panel) = (focus_ring_of(&ctx), ctx.style().visuals.panel_fill);
+        let ratio = contrast(focus_ring, panel);
+        if ratio < 3.0 {
+            failures.push(format!(
+                "no theme, light visuals: keyboard focus ring on panels is {ratio:.2}:1, below 3:1"
+            ));
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }

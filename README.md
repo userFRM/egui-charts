@@ -83,10 +83,10 @@ egui-charts/src/
 ├── validation/                OHLC integrity checks, timestamp ordering
 ├── theme/                     Theme value, its presets, apply_to_egui
 ├── tokens/                    Design tokens as Rust constants (colors, spacing, typography)
-├── styles/                    Style computation from semantic tokens
+├── styles/                    Focus ring, sizing, typography and icon constants
 ├── widget/                    Chart egui widget, indicator panes
 ├── icons/                     Compile-time embedded SVG icons
-├── ext/                       UiExt, ContextExt, ResponseExt, HasDesignTokens
+├── ext/                       UiExt, ResponseExt, widget builder extensions
 ├── ui/          [feature: ui] Toolbars, panels, dialogs, replay controls
 ├── ui_kit/      [feature: ui] Reusable widget library: buttons, forms, color pickers
 ├── backtest/    [feature: backtest] Strategy backtesting
@@ -163,7 +163,7 @@ let mini = ChartBuilder::price_chart()
 
 | Feature | Default | Description |
 |---|:---:|---|
-| `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `theming`, `styles`, `ext` and `widget`. Without it the crate is the headless engine (`model`, `scales`, `data`, `studies`, `tokens`, `validation`, and `backtest` and `scripting` when enabled), which does not depend on egui. Required by `icons` and `ui`. |
+| `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine (`model`, `scales`, `data`, `studies`, `tokens`, `validation`, and `backtest` and `scripting` when enabled), which does not depend on egui. Required by `icons` and `ui`. |
 | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. Use `default-features = false, features = ["widget"]` to drop egui_extras and save binary size. |
 | `ui` | off | Application-level UI: drawing toolbar, top toolbar, timeframe bar, replay controls, sidebars, dialogs, and the `ui_kit` widget library. |
 | `backtest` | off | Strategy backtesting on historical data. |
@@ -328,7 +328,7 @@ let classic = Theme { chart: Theme::dark().chart, ..Theme::light() };
 
 With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a theme can be stored in any serde format; fields missing from the input take the dark theme's values.
 
-Access chart colors anywhere via the `HasDesignTokens` extension trait on `egui::Ui`.
+Inside a widget, `ui.active_theme()` (trait `theme::ThemeExt`) returns the theme last applied, or the dark theme if none was; colours egui models, such as the panel fill or the hover fill, are read from `ui.visuals()`, which `apply_to_egui` sets from the same theme.
 
 ---
 

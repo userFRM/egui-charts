@@ -9,8 +9,8 @@ use egui::{
 };
 
 use crate::drawings::rendering::utils::draw_dashed_line;
-use crate::ext::HasDesignTokens;
 use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
 /// Unique string identifier for an order, used to reference specific order lines.
@@ -287,7 +287,7 @@ fn render_order_line(ui: &mut Ui, chart_rect: Rect, y: f32, line: &OrderLine) ->
 
     // Get colors based on order type and side
     let (line_color, label_bg, label_text_color) = get_order_colors(ui, line);
-    let bearish = ui.bearish_color();
+    let bearish = ui.active_theme().chart.candle_down;
 
     // Line thickness based on selection
     let line_width = if line.is_selected {
@@ -426,8 +426,8 @@ fn render_order_line(ui: &mut Ui, chart_rect: Rect, y: f32, line: &OrderLine) ->
 
 /// Get colors for order line based on type and side
 fn get_order_colors(ui: &Ui, line: &OrderLine) -> (Color32, Color32, Color32) {
-    let bullish = ui.bullish_color();
-    let bearish = ui.bearish_color();
+    let colors = ui.active_theme().chart;
+    let (bullish, bearish) = (colors.candle_up, colors.candle_down);
 
     match line.line_type {
         OrderLineType::Entry | OrderLineType::PendingLimit | OrderLineType::PendingStop => {

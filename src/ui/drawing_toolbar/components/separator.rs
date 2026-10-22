@@ -1,6 +1,5 @@
 //! Separator component for visual dividers in the toolbar.
 
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Rect, Sense, Ui, Vec2};
 
@@ -16,8 +15,11 @@ use egui::{Rect, Sense, Ui, Vec2};
 pub fn draw_separator(ui: &mut Ui, width: f32) {
     let separator_height = 1.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, separator_height), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, 0.0, theming::separator_color(ui));
+    ui.painter().rect_filled(
+        rect,
+        0.0,
+        ui.visuals().widgets.noninteractive.bg_stroke.color,
+    );
 }
 
 /// Draw a separator with horizontal margins.
@@ -34,8 +36,11 @@ pub fn draw_separator_with_margin(ui: &mut Ui, width: f32, margin: f32) {
         ui.cursor().min + Vec2::new(margin, 0.0),
         Vec2::new(width - margin * 2.0, 1.0),
     );
-    ui.painter()
-        .rect_filled(sep_rect, 0.0, theming::separator_color(ui));
+    ui.painter().rect_filled(
+        sep_rect,
+        0.0,
+        ui.visuals().widgets.noninteractive.bg_stroke.color,
+    );
     ui.add_space(DESIGN_TOKENS.spacing.hairline);
 }
 
@@ -61,8 +66,11 @@ pub fn draw_separator_styled(ui: &mut Ui, toolbar_width: f32) {
         ui.cursor().min + Vec2::new(margin, 0.0),
         Vec2::new(sep_width, 1.0),
     );
-    ui.painter()
-        .rect_filled(sep_rect, 0.0, theming::separator_color(ui));
+    ui.painter().rect_filled(
+        sep_rect,
+        0.0,
+        ui.visuals().widgets.noninteractive.bg_stroke.color,
+    );
 
     // Allocate space for the separator line
     ui.add_space(1.0);

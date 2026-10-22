@@ -3,10 +3,10 @@
 //! Provide playback controls for market replay functionality including
 //! play/pause/stop buttons, speed selector, progress bar, and time display.
 
-use crate::ext::HasDesignTokens;
 use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::styles::{icons as icon_sizes, typography};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::{
     PlaybackSpeed, ReplayCommand, ReplayProgress, ToolbarReplayState as ReplayState,
@@ -315,8 +315,8 @@ impl<'a> ReplayToolbar<'a> {
 
             if ui.is_rect_visible(rect) {
                 let painter = ui.painter();
-                let bg = ui.chart_bg();
-                let fg = ui.accent_color();
+                let theme = ui.active_theme();
+                let (bg, fg) = (theme.chart.bg, theme.ui.accent);
 
                 // Background
                 painter.rect_filled(rect, DESIGN_TOKENS.rounding.xs, bg);
@@ -334,7 +334,7 @@ impl<'a> ReplayToolbar<'a> {
                     egui::Align2::CENTER_CENTER,
                     text,
                     egui::FontId::proportional(typography::XS),
-                    ui.text_color(),
+                    ui.visuals().strong_text_color(),
                 );
             }
         }

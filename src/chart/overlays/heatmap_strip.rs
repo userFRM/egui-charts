@@ -5,7 +5,7 @@
 
 use egui::{Color32, Pos2, Rect, Ui, Vec2};
 
-use crate::ext::HasDesignTokens;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
 /// A single cell in the heatmap strip
@@ -156,9 +156,10 @@ impl HeatmapStrip {
         let painter = ui.painter();
 
         // Get theme colors
-        let bullish = ui.bullish_color();
-        let bearish = ui.bearish_color();
-        let neutral = ui.chart_bg();
+        let colors = ui.active_theme().chart;
+        let bullish = colors.candle_up;
+        let bearish = colors.candle_down;
+        let neutral = colors.bg;
 
         // Draw background
         painter.rect_filled(strip_rect, 0.0, neutral);
@@ -205,7 +206,10 @@ impl HeatmapStrip {
         painter.rect_stroke(
             strip_rect,
             0.0,
-            egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_color()),
+            egui::Stroke::new(
+                DESIGN_TOKENS.stroke.hairline,
+                ui.visuals().widgets.noninteractive.bg_stroke.color,
+            ),
             egui::StrokeKind::Inside,
         );
     }

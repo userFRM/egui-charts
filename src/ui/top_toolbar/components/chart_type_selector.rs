@@ -6,7 +6,6 @@
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::model::ChartType;
 use crate::styles::{icons as icon_sizes, typography};
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
@@ -171,9 +170,9 @@ impl ChartTypeSelector {
         );
         let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
         let icon_color = if response.hovered() {
-            theming::icon_hover_color(ui)
+            ui.visuals().widgets.hovered.fg_stroke.color
         } else {
-            theming::icon_normal(ui)
+            ui.visuals().widgets.noninteractive.fg_stroke.color
         };
         self.current
             .icon()
@@ -197,9 +196,9 @@ impl ChartTypeSelector {
         );
         let chevron_rect = Rect::from_min_size(chevron_pos, Vec2::splat(chevron_size));
         let chevron_color = if response.hovered() {
-            theming::icon_hover_color(ui)
+            ui.visuals().widgets.hovered.fg_stroke.color
         } else {
-            theming::icon_normal(ui)
+            ui.visuals().widgets.noninteractive.fg_stroke.color
         };
         embedded_icons::CHEVRON_DOWN
             .as_image_tinted(Vec2::splat(chevron_size), chevron_color)
@@ -312,9 +311,9 @@ impl ChartTypeSelector {
         let icon_color = if is_current {
             colors.on_selected
         } else if response.hovered() {
-            theming::icon_hover_color(ui)
+            ui.visuals().widgets.hovered.fg_stroke.color
         } else {
-            theming::icon_normal(ui)
+            ui.visuals().widgets.noninteractive.fg_stroke.color
         };
         chart_type
             .icon()

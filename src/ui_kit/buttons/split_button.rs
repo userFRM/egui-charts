@@ -6,7 +6,6 @@
 
 use super::{ButtonSize, ButtonVariant, finish};
 use crate::icons::Icon;
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Rect, Response, Sense, Stroke, Ui, Vec2, vec2};
 
@@ -104,9 +103,9 @@ impl SplitButton {
             let color = if show_active {
                 variant.fg_color(ui)
             } else if hovered || pressed {
-                theming::icon_hover_color(ui)
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::icon_normal(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
             let icon_size = Vec2::splat(self.size.icon_pixels(None));
             self.icon

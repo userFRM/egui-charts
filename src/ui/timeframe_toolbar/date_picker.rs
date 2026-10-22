@@ -3,7 +3,7 @@
 //! A date picker dialog with calendar for navigating to specific dates.
 use crate::ext::UiExt;
 use crate::styles::typography;
-use crate::theme::{Theme, ThemeUiExt, follow_active_theme, theme_derived};
+use crate::theme::{Theme, ThemeExt, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{Datelike, NaiveDate};
 use egui::{Color32, Sense, Stroke, StrokeKind, Ui, Vec2, Window};
@@ -359,7 +359,7 @@ impl DatePicker {
                             );
                         } else if is_in_range {
                             // Range selection uses the accent with reduced alpha
-                            let range_color = ui.theme_accent().gamma_multiply(0.5);
+                            let range_color = ui.active_theme().ui.accent.gamma_multiply(0.5);
                             ui.painter()
                                 .rect_filled(rect, DESIGN_TOKENS.rounding.sm, range_color);
                         } else if response.hovered() {
@@ -382,7 +382,7 @@ impl DatePicker {
 
                         // Day number
                         let text_color = if is_sel {
-                            ui.theme_data().ui_accent_text
+                            ui.active_theme().ui.accent_text
                         } else if is_today {
                             self.config.today_color
                         } else {

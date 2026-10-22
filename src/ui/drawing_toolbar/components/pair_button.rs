@@ -3,7 +3,6 @@
 //! Used for: cursors, tool categories, magnet, hide, remove btns.
 
 use crate::icons::Icon;
-use crate::theming;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 use super::svg_helpers::render_svg_at_rect_themed;
@@ -113,11 +112,11 @@ impl<'a> PairButton<'a> {
         // Draw icon button background (with visibility check)
         if ui.is_rect_visible(icon_rect) {
             let icon_bg = if self.is_icon_active && icon_res.hovered() {
-                theming::active_hover_color(ui)
+                super::active_hover_color(ui)
             } else if self.is_icon_active {
-                theming::sel_color(ui)
+                ui.visuals().widgets.active.bg_fill
             } else if icon_res.hovered() {
-                theming::hover_color(ui)
+                ui.visuals().widgets.hovered.bg_fill
             } else {
                 Color32::TRANSPARENT // Let parent Frame's background show through
             };
@@ -147,9 +146,9 @@ impl<'a> PairButton<'a> {
             let arrow_stroke = Stroke::new(
                 1.2_f32,
                 if arrow_res.hovered() {
-                    theming::active_icon_color(ui)
+                    ui.visuals().widgets.active.fg_stroke.color
                 } else {
-                    theming::icon_color(ui)
+                    ui.visuals().widgets.noninteractive.fg_stroke.color
                 },
             );
 
@@ -244,11 +243,11 @@ impl<'a> PairButton<'a> {
         let show_bg = any_hovered || self.is_icon_active;
         if show_bg && ui.is_rect_visible(inner_rect) {
             let bg = if self.is_icon_active && icon_hovered {
-                theming::active_hover_color(ui)
+                super::active_hover_color(ui)
             } else if self.is_icon_active {
-                theming::sel_color(ui)
+                ui.visuals().widgets.active.bg_fill
             } else if any_hovered {
-                theming::hover_color(ui)
+                ui.visuals().widgets.hovered.bg_fill
             } else {
                 Color32::TRANSPARENT
             };
@@ -266,9 +265,9 @@ impl<'a> PairButton<'a> {
             let arrow_stroke = Stroke::new(
                 1.2_f32,
                 if arrow_hovered {
-                    theming::active_icon_color(ui)
+                    ui.visuals().widgets.active.fg_stroke.color
                 } else {
-                    theming::icon_color(ui)
+                    ui.visuals().widgets.noninteractive.fg_stroke.color
                 },
             );
 

@@ -11,7 +11,7 @@ use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::responsive::LayoutContext;
 use crate::styles::{icons as icon_sizes, typography};
-use crate::theme::ThemeUiExt;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 
@@ -50,7 +50,6 @@ use super::{
     },
 };
 use crate::ext::UiExt;
-use crate::theming;
 
 /// Drawing toolbar - main UI component
 #[derive(Clone, Default)]
@@ -799,7 +798,7 @@ impl DrawingToolbar {
             ui.painter().rect_stroke(
                 rect,
                 DESIGN_TOKENS.rounding.sm,
-                Stroke::new(DESIGN_TOKENS.stroke.thick, ui.theme_accent()),
+                Stroke::new(DESIGN_TOKENS.stroke.thick, ui.active_theme().ui.accent),
                 egui::StrokeKind::Outside,
             );
         } else if response.hovered() {
@@ -866,7 +865,7 @@ impl DrawingToolbar {
             .fixed_pos(position)
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()
-                    .fill(theming::toolbar_bg(ui))
+                    .fill(ui.visuals().panel_fill)
                     .stroke(ui.style().visuals.window_stroke)
                     .corner_radius(DESIGN_TOKENS.rounding.md)
                     .show(ui, |ui| {
@@ -888,9 +887,9 @@ impl DrawingToolbar {
                                 );
 
                                 let bg = if is_sel {
-                                    theming::sel_color(ui)
+                                    ui.visuals().widgets.active.bg_fill
                                 } else if response.hovered() {
-                                    theming::hover_color(ui)
+                                    ui.visuals().widgets.hovered.bg_fill
                                 } else {
                                     Color32::TRANSPARENT
                                 };
@@ -923,9 +922,9 @@ impl DrawingToolbar {
                                 Sense::click(),
                             );
                             let bg = if self.state.magnet_mode {
-                                theming::sel_color(ui)
+                                ui.visuals().widgets.active.bg_fill
                             } else if response.hovered() {
-                                theming::hover_color(ui)
+                                ui.visuals().widgets.hovered.bg_fill
                             } else {
                                 Color32::TRANSPARENT
                             };

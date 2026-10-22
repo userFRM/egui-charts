@@ -872,7 +872,6 @@ impl TradingChart {
     /// is chosen, the action is stored for [`take_context_action`](Self::take_context_action).
     #[cfg(feature = "ui")]
     fn handle_context_menus(&mut self, ctx: &egui::Context) {
-        use crate::theme::ThemeContextExt;
         use crate::widget::RightClickTarget;
 
         if let Some(target) = self.chart.take_right_click() {
@@ -898,7 +897,7 @@ impl TradingChart {
             }
         }
 
-        let active = ctx.active_theme();
+        let active = crate::theme::applied_theme(ctx);
         let theme = active.as_ref().unwrap_or(&self.theme);
         self.context_menus.chart.show(ctx, theme);
         self.context_menus.series.show(ctx, theme);

@@ -93,7 +93,7 @@ A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/
 - [`validation`](src/validation): OHLC integrity and data-quality checks.
 - [`theme`](src/theme) / [`tokens`](src/tokens) / [`styles`](src/styles): the design-token theme system.
 - [`widget`](src/widget): the `Chart` egui widget, `ChartBuilder`, and `TradingChart`.
-- [`ext`](src/ext): extension traits (`UiExt`, `ContextExt`, `HasDesignTokens`).
+- [`ext`](src/ext): extension traits (`UiExt`, `ResponseExt`, widget builders).
 - [`icons`](src/icons): compile-time embedded SVG icons.
 
 ### Feature flags

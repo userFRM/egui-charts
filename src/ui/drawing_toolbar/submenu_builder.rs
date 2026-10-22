@@ -38,7 +38,6 @@ use super::actions::DrawingToolbarAction;
 use crate::ext::UiExt;
 use crate::icons::Icon;
 use crate::styles::{icons as icon_sizes, typography};
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2};
 
@@ -204,7 +203,7 @@ impl<'a> SubmenuBuilder<'a> {
             .show(self.ui.ctx(), |ui| {
                 // Frame with shadow
                 egui::Frame::new()
-                    .fill(theming::toolbar_bg(ui))
+                    .fill(ui.visuals().panel_fill)
                     .stroke(ui.style().visuals.window_stroke)
                     .corner_radius(DESIGN_TOKENS.rounding.lg)
                     .shadow(egui::Shadow {
@@ -232,7 +231,7 @@ impl<'a> SubmenuBuilder<'a> {
                                 ui.painter().rect_filled(
                                     rect,
                                     DESIGN_TOKENS.rounding.sm,
-                                    theming::hover_color(ui),
+                                    ui.visuals().widgets.hovered.bg_fill,
                                 );
                             }
 
@@ -244,12 +243,10 @@ impl<'a> SubmenuBuilder<'a> {
                                 );
 
                                 // Render icon with theme-aware colors
-                                let icon_color = if item.is_sel {
-                                    theming::icon_active(ui)
-                                } else if response.hovered() {
-                                    theming::icon_hover_color(ui)
+                                let icon_color = if item.is_sel || response.hovered() {
+                                    ui.visuals().widgets.hovered.fg_stroke.color
                                 } else {
-                                    theming::icon_normal(ui)
+                                    ui.visuals().widgets.noninteractive.fg_stroke.color
                                 };
                                 icon.as_image_tinted(Vec2::splat(icon_sizes::SM_MD), icon_color)
                                     .paint_at(ui, icon_rect);
@@ -266,7 +263,7 @@ impl<'a> SubmenuBuilder<'a> {
                                 egui::Align2::LEFT_CENTER,
                                 &item.label,
                                 egui::FontId::proportional(typography::LG),
-                                theming::icon_color(ui),
+                                ui.visuals().widgets.noninteractive.fg_stroke.color,
                             );
 
                             // Handle click

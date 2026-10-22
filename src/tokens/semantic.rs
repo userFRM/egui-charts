@@ -5,9 +5,9 @@
 //! `panel_bg_light` / `panel_bg_dark`). The [`theme`](crate::theme) module
 //! resolves these into single values based on the active theme preset.
 //!
-//! For most use cases, prefer accessing colors through the theme system
-//! ([`HasDesignTokens`](crate::ext::HasDesignTokens) trait) rather than
-//! reading from these structs directly.
+//! For most use cases, prefer reading colors from the applied theme
+//! ([`ThemeExt::active_theme`](crate::theme::ThemeExt::active_theme)) rather than
+//! from these structs directly.
 
 use egui::Color32;
 

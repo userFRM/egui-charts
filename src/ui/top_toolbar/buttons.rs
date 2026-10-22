@@ -4,11 +4,11 @@
 
 use crate::icons::Icon;
 use crate::styles::{icons as icon_sizes, stroke, typography};
-use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
+use egui::{Color32, Pos2, Rect, Response, Sense, Ui, Vec2};
 
 use super::TopToolbarConfig;
 use crate::ext::UiExt;
-use crate::theming;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
 /// Small icon-only button (config-driven size)
@@ -41,11 +41,11 @@ impl<'a> ToolbarIconButton<'a> {
 
         // Background with theme-aware colors
         let bg_color = if response.is_pointer_button_down_on() {
-            theming::btn_bg_pressed(ui)
+            ui.visuals().widgets.active.bg_fill
         } else if response.hovered() {
-            theming::btn_bg_hover(ui)
+            ui.visuals().widgets.hovered.bg_fill
         } else {
-            theming::btn_bg_normal(ui)
+            Color32::TRANSPARENT
         };
 
         ui.painter()
@@ -59,12 +59,10 @@ impl<'a> ToolbarIconButton<'a> {
         let icon_pos = rect.center() - Vec2::splat(icon_size / 2.0);
         let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
         if ui.is_rect_visible(icon_rect) {
-            let icon_color = if is_active {
-                theming::icon_active(ui)
-            } else if is_hovered {
-                theming::icon_hover_color(ui)
+            let icon_color = if is_active || is_hovered {
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::icon_normal(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
             self.icon
                 .as_image_tinted(Vec2::splat(icon_size), icon_color)
@@ -116,11 +114,11 @@ impl<'a> IconTextButton<'a> {
         if ui.is_rect_visible(rect) {
             // Background
             let bg_color = if response.is_pointer_button_down_on() {
-                theming::btn_bg_pressed(ui)
+                ui.visuals().widgets.active.bg_fill
             } else if response.hovered() {
-                theming::btn_bg_hover(ui)
+                ui.visuals().widgets.hovered.bg_fill
             } else {
-                theming::btn_bg_normal(ui)
+                Color32::TRANSPARENT
             };
 
             ui.painter()
@@ -133,12 +131,10 @@ impl<'a> IconTextButton<'a> {
             // Icon - using ui.put() for precise positioning
             let icon_pos = Pos2::new(rect.min.x + padding, rect.center().y - icon_size / 2.0);
             let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
-            let icon_color = if is_active {
-                theming::icon_active(ui)
-            } else if is_hovered {
-                theming::icon_hover_color(ui)
+            let icon_color = if is_active || is_hovered {
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::icon_normal(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
             self.icon
                 .as_image_tinted(Vec2::splat(icon_size), icon_color)
@@ -146,9 +142,9 @@ impl<'a> IconTextButton<'a> {
 
             // Text color
             let color = if is_hovered || is_active {
-                theming::icon_active(ui)
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::icon_normal(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
 
             // Text
@@ -207,11 +203,11 @@ impl TextButton {
 
         // Background
         let bg_color = if response.is_pointer_button_down_on() {
-            theming::btn_bg_pressed(ui)
+            ui.visuals().widgets.active.bg_fill
         } else if response.hovered() {
-            theming::btn_bg_hover(ui)
+            ui.visuals().widgets.hovered.bg_fill
         } else {
-            theming::btn_bg_normal(ui)
+            Color32::TRANSPARENT
         };
 
         ui.painter()
@@ -223,7 +219,7 @@ impl TextButton {
             egui::Align2::CENTER_CENTER,
             &self.text,
             egui::FontId::proportional(typography::LG),
-            theming::text_color(ui),
+            ui.visuals().text_color(),
         );
 
         if let Some(tooltip) = self.tooltip {
@@ -243,7 +239,7 @@ pub fn separator(ui: &mut Ui) {
     ui.painter().rect_filled(
         rect,
         DESIGN_TOKENS.rounding.none,
-        theming::separator_color(ui),
+        ui.visuals().widgets.noninteractive.bg_stroke.color,
     );
     ui.space_lg();
 }
@@ -262,13 +258,12 @@ impl PillButtonFilled {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
+        let colors = ui.active_theme().ui;
         let padding_h = DESIGN_TOKENS.spacing.lg;
         let font_id = egui::FontId::proportional(typography::SM);
-        let galley = ui.painter().layout_no_wrap(
-            self.text.to_string(),
-            font_id,
-            theming::publish_button_text(ui),
-        );
+        let galley =
+            ui.painter()
+                .layout_no_wrap(self.text.to_string(), font_id, colors.accent_text);
         let text_width = galley.rect.width();
         let total_width = text_width + padding_h * 2.0;
         let height = DESIGN_TOKENS.sizing.button_sm;
@@ -278,25 +273,23 @@ impl PillButtonFilled {
         crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
-            // Blue background
             let bg_color = if response.is_pointer_button_down_on() {
-                theming::publish_button_bg_pressed(ui)
+                colors.accent_active
             } else if response.hovered() {
-                theming::publish_button_bg_hover(ui)
+                colors.accent_hover
             } else {
-                theming::publish_button_bg(ui)
+                colors.accent
             };
 
             ui.painter()
                 .rect_filled(rect, DESIGN_TOKENS.rounding.pill, bg_color);
 
-            // White text
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 self.text,
                 egui::FontId::proportional(typography::SM),
-                theming::publish_button_text(ui),
+                colors.accent_text,
             );
         }
 
@@ -322,7 +315,7 @@ impl PillButtonOutlined {
         let font_id = egui::FontId::proportional(typography::SM);
         let galley =
             ui.painter()
-                .layout_no_wrap(self.text.to_string(), font_id, theming::text_color(ui));
+                .layout_no_wrap(self.text.to_string(), font_id, ui.visuals().text_color());
         let text_width = galley.rect.width();
         let total_width = text_width + padding_h * 2.0;
         let height = DESIGN_TOKENS.sizing.button_sm;
@@ -334,9 +327,9 @@ impl PillButtonOutlined {
         if ui.is_rect_visible(rect) {
             // Background: transparent or subtle hover
             let bg_color = if response.is_pointer_button_down_on() {
-                theming::btn_bg_pressed(ui)
+                ui.visuals().widgets.active.bg_fill
             } else if response.hovered() {
-                theming::btn_bg_hover(ui)
+                ui.visuals().widgets.hovered.bg_fill
             } else {
                 egui::Color32::TRANSPARENT
             };
@@ -346,9 +339,9 @@ impl PillButtonOutlined {
 
             // Border
             let border_color = if response.hovered() {
-                theming::icon_hover_color(ui)
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::separator_color(ui)
+                ui.visuals().widgets.noninteractive.bg_stroke.color
             };
             ui.painter().rect_stroke(
                 rect,
@@ -359,9 +352,9 @@ impl PillButtonOutlined {
 
             // Text
             let text_color = if response.hovered() {
-                theming::icon_hover_color(ui)
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::text_color(ui)
+                ui.visuals().text_color()
             };
             ui.painter().text(
                 rect.center(),
@@ -406,7 +399,7 @@ impl<'a> TextIconButton<'a> {
         let galley = ui.painter().layout_no_wrap(
             self.text.to_string(),
             font_id.clone(),
-            theming::text_color(ui),
+            ui.visuals().text_color(),
         );
         let text_width = galley.rect.width();
         let total_width = text_width + padding * 2.0 + icon_size + padding;
@@ -419,11 +412,11 @@ impl<'a> TextIconButton<'a> {
         if ui.is_rect_visible(rect) {
             // Background
             let bg_color = if response.is_pointer_button_down_on() {
-                theming::btn_bg_pressed(ui)
+                ui.visuals().widgets.active.bg_fill
             } else if response.hovered() {
-                theming::btn_bg_hover(ui)
+                ui.visuals().widgets.hovered.bg_fill
             } else {
-                theming::btn_bg_normal(ui)
+                Color32::TRANSPARENT
             };
 
             ui.painter()
@@ -431,9 +424,9 @@ impl<'a> TextIconButton<'a> {
 
             // Text
             let text_color = if response.hovered() {
-                theming::icon_hover_color(ui)
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::text_color(ui)
+                ui.visuals().text_color()
             };
             let text_x = rect.min.x + padding;
             ui.painter().text(
@@ -449,9 +442,9 @@ impl<'a> TextIconButton<'a> {
             let icon_pos = Pos2::new(icon_x, rect.center().y - icon_size / 2.0);
             let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
             let icon_color = if response.hovered() {
-                theming::icon_hover_color(ui)
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::icon_normal(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
             self.icon
                 .as_image_tinted(Vec2::splat(icon_size), icon_color)

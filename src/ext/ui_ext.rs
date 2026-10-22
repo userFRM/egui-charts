@@ -23,6 +23,7 @@ use egui::{Color32, Rect, Response, RichText, Sense, TextEdit, Ui, Vec2, Widget}
 use crate::icons::Icon;
 #[cfg(feature = "icons")]
 use crate::styles::icons;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
 /// Extension trait for `egui::Ui` providing 60+ convenience methods
@@ -446,7 +447,7 @@ impl UiExt for Ui {
 
     fn clickable_label(&mut self, text: impl Into<String>) -> Response {
         let text = text.into();
-        let color = DESIGN_TOKENS.semantic.brand.accent;
+        let color = self.active_theme().ui.accent;
         self.add(egui::Label::new(RichText::new(text).color(color)).sense(Sense::click()))
     }
 
@@ -763,13 +764,13 @@ impl UiExt for Ui {
     }
 
     fn section_label(&mut self, text: impl Into<String>) -> Response {
-        use crate::ext::HasDesignTokens;
         use crate::styles::typography;
+        let color = self.visuals().widgets.noninteractive.fg_stroke.color;
         self.label(
             RichText::new(text.into())
                 .size(typography::TINY)
                 .strong()
-                .color(self.text_secondary()),
+                .color(color),
         )
     }
 
@@ -828,16 +829,17 @@ impl UiExt for Ui {
     }
 
     fn toolbar_separator(&mut self) {
-        use crate::theming;
-
         let padding = DESIGN_TOKENS.spacing.xl; // 12px
         let sep_width = DESIGN_TOKENS.sizing.toolbar.separator_width;
         let sep_height = DESIGN_TOKENS.sizing.toolbar.separator_height;
         self.add_space(padding);
         let (rect, _) = self.allocate_exact_size(Vec2::new(sep_width, sep_height), Sense::hover());
         if self.is_rect_visible(rect) {
-            self.painter()
-                .rect_filled(rect, 0.0, theming::separator_color(self));
+            self.painter().rect_filled(
+                rect,
+                0.0,
+                self.visuals().widgets.noninteractive.bg_stroke.color,
+            );
         }
         self.add_space(padding);
     }

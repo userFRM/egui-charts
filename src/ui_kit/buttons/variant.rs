@@ -5,7 +5,7 @@
 
 use egui::{Color32, Ui};
 
-use crate::theme::{ThemeContextExt, ThemeUiExt};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
 /// How far one interaction step (hover, then press) moves a fill towards the text colour.
@@ -67,11 +67,11 @@ impl ButtonVariant {
         };
         let (rest, rest_steps) = match self {
             Self::Primary if ui.is_enabled() => {
-                let colors = ui.ctx().active_theme().unwrap_or_default().ui;
+                let colors = ui.active_theme().ui;
                 return state(colors.accent, colors.accent_hover, colors.accent_active);
             }
             Self::Danger if ui.is_enabled() => {
-                let colors = ui.ctx().active_theme().unwrap_or_default().ui;
+                let colors = ui.active_theme().ui;
                 return state(
                     colors.danger_bg,
                     colors.danger_bg_hover,
@@ -92,12 +92,8 @@ impl ButtonVariant {
     /// Get the foreground (text/icon) color for this variant
     pub fn fg_color(&self, ui: &Ui) -> Color32 {
         match self {
-            Self::Primary if ui.is_enabled() => {
-                ui.ctx().active_theme().unwrap_or_default().ui.accent_text
-            }
-            Self::Danger if ui.is_enabled() => {
-                ui.ctx().active_theme().unwrap_or_default().ui.danger_text
-            }
+            Self::Primary if ui.is_enabled() => ui.active_theme().ui.accent_text,
+            Self::Danger if ui.is_enabled() => ui.active_theme().ui.danger_text,
             _ => ui.visuals().strong_text_color(),
         }
     }
@@ -107,7 +103,7 @@ impl ButtonVariant {
     pub fn border_color(&self, ui: &Ui) -> Option<Color32> {
         match self {
             Self::Outlined => Some(ui.visuals().widgets.inactive.fg_stroke.color),
-            Self::Primary if !ui.is_enabled() => Some(ui.theme_accent()),
+            Self::Primary if !ui.is_enabled() => Some(ui.active_theme().ui.accent),
             _ => None,
         }
     }

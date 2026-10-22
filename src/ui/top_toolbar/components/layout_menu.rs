@@ -2,7 +2,7 @@
 //!
 //! A dropdown menu for saving, loading, and managing chart layouts.
 use crate::styles::typography;
-use crate::theme::ThemeUiExt;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
@@ -508,7 +508,7 @@ impl LayoutMenu {
         ui.painter().rect_stroke(
             input_rect,
             DESIGN_TOKENS.rounding.sm,
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.theme_accent()),
+            Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.active_theme().ui.accent),
             StrokeKind::Outside,
         );
 

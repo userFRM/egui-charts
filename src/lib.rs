@@ -55,9 +55,9 @@
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Validation** | [`validation`] | OHLC integrity checks, timestamp ordering, data quality |
-//! | **Theme system** | [`theme`], [`tokens`], [`styles`], [`theming`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
+//! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
 //! | **Widget** | [`widget`] | `Chart` egui widget, `ChartBuilder`, `TradingChart` |
-//! | **Extensions** | [`ext`] | `UiExt`, `ContextExt`, `ResponseExt`, `HasDesignTokens` |
+//! | **Extensions** | [`ext`] | `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt` |
 //! | **Icons** | [`icons`] | Compile-time embedded SVG icons |
 //! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
 //! | **Backtest** | `backtest` | *(feature `backtest`)* Strategy backtesting on historical data |
@@ -72,7 +72,7 @@
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
-//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `theming`, `styles`, `ext` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`studies`], [`tokens`], [`validation`], and `backtest` and `scripting` when enabled. Required by `icons` and `ui`. |
+//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`studies`], [`tokens`], [`validation`], and `backtest` and `scripting` when enabled. Required by `icons` and `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
 //! | `ui` | off | Application-level UI: toolbars, panels, sidebars, dialogs, and the reusable `ui_kit` widget library they are built on. Enable this when you are building a full trading-terminal interface around the chart engine. |
 //! | `backtest` | off | Backtesting framework for strategy evaluation on historical data. |
@@ -147,8 +147,6 @@ pub mod icons;
 pub mod styles;
 #[cfg(feature = "widget")]
 pub mod theme;
-#[cfg(feature = "widget")]
-pub mod theming;
 pub mod tokens;
 
 // ─── Widget layer ────────────────────────────────────────────────────────────

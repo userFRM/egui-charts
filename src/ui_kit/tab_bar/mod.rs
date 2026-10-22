@@ -29,7 +29,7 @@
 //! ```
 
 use crate::styles::typography;
-use crate::theme::ThemeUiExt;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Ui};
 
@@ -90,7 +90,7 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
                             Pos2::new(rect.min.x, rect.max.y + 2.0),
                             Pos2::new(rect.max.x, rect.max.y + 2.0),
                         ],
-                        egui::Stroke::new(DESIGN_TOKENS.stroke.thick, ui.theme_accent()),
+                        egui::Stroke::new(DESIGN_TOKENS.stroke.thick, ui.active_theme().ui.accent),
                     );
                 }
 

@@ -4,7 +4,6 @@
 
 use crate::icons::icons as embedded_icons;
 use crate::styles::typography;
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::ChartLayoutMode;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
@@ -112,9 +111,9 @@ impl ChartGridSelector {
             Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
         );
         let icon_color = if response.hovered() {
-            theming::icon_hover_color(ui)
+            ui.visuals().widgets.hovered.fg_stroke.color
         } else {
-            theming::icon_normal(ui)
+            ui.visuals().widgets.noninteractive.fg_stroke.color
         };
         embedded_icons::LAYOUT_GRID
             .as_image_tinted(Vec2::splat(DESIGN_TOKENS.sizing.icon_sm), icon_color)

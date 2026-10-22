@@ -1,13 +1,13 @@
-//! UI Styles - Sizing Constants and Layout Helpers
+//! UI styles: the keyboard focus ring and sizing, typography, icon and stroke constants.
 //!
-//! This module provides sizing constants and layout helpers.
 //! Core spacing, rounding, and button sizing are now in `DESIGN_TOKENS`.
 //!
 //! # Architecture
 //!
 //! ```text
 //! styles/
-//! ├── sizing.rs      - Fixed desktop sizing constants
+//! ├── focus.rs       - Keyboard focus ring
+//! ├── sizing.rs      - Chart layout constants
 //! ├── typography.rs  - Font sizes
 //! └── icons.rs       - Icon sizes
 //!
@@ -18,7 +18,7 @@
 //! # Usage
 //!
 //! ```rust
-//! use egui_charts::styles::{self, sizing, typography};
+//! use egui_charts::styles::{sizing, typography};
 //! use egui_charts::tokens::DESIGN_TOKENS;
 //!
 //! // Spacing (from DESIGN_TOKENS)
@@ -26,7 +26,7 @@
 //! let padding = DESIGN_TOKENS.spacing.lg;
 //!
 //! // Sizing (fixed desktop constants)
-//! let toolbar_height = sizing::toolbar::TOP_HEIGHT;
+//! let axis_width = sizing::chart::RIGHT_AXIS_WIDTH;
 //! let btn_size = DESIGN_TOKENS.sizing.button_md;
 //!
 //! // Rounding (from DESIGN_TOKENS)
@@ -34,9 +34,6 @@
 //!
 //! // Typography
 //! let font_size = typography::MD;
-//!
-//! // Margin helpers
-//! let margin = styles::margin::same(DESIGN_TOKENS.spacing.md);
 //! ```
 //!
 //! # Design Philosophy
@@ -51,95 +48,6 @@ pub mod icons;
 pub(crate) mod responsive;
 pub mod sizing;
 pub mod typography;
-
-// =============================================================================
-// Margin Helpers for egui Compatibility
-// =============================================================================
-
-/// Helper functions for creating [`egui::Margin`] from `f32` values.
-///
-/// egui 0.33+ uses `i8` for `Margin` fields. These helpers handle the
-/// `f32 -> i8` cast so callers can use design token values directly.
-///
-/// # Example
-///
-/// ```rust
-/// use egui_charts::styles::margin;
-/// use egui_charts::tokens::DESIGN_TOKENS;
-///
-/// let m = margin::same(DESIGN_TOKENS.spacing.md);
-/// let m2 = margin::symmetric(DESIGN_TOKENS.spacing.lg, DESIGN_TOKENS.spacing.sm);
-/// ```
-pub mod margin {
-    use egui::Margin;
-
-    /// Create uniform margin from f32 value
-    #[inline]
-    pub fn same(v: f32) -> Margin {
-        Margin::same(v as i8)
-    }
-
-    /// Create symmetric margin (horizontal, vertical) from f32 values
-    #[inline]
-    pub fn symmetric(h: f32, v: f32) -> Margin {
-        Margin::symmetric(h as i8, v as i8)
-    }
-
-    /// Create margin with individual sides from f32 values
-    #[inline]
-    pub fn new(left: f32, right: f32, top: f32, bottom: f32) -> Margin {
-        Margin {
-            left: left as i8,
-            right: right as i8,
-            top: top as i8,
-            bottom: bottom as i8,
-        }
-    }
-
-    /// Create margin with only left side
-    #[inline]
-    pub fn left(v: f32) -> Margin {
-        Margin {
-            left: v as i8,
-            right: 0,
-            top: 0,
-            bottom: 0,
-        }
-    }
-
-    /// Create margin with only right side
-    #[inline]
-    pub fn right(v: f32) -> Margin {
-        Margin {
-            left: 0,
-            right: v as i8,
-            top: 0,
-            bottom: 0,
-        }
-    }
-
-    /// Create margin with only top side
-    #[inline]
-    pub fn top(v: f32) -> Margin {
-        Margin {
-            left: 0,
-            right: 0,
-            top: v as i8,
-            bottom: 0,
-        }
-    }
-
-    /// Create margin with only bottom side
-    #[inline]
-    pub fn bottom(v: f32) -> Margin {
-        Margin {
-            left: 0,
-            right: 0,
-            top: 0,
-            bottom: v as i8,
-        }
-    }
-}
 
 // =============================================================================
 // Stroke Helpers

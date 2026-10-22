@@ -5,7 +5,6 @@
 
 use crate::icons::icons;
 use crate::styles::icons as icon_sizes;
-use crate::theme::context::ThemeContextExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::ReplayProgress;
 use egui::{Response, RichText, Ui, Vec2, Widget};
@@ -78,7 +77,7 @@ impl<'a> ReplayStatusIndicator<'a> {
 
 impl<'a> Widget for ReplayStatusIndicator<'a> {
     fn ui(self, ui: &mut Ui) -> Response {
-        let muted = ui.ctx().theme_data().ui_text_muted;
+        let muted = ui.visuals().weak_text_color();
         match self.status {
             ReplayStatus::Inactive => {
                 // Show nothing when not replaying

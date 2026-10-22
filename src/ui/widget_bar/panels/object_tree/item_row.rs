@@ -5,10 +5,9 @@
 use egui::{Color32, Rect, Sense, Stroke, Ui, vec2};
 
 use crate::drawings::DrawingToolType;
-use crate::ext::HasDesignTokens;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::typography;
-use crate::theming;
+use crate::theme::ThemeExt;
 
 use super::actions::ObjectTreeAction;
 use super::config::ObjectTreeConfig;
@@ -129,7 +128,7 @@ fn render_row_content(
     // First pass: paint background and static elements
     {
         let painter = ui.painter();
-        let accent = ui.accent_color();
+        let accent = ui.active_theme().ui.accent;
         let accent_fill = {
             let [r, g, b, _] = accent.to_array();
             Color32::from_rgba_unmultiplied(r, g, b, 40)
@@ -254,9 +253,9 @@ fn render_row_content(
     let vis_response = ui.allocate_rect(vis_rect, Sense::click());
     if ui.is_rect_visible(vis_rect) {
         let icon_color = if vis_response.hovered() {
-            theming::icon_hover_color(ui)
+            ui.visuals().widgets.hovered.fg_stroke.color
         } else {
-            theming::icon_normal(ui)
+            ui.visuals().widgets.noninteractive.fg_stroke.color
         };
         vis_icon
             .as_image_tinted(vec2(14.0, 14.0), icon_color)
@@ -279,9 +278,9 @@ fn render_row_content(
         let lock_response = ui.allocate_rect(lock_rect, Sense::click());
         if ui.is_rect_visible(lock_rect) {
             let icon_color = if lock_response.hovered() {
-                theming::icon_hover_color(ui)
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::icon_normal(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
             lock_icon
                 .as_image_tinted(vec2(14.0, 14.0), icon_color)

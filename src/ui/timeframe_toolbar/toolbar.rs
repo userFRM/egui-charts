@@ -9,7 +9,6 @@ use crate::ext::UiExt;
 use crate::icons::icons as embedded_icons;
 use crate::styles::{icons as icon_sizes, stroke, typography};
 use crate::theme::{Theme, follow_active_theme, theme_derived};
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::toolbar::ResponsiveToolbar;
 use egui::{Color32, FontId, Response, Sense, Stroke, Ui, Vec2};
@@ -325,9 +324,9 @@ impl TimeframeToolbar {
 
         // Render the icon with theme-aware coloring
         let icon_color = if response.hovered() {
-            theming::icon_hover_color(ui)
+            ui.visuals().widgets.hovered.fg_stroke.color
         } else {
-            theming::icon_normal(ui)
+            ui.visuals().widgets.noninteractive.fg_stroke.color
         };
         embedded_icons::GO_TO_DATE
             .as_image_tinted(Vec2::splat(icon_size), icon_color)

@@ -1,6 +1,6 @@
 //! Configuration for top toolbar layout.
 //!
-//! Colors are NOT stored here - use theming.rs instead for theme-aware colors.
+//! Colors are not stored here: widgets read them from `ui.visuals()` and the active theme.
 //! Fixed desktop dimensions - no responsive behavior.
 
 // =============================================================================

@@ -5,7 +5,6 @@
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::{icons, stroke, typography};
 use crate::theme::{Theme, follow_active_theme, theme_derived};
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
@@ -219,12 +218,10 @@ impl RightPanelTabs {
             let icon_rect = Rect::from_center_size(btn_rect.center(), Vec2::splat(icon_size));
 
             // Get icon color based on state
-            let icon_color = if is_active {
-                theming::icon_active(ui)
-            } else if is_hovered {
-                theming::icon_hover_color(ui)
+            let icon_color = if is_active || is_hovered {
+                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                theming::icon_normal(ui)
+                ui.visuals().widgets.noninteractive.fg_stroke.color
             };
 
             tab.icon()
