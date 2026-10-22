@@ -9,6 +9,7 @@
 //! - `chart_type` - Chart visualization type definitions
 //! - `renko`, `kagi`, `line_break`, etc. - Data transformations
 //! - `markers`, `annotations` - Chart overlays
+//! - `strategy` - A strategy run's trades and equity, and its performance metrics
 
 mod annotations;
 pub mod bar;
@@ -28,6 +29,7 @@ pub mod range_bar;
 pub mod renko;
 pub mod session;
 mod signal;
+mod strategy;
 mod symbol;
 pub mod symbol_info;
 mod timeframe;
@@ -66,6 +68,9 @@ pub use session::{
     SessionBreakType, SessionProvider, WeeklySessionProvider, find_session_breaks,
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
+pub use strategy::{
+    StrategyExit, StrategyPerformance, StrategyReport, StrategySide, StrategyTrade,
+};
 pub use symbol::Symbol;
 pub use symbol_info::{DataStatus, LibrarySymbolInfo, SubsessionInfo, SymbolFormat, SymbolType};
 pub use timeframe::Timeframe;
