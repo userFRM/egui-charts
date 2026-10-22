@@ -26,7 +26,9 @@
 use egui::{Color32, Response, RichText, Ui, Vec2};
 
 use crate::icons::{Icon, icons};
+use crate::theme::{ThemeExt, UiColors};
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 
 /// Alert severity levels
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,36 +45,13 @@ pub enum AlertKind {
 }
 
 impl AlertKind {
-    /// Get the background color for this alert kind
-    pub fn bg_color(&self) -> Color32 {
-        let tokens = &DESIGN_TOKENS.semantic.alert;
+    /// The theme's status colour for this kind, which tints the icon, fill and border
+    pub fn color(&self, ui: &UiColors) -> Color32 {
         match self {
-            AlertKind::Info => tokens.info_bg,
-            AlertKind::Success => tokens.success_bg,
-            AlertKind::Warning => tokens.warning_bg,
-            AlertKind::Error => tokens.error_bg,
-        }
-    }
-
-    /// Get the border color for this alert kind
-    pub fn border_color(&self) -> Color32 {
-        let tokens = &DESIGN_TOKENS.semantic.alert;
-        match self {
-            AlertKind::Info => tokens.info_border,
-            AlertKind::Success => tokens.success_border,
-            AlertKind::Warning => tokens.warning_border,
-            AlertKind::Error => tokens.error_border,
-        }
-    }
-
-    /// Get the icon color for this alert kind
-    pub fn icon_color(&self) -> Color32 {
-        let tokens = &DESIGN_TOKENS.semantic.alert;
-        match self {
-            AlertKind::Info => tokens.info_icon,
-            AlertKind::Success => tokens.success_icon,
-            AlertKind::Warning => tokens.warning_icon,
-            AlertKind::Error => tokens.error_icon,
+            AlertKind::Info => ui.info,
+            AlertKind::Success => ui.success,
+            AlertKind::Warning => ui.warning,
+            AlertKind::Error => ui.error,
         }
     }
 
@@ -156,54 +135,51 @@ impl Alert {
 
     /// Show the alert
     pub fn show(self, ui: &mut Ui) -> AlertResponse {
-        let bg_color = self.kind.bg_color();
-        let border_color = self.kind.border_color();
-        let icon_color = self.kind.icon_color();
+        let theme = ui.active_theme();
+        let color = self.kind.color(&theme.ui);
 
         let frame = egui::Frame::new()
-            .fill(bg_color)
+            .fill(color.gamma_multiply(0.1))
             .stroke(egui::Stroke::new(
                 DESIGN_TOKENS.stroke.hairline,
-                border_color,
+                color.gamma_multiply(0.4),
             ))
-            .corner_radius(DESIGN_TOKENS.rounding.md)
-            .inner_margin(egui::Margin::same(DESIGN_TOKENS.spacing.lg as i8));
+            .corner_radius(theme.radius.md)
+            .inner_margin(egui::Margin::same(theme.spacing.lg as i8));
 
         let mut dismissed = false;
 
         let inner_response = frame.show(ui, |ui| {
+            // Every alert fills the width, dismissible or not.
+            ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 // Icon
                 if self.show_icon {
                     let icon = self.kind.icon();
                     let icon_size = DESIGN_TOKENS.sizing.icon_md;
-                    ui.add(icon.as_image_tinted(Vec2::splat(icon_size), icon_color));
-                    ui.add_space(DESIGN_TOKENS.spacing.lg);
+                    ui.add(icon.as_image_tinted(Vec2::splat(icon_size), color));
                 }
 
                 // Content
                 ui.vertical(|ui| {
-                    // Title
+                    // Title, then the message, muted so the title stands out
+                    let mut message_color = theme.ui.text;
                     if let Some(title) = &self.title {
-                        ui.label(RichText::new(title).strong().color(icon_color));
+                        ui.label(RichText::new(title).strong());
                         ui.add_space(DESIGN_TOKENS.spacing.xs);
+                        message_color = theme.ui.text_secondary;
                     }
-
-                    // Message
-                    ui.label(&self.message);
+                    ui.label(RichText::new(&self.message).color(message_color));
                 });
 
                 // Dismiss button
                 if self.dismissible {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        let close_icon = &icons::CLOSE;
-                        let close_btn = ui.add(close_icon.as_image_tinted(
-                            Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
-                            ui.style().visuals.widgets.noninteractive.fg_stroke.color,
-                        ));
-                        if close_btn.clicked() {
-                            dismissed = true;
-                        }
+                        dismissed = IconButton::new(&icons::CLOSE)
+                            .size(ButtonSize::SM)
+                            .tooltip("Dismiss")
+                            .show(ui)
+                            .clicked();
                     });
                 }
             });

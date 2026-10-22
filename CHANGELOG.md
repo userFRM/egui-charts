@@ -40,6 +40,7 @@ All notable changes to this project are documented in this file. The format is b
 - The Negative and Positive Volume Index plot their signal line, the 255-bar EMA of the index seeded with its first value, so it starts at bar 0 like the index. The index is unchanged. Migration: `NegativeVolumeIndex` and `PositiveVolumeIndex` output `IndicatorValue::Multiple(vec![index, signal])` instead of `Single(index)`, and report two lines and two colours; code that matched `Single` reads the index as the first value.
 - `config::KeyboardAction::shortcut` returns the key combination that triggers an action, as an `egui::KeyboardShortcut`, for the actions the context menus show a shortcut for: Reset chart, Create alert and Delete drawing.
 - `ToastKind::color` returns the theme's status colour for a toast kind.
+- `AlertKind::color` and `ToastKind::color` return the theme's status colour for an alert or toast kind.
 
 ### Fixed
 
@@ -158,6 +159,7 @@ All notable changes to this project are documented in this file. The format is b
 - The chart, series and drawing context menus hide the crosshair, its labels and the tooltip while they are open, open 2 px from the pointer (the drawing menu 6 px, clear of the clicked handle) and flip to the other side of it to stay 8 px inside the window, size themselves from the laid-out text and elide labels wider than 300 px, and draw with the theme's menu frame, hover fill and shadow. Rows show the bound shortcut, formatted for the platform ("Ctrl+R" on Linux and Windows), only for actions with a key binding; the crate handles only Delete, destructive rows ("Remove 5 indicators", "Delete") use the danger colour, both menus format the clicked price with thousands separators, and every row reports its label and role to accessibility tools.
 - `NotificationPanel` stacks its toasts 8 px apart, newest nearest the corner, 16 px from the window corner. Every toast was drawn at the same spot, flush to the corner, so only one was visible.
 - Toasts are opaque and follow the theme: the window fill, border and popup shadow, text in the theme's text colour (a title in the strong text colour, its message in the secondary text colour), and the icon and progress bar in the theme's colour for the kind. They were translucent fixed-colour slabs, the same in every theme, with error text below 4.5:1. The close button can be clicked, and a timed toast's progress bar spans the toast's content instead of stopping 16 px short.
+- `Alert` takes its colours from the theme: the icon in the theme's colour for the kind, the fill and border in that colour at 10 % and 40 %, and the title in the strong text colour with the message under it in the secondary text colour. It used fixed tokens tuned for the dark theme, so several icons fell below 3:1 in the light theme and the high contrast theme showed the dark colours. Every alert fills the available width, the dismiss button can be clicked, and the text starts 8 px after the icon instead of 16 px.
 
 ### Changed
 
@@ -258,6 +260,7 @@ All notable changes to this project are documented in this file. The format is b
 - `IndicatorPalette`, `IndicatorColorSchemes` and `ColorCategory`, which no study or component used. Study colours come from `Indicator::colors` and the theme.
 - The `backtest` feature and module, and the indicator dialog's "Strategies" tab (`IndicatorTab::Strategies`), which listed the built-in indicators. The backtester filled orders at the close of the signal bar, stamped trades with the wall-clock time, dropped orders larger than the cash without notice and left several metrics unset. The dialog is titled "Indicators" and the series context menu entry reads "Add indicator". Migration: run backtests in the host or on a server against the headless engine (`default-features = false`); 0.2.0 keeps the module.
 - `ToastKind::bg_color` and `ToastKind::text_color`, fixed colours that ignored the theme. Migration: `ToastKind::color(&theme.ui)` gives the kind's status colour; a toast draws on `visuals.window_fill` with `theme.ui.text`.
+- `AlertKind::bg_color`, `AlertKind::border_color` and `AlertKind::icon_color`, fixed colours tuned for the dark theme. Migration: `AlertKind::color(&theme.ui)` gives the kind's status colour; an alert fills with `color.gamma_multiply(0.1)` and outlines with `color.gamma_multiply(0.4)`.
 
 ## [0.2.0] - 2026-06-04
 
