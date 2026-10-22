@@ -38,23 +38,18 @@ pub fn render_crosshair_full(
         return [None; 2];
     }
 
-    // Convert x to a global index
-    let bars_from_right = (context.rect.max.x - hover_pos.x) / coords.bar_spacing - 0.5;
-    let t_float = coords.base_idx as f32 - (bars_from_right - coords.right_offset);
-    let t_idx = t_float.floor() as isize;
-    let first = coords.start_idx as isize;
-    let last = (coords.start_idx + visible_data.len().saturating_sub(1)) as isize;
-
-    let candle = (t_idx >= first && t_idx <= last)
-        .then(|| &visible_data[(t_idx as usize).saturating_sub(coords.start_idx)]);
+    // The bar nearest the pointer, the one the OHLC readout shows, and its global index
+    let bar = coords
+        .local_idx_at_x(hover_pos.x, visible_data.len())
+        .map(|idx| (coords.start_idx + idx, &visible_data[idx]));
 
     // Determine actual hover position based on mode
-    let (actual_hover_x, actual_hover_y) = if let Some(candle) = candle {
+    let (actual_hover_x, actual_hover_y) = if let Some((idx, candle)) = bar {
         match mode {
             CrosshairMode::Normal => (hover_pos.x, hover_pos.y),
             CrosshairMode::Magnet => {
                 // Snap to nearest candle X position using ChartCoords helper
-                let candle_x = coords.idx_to_x(t_idx as usize);
+                let candle_x = coords.idx_to_x(idx);
 
                 // Snap to nearest OHLC price
                 let snap_price = snap_to_nearest_ohlc(hover_pos.y, price_scale, candle);
@@ -161,7 +156,7 @@ pub fn render_crosshair_full(
         label_bg,
     );
 
-    let time_tag = candle.map(|candle| {
+    let time_tag = bar.map(|(_, candle)| {
         let bar_seconds = visible_data.get(1).map_or(1, |next| {
             next.time
                 .signed_duration_since(visible_data[0].time)

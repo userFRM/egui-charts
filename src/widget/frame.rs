@@ -848,7 +848,7 @@ impl Chart {
             {
                 if let Some(bar_idx) = self.synced_crosshair_bar_idx {
                     // Convert bar index to screen x coordinate
-                    let x = coords.idx_to_x(bar_idx as usize);
+                    let x = coords.idx_to_x(bar_idx.round() as usize);
                     if coords.is_x_visible(x) {
                         // Create a synthetic hover position at the center of the price range
                         let center_y = price_rect.center().y;
@@ -903,7 +903,8 @@ impl Chart {
 mod tests {
     use crate::chart::series::SeriesSettings;
     use crate::scales::PriceScaleMode;
-    use crate::widget::test_frames::{chart, frame};
+    use crate::widget::test_frames::{chart, frame, shapes};
+    use egui::{Event, Pos2, Shape};
 
     /// On a logarithmic scale 100 lies halfway between 10 and 1,000 (ln 100 is the mean of ln 10 and
     /// ln 1,000); a linear mapping puts it a tenth of the way up. A range zoomed by hand before the
@@ -936,5 +937,46 @@ mod tests {
             top < y1000 && y10 < bottom,
             "{y10}..{y1000} outside {top}..{bottom}"
         );
+    }
+
+    /// The crosshair's time label names the bar nearest the pointer, and a chart that follows
+    /// another one's index names the same bar. The bars are daily from 2023-11-14, so bar 50 is
+    /// 3 Jan 2024 and bar 51 is 4 Jan 2024; 0.7 of a bar past the centre of bar 50 is nearer to 51.
+    #[test]
+    fn crosshair_time_label_names_the_nearest_bar() {
+        // (pointer over the chart, index another chart reports, expected time label)
+        for case in [
+            (true, None, "Jan 04, 2024"),
+            (false, Some(50.7), "Jan 04, 2024"),
+        ] {
+            let (pointer, synced, expected) = case;
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.set_synced_crosshair_bar_idx(synced);
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let map = chart.get_chart_mapping();
+            let hover = Pos2::new(
+                map.idx_to_x(50) + 0.7 * map.bar_spacing,
+                map.rect.center().y,
+            );
+            let events = || {
+                pointer
+                    .then_some(Event::PointerMoved(hover))
+                    .into_iter()
+                    .collect()
+            };
+            frame(&ctx, &mut chart, 0.1, events());
+            let painted = shapes(&ctx, &mut chart, 0.2, events());
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) if text.galley.text().ends_with(", 2024") => {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels, [expected], "{case:?}");
+        }
     }
 }
