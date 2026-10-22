@@ -650,8 +650,11 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        let drawings = self.trading_chart.drawing_manager.as_ref();
+        self.top_toolbar.state.can_undo = drawings.is_some_and(|dm| dm.can_undo());
+        self.top_toolbar.state.can_redo = drawings.is_some_and(|dm| dm.can_redo());
         egui::Panel::top("toolbar")
-            .exact_size(38.0)
+            .exact_size(egui_charts::ui::top_toolbar::config::TOOLBAR_HEIGHT)
             .show_separator_line(false)
             .frame(panel_frame(bg))
             .show(ui, |ui| {

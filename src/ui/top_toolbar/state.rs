@@ -6,10 +6,24 @@
 ///
 /// Note: Symbol, interval, and chart style are NOT stored here.
 /// They live in AppState.chart and are accessed directly during rendering.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct TopToolbarState {
     /// Whether replay mode is active
     pub replay_active: bool,
+    /// Whether there is an action to undo; the undo button is disabled while this is `false`.
+    pub can_undo: bool,
+    /// Whether there is an undone action to redo; the redo button is disabled while this is `false`.
+    pub can_redo: bool,
+}
+
+impl Default for TopToolbarState {
+    fn default() -> Self {
+        Self {
+            replay_active: false,
+            can_undo: true,
+            can_redo: true,
+        }
+    }
 }
 
 impl TopToolbarState {

@@ -7,14 +7,14 @@
 // Fixed Desktop Constants (exact dimensions)
 // =============================================================================
 
-/// Top toolbar height: 38px
-pub const TOOLBAR_HEIGHT: f32 = 38.0;
+/// Top toolbar height: 32px
+pub const TOOLBAR_HEIGHT: f32 = 32.0;
 
-/// Button size: 32px
-pub const BUTTON_SIZE: f32 = 32.0;
+/// Button size: 28px
+pub const BUTTON_SIZE: f32 = 28.0;
 
-/// Icon size: 18px
-pub const ICON_SIZE: f32 = 18.0;
+/// Icon size: 20px
+pub const ICON_SIZE: f32 = 20.0;
 
 /// Padding: 4px
 pub const PADDING: f32 = 4.0;
@@ -29,11 +29,11 @@ pub const ROUNDING: f32 = 4.0;
 /// Configuration for the top toolbar - fixed desktop dimensions
 #[derive(Clone, Debug)]
 pub struct TopToolbarConfig {
-    /// Toolbar height: 38px
+    /// Toolbar height: 32px
     pub height: f32,
-    /// Icon size: 18px
+    /// Icon size: 20px
     pub small_icon_size: f32,
-    /// Button size: 32px
+    /// Button size: 28px
     pub btn_size: f32,
     /// Padding: 4px
     pub padding: f32,

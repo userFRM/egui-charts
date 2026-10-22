@@ -5,9 +5,10 @@
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::model::ChartType;
-use crate::styles::{icons as icon_sizes, typography};
+use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
+use crate::ui::top_toolbar::buttons::Trigger;
+use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 /// Extension trait for ChartType to provide UI-specific functionality
 pub trait ChartTypeUiExt {
@@ -43,6 +44,7 @@ impl ChartTypeUiExt for ChartType {
 /// Configuration for chart type selector
 #[derive(Debug, Clone)]
 pub struct ChartTypeSelectorConfig {
+    /// Minimum width of the button; it is otherwise sized to its label.
     pub btn_width: f32,
     pub dropdown_width: f32,
     pub item_height: f32,
@@ -58,7 +60,7 @@ impl Default for ChartTypeSelectorConfig {
         // Colors are TRANSPARENT to signal that colors should be fetched from
         // ui.style().visuals at render time for proper theme support.
         Self {
-            btn_width: 100.0,
+            btn_width: 0.0,
             dropdown_width: DESIGN_TOKENS.sizing.dialog.submenu_width + DESIGN_TOKENS.spacing.xxl,
             item_height: DESIGN_TOKENS.sizing.button_lg,
             bg_color: Color32::TRANSPARENT,
@@ -112,7 +114,7 @@ impl ChartTypeSelector {
         let mut action = ChartTypeAction::None;
 
         // Main button
-        let btn_res = self.draw_btn(ui);
+        let btn_res = self.trigger().show(ui, self.is_open);
         if btn_res.clicked() {
             self.is_open = !self.is_open;
         }
@@ -140,71 +142,15 @@ impl ChartTypeSelector {
         action
     }
 
-    fn draw_btn(&self, ui: &mut Ui) -> Response {
-        let desired_size = Vec2::new(self.config.btn_width, DESIGN_TOKENS.sizing.button_md);
-        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
-
-        // Theme-aware colors
-        let bg_color = if self.is_open || response.hovered() {
-            ui.style().visuals.widgets.hovered.bg_fill
-        } else {
-            Color32::TRANSPARENT
-        };
-        let border_color = ui.style().visuals.widgets.noninteractive.bg_stroke.color;
-        let text_color = ui.style().visuals.text_color();
-
-        ui.painter()
-            .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg_color);
-        ui.painter().rect_stroke(
-            rect,
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
-            StrokeKind::Outside,
-        );
-
-        // Icon
-        let icon_size = DESIGN_TOKENS.sizing.icon_lg;
-        let icon_pos = Pos2::new(
-            rect.min.x + DESIGN_TOKENS.spacing.md,
-            rect.center().y - icon_size / 2.0,
-        );
-        let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
-        let icon_color = if response.hovered() {
-            ui.visuals().widgets.hovered.fg_stroke.color
-        } else {
-            ui.visuals().widgets.noninteractive.fg_stroke.color
-        };
-        self.current
-            .icon()
-            .as_image_tinted(Vec2::splat(icon_size), icon_color)
-            .paint_at(ui, icon_rect);
-
-        // Name
-        ui.painter().text(
-            Pos2::new(rect.min.x + DESIGN_TOKENS.sizing.button_xl, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            self.current.name(),
-            egui::FontId::proportional(typography::MD),
-            text_color,
-        );
-
-        // Dropdown arrow
-        let chevron_size = icon_sizes::XS;
-        let chevron_pos = Pos2::new(
-            rect.right() - DESIGN_TOKENS.spacing.xxl,
-            rect.center().y - chevron_size / 2.0,
-        );
-        let chevron_rect = Rect::from_min_size(chevron_pos, Vec2::splat(chevron_size));
-        let chevron_color = if response.hovered() {
-            ui.visuals().widgets.hovered.fg_stroke.color
-        } else {
-            ui.visuals().widgets.noninteractive.fg_stroke.color
-        };
-        embedded_icons::CHEVRON_DOWN
-            .as_image_tinted(Vec2::splat(chevron_size), chevron_color)
-            .paint_at(ui, chevron_rect);
-
-        response
+    /// The button that opens the dropdown, showing the current chart type.
+    pub(crate) fn trigger(&self) -> Trigger<'static> {
+        let label = self.current.name();
+        Trigger {
+            icon: Some(self.current.icon()),
+            label: label.to_owned(),
+            name: format!("Chart type: {label}"),
+            min_width: self.config.btn_width,
+        }
     }
 
     fn draw_dropdown(&mut self, ui: &mut Ui, btn_rect: Rect) -> ChartTypeAction {

@@ -2,13 +2,15 @@
 //!
 //! Eliminates ~180 lines of repetitive button rendering code.
 
-use crate::icons::Icon;
+use std::sync::Arc;
+
+use crate::icons::{Icon, icons::CHEVRON_DOWN};
 use crate::styles::{icons as icon_sizes, stroke, typography};
-use egui::{Color32, Pos2, Rect, Response, Sense, Ui, Vec2};
+use egui::{Color32, Galley, Pos2, Rect, Response, Role, Sense, Ui, Vec2, WidgetInfo};
 
 use super::TopToolbarConfig;
 use crate::ext::UiExt;
-use crate::theme::ThemeExt;
+use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 
 /// Small icon-only button (config-driven size)
@@ -244,6 +246,15 @@ pub fn separator(ui: &mut Ui) {
     ui.space_lg();
 }
 
+/// Width of a pill button: its label and `spacing.lg` on each side.
+fn pill_width(ui: &Ui, text: &str) -> f32 {
+    let font_id = egui::FontId::proportional(typography::SM);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font_id, Color32::PLACEHOLDER);
+    galley.rect.width() + DESIGN_TOKENS.spacing.lg * 2.0
+}
+
 /// Filled pill button (Trade button style)
 ///
 /// Blue-filled rounded pill with white text
@@ -257,19 +268,14 @@ impl PillButtonFilled {
         Self { text, tooltip }
     }
 
+    pub(crate) fn width(&self, ui: &Ui) -> f32 {
+        pill_width(ui, self.text)
+    }
+
     pub fn show(self, ui: &mut Ui) -> Response {
         let colors = ui.active_theme().ui;
-        let padding_h = DESIGN_TOKENS.spacing.lg;
-        let font_id = egui::FontId::proportional(typography::SM);
-        let galley =
-            ui.painter()
-                .layout_no_wrap(self.text.to_string(), font_id, colors.accent_text);
-        let text_width = galley.rect.width();
-        let total_width = text_width + padding_h * 2.0;
-        let height = DESIGN_TOKENS.sizing.button_sm;
-
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
+        let size = Vec2::new(self.width(ui), DESIGN_TOKENS.sizing.button_sm);
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
@@ -310,18 +316,13 @@ impl PillButtonOutlined {
         Self { text, tooltip }
     }
 
-    pub fn show(self, ui: &mut Ui) -> Response {
-        let padding_h = DESIGN_TOKENS.spacing.lg;
-        let font_id = egui::FontId::proportional(typography::SM);
-        let galley =
-            ui.painter()
-                .layout_no_wrap(self.text.to_string(), font_id, ui.visuals().text_color());
-        let text_width = galley.rect.width();
-        let total_width = text_width + padding_h * 2.0;
-        let height = DESIGN_TOKENS.sizing.button_sm;
+    pub(crate) fn width(&self, ui: &Ui) -> f32 {
+        pill_width(ui, self.text)
+    }
 
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
+    pub fn show(self, ui: &mut Ui) -> Response {
+        let size = Vec2::new(self.width(ui), DESIGN_TOKENS.sizing.button_sm);
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
@@ -392,21 +393,20 @@ impl<'a> TextIconButton<'a> {
         }
     }
 
+    pub(crate) fn width(&self, ui: &Ui) -> f32 {
+        let font_id = egui::FontId::proportional(typography::SM);
+        let galley =
+            ui.painter()
+                .layout_no_wrap(self.text.to_owned(), font_id, Color32::PLACEHOLDER);
+        galley.rect.width() + self.config.padding * 3.0 + icon_sizes::XS
+    }
+
     pub fn show(self, ui: &mut Ui) -> Response {
         let padding = self.config.padding;
         let icon_size = icon_sizes::XS;
         let font_id = egui::FontId::proportional(typography::SM);
-        let galley = ui.painter().layout_no_wrap(
-            self.text.to_string(),
-            font_id.clone(),
-            ui.visuals().text_color(),
-        );
-        let text_width = galley.rect.width();
-        let total_width = text_width + padding * 2.0 + icon_size + padding;
-        let height = self.config.btn_size;
-
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
+        let size = Vec2::new(self.width(ui), self.config.btn_size);
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
@@ -452,5 +452,92 @@ impl<'a> TextIconButton<'a> {
         }
 
         response.on_hover_text(self.tooltip)
+    }
+}
+
+/// Dropdown trigger of the top toolbar: an optional icon, a label and a chevron, sized to the
+/// laid-out label.
+///
+/// It has a hairline outline, the hover fill while hovered and the pressed fill while pressed
+/// or open, and reports itself to accessibility tools as a button called `name`.
+pub(crate) struct Trigger<'a> {
+    pub icon: Option<&'a Icon>,
+    pub label: String,
+    pub name: String,
+    /// The trigger is at least this wide.
+    pub min_width: f32,
+}
+
+impl Trigger<'_> {
+    fn galley(&self, ui: &Ui, theme: &Theme) -> Arc<Galley> {
+        let font_id = egui::FontId::proportional(theme.text.body);
+        ui.painter()
+            .layout_no_wrap(self.label.clone(), font_id, Color32::PLACEHOLDER)
+    }
+
+    fn width_for(&self, theme: &Theme, label_width: f32) -> f32 {
+        let gap = theme.spacing.sm;
+        let icon = self.icon.map_or(0.0, |_| icon_sizes::MD + gap);
+        let content = icon + label_width + gap + icon_sizes::XS;
+        (content + theme.spacing.lg * 2.0).max(self.min_width)
+    }
+
+    pub(crate) fn width(&self, ui: &Ui) -> f32 {
+        let theme = ui.active_theme();
+        self.width_for(&theme, self.galley(ui, &theme).size().x)
+    }
+
+    pub(crate) fn show(self, ui: &mut Ui, open: bool) -> Response {
+        let theme = ui.active_theme();
+        let galley = self.galley(ui, &theme);
+        let size = Vec2::new(
+            self.width_for(&theme, galley.size().x),
+            DESIGN_TOKENS.sizing.button_md,
+        );
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response);
+
+        if ui.is_rect_visible(rect) {
+            let widgets = &ui.visuals().widgets;
+            let pressed = open || response.is_pointer_button_down_on();
+            let hovered = response.hovered();
+            let fill = if pressed {
+                widgets.active.bg_fill
+            } else if hovered {
+                widgets.hovered.bg_fill
+            } else {
+                Color32::TRANSPARENT
+            };
+            let icon_color = if pressed || hovered {
+                widgets.hovered.fg_stroke.color
+            } else {
+                widgets.noninteractive.fg_stroke.color
+            };
+            ui.painter().rect(
+                rect,
+                theme.radius.md,
+                fill,
+                widgets.inactive.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+
+            let paint_icon = |icon: &Icon, x: f32, size: f32| {
+                let min = Pos2::new(x, rect.center().y - size / 2.0);
+                icon.as_image_tinted(Vec2::splat(size), icon_color)
+                    .paint_at(ui, Rect::from_min_size(min, Vec2::splat(size)));
+            };
+            let mut x = rect.min.x + theme.spacing.lg;
+            if let Some(icon) = self.icon {
+                paint_icon(icon, x, icon_sizes::MD);
+                x += icon_sizes::MD + theme.spacing.sm;
+            }
+            let label_pos = Pos2::new(x, rect.center().y - galley.size().y / 2.0);
+            ui.painter().galley(label_pos, galley, theme.ui.text);
+            let chevron_x = rect.max.x - theme.spacing.lg - icon_sizes::XS;
+            paint_icon(&CHEVRON_DOWN, chevron_x, icon_sizes::XS);
+        }
+
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &self.name));
+        response
     }
 }

@@ -1,33 +1,21 @@
 //! Top Toolbar Widget
 //!
-//! Complete toolbar implementation with:
-//! - Symbol search pill
-//! - Compare/add symbol
-//! - Intervals dropdown
-//! - Chart style dropdown
-//! - Indicators button
-//! - Indicator templates
-//! - Alert button
-//! - Replay button
-//! - Undo/Redo btns
-//! - Screenshot button
-//! - Settings dropdown
-//! - Save button
-//! - Publish button
-//! - Fullscreen button
+//! The symbol search pill, interval and chart type dropdowns, indicators, alert, replay,
+//! undo and redo on the left; theme, layouts, save, search, settings, fullscreen, screenshot,
+//! trade and publish on the right. When the strip is too narrow, Indicators, Alert and Replay
+//! lose their labels, then the least important controls move into an overflow menu at the right.
 
-use crate::icons::icons as embedded_icons;
-use crate::styles::responsive::LayoutContext;
-use crate::styles::{icons, typography};
-use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
+use crate::icons::{Icon, icons as embedded_icons};
+use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
+use crate::ui_kit::list_item::ListItem;
+use egui::{Rect, Sense, Ui, Vec2};
 
 use crate::ext::UiExt;
 
 use super::{
     actions::TopToolbarAction,
-    buttons::{
-        IconTextButton, PillButtonFilled, PillButtonOutlined, TextIconButton, ToolbarIconButton,
-    },
+    buttons::{PillButtonFilled, PillButtonOutlined, TextIconButton, ToolbarIconButton, Trigger},
     components::{
         chart_grid_selector::ChartGridSelector,
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
@@ -40,6 +28,163 @@ use super::{
 };
 use crate::model::ChartType;
 use crate::tokens::DESIGN_TOKENS;
+
+/// A place in the strip, holding one control.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Slot {
+    Menu,
+    Symbol,
+    Compare,
+    Interval,
+    ChartType,
+    Indicators,
+    Templates,
+    Alert,
+    Replay,
+    Undo,
+    Redo,
+    Theme,
+    Layouts,
+    Save,
+    QuickSearch,
+    Settings,
+    Fullscreen,
+    Screenshot,
+    Trade,
+    Publish,
+}
+
+use Slot as S;
+
+/// Left part of the strip, in groups divided by separators.
+const LEFT: &[&[Slot]] = &[
+    &[S::Menu],
+    &[S::Symbol, S::Compare],
+    &[S::Interval],
+    &[S::ChartType],
+    &[S::Indicators, S::Templates],
+    &[S::Alert, S::Replay],
+    &[S::Undo, S::Redo],
+];
+
+/// Right-aligned part of the strip, in groups divided by separators.
+const RIGHT: &[&[Slot]] = &[
+    &[S::Theme, S::Layouts, S::Save],
+    &[
+        S::QuickSearch,
+        S::Settings,
+        S::Fullscreen,
+        S::Screenshot,
+        S::Trade,
+        S::Publish,
+    ],
+];
+
+/// Controls that move into the overflow menu when the strip is too narrow, the first to go
+/// first. Quick search opens the same dialog as the symbol pill.
+const OVERFLOW_ORDER: [Slot; 11] = [
+    S::Menu,
+    S::Trade,
+    S::Publish,
+    S::Compare,
+    S::Templates,
+    S::Save,
+    S::Layouts,
+    S::Screenshot,
+    S::Fullscreen,
+    S::QuickSearch,
+    S::Theme,
+];
+
+/// Space between the controls of a group.
+fn gap() -> f32 {
+    DESIGN_TOKENS.spacing.sm
+}
+
+/// Width of `UiExt::toolbar_separator` with its padding.
+fn separator() -> f32 {
+    2.0 * DESIGN_TOKENS.spacing.xl + DESIGN_TOKENS.sizing.toolbar.separator_width
+}
+
+/// Width of a kit icon-and-text button: 12 px padding on each side of a 20 px icon, a 4 px
+/// gap and the laid-out label.
+fn labelled_button_width(ui: &Ui, label: &str) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER);
+    let spacing = &DESIGN_TOKENS.spacing;
+    2.0 * spacing.xl + DESIGN_TOKENS.sizing.icon_md + spacing.sm + galley.size().x
+}
+
+impl Slot {
+    /// Icon, name and action of a control that acts on a click; `None` for the dropdowns.
+    fn entry(self) -> Option<(&'static Icon, &'static str, TopToolbarAction)> {
+        use TopToolbarAction as A;
+        Some(match self {
+            S::Menu => (&embedded_icons::MENU, "Menu", A::OpenMenu),
+            S::Symbol => (
+                &embedded_icons::QUICK_SEARCH,
+                "Symbol search",
+                A::OpenSymbolSearch,
+            ),
+            S::Compare => (
+                &embedded_icons::PLUS,
+                "Compare or Add Symbol",
+                A::OpenCompare,
+            ),
+            S::Indicators => (&embedded_icons::INDICATORS, "Indicators", A::OpenIndicators),
+            S::Templates => (
+                &embedded_icons::LAYOUT_GRID,
+                "Indicator templates",
+                A::OpenIndicatorTemplates,
+            ),
+            S::Alert => (&embedded_icons::BELL, "Alert", A::CreateAlert),
+            S::Replay => (&embedded_icons::REPLAY, "Replay", A::ToggleReplay),
+            S::Undo => (&embedded_icons::UNDO, "Undo", A::Undo),
+            S::Redo => (&embedded_icons::REDO, "Redo", A::Redo),
+            S::Theme => (
+                &embedded_icons::THEME_TOGGLE,
+                "Toggle Theme",
+                A::ThemeToggle,
+            ),
+            S::Layouts => (
+                &embedded_icons::LAYOUT_SETUP,
+                "Manage Layouts",
+                A::Layout(LayoutAction::OpenMenu),
+            ),
+            S::Save => (&embedded_icons::DATABASE, "Save Chart", A::Save),
+            S::QuickSearch => (
+                &embedded_icons::QUICK_SEARCH,
+                "Quick Search",
+                A::OpenSymbolSearch,
+            ),
+            S::Settings => (&embedded_icons::SETTINGS_GEAR, "Settings", A::OpenSettings),
+            S::Fullscreen => (
+                &embedded_icons::FULLSCREEN,
+                "Fullscreen",
+                A::ToggleFullscreen,
+            ),
+            S::Screenshot => (
+                &embedded_icons::CAMERA,
+                "Take Screenshot",
+                A::TakeScreenshot,
+            ),
+            S::Trade => (
+                &embedded_icons::LONG_POS,
+                "Open Trading Panel",
+                A::OpenTradingPanel,
+            ),
+            S::Publish => (&embedded_icons::IDEAS, "Publish Idea", A::Publish),
+            S::Interval | S::ChartType => return None,
+        })
+    }
+
+    /// Whether the control loses its label in a narrow strip.
+    fn compacts(self) -> bool {
+        matches!(self, S::Indicators | S::Alert | S::Replay)
+    }
+}
 
 /// Top toolbar widget
 pub struct TopToolbar {
@@ -89,8 +234,6 @@ impl TopToolbar {
         ui: &mut Ui,
         app_state: &dyn crate::ui::app_state::ChartAppState,
     ) -> TopToolbarAction {
-        let _layout_ctx = LayoutContext::from_egui(ui.ctx());
-
         ui.horizontal(|ui| {
             ui.set_height(self.config.height);
             self.show_contents_desktop(ui, app_state.active_symbol())
@@ -114,214 +257,232 @@ impl TopToolbar {
     /// Desktop layout: horizontal toolbar contents.
     fn show_contents_desktop(&mut self, ui: &mut Ui, symbol: &str) -> TopToolbarAction {
         let mut action = TopToolbarAction::None;
-        // Controls carry their own token gaps (`space_*`, separators).
+        // Controls carry their own token gaps (`gap`, separators).
         ui.spacing_mut().item_spacing.x = 0.0;
+        // Kit buttons label in egui's button style; every label of the strip has the body size.
+        let body = egui::FontId::proportional(ui.active_theme().text.body);
+        ui.style_mut()
+            .text_styles
+            .insert(egui::TextStyle::Button, body);
 
-        // Menu button (burger) - leftmost
-        self.show_menu_button(ui, &mut action);
-        self.toolbar_separator(ui);
+        // The widest arrangement that fits: full, then icon-only labels, then overflow.
+        let available = ui.available_width();
+        let fits =
+            |compact, hidden: &[Slot]| self.strip_width(ui, symbol, compact, hidden) <= available;
+        let order = &OVERFLOW_ORDER[..];
+        let (compact, hidden) = if fits(false, &[]) {
+            (false, &order[..0])
+        } else {
+            let n = (0..order.len())
+                .find(|&n| fits(true, &order[..n]))
+                .unwrap_or(order.len());
+            (true, &order[..n])
+        };
 
-        // Left section
-        self.show_symbol_controls(ui, &mut action, symbol);
-        self.show_chart_controls(ui, &mut action);
-        self.show_action_controls(ui, &mut action);
-
-        // Right section (right-aligned)
-        ui.right_aligned(|ui| {
-            self.show_right_controls(ui, &mut action);
-        });
+        ui.add_space(DESIGN_TOKENS.spacing.lg);
+        self.show_groups(ui, LEFT, compact, hidden, symbol, &mut action);
+        let right = self.groups_width(ui, RIGHT, compact, hidden, symbol)
+            + Self::overflow_width(hidden)
+            + DESIGN_TOKENS.spacing.lg;
+        ui.add_space((ui.available_width() - right).max(0.0));
+        self.show_groups(ui, RIGHT, compact, hidden, symbol, &mut action);
+        if !hidden.is_empty() {
+            ui.add_space(gap());
+            Self::show_overflow(ui, hidden, &mut action);
+        }
 
         action
     }
 
-    /// Helper to draw separator
-    fn toolbar_separator(&self, ui: &mut Ui) {
-        ui.toolbar_separator();
-    }
-
-    /// Symbol search pill, compare button, and timeframe selector.
-    fn show_symbol_controls(&mut self, ui: &mut Ui, action: &mut TopToolbarAction, symbol: &str) {
-        if self.symbol_search_pill(ui, symbol).clicked() {
-            *action = TopToolbarAction::OpenSymbolSearch;
-        }
-        ui.space_sm();
-
-        if ToolbarIconButton::new(&embedded_icons::PLUS, "Compare or Add Symbol", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::OpenCompare;
-        }
-        self.toolbar_separator(ui);
-
-        let tf_action = self.timeframe_selector.show(ui);
-        if let TimeframeAction::Select(tf) = tf_action {
-            let display = tf.display();
-            *action = TopToolbarAction::IntervalSelected(display);
-        }
-        self.toolbar_separator(ui);
-    }
-
-    /// Chart type and indicators controls
-    fn show_chart_controls(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
-        let ct_action = self.chart_type_selector.show(ui);
-        if let ChartTypeAction::Select(ct) = ct_action {
-            let name = ct.name().to_string();
-            // Note: AppState is updated via dispatch, no need to set local state
-            *action = TopToolbarAction::ChartStyleSelected(name);
-        }
-        self.toolbar_separator(ui);
-
-        if IconTextButton::new(&embedded_icons::INDICATORS, "Indicators", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::OpenIndicators;
-        }
-        ui.space_xs();
-
-        if ToolbarIconButton::new(
-            &embedded_icons::LAYOUT_GRID,
-            "Indicator templates",
-            &self.config,
-        )
-        .show(ui)
-        .clicked()
-        {
-            *action = TopToolbarAction::OpenIndicatorTemplates;
-        }
-        self.toolbar_separator(ui);
-    }
-
-    /// Alert, replay, undo/redo controls (Trade moved to right side)
-    fn show_action_controls(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
-        if IconTextButton::new(&embedded_icons::BELL, "Alert", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::CreateAlert;
-        }
-        ui.space_sm();
-
-        if IconTextButton::new(&embedded_icons::REPLAY, "Replay", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            self.state.toggle_replay();
-            *action = TopToolbarAction::ToggleReplay;
-        }
-        self.toolbar_separator(ui);
-
-        if ToolbarIconButton::new(&embedded_icons::UNDO, "Undo", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::Undo;
-        }
-        ui.space_xs();
-
-        if ToolbarIconButton::new(&embedded_icons::REDO, "Redo", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::Redo;
+    /// Width of `control` in the strip.
+    fn control_width(&self, ui: &Ui, control: Slot, compact: bool, symbol: &str) -> f32 {
+        let icon_button = ButtonSize::MD.pixels();
+        match control {
+            S::Menu => DESIGN_TOKENS.sizing.button_dialog,
+            S::Symbol => Self::symbol_trigger(symbol).width(ui),
+            S::Interval => self.timeframe_selector.trigger().width(ui),
+            S::ChartType => self.chart_type_selector.trigger().width(ui),
+            S::Compare | S::Templates | S::Layouts => self.config.btn_size,
+            S::Save => Self::save_button(&self.config).width(ui),
+            S::Trade => Self::trade_button().width(ui),
+            S::Publish => Self::publish_button().width(ui),
+            c if c.compacts() && !compact => c.entry().map_or(icon_button, |(_, label, _)| {
+                labelled_button_width(ui, label)
+            }),
+            _ => icon_button,
         }
     }
 
-    /// Right-aligned controls (RTL)
-    /// Order: Publish | Trade | Camera | Fullscreen | Settings | QuickSearch | sep | Save▼ | LayoutSetup | Theme
-    fn show_right_controls(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
-        ui.space_lg();
-
-        // Publish button (outlined pill) - rightmost
-        if PillButtonOutlined::new("Publish", "Publish Idea")
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::Publish;
+    /// Width of the visible controls of `groups` with their gaps and separators.
+    fn groups_width(
+        &self,
+        ui: &Ui,
+        groups: &[&[Slot]],
+        compact: bool,
+        hidden: &[Slot],
+        symbol: &str,
+    ) -> f32 {
+        let mut width = 0.0;
+        let mut shown = 0_usize;
+        for group in groups {
+            let visible = group.iter().filter(|&c| !hidden.contains(c));
+            let (mut group_width, mut count) = (0.0, 0);
+            for &control in visible {
+                group_width += self.control_width(ui, control, compact, symbol);
+                count += 1;
+            }
+            if count > 0 {
+                width += group_width + gap() * (count - 1) as f32;
+                shown += 1;
+            }
         }
-        ui.space_lg();
+        width + separator() * shown.saturating_sub(1) as f32
+    }
 
-        // Trade button (blue filled pill)
-        if PillButtonFilled::new("Trade", "Open Trading Panel")
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::OpenTradingPanel;
+    /// Width of the strip with `hidden` controls in the overflow menu.
+    fn strip_width(&self, ui: &Ui, symbol: &str, compact: bool, hidden: &[Slot]) -> f32 {
+        let left = self.groups_width(ui, LEFT, compact, hidden, symbol);
+        let right = self.groups_width(ui, RIGHT, compact, hidden, symbol);
+        // The two parts stay at least a separator apart.
+        2.0 * DESIGN_TOKENS.spacing.lg + left + separator() + right + Self::overflow_width(hidden)
+    }
+
+    fn overflow_width(hidden: &[Slot]) -> f32 {
+        if hidden.is_empty() {
+            0.0
+        } else {
+            gap() + ButtonSize::MD.pixels()
         }
-        ui.space_sm();
+    }
 
-        // Camera/Screenshot
-        if ToolbarIconButton::new(&embedded_icons::CAMERA, "Take Screenshot", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::TakeScreenshot;
+    /// Draw the visible controls of `groups`, with separators between groups.
+    fn show_groups(
+        &mut self,
+        ui: &mut Ui,
+        groups: &[&[Slot]],
+        compact: bool,
+        hidden: &[Slot],
+        symbol: &str,
+        action: &mut TopToolbarAction,
+    ) {
+        let mut first_group = true;
+        for group in groups {
+            let mut visible = group.iter().filter(|&c| !hidden.contains(c)).peekable();
+            if visible.peek().is_none() {
+                continue;
+            }
+            if !first_group {
+                ui.toolbar_separator();
+            }
+            first_group = false;
+            for (i, &control) in visible.enumerate() {
+                if i > 0 {
+                    ui.add_space(gap());
+                }
+                self.show_control(ui, control, compact, symbol, action);
+            }
         }
-        ui.space_xs();
+    }
 
-        // Fullscreen
-        if ToolbarIconButton::new(&embedded_icons::FULLSCREEN, "Fullscreen", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::ToggleFullscreen;
+    fn show_control(
+        &mut self,
+        ui: &mut Ui,
+        control: Slot,
+        compact: bool,
+        symbol: &str,
+        action: &mut TopToolbarAction,
+    ) {
+        match control {
+            S::Menu => return self.show_menu_button(ui, action),
+            S::Interval => {
+                if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui) {
+                    *action = TopToolbarAction::IntervalSelected(tf.display());
+                }
+                return;
+            }
+            S::ChartType => {
+                if let ChartTypeAction::Select(ct) = self.chart_type_selector.show(ui) {
+                    *action = TopToolbarAction::ChartStyleSelected(ct.name().to_string());
+                }
+                return;
+            }
+            _ => {}
         }
-        ui.space_xs();
-
-        // Settings
-        if ToolbarIconButton::new(&embedded_icons::SETTINGS_GEAR, "Settings", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::OpenSettings;
+        let Some((icon, label, clicked_action)) = control.entry() else {
+            return;
+        };
+        let response = match control {
+            S::Symbol => Self::symbol_trigger(symbol).show(ui, false),
+            S::Compare | S::Templates | S::Layouts => {
+                ToolbarIconButton::new(icon, label, &self.config).show(ui)
+            }
+            S::Save => Self::save_button(&self.config).show(ui),
+            S::Trade => Self::trade_button().show(ui),
+            S::Publish => Self::publish_button().show(ui),
+            S::Undo => IconButton::new(icon)
+                .enabled(self.state.can_undo)
+                .tooltip(if self.state.can_undo {
+                    label
+                } else {
+                    "Nothing to undo"
+                })
+                .show(ui),
+            S::Redo => IconButton::new(icon)
+                .enabled(self.state.can_redo)
+                .tooltip(if self.state.can_redo {
+                    label
+                } else {
+                    "Nothing to redo"
+                })
+                .show(ui),
+            c if c.compacts() && !compact => Button::icon_and_text(icon, label).ghost().show(ui),
+            _ => IconButton::new(icon).tooltip(label).show(ui),
+        };
+        if response.clicked() {
+            if control == S::Replay {
+                self.state.toggle_replay();
+            }
+            *action = clicked_action;
         }
-        ui.space_xs();
+    }
 
-        // Quick Search
-        if ToolbarIconButton::new(&embedded_icons::QUICK_SEARCH, "Quick Search", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::OpenSymbolSearch;
+    /// The overflow button and its menu of the controls that left the strip.
+    fn show_overflow(ui: &mut Ui, hidden: &[Slot], action: &mut TopToolbarAction) {
+        let response = IconButton::new(&embedded_icons::UI_MORE_HORIZONTAL)
+            .tooltip("More")
+            .show(ui);
+        egui::Popup::menu(&response).show(|ui| {
+            ui.set_width(DESIGN_TOKENS.sizing.dialog.submenu_width);
+            let strip_order = LEFT.iter().chain(RIGHT).flat_map(|group| group.iter());
+            for control in strip_order.filter(|&c| hidden.contains(c)) {
+                if let Some((icon, label, clicked_action)) = control.entry()
+                    && ListItem::new().show_with_icon(ui, label, icon).clicked()
+                {
+                    *action = clicked_action;
+                }
+            }
+        });
+    }
+
+    fn symbol_trigger(symbol: &str) -> Trigger<'static> {
+        Trigger {
+            icon: Some(&embedded_icons::QUICK_SEARCH),
+            label: symbol.to_owned(),
+            name: format!("Symbol search: {symbol}"),
+            min_width: 0.0,
         }
+    }
 
-        // Separator
-        ui.toolbar_separator();
+    fn save_button(config: &TopToolbarConfig) -> TextIconButton<'static> {
+        TextIconButton::new("Save", &embedded_icons::CHEVRON_DOWN, "Save Chart", config)
+    }
 
-        // Save dropdown (text + chevron)
-        if TextIconButton::new(
-            "Save",
-            &embedded_icons::CHEVRON_DOWN,
-            "Save Chart",
-            &self.config,
-        )
-        .show(ui)
-        .clicked()
-        {
-            *action = TopToolbarAction::Save;
-        }
-        ui.space_sm();
+    fn trade_button() -> PillButtonFilled {
+        PillButtonFilled::new("Trade", "Open Trading Panel")
+    }
 
-        // Layout Setup icon (21x19)
-        if ToolbarIconButton::new(
-            &embedded_icons::LAYOUT_SETUP,
-            "Manage Layouts",
-            &self.config,
-        )
-        .show(ui)
-        .clicked()
-        {
-            *action = TopToolbarAction::Layout(LayoutAction::OpenMenu);
-        }
-        ui.space_sm();
-
-        if ToolbarIconButton::new(&embedded_icons::THEME_TOGGLE, "Toggle Theme", &self.config)
-            .show(ui)
-            .clicked()
-        {
-            *action = TopToolbarAction::ThemeToggle;
-        }
+    fn publish_button() -> PillButtonOutlined {
+        PillButtonOutlined::new("Publish", "Publish Idea")
     }
 
     /// Menu button (burger icon)
@@ -360,110 +521,68 @@ impl TopToolbar {
 
         response.on_hover_text("Menu");
     }
-
-    /// Symbol search pill (with internal separator and diamond)
-    ///
-    /// Layout: [Search icon | Symbol text | separator | Diamond | Chevron]
-    ///
-    /// `symbol` is read from AppState (single source of truth).
-    fn symbol_search_pill(&self, ui: &mut Ui, symbol: &str) -> Response {
-        let icon_size = icons::SM_MD;
-        let small_icon_size = icons::XS;
-        let padding = DESIGN_TOKENS.spacing.lg;
-        let text_width = symbol.len() as f32 * 7.5; // Slightly more space for text
-        let separator_width = DESIGN_TOKENS.stroke.hairline;
-        let separator_padding = DESIGN_TOKENS.spacing.sm;
-
-        // Total width: search + padding + text + padding + separator + padding + diamond + padding + chevron + padding
-        let total_width = icon_size
-            + padding
-            + text_width
-            + separator_padding
-            + separator_width
-            + separator_padding
-            + small_icon_size
-            + DESIGN_TOKENS.spacing.xs
-            + small_icon_size
-            + padding;
-        let height = DESIGN_TOKENS.sizing.button_md;
-
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
-
-        if ui.is_rect_visible(rect) {
-            // Background (use theme-aware pill color)
-            let bg_color = if response.is_pointer_button_down_on() {
-                ui.visuals().widgets.active.bg_fill
-            } else if response.hovered() {
-                ui.visuals().widgets.hovered.bg_fill
-            } else {
-                // 10% of the way from the panel fill to white.
-                let panel = ui.visuals().panel_fill;
-                let lift = |c: u8| c + ((255 - c) as f32 * 0.1) as u8;
-                egui::Color32::from_rgb(lift(panel.r()), lift(panel.g()), lift(panel.b()))
-            };
-
-            ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.pill, bg_color);
-
-            let mut x = rect.min.x + padding;
-
-            // Search icon
-            let icon_pos = Pos2::new(x, rect.center().y - icon_size / 2.0);
-            let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
-            let icon_color = if response.hovered() {
-                ui.visuals().widgets.hovered.fg_stroke.color
-            } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
-            };
-            embedded_icons::QUICK_SEARCH
-                .as_image_tinted(Vec2::splat(icon_size), icon_color)
-                .paint_at(ui, icon_rect);
-            x += icon_size + padding;
-
-            // Symbol text
-            ui.painter().text(
-                Pos2::new(x, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                symbol,
-                egui::FontId::proportional(typography::MD),
-                ui.visuals().text_color(),
-            );
-            x += text_width + separator_padding;
-
-            // Vertical separator inside pill
-            let sep_height = height * 0.5;
-            let sep_y = rect.center().y - sep_height / 2.0;
-            ui.painter().rect_filled(
-                Rect::from_min_size(Pos2::new(x, sep_y), Vec2::new(separator_width, sep_height)),
-                DESIGN_TOKENS.rounding.none,
-                ui.visuals().widgets.noninteractive.bg_stroke.color,
-            );
-            x += separator_width + separator_padding;
-
-            // Diamond icon
-            let diamond_pos = Pos2::new(x, rect.center().y - small_icon_size / 2.0);
-            let diamond_rect = Rect::from_min_size(diamond_pos, Vec2::splat(small_icon_size));
-            embedded_icons::CANDLESTICK
-                .as_image_tinted(Vec2::splat(small_icon_size), icon_color)
-                .paint_at(ui, diamond_rect);
-            x += small_icon_size + DESIGN_TOKENS.spacing.xs;
-
-            // Chevron down
-            let chevron_pos = Pos2::new(x, rect.center().y - small_icon_size / 2.0);
-            let chevron_rect = Rect::from_min_size(chevron_pos, Vec2::splat(small_icon_size));
-            embedded_icons::CHEVRON_DOWN
-                .as_image_tinted(Vec2::splat(small_icon_size), icon_color)
-                .paint_at(ui, chevron_rect);
-        }
-
-        response
-    }
 }
 
 impl TopToolbar {
     /// Sync toolbar state from application state.
     pub fn sync_from_app_state(&mut self, app_state: &dyn crate::ui::app_state::ChartAppState) {
         self.state.sync_from_app_state(app_state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, PointerButton, Pos2, RawInput, pos2, vec2};
+
+    /// Actions from clicking the strip every 4 px along its middle, one click at a time.
+    fn click_along(ctx: &egui::Context, toolbar: &mut TopToolbar) -> Vec<TopToolbarAction> {
+        let mut actions = Vec::new();
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 32.0));
+        for x in (0..1440).step_by(4) {
+            let pos = pos2(x as f32, 16.0);
+            for pressed in [true, false] {
+                let input = RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    ..Default::default()
+                };
+                ctx.run_ui(input, |ui| {
+                    let action = ui
+                        .horizontal(|ui| {
+                            ui.set_height(toolbar.config.height);
+                            toolbar.show_contents_desktop(ui, "BTCUSD")
+                        })
+                        .inner;
+                    actions.push(action);
+                })
+                .drop_without_applying_deltas();
+            }
+        }
+        actions
+    }
+
+    #[test]
+    fn undo_and_redo_ignore_clicks_while_there_is_nothing_to_undo_or_redo() {
+        let ctx = egui::Context::default();
+        let mut toolbar = TopToolbar::default();
+        let actions = click_along(&ctx, &mut toolbar);
+        assert!(actions.contains(&TopToolbarAction::Undo));
+        assert!(actions.contains(&TopToolbarAction::Redo));
+
+        toolbar.state.can_undo = false;
+        toolbar.state.can_redo = false;
+        let actions = click_along(&ctx, &mut toolbar);
+        assert!(!actions.contains(&TopToolbarAction::Undo));
+        assert!(!actions.contains(&TopToolbarAction::Redo));
+        assert!(actions.contains(&TopToolbarAction::ToggleReplay));
     }
 }

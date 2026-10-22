@@ -4,7 +4,8 @@
 use crate::ext::UiExt;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
+use crate::ui::top_toolbar::buttons::Trigger;
+use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::collections::HashSet;
 
 /// Theme colors for dropdown rendering
@@ -159,6 +160,7 @@ impl Timeframe {
 /// Configuration for timeframe selector
 #[derive(Debug, Clone)]
 pub struct TimeframeSelectorConfig {
+    /// Minimum width of the button; it is otherwise sized to its label.
     pub btn_width: f32,
     pub dropdown_width: f32,
     pub item_height: f32,
@@ -175,7 +177,7 @@ impl Default for TimeframeSelectorConfig {
         // Colors are TRANSPARENT to signal that colors should be fetched from
         // ui.style().visuals at render time for proper theme support.
         Self {
-            btn_width: 50.0,
+            btn_width: 0.0,
             dropdown_width: 180.0,
             item_height: DESIGN_TOKENS.sizing.button_md,
             bg_color: Color32::TRANSPARENT,
@@ -374,7 +376,7 @@ impl TimeframeSelector {
         let mut action = TimeframeAction::None;
 
         // Main button
-        let btn_res = self.draw_btn(ui);
+        let btn_res = self.trigger().show(ui, self.is_open);
         if btn_res.clicked() {
             self.is_open = !self.is_open;
         }
@@ -403,48 +405,15 @@ impl TimeframeSelector {
         action
     }
 
-    fn draw_btn(&self, ui: &mut Ui) -> Response {
-        let desired_size = Vec2::new(self.config.btn_width, DESIGN_TOKENS.sizing.button_md);
-        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
-
-        // Theme-aware colors
-        let bg_color = if self.is_open || response.hovered() {
-            ui.style().visuals.widgets.hovered.bg_fill
-        } else {
-            Color32::TRANSPARENT
-        };
-        let border_color = ui.style().visuals.widgets.noninteractive.bg_stroke.color;
-        let text_color = ui.style().visuals.text_color();
-        let muted_color = ui.style().visuals.widgets.noninteractive.fg_stroke.color;
-
-        ui.painter()
-            .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg_color);
-        ui.painter().rect_stroke(
-            rect,
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
-            StrokeKind::Outside,
-        );
-
-        // Timeframe text
-        ui.painter().text(
-            rect.center() - Vec2::new(5.0, 0.0),
-            egui::Align2::CENTER_CENTER,
-            self.current.display(),
-            egui::FontId::proportional(typography::LG),
-            text_color,
-        );
-
-        // Dropdown arrow
-        ui.painter().text(
-            Pos2::new(rect.right() - DESIGN_TOKENS.spacing.xl, rect.center().y),
-            egui::Align2::CENTER_CENTER,
-            "▾",
-            egui::FontId::proportional(typography::XS),
-            muted_color,
-        );
-
-        response
+    /// The button that opens the dropdown, showing the current timeframe.
+    pub(crate) fn trigger(&self) -> Trigger<'static> {
+        let label = self.current.display();
+        Trigger {
+            icon: None,
+            name: format!("Interval: {label}"),
+            label,
+            min_width: self.config.btn_width,
+        }
     }
 
     fn draw_dropdown(&mut self, ui: &mut Ui, btn_rect: Rect) -> TimeframeAction {

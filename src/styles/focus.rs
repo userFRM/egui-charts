@@ -24,7 +24,8 @@ pub fn draw_focus_ring(ui: &Ui, response: &Response) {
             response.rect.expand(DESIGN_TOKENS.spacing.xs),
             DESIGN_TOKENS.rounding.sm,
             Stroke::new(DESIGN_TOKENS.stroke.thick, ring_color),
-            StrokeKind::Outside,
+            // Inside the expanded rect, so a control filling a tight strip keeps all four sides.
+            StrokeKind::Inside,
         );
     }
 }
