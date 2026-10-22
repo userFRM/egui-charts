@@ -163,9 +163,6 @@ mod average_price;
 
 // Seventh batch - order-flow indicators
 mod cvd;
-mod iceberg;
-mod liquidity_tracker;
-mod stop_run;
 
 // Eighth batch - Volume indicators
 mod net_volume;
@@ -327,12 +324,6 @@ pub use average_price::{HL2, HLC3, OHLC4, TrueRange};
 
 // Re-exports - Seventh batch (order-flow indicators)
 pub use cvd::{CVD, CVDMode};
-pub use iceberg::{IcebergDetection, IcebergDetector};
-pub use liquidity_tracker::{
-    LiquidityLevel, LiquiditySweep, LiquidityTracker, LiquidityZone, LiquidityZoneType,
-    SweepDirection,
-};
-pub use stop_run::{StopRunDetection, StopRunIndicator, StopRunType};
 
 // Re-exports - Eighth batch (Volume indicators)
 pub use net_volume::NetVolume;
@@ -514,18 +505,6 @@ pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
             "CVD",
             "Cumulative Volume Delta - Buy minus sell volume, estimated from bars",
         ),
-        (
-            "Iceberg",
-            "Iceberg Detector - Repeated heavy price levels, estimated from bars",
-        ),
-        (
-            "Stop Run",
-            "Stop Run Indicator - Swing break reversed within the bar",
-        ),
-        (
-            "Liquidity",
-            "Liquidity Tracker - Volume accumulated at price levels, estimated from bars",
-        ),
         // Eighth batch - Volume indicators
         (
             "Net Volume",
@@ -646,52 +625,5 @@ fn clamp_param(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
 }
 
-/// The volume of the last `period` bars up to `data[idx]`, from `sum`, the
-/// volume of the last `period` bars up to the bar before. It is summed again
-/// every `period` bars, which bounds rounding drift, and while it is not
-/// finite, so a NaN or infinite volume only affects the windows that hold it.
-fn window_volume(data: &[crate::model::Bar], idx: usize, period: usize, mut sum: f64) -> f64 {
-    sum += data[idx].volume;
-    if let Some(leaving) = idx.checked_sub(period) {
-        sum -= data[leaving].volume;
-    }
-    if !sum.is_finite() || idx.is_multiple_of(period) {
-        sum = data[(idx + 1).saturating_sub(period)..=idx]
-            .iter()
-            .map(|b| b.volume)
-            .sum();
-    }
-    sum
-}
-
 /// Most price rows a volume profile computes.
 const MAX_PROFILE_ROWS: usize = 10_000;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::Bar;
-    use chrono::Utc;
-
-    /// The running sum equals the sum of each window, so a NaN or infinite
-    /// volume affects only the windows that hold it.
-    #[test]
-    fn window_volume_is_the_sum_of_each_window() {
-        let mut volumes = [1.0; 16];
-        volumes[2] = f64::NAN;
-        volumes[9] = f64::INFINITY;
-        let data: Vec<Bar> = volumes
-            .iter()
-            .map(|&volume| Bar::new(Utc::now(), 1.0, 1.0, 1.0, 1.0, volume))
-            .collect();
-        let period = 4;
-        let mut sum = 0.0;
-        for idx in 0..data.len() {
-            sum = window_volume(&data, idx, period, sum);
-            let window = &volumes[(idx + 1).saturating_sub(period)..=idx];
-            let expected: f64 = window.iter().sum();
-            let same = sum == expected || sum.is_nan() && expected.is_nan();
-            assert!(same, "bar {idx}: {sum}, expected {expected}");
-        }
-    }
-}

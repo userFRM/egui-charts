@@ -240,10 +240,10 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 
 ---
 
-## Technical Indicators (131 registered)
+## Technical Indicators (128 registered)
 
-All 131 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
-Some indicators appear in multiple categories below (e.g., CVD in both Volume and Order Flow).
+All 128 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
+Some indicators appear in more than one category below (for example Standard Error in Volatility and Statistics).
 
 ### Rendering Limitation
 All indicators use a **generic polyline renderer**. There is no indicator-specific rendering. This means:
@@ -335,17 +335,11 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Pivot Points: Standard, Fibonacci, Woodie, Camarilla, DeMark formulas over a rolling N-bar window; only the pivot line is drawn
 - [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; the last leg follows the current extreme until the next reversal
 
-### Order Flow (4/4, estimated from bars; no trade or order book data)
-- [x] Iceberg Detector: 0 to 1 score in its own pane for bars closing at a price level that enough of the last N bars touched with heavy volume, each bar's volume spread evenly over its range; it cannot see hidden orders. Levels use the tick size set with `with_tick_size`, otherwise the price span of the bars so far in about 1,000 levels
-- [x] Stop Run: signed score in its own pane for bars that break the prior swing low or high and reverse within the bar
-- [x] Liquidity Tracker: largest volume the last N bars spread on one price level, in multiples of the average bar volume, in its own pane; sweeps (the heavy levels a bar traded through, one per side of the level holding its open) and zones are available through the API only
-- [x] CVD (also in Volume)
-
 ### Price Oscillators (1/1)
 - [x] PPO: Price Oscillator (signal line computed, not drawn)
 
 ### Factory Coverage
-- [x] `IndicatorFactory` registers all 131 built-in indicators by name
+- [x] `IndicatorFactory` registers all 128 built-in indicators by name
 - [ ] The indicator dialog offers 24 fixed entries; the other indicators are reachable only from code
 
 ---
@@ -550,7 +544,7 @@ All ui_kit components are **fully implemented** generic building blocks:
 - 18 of 18 chart types render
 - Pan/zoom and crosshair; the price axis renders on a linear scale only
 - 74 of 88 drawing tools work as described, several with limits noted above (95 total incl. 4 cursor modes + 3 placeholders)
-- 131 registered indicators with calculation code; multi-line studies draw only their first line
+- 128 registered indicators with calculation code; multi-line studies draw only their first line
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - 24 reusable ui_kit building blocks
 - Theme system with 300+ design tokens and multiple presets

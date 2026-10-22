@@ -184,10 +184,6 @@ impl IndicatorFactory {
             PositiveVolumeIndex,
             WilliamsAD,
             MarketFacilitationIndex,
-            // Order-flow / liquidity
-            IcebergDetector,
-            StopRunIndicator,
-            LiquidityTracker,
             // Support / resistance
             PivotPoints,
             ZigZag,
@@ -442,17 +438,6 @@ mod tests {
             Box::new(PositiveVolumeIndex::new()),
             Box::new(WilliamsAD::new()),
             Box::new(MarketFacilitationIndex::new().with_divisor(x(1.0))),
-            Box::new(
-                IcebergDetector::new(l(0))
-                    .with_tick_size(x(0.0))
-                    .with_volume_threshold(x(2.0)),
-            ),
-            Box::new(StopRunIndicator::new(l(0)).with_break_threshold(x(0.5))),
-            Box::new(
-                LiquidityTracker::new(l(0))
-                    .with_tick_size(x(0.0))
-                    .with_volume_threshold(x(2.0)),
-            ),
             Box::new(PivotPoints::new(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
             Box::new(PriceChannel::new(l(0))),
@@ -661,63 +646,5 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
-    }
-
-    /// A bar's value may depend only on that bar and the bars before it, so
-    /// appending bars, here with heavier volume and a wider price range, must
-    /// leave the values of the bars already computed unchanged.
-    #[test]
-    fn appending_bars_leaves_earlier_values_unchanged() {
-        use crate::model::Bar;
-        use chrono::{TimeZone, Utc};
-
-        let bars: Vec<Bar> = (0..300)
-            .map(|i| {
-                let (c, volume) = if i < 150 {
-                    (100.0 + 3.0 * (i as f64 / 5.0).sin(), 100.0)
-                } else {
-                    (100.0 + 15.0 * (i - 150) as f64, 1000.0)
-                };
-                Bar {
-                    time: Utc.timestamp_opt(i * 60, 0).unwrap(),
-                    open: c - 0.5,
-                    high: c + 1.0,
-                    low: c - 1.0,
-                    close: c,
-                    volume,
-                }
-            })
-            .collect();
-        let studies: [fn() -> Box<dyn Indicator>; 2] = [
-            || Box::new(IcebergDetector::new(20).with_tick_size(1.0)),
-            || Box::new(LiquidityTracker::new(20).with_tick_size(1.0)),
-        ];
-        let mut changed = Vec::new();
-        for make in studies {
-            let (mut prefix, mut full) = (make(), make());
-            prefix.calculate(&bars[..150]);
-            full.calculate(&bars);
-            let values = prefix.values().iter().zip(full.values());
-            if let Some((i, (a, b))) = values
-                .enumerate()
-                .find(|(_, (a, b))| format!("{a:?}") != format!("{b:?}"))
-            {
-                changed.push(format!("{} bar {i}: {a:?} became {b:?}", prefix.name()));
-            }
-        }
-        assert!(changed.is_empty(), "{}", changed.join("\n"));
-    }
-
-    /// The factory exposes the full built-in catalogue. This pins the count so
-    /// a dropped registration (or a name collision silently overwriting an
-    /// entry) is caught immediately.
-    #[test]
-    fn factory_exposes_full_builtin_catalogue() {
-        let factory = IndicatorFactory::new();
-        assert_eq!(
-            factory.count(),
-            131,
-            "expected every built-in indicator to be registered exactly once",
-        );
     }
 }

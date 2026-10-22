@@ -51,7 +51,7 @@
 //! | **Data** | [`data`] | `DataSource` trait, `DataUpdate`, historical/live data abstractions |
 //! | **Chart engine** | [`chart`] | Pan/zoom, hit-testing, coordinate mapping, series rendering, interaction |
 //! | **Drawing tools** | [`drawings`] | 95 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
-//! | **Indicators** | [`studies`] | 131 indicator names in `IndicatorFactory`, `Indicator` trait, `IndicatorRegistry` |
+//! | **Indicators** | [`studies`] | 128 indicator names in `IndicatorFactory`, `Indicator` trait, `IndicatorRegistry` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Validation** | [`validation`] | OHLC integrity checks, timestamp ordering, data quality |
