@@ -148,7 +148,7 @@ impl Timeframe {
         ]
     }
 
-    /// Get duration in milliseconds
+    /// Get duration in milliseconds, saturating at `i64::MAX` for huge custom timeframes
     pub fn duration_ms(&self) -> i64 {
         match self {
             Timeframe::Ms100 => 100,
@@ -168,7 +168,7 @@ impl Timeframe {
             Timeframe::Day1 => 86_400_000,
             Timeframe::Week1 => 604_800_000,
             Timeframe::Month1 => 2_592_000_000, // Approximation: 30 days
-            Timeframe::Custom(seconds) => (*seconds as i64) * 1000,
+            Timeframe::Custom(seconds) => seconds.saturating_mul(1000).min(i64::MAX as u64) as i64,
         }
     }
 
@@ -306,13 +306,13 @@ fn parse_custom_timeframe(s: &str) -> Option<u64> {
     for &(suffix, multiplier) in suffixes {
         if let Some(num_str) = s.strip_suffix(suffix) {
             let num: u64 = num_str.trim().parse().ok()?;
-            return Some(num * multiplier);
+            return num.checked_mul(multiplier);
         }
     }
 
     // Try bare number as minutes (common convention)
     let num: u64 = s.trim().parse().ok()?;
-    Some(num * 60)
+    num.checked_mul(60)
 }
 
 #[cfg(test)]
@@ -339,6 +339,16 @@ mod tests {
         assert_eq!(Timeframe::Custom(45).duration_ms(), 45_000);
         assert_eq!(Timeframe::Custom(180).duration_ms(), 180_000);
         assert_eq!(Timeframe::Custom(7200).duration_ms(), 7_200_000);
+        // Too large for i64 milliseconds: saturate rather than overflow or wrap negative.
+        assert_eq!(
+            Timeframe::Custom(10_000_000_000_000_000).duration_ms(),
+            i64::MAX
+        );
+        assert_eq!(
+            Timeframe::Custom(u64::MAX).duration(),
+            Duration::milliseconds(i64::MAX)
+        );
+        assert!("40000000000000w".parse::<Timeframe>().is_err());
     }
 
     #[test]

@@ -27,6 +27,7 @@ All notable changes to this project are documented in this file. The format is b
 - The bars pattern projection draws shifted copies of the selected bars.
 - The chart watermark falls back to the chart symbol and is hidden when there is none, instead of showing a placeholder.
 - Zooming the price axis in by hand stops at a span of one millionth of the price level instead of narrowing to a few nanounits, and repeated zooming out can no longer overflow the price range to infinite or NaN bounds.
+- `Timeframe::duration_ms` saturates at `i64::MAX` for custom timeframes too large to represent instead of overflowing into a panic or a negative duration, and parsing a custom timeframe whose second count overflows is rejected.
 
 ### Changed
 
