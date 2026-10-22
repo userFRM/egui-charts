@@ -180,7 +180,7 @@ impl PriceTransform {
             PriceScaleMode::Logarithmic if price > 0.0 => price.ln(),
             PriceScaleMode::Logarithmic => f64::NEG_INFINITY,
             PriceScaleMode::Percentage => (price - self.base) / self.base.abs() * 100.0,
-            PriceScaleMode::IndexedTo100 => price / self.base * 100.0,
+            PriceScaleMode::IndexedTo100 => 100.0 + (price - self.base) / self.base.abs() * 100.0,
         }
     }
 
@@ -190,7 +190,7 @@ impl PriceTransform {
             PriceScaleMode::Normal => value,
             PriceScaleMode::Logarithmic => value.exp(),
             PriceScaleMode::Percentage => self.base + value / 100.0 * self.base.abs(),
-            PriceScaleMode::IndexedTo100 => value / 100.0 * self.base,
+            PriceScaleMode::IndexedTo100 => self.base + (value - 100.0) / 100.0 * self.base.abs(),
         }
     }
 
@@ -424,6 +424,9 @@ mod tests {
             (Percentage, 50.0, (-10.0, 10.0), false, 50.0, 50.0),
             // 45 is 90 when 50 is 100.
             (IndexedTo100, 50.0, (90.0, 110.0), false, 45.0, 100.0),
+            // A negative base keeps the price order: -40 is 20% above -50 and reads 120.
+            (IndexedTo100, -50.0, (80.0, 120.0), false, -40.0, 0.0),
+            (IndexedTo100, -50.0, (80.0, 120.0), false, -60.0, 100.0),
             (Normal, 0.0, (100.0, 200.0), true, 120.0, 20.0),
             // Outside the range: above the pane, not on its edge.
             (Normal, 0.0, (100.0, 200.0), false, 250.0, -50.0),
@@ -439,7 +442,7 @@ mod tests {
             );
             let back = map.y_to_price(got);
             assert!(
-                (back - price).abs() < 1e-3 * price,
+                (back - price).abs() < 1e-3 * price.abs(),
                 "{mode:?} {price}: back {back}"
             );
         }
