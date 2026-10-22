@@ -133,6 +133,9 @@ impl IndicatorDialog {
 
         // Corner radius - desktop style
         let corner_radius = DESIGN_TOKENS.rounding.lg;
+        let frame = egui::Frame::window(&ctx.global_style())
+            .fill(self.config.bg_color)
+            .corner_radius(corner_radius as u8);
 
         Window::new("Indicators")
             .open(&mut is_open)
@@ -140,12 +143,9 @@ impl IndicatorDialog {
             .collapsible(false)
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(Vec2::new(dialog_width, dialog_height))
-            .frame(
-                egui::Frame::window(&ctx.global_style())
-                    .fill(self.config.bg_color)
-                    .corner_radius(corner_radius as u8),
-            )
+            // egui sizes a window from outside its frame, so add the frame to the content size.
+            .fixed_size(Vec2::new(dialog_width, dialog_height) + frame.total_margin().sum())
+            .frame(frame)
             .show(ctx, |ui| {
                 action = self.draw_content(ui);
             });
@@ -210,7 +210,7 @@ impl IndicatorDialog {
                 let list_width = if self.show_config {
                     self.config.width - 420.0 // More space for config panel
                 } else {
-                    self.config.width - 160.0
+                    ui.available_width()
                 };
                 ui.set_width(list_width);
                 action = self.draw_indicator_list(ui);
@@ -220,7 +220,7 @@ impl IndicatorDialog {
             if self.show_config {
                 ui.separator();
                 ui.vertical(|ui| {
-                    ui.set_width(250.0); // Wider config panel
+                    ui.set_width(ui.available_width()); // The rest of the dialog
                     if let Some(a) = self.draw_config_panel(ui) {
                         action = a;
                     }

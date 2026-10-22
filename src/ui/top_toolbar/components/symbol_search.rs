@@ -235,11 +235,13 @@ impl SymbolSearchDialog {
         let mut sel_symbol = None;
         let mut should_close = false;
 
+        // egui sizes a window from outside its frame, so add the frame to the content width.
+        let frame = egui::Frame::window(&ctx.global_style());
         // Centred like the crate's other dialogs, but movable.
         egui::Window::new("Symbol Search")
             .collapsible(false)
             .resizable(false)
-            .default_width(400.0)
+            .default_width(400.0 + frame.total_margin().sum().x)
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
@@ -605,14 +607,16 @@ impl CompareSymbolsDialog {
 
         let mut is_open = self.is_open;
         let config = self.config.resolved(&ctx.global_style().visuals);
+        let frame = egui::Frame::window(&ctx.global_style()).fill(config.bg_color);
 
         Window::new("Compare symbol")
             .open(&mut is_open)
             .resizable(false)
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(Vec2::new(config.width, config.height))
-            .frame(egui::Frame::window(&ctx.global_style()).fill(config.bg_color))
+            // egui sizes a window from outside its frame, so add the frame to the content size.
+            .fixed_size(Vec2::new(config.width, config.height) + frame.total_margin().sum())
+            .frame(frame)
             .show(ctx, |ui| {
                 action = self.draw_content(ui, symbols, &config);
             });
