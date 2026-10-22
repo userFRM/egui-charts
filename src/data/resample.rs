@@ -4,8 +4,7 @@ use crate::model::{Bar, BarClock, Timeframe};
 use chrono::TimeDelta;
 
 /// Builds bars of interval `to` from `bars` of interval `from`, which must be in time order.
-/// Prices and volumes are expected to be finite, as stored series keep them; non-finite values are
-/// not filtered.
+/// Prices and volumes are expected to be finite, as stored series keep them.
 ///
 /// Each output bar gathers the consecutive input bars that fall in one bar of
 /// [`BarClock::new(to)`](BarClock::new) and is stamped with that bar's open time. It takes the open
@@ -15,7 +14,8 @@ use chrono::TimeDelta;
 ///
 /// Returns `None` when `from` bars do not nest in `to` bars: weekly and monthly bars into any
 /// other interval, or an input bar that would span two output bars, as a 5-minute bar opening at
-/// 00:05 does in 7-minute bars.
+/// 00:05 does in 7-minute bars. Also returns `None` when the bars of one slot do not combine into a
+/// valid bar, as when their volumes add up to infinity.
 ///
 /// ```
 /// use chrono::{DateTime, TimeDelta, Utc};
@@ -58,7 +58,7 @@ pub fn resample(bars: &[Bar], from: Timeframe, to: Timeframe) -> Option<Vec<Bar>
             return None;
         }
         match resampled.last_mut() {
-            Some(last) if last.time == slot => super::merge::fold(last, bar),
+            Some(last) if last.time == slot => *last = super::merge::fold(last, bar)?,
             _ => resampled.push(Bar {
                 time: slot,
                 ..bar.clone()
@@ -134,6 +134,11 @@ mod tests {
                 bar("2024-03-11T00:00:00Z", [30.0, 33.0, 29.0, 32.0, 3.0]),
                 bar("2024-03-18T00:00:00Z", [32.0, 34.0, 28.0, 29.0, 7.0]),
             ])),
+            // Two volumes that add up to infinity give no valid bar.
+            (Timeframe::Min1, Timeframe::Min5, vec![
+                bar("2024-03-15T00:00:00Z", [1.0, 1.0, 1.0, 1.0, f64::MAX]),
+                bar("2024-03-15T00:01:00Z", [1.0, 1.0, 1.0, 1.0, f64::MAX]),
+            ], None),
             // Some weeks end in the next month, so weekly bars never build monthly ones, even a week inside one month.
             (Timeframe::Week1, Timeframe::Month1, vec![
                 bar("2024-03-04T00:00:00Z", [1.0, 1.0, 1.0, 1.0, 1.0]),

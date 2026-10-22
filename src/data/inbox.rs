@@ -288,7 +288,11 @@ impl Sink {
                 match updates.bars.entry(open) {
                     Entry::Occupied(mut pending) => {
                         let (bar, origin) = pending.get_mut();
-                        fold(bar, &ticks);
+                        let Some(folded) = fold(bar, &ticks) else {
+                            updates.rejected += 1;
+                            return;
+                        };
+                        *bar = folded;
                         if let Origin::Ticks(trades) = origin {
                             *trades += 1;
                         }

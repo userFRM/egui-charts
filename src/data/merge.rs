@@ -84,11 +84,10 @@ impl SeriesBars {
             }
             let old = stored.next_if(|old| slot(old) == at);
             let new = match (old, origin) {
-                (Some(old), Origin::Ticks(_)) => {
-                    let mut new = old.clone();
-                    fold(&mut new, &bar);
-                    new
-                }
+                (Some(old), Origin::Ticks(_)) => fold(old, &bar).unwrap_or_else(|| {
+                    merged.rejected += 1;
+                    old.clone()
+                }),
                 (Some(old), Origin::History) if !self.from_ticks.contains(&old.time) => old.clone(),
                 (Some(old), _) => {
                     self.from_ticks.remove(&old.time);
@@ -121,12 +120,17 @@ pub(super) fn valid(bar: &Bar) -> bool {
         && bar.volume >= 0.0
 }
 
-/// Extends `bar` with `ticks`, a bar of later trades in the same slot.
-pub(super) fn fold(bar: &mut Bar, ticks: &Bar) {
-    bar.high = bar.high.max(ticks.high);
-    bar.low = bar.low.min(ticks.low);
-    bar.close = ticks.close;
-    bar.volume += ticks.volume;
+/// `bar` extended with `ticks`, a bar of later trades in the same slot, or `None` if the result is
+/// not valid: two valid volumes can add up to infinity.
+pub(super) fn fold(bar: &Bar, ticks: &Bar) -> Option<Bar> {
+    let folded = Bar {
+        high: bar.high.max(ticks.high),
+        low: bar.low.min(ticks.low),
+        close: ticks.close,
+        volume: bar.volume + ticks.volume,
+        ..*bar
+    };
+    valid(&folded).then_some(folded)
 }
 
 #[cfg(test)]
@@ -197,6 +201,10 @@ mod tests {
                 vec![(History, vec![bar(0, 1.0), ohlcv(1, [5.0, 7.0, 4.0, 6.0, 10.0])]),
                     (Ticks(3), vec![ohlcv(1, [8.0, 8.0, 3.0, 3.0, 3.0])])],
                 vec![bar(0, 1.0), ohlcv(1, [5.0, 8.0, 3.0, 3.0, 13.0])], (Some(1), 0, 0)),
+            ("ticks that would overflow the volume are rejected",
+                vec![(History, vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1.5e308])]),
+                    (Ticks(1), vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1e308])])],
+                vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1.5e308])], (None, 1, 0)),
             ("every trade of a bar older than the last bar is late",
                 vec![(History, vec![bar(0, 1.0), bar(1, 2.0)]), (Ticks(3), vec![bar(0, 9.0)])],
                 vec![bar(0, 1.0), bar(1, 2.0)], (None, 0, 3)),
