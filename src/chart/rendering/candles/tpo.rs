@@ -225,7 +225,7 @@ fn draw_session_profile(
             TPODisplayMode::Letters | TPODisplayMode::Both
         );
 
-    // Row height in pixels for one tick — used to size blocks/letters so they
+    // Row height in pixels for one tick, used to size blocks/letters so they
     // fill their price bin without overlapping the neighbour above/below.
     let row_height = {
         // Measured at the POC: a row is not the same height everywhere on a log scale.

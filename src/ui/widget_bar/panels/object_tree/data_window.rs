@@ -114,7 +114,7 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
 /// keeps the decimals of the positive price of the same size
 fn format_price(price: f64) -> String {
     if price == 0.0 {
-        return "—".to_string();
+        return "\u{2014}".to_string();
     }
 
     let magnitude = price.abs();
@@ -136,7 +136,7 @@ fn format_price(price: f64) -> String {
 /// Format volume with K/M/B suffixes
 fn format_volume(volume: f64) -> String {
     if volume == 0.0 {
-        return "—".to_string();
+        return "\u{2014}".to_string();
     }
 
     if volume >= 1_000_000_000.0 {

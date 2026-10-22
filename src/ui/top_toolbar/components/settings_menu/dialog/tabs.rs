@@ -740,8 +740,8 @@ fn styled_text_input(ui: &mut Ui, text: &mut String, width: f32) {
 
 fn line_style_preview(ls: LineStyle) -> &'static str {
     match ls {
-        LineStyle::Solid => "———",
-        LineStyle::Dashed => "– – –",
+        LineStyle::Solid => "\u{2014}\u{2014}\u{2014}",
+        LineStyle::Dashed => "\u{2013} \u{2013} \u{2013}",
         LineStyle::Dotted => "· · · ·",
     }
 }
