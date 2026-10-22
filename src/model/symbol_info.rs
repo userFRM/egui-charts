@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Symbol type categories for instrument classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SymbolType {
     #[default]
     Stock,

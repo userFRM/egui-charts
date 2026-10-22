@@ -20,8 +20,9 @@ use serde::{Deserialize, Serialize};
 /// Each tick represents one matched trade on the exchange, recording the
 /// price, size, and aggressor side. Ticks are the finest-grained market
 /// data and can be aggregated into bars, footprint charts, or volume
-/// profiles.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// profiles. Build it with [`Tick::new`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Tick {
     /// Ts of the trade
     pub ts: DateTime<Utc>,
@@ -31,6 +32,29 @@ pub struct Tick {
     pub size: f64,
     /// Side of the trade (if available)
     pub side: Option<TradeSide>,
+    /// Exchange trade id or sequence number, unique per symbol. With it, history and live trades
+    /// join without losing or repeating a trade.
+    #[serde(default)]
+    pub id: Option<u64>,
+}
+
+impl Tick {
+    /// A trade without an id.
+    pub fn new(ts: DateTime<Utc>, price: f64, size: f64, side: Option<TradeSide>) -> Self {
+        Self {
+            ts,
+            price,
+            size,
+            side,
+            id: None,
+        }
+    }
+
+    /// Sets [`id`](Self::id).
+    pub fn with_id(mut self, id: u64) -> Self {
+        self.id = Some(id);
+        self
+    }
 }
 
 /// Aggressor side of a trade.

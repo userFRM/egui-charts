@@ -13,6 +13,10 @@ All notable changes to this project are documented in this file. The format is b
 - A theme toggle in the top toolbar emits `TopToolbarAction::ThemeToggle`.
 - Icons `CHECK`, `MINUS`, `CHEVRON_UP`, `CHEVRON_LEFT`, `CHEVRON_RIGHT`, `STAR_FILLED`, `CODE`, `USERS`, `CROWN`, `DATABASE`, `PENCIL` and `TEMPLATE` in `icons::icons`.
 - `ListItemContent::interactive` lets content take its row out of pointer interaction. It defaults to `true`; a disabled `ButtonContent` returns `false`, so its row is neither highlighted nor clickable.
+- `data::Sink::push_tick` also keeps each trade, with its price, size, aggressor side and time, in a bounded store for order flow, and `Datafeed::trades` pages historical trades (`TradeRequest`, `TradePage`) so order flow can be rebuilt after a reload. The default answers `FeedError::NotSupported`. History and live trades join exactly when both carry the new `Tick::id` (an exchange trade id or sequence number); without ids, trades at the boundary instant may be dropped but are never counted twice.
+- Order book depth on the `Datafeed` contract: `Sink::push_depth_snapshot` and `Sink::push_depth_delta` carry a sequence number; a gap, a delta before any snapshot or an invalid update clears the book until the feed pushes a new snapshot, which is asked for once through `Datafeed::request_depth_snapshot`. A level with size 0 is removed, and a book is limited to 10,000 levels per side. Rejected updates are counted in `FeedState::rejected_depth`.
+- `model::Instrument` describes the instrument type, tick size, price decimals, currency, exchange time zone (`model::TimezoneId`) and trading hours (`model::Session`, `model::SessionWindow`), each unknown by default and set with a `with_` method.
+- `model::Tick` implements `PartialEq`.
 
 ### Fixed
 
@@ -60,6 +64,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- `model::Tick` is `#[non_exhaustive]` and has an `id` field. Migration: build it with `Tick::new(ts, price, size, side)`, adding `.with_id(id)` when the feed has trade ids.
+- `model::SymbolType` is `#[non_exhaustive]`. Migration: add a wildcard arm to matches on it.
 - Replaced the bundled icon set with original artwork drawn on a 24 px grid. Toolbar, chart-type and widget-bar icons now render at 24 px, and close buttons, the cross cursor, alert and toast states, move to pane, add to watchlist, the replay next-bar button, the price range tool, the arrow tool and the note, callout, comment, table, image and other annotation tools show their own icons.
 - `Drawing::render`, `Drawing::render_original`, and `DrawingManager::render_all` take a `drawings::rendering::ChartView` holding the chart's bars and coordinate mapping. Migration: build `ChartView { bars, bar_to_x, price_to_y }` from the series and the closures passed to `update_all_screen_coords`, and pass it as the last argument.
 - `Chart::handle_drawings` no longer takes the last close price.

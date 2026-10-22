@@ -46,13 +46,14 @@
 //! | [`TimescaleMark`]        | Event marker on the time axis                     |
 
 pub use crate::model::Bar;
-use crate::model::Instrument;
 pub use crate::model::Timeframe;
+use crate::model::{Instrument, Tick};
 use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
+pub(crate) mod depth;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
@@ -63,6 +64,11 @@ pub(crate) mod inbox;
     expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
 )]
 pub(crate) mod merge;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
+)]
+pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink};
 
@@ -454,6 +460,22 @@ pub trait Datafeed: MaybeSend + 'static {
     fn unsubscribe(&self, id: SubscriptionId) {
         let _ = id;
     }
+
+    /// Up to `request.count` trades older than `request.before`, or the latest trades when it is
+    /// `None`, so order flow survives a reload. The default answers [`FeedError::NotSupported`].
+    fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
+        let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// The order book of subscription `id` was lost to a gap, an unusable update or a book deeper
+    /// than the limit: push a new snapshot with [`Sink::push_depth_snapshot`], from inside this
+    /// call if convenient. Called once per loss: after an unusable snapshot the chart does not ask
+    /// again, and the book stays empty until the feed pushes a usable one or the subscription
+    /// restarts. The default does nothing, for feeds without depth.
+    fn request_depth_snapshot(&self, id: SubscriptionId) {
+        let _ = id;
+    }
 }
 
 /// A request for one page of history.
@@ -478,6 +500,43 @@ pub struct HistoryPage {
     /// Nothing exists before the oldest returned bar (or before `request.before` when `bars` is
     /// empty).
     pub end_of_history: bool,
+}
+
+/// A request for one page of trades.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TradeRequest {
+    pub symbol: String,
+    /// Only trades strictly before this instant. `None` asks for the latest trades.
+    pub before: Option<DateTime<Utc>>,
+    /// Trades wanted. Fewer is fine.
+    pub count: usize,
+}
+
+/// One page of trades. A page without trades ends scroll-back like `end_of_history` does.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct TradePage {
+    /// Oldest first; trades sharing a time keep their order. They feed order flow only: bars come
+    /// from [`Datafeed::history`]. The chart drops invalid trades and takes as many as its trade
+    /// store has room for, up to the oldest trade it holds: later ones are left to the live stream.
+    /// A trade with an [`id`](Tick::id) the chart already holds is dropped, so history and live
+    /// trades join exactly when both carry ids. Without ids, only trades older than every held
+    /// trade are taken, and live trades at or before the newest trade a page added are dropped:
+    /// trades at the boundary instant may be lost, never counted twice.
+    pub trades: Vec<Tick>,
+    /// Nothing exists before the oldest returned trade.
+    pub end_of_history: bool,
+}
+
+impl TradePage {
+    /// A page of `trades`, the last one when `end_of_history`.
+    pub fn new(trades: Vec<Tick>, end_of_history: bool) -> Self {
+        Self {
+            trades,
+            end_of_history,
+        }
+    }
 }
 
 /// A live subscription: push its updates into `sink` until [`Datafeed::unsubscribe`] gets `id`.
@@ -552,4 +611,7 @@ pub struct FeedState {
     pub rejected_bars: u64,
     /// Trades older than the forming bar, dropped.
     pub late_ticks: u64,
+    /// Order book snapshots and deltas dropped by validation: a non-finite price or size, a
+    /// negative size. Each one clears the book until the feed pushes a new snapshot.
+    pub rejected_depth: u64,
 }

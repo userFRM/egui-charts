@@ -1,11 +1,28 @@
 //! Instrument metadata reported by a feed.
 
-/// What a feed reports about a symbol. Build it with [`Instrument::new`]; fields will be added.
+use super::SymbolType;
+use chrono::{NaiveTime, Weekday};
+use chrono_tz::Tz;
+
+/// What a feed reports about a symbol. Build it with [`Instrument::new`] and the `with_` setters;
+/// fields left out stay unknown.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Instrument {
     /// The symbol as the feed knows it.
     pub symbol: String,
+    /// Instrument type.
+    pub symbol_type: Option<SymbolType>,
+    /// Smallest price increment: positive and finite. Consumers ignore any other value.
+    pub tick_size: Option<f64>,
+    /// Decimals of price labels.
+    pub price_decimals: Option<u8>,
+    /// Currency of prices, such as "USD".
+    pub currency: Option<String>,
+    /// Exchange time zone.
+    pub time_zone: Option<TimezoneId>,
+    /// Regular trading hours, in exchange time.
+    pub session: Option<Session>,
 }
 
 impl Instrument {
@@ -13,6 +30,109 @@ impl Instrument {
     pub fn new(symbol: impl Into<String>) -> Self {
         Self {
             symbol: symbol.into(),
+            symbol_type: None,
+            tick_size: None,
+            price_decimals: None,
+            currency: None,
+            time_zone: None,
+            session: None,
+        }
+    }
+
+    /// Sets [`symbol_type`](Self::symbol_type).
+    pub fn with_symbol_type(mut self, symbol_type: SymbolType) -> Self {
+        self.symbol_type = Some(symbol_type);
+        self
+    }
+
+    /// Sets [`tick_size`](Self::tick_size).
+    pub fn with_tick_size(mut self, tick_size: f64) -> Self {
+        self.tick_size = Some(tick_size);
+        self
+    }
+
+    /// Sets [`price_decimals`](Self::price_decimals).
+    pub fn with_price_decimals(mut self, decimals: u8) -> Self {
+        self.price_decimals = Some(decimals);
+        self
+    }
+
+    /// Sets [`currency`](Self::currency).
+    pub fn with_currency(mut self, currency: impl Into<String>) -> Self {
+        self.currency = Some(currency.into());
+        self
+    }
+
+    /// Sets [`time_zone`](Self::time_zone).
+    pub fn with_time_zone(mut self, time_zone: TimezoneId) -> Self {
+        self.time_zone = Some(time_zone);
+        self
+    }
+
+    /// Sets [`session`](Self::session).
+    pub fn with_session(mut self, session: Session) -> Self {
+        self.session = Some(session);
+        self
+    }
+}
+
+/// A time zone.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TimezoneId(Tz);
+
+impl TimezoneId {
+    /// Coordinated Universal Time.
+    pub fn utc() -> Self {
+        Self(Tz::UTC)
+    }
+
+    /// The zone of an IANA name such as "America/New_York", if known.
+    pub fn named(name: &str) -> Option<Self> {
+        name.parse().ok().map(Self)
+    }
+
+    /// The IANA name, such as "America/New_York" or "UTC".
+    pub fn name(&self) -> &str {
+        self.0.name()
+    }
+}
+
+/// Trading hours: the windows in which an instrument trades.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Session {
+    /// No window means always open.
+    pub windows: Vec<SessionWindow>,
+}
+
+impl Session {
+    /// Trading hours made of `windows`.
+    pub fn new(windows: impl IntoIterator<Item = SessionWindow>) -> Self {
+        Self {
+            windows: windows.into_iter().collect(),
+        }
+    }
+}
+
+/// One trading window, repeated on each of `days`.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct SessionWindow {
+    /// Trading days, named by the day on which the window closes.
+    pub days: Vec<Weekday>,
+    /// Exchange time.
+    pub open: NaiveTime,
+    /// Exchange time. At or before `open`, the window spans midnight.
+    pub close: NaiveTime,
+}
+
+impl SessionWindow {
+    /// `open` to `close` on each of `days`.
+    pub fn new(days: impl IntoIterator<Item = Weekday>, open: NaiveTime, close: NaiveTime) -> Self {
+        Self {
+            days: days.into_iter().collect(),
+            open,
+            close,
         }
     }
 }
