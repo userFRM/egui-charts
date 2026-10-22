@@ -404,38 +404,80 @@ impl HandleService {
 mod tests {
     use super::*;
     use crate::drawings::domain::ChartPoint;
+    use egui::pos2;
+
+    /// Screen to chart mapping used by the tests: 10 px per bar, price 1000 at
+    /// the top falling one unit per pixel.
+    fn x_to_bar(x: f32) -> f32 {
+        x / 10.0
+    }
+
+    fn y_to_price(y: f32) -> f64 {
+        1000.0 - y as f64
+    }
 
     fn create_test_drawing(tool_type: DrawingToolType, points: Vec<Pos2>) -> Drawing {
         let mut drawing = Drawing::new(1, tool_type);
-        drawing.points = points.clone();
         drawing.chart_points = points
             .iter()
-            .map(|p| ChartPoint {
-                bar_idx: p.x,
-                price: p.y as f64,
-            })
+            .map(|p| ChartPoint::new(x_to_bar(p.x), y_to_price(p.y)))
             .collect();
+        drawing.points = points;
         drawing
     }
 
     #[test]
-    fn test_get_handles_trendline() {
-        let drawing = create_test_drawing(
-            DrawingToolType::TrendLine,
-            vec![Pos2::new(100.0, 200.0), Pos2::new(300.0, 400.0)],
-        );
-        let handles = HandleService::get_handles(&drawing);
-        assert_eq!(handles.len(), 3); // Start, End, Middle
-    }
-
-    #[test]
-    fn test_get_handles_rect() {
-        let drawing = create_test_drawing(
-            DrawingToolType::Rect,
-            vec![Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0)],
-        );
-        let handles = HandleService::get_handles(&drawing);
-        assert_eq!(handles.len(), 4); // 4 corners
+    fn get_handles_by_tool() {
+        use HandlePos::*;
+        let cases = [
+            (
+                DrawingToolType::TrendLine,
+                vec![pos2(100.0, 200.0), pos2(300.0, 400.0)],
+                vec![
+                    (Start, pos2(100.0, 200.0)),
+                    (End, pos2(300.0, 400.0)),
+                    (Middle, pos2(200.0, 300.0)),
+                ],
+            ),
+            (
+                DrawingToolType::Rect,
+                vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
+                vec![
+                    (TopLeft, pos2(100.0, 100.0)),
+                    (TopRight, pos2(200.0, 100.0)),
+                    (BottomLeft, pos2(100.0, 300.0)),
+                    (BottomRight, pos2(200.0, 300.0)),
+                ],
+            ),
+            (
+                DrawingToolType::HorizontalLine,
+                vec![pos2(50.0, 120.0)],
+                vec![(Start, pos2(50.0, 120.0))],
+            ),
+            (
+                DrawingToolType::FibonacciRetracement,
+                vec![pos2(0.0, 0.0), pos2(100.0, 50.0)],
+                vec![
+                    (Start, pos2(0.0, 0.0)),
+                    (End, pos2(100.0, 50.0)),
+                    (Middle, pos2(50.0, 25.0)),
+                ],
+            ),
+            (
+                DrawingToolType::Triangle,
+                vec![pos2(0.0, 0.0), pos2(30.0, 0.0), pos2(0.0, 60.0)],
+                vec![
+                    (Point(0), pos2(0.0, 0.0)),
+                    (Point(1), pos2(30.0, 0.0)),
+                    (Point(2), pos2(0.0, 60.0)),
+                    (Middle, pos2(10.0, 20.0)),
+                ],
+            ),
+        ];
+        for (tool, points, expected) in cases {
+            let drawing = create_test_drawing(tool, points);
+            assert_eq!(HandleService::get_handles(&drawing), expected, "{tool:?}");
+        }
     }
 
     #[test]
@@ -454,21 +496,55 @@ mod tests {
         assert_eq!(miss, None);
     }
 
+    /// A handle drag moves the screen points and the persisted chart points
+    /// together: one anchor for an endpoint, one coordinate of each anchor for
+    /// a rectangle corner, and every anchor for the Middle handle of a two-point
+    /// or multi-point tool.
     #[test]
-    fn test_update_handle() {
-        let mut drawing = create_test_drawing(
-            DrawingToolType::TrendLine,
-            vec![Pos2::new(100.0, 200.0), Pos2::new(300.0, 400.0)],
-        );
-
-        HandleService::update_handle(
-            &mut drawing,
-            HandlePos::Start,
-            Pos2::new(150.0, 250.0),
-            |x| x,
-            |y| y as f64,
-        );
-
-        assert_eq!(drawing.points[0], Pos2::new(150.0, 250.0));
+    fn update_handle_moves_screen_and_chart_points() {
+        let cases = [
+            (
+                DrawingToolType::TrendLine,
+                vec![pos2(100.0, 200.0), pos2(300.0, 400.0)],
+                HandlePos::Start,
+                pos2(150.0, 250.0),
+                vec![pos2(150.0, 250.0), pos2(300.0, 400.0)],
+                vec![ChartPoint::new(15.0, 750.0), ChartPoint::new(30.0, 600.0)],
+            ),
+            (
+                DrawingToolType::TrendLine,
+                vec![pos2(100.0, 200.0), pos2(300.0, 400.0)],
+                HandlePos::Middle,
+                pos2(250.0, 280.0),
+                vec![pos2(150.0, 180.0), pos2(350.0, 380.0)],
+                vec![ChartPoint::new(15.0, 820.0), ChartPoint::new(35.0, 620.0)],
+            ),
+            (
+                DrawingToolType::Rect,
+                vec![pos2(100.0, 100.0), pos2(200.0, 300.0)],
+                HandlePos::TopRight,
+                pos2(250.0, 80.0),
+                vec![pos2(100.0, 80.0), pos2(250.0, 300.0)],
+                vec![ChartPoint::new(10.0, 920.0), ChartPoint::new(25.0, 700.0)],
+            ),
+            (
+                DrawingToolType::Triangle,
+                vec![pos2(0.0, 0.0), pos2(30.0, 0.0), pos2(0.0, 60.0)],
+                HandlePos::Middle,
+                pos2(20.0, 30.0),
+                vec![pos2(10.0, 10.0), pos2(40.0, 10.0), pos2(10.0, 70.0)],
+                vec![
+                    ChartPoint::new(1.0, 990.0),
+                    ChartPoint::new(4.0, 990.0),
+                    ChartPoint::new(1.0, 930.0),
+                ],
+            ),
+        ];
+        for (tool, points, handle, to, screen, chart) in cases {
+            let mut drawing = create_test_drawing(tool, points);
+            HandleService::update_handle(&mut drawing, handle, to, x_to_bar, y_to_price);
+            assert_eq!(drawing.points, screen, "{tool:?} {handle:?}");
+            assert_eq!(drawing.chart_points, chart, "{tool:?} {handle:?}");
+        }
     }
 }
