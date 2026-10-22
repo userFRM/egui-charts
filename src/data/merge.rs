@@ -16,14 +16,6 @@ pub(crate) enum Origin {
     Ticks(u64),
 }
 
-/// The bars of one series: valid, in time order, at most one per slot of the series' clock.
-#[derive(Default)]
-pub(crate) struct SeriesBars {
-    bars: Vec<Bar>,
-    /// Times of bars built from ticks, which a history bar of the same slot replaces.
-    from_ticks: BTreeSet<DateTime<Utc>>,
-}
-
 /// What one merge changed.
 pub(crate) struct Merged {
     /// Index of the first bar inserted or changed. Bars after it may have moved.
@@ -35,86 +27,87 @@ pub(crate) struct Merged {
     pub(crate) late_ticks: u64,
 }
 
-impl SeriesBars {
-    pub(crate) fn bars(&self) -> &[Bar] {
-        &self.bars
+/// Merges `incoming`, in any order, into `bars` by the rules of each bar's origin. `bars` are the
+/// bars of one series: valid, in time order, at most one per slot of `clock`, which must be the
+/// same for every merge into the series. `from_ticks` holds the times of the series' bars built
+/// from ticks, which a history bar of the same slot replaces; keep it with the bars.
+pub(crate) fn merge(
+    bars: &mut Vec<Bar>,
+    from_ticks: &mut BTreeSet<DateTime<Utc>>,
+    clock: &BarClock,
+    mut incoming: Vec<(Bar, Origin)>,
+) -> Merged {
+    let received = incoming.len();
+    incoming.retain(|(bar, _)| valid(bar));
+    let mut merged = Merged {
+        first_changed: None,
+        rejected: (received - incoming.len()) as u64,
+        late_ticks: 0,
+    };
+    if merged.rejected > 0 {
+        log::warn!("dropped {} invalid bars", merged.rejected);
     }
-
-    /// Merges `incoming`, in any order, by the rules of each bar's origin. Bars are identified by
-    /// their slot in `clock`, which must be the same for every merge into this series.
-    pub(crate) fn merge(&mut self, clock: &BarClock, mut incoming: Vec<(Bar, Origin)>) -> Merged {
-        let received = incoming.len();
-        incoming.retain(|(bar, _)| valid(bar));
-        let mut merged = Merged {
-            first_changed: None,
-            rejected: (received - incoming.len()) as u64,
-            late_ticks: 0,
-        };
-        if merged.rejected > 0 {
-            log::warn!("dropped {} invalid bars", merged.rejected);
+    // A stable sort, so the last of several bars in one slot wins.
+    incoming.sort_by_key(|(bar, _)| bar.time);
+    incoming.dedup_by(|later, earlier| {
+        let same = clock.same_bar(later.0.time, earlier.0.time);
+        if same {
+            if later.0 != earlier.0 {
+                log::debug!(
+                    "dropped the bar at {} for a later bar of its slot",
+                    earlier.0.time
+                );
+            }
+            std::mem::swap(later, earlier);
         }
-        // A stable sort, so the last of several bars in one slot wins.
-        incoming.sort_by_key(|(bar, _)| bar.time);
-        incoming.dedup_by(|later, earlier| {
-            let same = clock.same_bar(later.0.time, earlier.0.time);
-            if same {
-                if later.0 != earlier.0 {
-                    log::debug!(
-                        "dropped the bar at {} for a later bar of its slot",
-                        earlier.0.time
-                    );
-                }
-                std::mem::swap(later, earlier);
-            }
-            same
-        });
-        let (Some((first, _)), Some((newest, _))) = (incoming.first(), incoming.last()) else {
-            return merged;
-        };
-        let slot = |bar: &Bar| clock.bar_open(bar.time);
-        let (first, newest) = (slot(first), slot(newest));
-        let last = self.bars.last().map(slot);
-        let lo = self.bars.partition_point(|bar| slot(bar) < first);
-        let hi = self.bars.partition_point(|bar| slot(bar) <= newest);
-        let mut stored = self.bars[lo..hi].iter().peekable();
-        let mut window = Vec::with_capacity(hi - lo + incoming.len());
-        for (bar, origin) in incoming {
-            let at = slot(&bar);
-            if let Origin::Ticks(trades) = origin
-                && last.is_some_and(|last| at < last)
-            {
-                merged.late_ticks += trades;
-                continue;
-            }
-            while let Some(old) = stored.next_if(|old| slot(old) < at) {
-                window.push(old.clone());
-            }
-            let old = stored.next_if(|old| slot(old) == at);
-            let new = match (old, origin) {
-                (Some(old), Origin::Ticks(trades)) => fold(old, &bar).unwrap_or_else(|| {
-                    merged.rejected += trades;
-                    old.clone()
-                }),
-                (Some(old), Origin::History) if !self.from_ticks.contains(&old.time) => old.clone(),
-                (Some(old), _) => {
-                    self.from_ticks.remove(&old.time);
-                    bar
-                }
-                (None, Origin::Ticks(_)) => {
-                    self.from_ticks.insert(bar.time);
-                    bar
-                }
-                (None, _) => bar,
-            };
-            if old != Some(&new) {
-                merged.first_changed.get_or_insert(lo + window.len());
-            }
-            window.push(new);
+        same
+    });
+    let (Some((first, _)), Some((newest, _))) = (incoming.first(), incoming.last()) else {
+        return merged;
+    };
+    let slot = |bar: &Bar| clock.bar_open(bar.time);
+    let (first, newest) = (slot(first), slot(newest));
+    let last = bars.last().map(slot);
+    let lo = bars.partition_point(|bar| slot(bar) < first);
+    let hi = bars.partition_point(|bar| slot(bar) <= newest);
+    let mut stored = bars[lo..hi].iter().peekable();
+    let mut window = Vec::with_capacity(hi - lo + incoming.len());
+    for (bar, origin) in incoming {
+        let at = slot(&bar);
+        if let Origin::Ticks(trades) = origin
+            && last.is_some_and(|last| at < last)
+        {
+            merged.late_ticks += trades;
+            continue;
         }
-        window.extend(stored.cloned());
-        self.bars.splice(lo..hi, window);
-        merged
+        while let Some(old) = stored.next_if(|old| slot(old) < at) {
+            window.push(old.clone());
+        }
+        let old = stored.next_if(|old| slot(old) == at);
+        let new = match (old, origin) {
+            (Some(old), Origin::Ticks(trades)) => fold(old, &bar).unwrap_or_else(|| {
+                merged.rejected += trades;
+                old.clone()
+            }),
+            (Some(old), Origin::History) if !from_ticks.contains(&old.time) => old.clone(),
+            (Some(old), _) => {
+                from_ticks.remove(&old.time);
+                bar
+            }
+            (None, Origin::Ticks(_)) => {
+                from_ticks.insert(bar.time);
+                bar
+            }
+            (None, _) => bar,
+        };
+        if old != Some(&new) {
+            merged.first_changed.get_or_insert(lo + window.len());
+        }
+        window.push(new);
     }
+    window.extend(stored.cloned());
+    bars.splice(lo..hi, window);
+    merged
 }
 
 /// Finite values, a high at or above open and close, a low at or below them, no negative volume.
@@ -221,16 +214,18 @@ mod tests {
         ];
         let clock = BarClock::new(Timeframe::Min1);
         for (name, steps, bars, expected) in cases {
-            let mut series = SeriesBars::default();
+            let (mut series, mut from_ticks) = (Vec::new(), BTreeSet::new());
             let mut merged = None;
             for (origin, incoming) in steps {
-                merged = Some(series.merge(
+                merged = Some(merge(
+                    &mut series,
+                    &mut from_ticks,
                     &clock,
                     incoming.into_iter().map(|bar| (bar, origin)).collect(),
                 ));
             }
             let merged = merged.unwrap();
-            assert_eq!(series.bars(), bars, "{name}");
+            assert_eq!(series, bars, "{name}");
             assert_eq!(
                 (merged.first_changed, merged.rejected, merged.late_ticks),
                 expected,
