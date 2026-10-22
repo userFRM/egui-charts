@@ -1,14 +1,19 @@
 //! Volume Weighted MACD (VW-MACD) indicator.
 //!
-//! A variation of MACD that uses volume-weighted prices instead of raw close
-//! prices, giving more weight to price movements backed by higher volume.
+//! A variation of MACD built from volume-weighted moving averages of the close,
+//! giving more weight to price movements backed by higher volume.
 //! This can reduce false signals during low-volume price moves.
 //!
 //! # Components
 //!
-//! Same as regular MACD (MACD line, signal line, histogram), but the input
-//! prices are cumulative volume-weighted average prices (typical price
-//! weighted by volume).
+//! - **VW-MACD line** = VWMA(close, fast) - VWMA(close, slow), where
+//!   `VWMA(n) = sum(close * volume, n) / sum(volume, n)`.
+//! - **Signal line** = EMA(VW-MACD line, signal).
+//! - **Histogram** = VW-MACD line - signal line.
+//!
+//! The line starts on bar `max(fast, slow) - 1`; earlier bars have no value.
+//! A window whose volume sums to 0 takes the simple average of its closes, as
+//! [`VWMA`](super::VWMA) does.
 //!
 //! # Default parameters
 //!
@@ -24,6 +29,7 @@
 //! vw.calculate(&bars);
 //! ```
 
+use super::VWMA;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -31,8 +37,9 @@ use egui::Color32;
 
 /// Volume Weighted MACD indicator
 ///
-/// Similar to regular MACD but applies volume weighting to price data
-/// before calculating the moving averages.
+/// The difference of a fast and a slow volume-weighted moving average of the
+/// close, with an EMA signal line seeded with the first line value, as the
+/// signal of [`MACD`](super::MACD) is.
 #[derive(Clone)]
 pub struct VolumeWeightedMACD {
     fast_period: usize,
@@ -65,34 +72,6 @@ impl VolumeWeightedMACD {
             visible: true,
         }
     }
-
-    /// Calculate volume-weighted price for a bar
-    fn volume_weighted_price(bar: &Bar) -> f64 {
-        // Typical price weighted by volume
-        // Using (H+L+C)/3 as typical price
-        let typical_price = (bar.high + bar.low + bar.close) / 3.0;
-        typical_price * bar.volume
-    }
-
-    /// Calculate cumulative volume-weighted average price
-    fn calculate_vwap_series(data: &[Bar]) -> Vec<f64> {
-        let mut cum_volume = 0.0;
-        let mut cum_vw_price = 0.0;
-        let mut vwap = Vec::with_capacity(data.len());
-
-        for bar in data {
-            cum_vw_price += Self::volume_weighted_price(bar);
-            cum_volume += bar.volume;
-
-            if cum_volume > 0.0 {
-                vwap.push(cum_vw_price / cum_volume);
-            } else {
-                vwap.push(bar.close);
-            }
-        }
-
-        vwap
-    }
 }
 
 impl Indicator for VolumeWeightedMACD {
@@ -105,67 +84,27 @@ impl Indicator for VolumeWeightedMACD {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.slow_period {
-            self.values.resize(data.len(), IndicatorValue::None);
-            return;
-        }
-
-        // Use volume-weighted prices instead of raw close
-        let vw_prices = Self::calculate_vwap_series(data);
-
-        // Calculate fast EMA on volume-weighted prices
-        let fast_mult = 2.0 / (self.fast_period as f64 + 1.0);
-        let mut fast_ema = vw_prices[0];
-        let mut fast_emas = vec![fast_ema];
-
-        for &price in vw_prices.iter().skip(1) {
-            fast_ema = (price - fast_ema) * fast_mult + fast_ema;
-            fast_emas.push(fast_ema);
-        }
-
-        // Calculate slow EMA on volume-weighted prices
-        let slow_mult = 2.0 / (self.slow_period as f64 + 1.0);
-        let mut slow_ema = vw_prices[0];
-        let mut slow_emas = vec![slow_ema];
-
-        for &price in vw_prices.iter().skip(1) {
-            slow_ema = (price - slow_ema) * slow_mult + slow_ema;
-            slow_emas.push(slow_ema);
-        }
-
-        // Calculate MACD line
-        let macd_line: Vec<f64> = fast_emas
-            .iter()
-            .zip(slow_emas.iter())
-            .map(|(fast, slow)| fast - slow)
-            .collect();
-
-        // Calculate signal line (EMA of MACD)
-        if macd_line.len() < self.signal_period {
-            self.values.resize(data.len(), IndicatorValue::None);
-            return;
-        }
+        let mut fast = VWMA::new(self.fast_period);
+        let mut slow = VWMA::new(self.slow_period);
+        fast.calculate(data);
+        slow.calculate(data);
 
         let signal_mult = 2.0 / (self.signal_period as f64 + 1.0);
-        let mut signal_ema = macd_line[0];
-        let mut signal_line = vec![signal_ema];
-
-        for &macd_val in macd_line.iter().skip(1) {
-            signal_ema = (macd_val - signal_ema) * signal_mult + signal_ema;
-            signal_line.push(signal_ema);
-        }
-
-        // Calculate histogram and store values
-        for i in 0..macd_line.len() {
-            let histogram = macd_line[i] - signal_line[i];
-            self.values.push(IndicatorValue::Multiple(vec![
-                macd_line[i],
-                signal_line[i],
-                histogram,
-            ]));
-        }
+        let mut signal: Option<f64> = None;
+        self.values = fast
+            .values()
+            .iter()
+            .zip(slow.values())
+            .map(|pair| match pair {
+                (IndicatorValue::Single(fast), IndicatorValue::Single(slow)) => {
+                    let line = fast - slow;
+                    let sig = signal.map_or(line, |prev| (line - prev) * signal_mult + prev);
+                    signal = Some(sig);
+                    IndicatorValue::Multiple(vec![line, sig, line - sig])
+                }
+                _ => IndicatorValue::None,
+            })
+            .collect();
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -219,140 +158,78 @@ impl Indicator for VolumeWeightedMACD {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
 
-    fn make_test_bars() -> Vec<Bar> {
-        vec![
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 30, 0).unwrap(),
-                open: 100.0,
-                high: 105.0,
-                low: 98.0,
-                close: 102.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 31, 0).unwrap(),
-                open: 102.0,
-                high: 108.0,
-                low: 101.0,
-                close: 107.0,
-                volume: 1500.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 32, 0).unwrap(),
-                open: 107.0,
-                high: 110.0,
-                low: 105.0,
-                close: 108.0,
-                volume: 1200.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 33, 0).unwrap(),
-                open: 108.0,
-                high: 112.0,
-                low: 106.0,
-                close: 110.0,
-                volume: 2000.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 34, 0).unwrap(),
-                open: 110.0,
-                high: 115.0,
-                low: 109.0,
-                close: 114.0,
-                volume: 1800.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 35, 0).unwrap(),
-                open: 114.0,
-                high: 116.0,
-                low: 111.0,
-                close: 112.0,
-                volume: 1400.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 36, 0).unwrap(),
-                open: 112.0,
-                high: 118.0,
-                low: 110.0,
-                close: 117.0,
-                volume: 2500.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 37, 0).unwrap(),
-                open: 117.0,
-                high: 120.0,
-                low: 115.0,
-                close: 119.0,
-                volume: 1600.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 38, 0).unwrap(),
-                open: 119.0,
-                high: 122.0,
-                low: 118.0,
-                close: 121.0,
-                volume: 1300.0,
-            },
-            Bar {
-                time: Utc.with_ymd_and_hms(2024, 1, 1, 9, 39, 0).unwrap(),
-                open: 121.0,
-                high: 125.0,
-                low: 120.0,
-                close: 124.0,
-                volume: 1700.0,
-            },
-        ]
+    fn bars(closes: &[f64], volumes: &[f64]) -> Vec<Bar> {
+        closes
+            .iter()
+            .zip(volumes)
+            .map(|(&c, &v)| Bar::new(chrono::Utc::now(), c, c, c, c, v))
+            .collect()
     }
 
-    #[test]
-    fn test_vw_macd_creation() {
-        let vw_macd = VolumeWeightedMACD::new(3, 5, 3);
-        assert_eq!(vw_macd.name(), "VW-MACD");
-        assert_eq!(vw_macd.line_cnt(), 3);
-        assert!(!vw_macd.is_overlay());
+    fn lines(study: &VolumeWeightedMACD, bar: usize) -> Option<&[f64]> {
+        match &study.values()[bar] {
+            IndicatorValue::Multiple(v) => Some(v),
+            _ => None,
+        }
     }
 
+    /// Reference values from the published definition (Buff Pelz Dormeier, "Investing with
+    /// Volume Analysis", 2011; John Bollinger, "Bollinger on Bollinger Bands", 2002):
+    /// VWMA(close, fast) - VWMA(close, slow), a signal EMA seeded with the first line value,
+    /// and their difference, computed independently in Python.
     #[test]
-    fn test_vw_macd_calculate() {
-        let mut vw_macd = VolumeWeightedMACD::new(3, 5, 3);
-        let bars = make_test_bars();
+    fn matches_published_definition() {
+        let closes = [
+            102.0, 107.0, 108.0, 110.0, 114.0, 112.0, 117.0, 119.0, 121.0, 124.0,
+        ];
+        let volumes = [
+            1000.0, 1500.0, 1200.0, 2000.0, 1800.0, 1400.0, 2500.0, 1600.0, 1300.0, 1700.0,
+        ];
+        let expected: [Option<[f64; 3]>; 10] = [
+            None,
+            None,
+            None,
+            None,
+            Some([1.9866666666666646, 1.9866666666666646, 0.0]),
+            Some([1.5306718597857838, 1.7586692632262242, -0.2279974034404404]),
+            Some([2.0043366844076473, 1.8815029738169358, 0.12283371059071158]),
+            Some([
+                1.8037145650048956,
+                1.8426087694109157,
+                -0.038894204406020094,
+            ]),
+            Some([2.0206718346253183, 1.931640302018117, 0.08903153260720131]),
+            Some([2.8483375959079353, 2.389988948963026, 0.4583486469449092]),
+        ];
+        let mut study = VolumeWeightedMACD::new(3, 5, 3);
+        study.calculate(&bars(&closes, &volumes));
+        assert_eq!(study.values().len(), expected.len());
+        for (bar, want) in expected.iter().enumerate() {
+            let got = lines(&study, bar);
+            match want {
+                None => assert!(got.is_none(), "bar {bar}: {got:?}"),
+                Some(want) => {
+                    let got = got.unwrap_or_else(|| panic!("bar {bar}: no value"));
+                    for (g, w) in got.iter().zip(want) {
+                        assert!((g - w).abs() < 1e-12, "bar {bar}: {got:?} != {want:?}");
+                    }
+                }
+            }
+        }
 
-        vw_macd.calculate(&bars);
-
-        // Should have values after calculation
-        assert!(!vw_macd.values().is_empty());
-    }
-
-    #[test]
-    fn test_vw_macd_line_names() {
-        let vw_macd = VolumeWeightedMACD::new(12, 26, 9);
-        let names = vw_macd.line_names();
-
-        assert_eq!(names.len(), 3);
-        assert!(names[0].contains("VW-MACD"));
-        assert_eq!(names[1], "Signal");
-        assert_eq!(names[2], "Histogram");
-    }
-
-    #[test]
-    fn test_vwap_series_calculation() {
-        let bars = make_test_bars();
-        let vwap = VolumeWeightedMACD::calculate_vwap_series(&bars);
-
-        assert_eq!(vwap.len(), bars.len());
-        // First value should be typical price (since only one bar)
-        let first_typical = (bars[0].high + bars[0].low + bars[0].close) / 3.0;
-        assert!((vwap[0] - first_typical).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_visibility() {
-        let mut vw_macd = VolumeWeightedMACD::default();
-        assert!(vw_macd.is_visible());
-
-        vw_macd.set_visible(false);
-        assert!(!vw_macd.is_visible());
+        // With constant volume the line is SMA(12) - SMA(26), 7 on a trend rising by 1 per bar,
+        // whatever the length of the history.
+        let closes: Vec<f64> = (0..200).map(|i| 100.0 + i as f64).collect();
+        let mut study = VolumeWeightedMACD::default();
+        study.calculate(&bars(&closes, &[1000.0; 200]));
+        assert!(lines(&study, 24).is_none());
+        for bar in 25..200 {
+            let line = lines(&study, bar).map(|v| v[0]);
+            assert!(
+                line.is_some_and(|l| (l - 7.0).abs() < 1e-9),
+                "bar {bar}: {line:?}"
+            );
+        }
     }
 }
