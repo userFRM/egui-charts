@@ -9,11 +9,6 @@
 //! | Percentage      | `+5.2%`, `-3.1%`        | Comparing relative performance   |
 //! | IndexedTo100    | Rebased to 100          | Portfolio benchmarking           |
 
-/// Price Scale Engine.
-///
-/// Reference: lightweight-charts/src/model/price-scale.ts.
-/// Provides price scaling modes and auto-scale behavior.
-use std::f64::consts::E;
 use std::fmt;
 use std::str::FromStr;
 
@@ -23,15 +18,14 @@ use std::str::FromStr;
 /// pixel coordinates.  The default is [`Normal`](PriceScaleMode::Normal).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PriceScaleMode {
-    /// Price scale shows prices. Price range changes linearly.
+    /// Prices on a linear axis: equal price differences take equal heights.
     #[default]
     Normal,
-    /// Price scale shows prices. Price range changes logarithmically.
+    /// Prices on a logarithmic axis: equal price ratios take equal heights.
     Logarithmic,
-    /// Price scale shows percentage values according to the first visible value.
-    /// The first visible value is 0% in this mode.
+    /// Change from the first visible value, in percent; that value reads 0%.
     Percentage,
-    /// The same as percentage mode, but the first value is moved to 100.
+    /// Like [`Percentage`](PriceScaleMode::Percentage), shifted so the first visible value reads 100.
     IndexedTo100,
 }
 
@@ -90,16 +84,16 @@ impl PriceRange {
 /// visible data range.
 #[derive(Debug, Clone, Copy)]
 pub struct PriceScaleMargins {
-    /// Top margin in percentages (0.0 to 1.0)
-    pub top: f32,
-    /// Bottom margin in percentages (0.0 to 1.0)
-    pub bottom: f32,
+    /// Top margin as a fraction of the data range (0.0 to 1.0)
+    pub top: f64,
+    /// Bottom margin as a fraction of the data range (0.0 to 1.0)
+    pub bottom: f64,
 }
 
 impl Default for PriceScaleMargins {
     fn default() -> Self {
         Self {
-            top: 0.2,
+            top: 0.1,
             bottom: 0.1,
         }
     }
@@ -121,12 +115,38 @@ pub(crate) fn auto_scale_span(min: f64, max: f64) -> f64 {
     }
 }
 
-/// Configuration options for a [`PriceScale`].
-#[derive(Debug, Clone, Copy)]
-pub struct PriceScaleOptions {
-    /// Auto-scale to fit visible data
-    pub auto_scale: bool,
+/// Identifies one of a pane's price axes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PriceScaleId {
+    /// Left price scale
+    Left,
+    /// Right price scale (holds the main series)
+    #[default]
+    Right,
+}
 
+impl PriceScaleId {
+    /// Returns the opposite scale
+    pub fn opposite(&self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+}
+
+impl fmt::Display for PriceScaleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Left => write!(f, "left"),
+            Self::Right => write!(f, "right"),
+        }
+    }
+}
+
+/// Configuration options for a [`PriceScale`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PriceScaleOptions {
     /// Price scale mode
     pub mode: PriceScaleMode,
 
@@ -135,367 +155,238 @@ pub struct PriceScaleOptions {
 
     /// Margins (top and bottom)
     pub scale_margins: PriceScaleMargins,
-
-    /// Align labels to prevent overlapping
-    pub align_labels: bool,
-
-    /// Draw border between price scale and chart
-    pub border_visible: bool,
-
-    /// Show price scale
-    pub visible: bool,
-
-    /// Draw small horizontal lines on price axis labels
-    pub ticks_visible: bool,
-
-    /// Show only entire text labels
-    pub entire_text_only: bool,
 }
 
-impl Default for PriceScaleOptions {
-    fn default() -> Self {
-        Self {
-            auto_scale: true,
-            mode: PriceScaleMode::Normal,
-            invert_scale: false,
-            scale_margins: PriceScaleMargins::default(),
-            align_labels: true,
-            border_visible: true,
-            visible: true,
-            ticks_visible: false,
-            entire_text_only: false,
+/// How one series' prices become scale units.
+///
+/// Percentage and indexed modes are relative to `base`, the series' first
+/// visible close; normal and logarithmic modes ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PriceTransform {
+    /// Scale mode
+    pub mode: PriceScaleMode,
+    /// Reference price for the percentage and indexed modes
+    pub base: f64,
+}
+
+impl PriceTransform {
+    /// Converts a price to scale units.
+    ///
+    /// Logarithmic maps non-positive prices to negative infinity, which
+    /// [`PriceMap`] places far below the pane.
+    pub fn to_scale(&self, price: f64) -> f64 {
+        match self.mode {
+            PriceScaleMode::Normal => price,
+            PriceScaleMode::Logarithmic if price > 0.0 => price.ln(),
+            PriceScaleMode::Logarithmic => f64::NEG_INFINITY,
+            PriceScaleMode::Percentage => (price - self.base) / self.base.abs() * 100.0,
+            PriceScaleMode::IndexedTo100 => price / self.base * 100.0,
+        }
+    }
+
+    /// Converts scale units back to a price.
+    pub fn to_price(&self, value: f64) -> f64 {
+        match self.mode {
+            PriceScaleMode::Normal => value,
+            PriceScaleMode::Logarithmic => value.exp(),
+            PriceScaleMode::Percentage => self.base + value / 100.0 * self.base.abs(),
+            PriceScaleMode::IndexedTo100 => value / 100.0 * self.base,
         }
     }
 }
 
-/// Price Scale Engine
-///
-/// Handles price-to-coord transformations with multiple modes:
-/// - Normal: Linear price scale
-/// - Logarithmic: Logarithmic price scale
-/// - Percentage: Percentage change from first visible value (0% baseline)
-/// - IndexedTo100: Percentage change from first visible value (100 baseline)
+/// One price axis: options and the visible range in scale units, fitted to the
+/// data until the user scales it by hand.
+#[derive(Debug, Clone)]
 pub struct PriceScale {
     options: PriceScaleOptions,
-
-    /// Current price range (in original price units)
-    price_range: PriceRange,
-
-    /// Height in pixels
-    height: f32,
-
-    /// First visible value (for Percentage/IndexedTo100 modes)
-    first_val: Option<f64>,
-
-    /// Manual price range override (when auto_scale is false)
-    manual_range: Option<PriceRange>,
+    /// Visible range in scale units
+    range: PriceRange,
+    /// The user zoomed or set the range, so autoscale leaves it alone until reset.
+    manual: bool,
 }
 
 impl PriceScale {
-    /// Creates a new price scale with default options and the given pixel height.
-    pub fn new(height: f32) -> Self {
-        Self {
-            options: PriceScaleOptions::default(),
-            price_range: PriceRange::new(0.0, 100.0),
-            height,
-            first_val: None,
-            manual_range: None,
-        }
-    }
-
-    /// Creates a new price scale with explicit options and the given pixel height.
-    pub fn with_options(height: f32, options: PriceScaleOptions) -> Self {
+    /// Creates an auto-scaled price scale.
+    pub fn new(options: PriceScaleOptions) -> Self {
         Self {
             options,
-            price_range: PriceRange::new(0.0, 100.0),
-            height,
-            first_val: None,
-            manual_range: None,
+            range: PriceRange::new(0.0, 100.0),
+            manual: false,
         }
     }
 
-    /// Set height (call when chart is resized)
-    pub fn set_height(&mut self, height: f32) {
-        self.height = height;
+    /// Returns the options.
+    pub fn options(&self) -> &PriceScaleOptions {
+        &self.options
     }
 
-    /// Set options
-    pub fn set_options(&mut self, options: PriceScaleOptions) {
-        self.options = options;
+    /// Returns the options for changing the mode, inversion or margins.
+    ///
+    /// The range is in scale units, so after changing the mode call
+    /// [`reset`](Self::reset) to fit the data in the new units.
+    pub fn options_mut(&mut self) -> &mut PriceScaleOptions {
+        &mut self.options
     }
 
-    /// Set first visible value (for Percentage/IndexedTo100 modes)
-    pub fn set_first_val(&mut self, value: f64) {
-        self.first_val = Some(value);
+    /// Returns the visible range in scale units.
+    pub fn range(&self) -> PriceRange {
+        self.range
     }
 
-    /// Auto-scale to fit the given price range
-    pub fn auto_scale(&mut self, data_min: f64, data_max: f64) {
-        if !self.options.auto_scale {
-            // Use manual range if set
-            if let Some(manual) = self.manual_range {
-                self.price_range = manual;
-                return;
-            }
+    /// Returns `true` when the user has scaled by hand.
+    pub fn is_manual(&self) -> bool {
+        self.manual
+    }
+
+    /// Fits `min..max` (scale units) plus margins unless the user scaled by hand.
+    ///
+    /// Non-finite bounds (no drawable data) keep the current range.
+    pub fn autoscale(&mut self, min: f64, max: f64) {
+        if self.manual || !min.is_finite() || !max.is_finite() {
+            return;
         }
-
-        let range = auto_scale_span(data_min, data_max);
-        let top_margin = range * self.options.scale_margins.top as f64;
-        let bottom_margin = range * self.options.scale_margins.bottom as f64;
-
-        self.price_range = PriceRange::new(data_min - bottom_margin, data_max + top_margin);
+        let span = auto_scale_span(min, max);
+        let margins = self.options.scale_margins;
+        self.range = PriceRange::new(min - span * margins.bottom, max + span * margins.top);
     }
 
-    /// Set manual price range (disables auto-scale)
-    pub fn set_manual_range(&mut self, min: f64, max: f64) {
-        self.manual_range = Some(PriceRange::new(min, max));
-        self.options.auto_scale = false;
+    /// Shows `min..max` (scale units) and switches to manual.
+    pub fn set_range(&mut self, min: f64, max: f64) {
+        self.range = PriceRange::new(min, max);
+        self.manual = true;
     }
 
-    /// Reset to auto-scale
-    pub fn reset_auto_scale(&mut self) {
-        self.manual_range = None;
-        self.options.auto_scale = true;
+    /// Scales the range by `factor` (above 1 zooms out) around the scale value
+    /// `anchor`, which keeps its position on screen, and switches to manual.
+    ///
+    /// One call changes the span by at most 20 times either way. Zooming in stops at a
+    /// span of 1e-6 of the larger bound's magnitude (1e-6 when both bounds are 0), and
+    /// a result that is not finite leaves the range unchanged.
+    pub fn zoom(&mut self, factor: f64, anchor: f64) {
+        let PriceRange { min, max } = self.range;
+        let span = auto_scale_span(min, max);
+        // 1e-6 of the level: far above f64 rounding (~1e-16), at or below common tick sizes.
+        let level = min.abs().max(max.abs());
+        let floor = if level > 0.0 { level * 1e-6 } else { 1e-6 };
+        // Never widen a range that is already narrower than the floor.
+        let new_span = (span * factor)
+            .clamp(span * 0.05, span * 20.0)
+            .max(floor.min(span));
+        let t = ((anchor - min) / span).clamp(0.0, 1.0);
+        let new_min = anchor - t * new_span;
+        let new_max = new_min + new_span;
+        if (new_max - new_min).is_finite() {
+            self.set_range(new_min, new_max);
+        }
     }
 
-    /// Convert price to Y coord
-    pub fn price_to_coord(&self, price: f64) -> f32 {
-        let normalized = self.normalize_price(price);
-        let ratio = self.price_to_ratio(normalized);
+    /// Returns to auto-scaling (double click on the axis).
+    pub fn reset(&mut self) {
+        self.manual = false;
+    }
 
-        // Invert Y axis (top = 0, bottom = height)
-        let y = if self.options.invert_scale {
-            ratio as f32 * self.height
+    /// Mapping for one series for one frame, given the pane's vertical extent in points.
+    pub fn map(&self, transform: PriceTransform, top: f32, bottom: f32) -> PriceMap {
+        PriceMap::new(
+            transform,
+            self.range,
+            top,
+            bottom,
+            self.options.invert_scale,
+        )
+    }
+}
+
+/// Per-frame price-to-pixel mapping.
+///
+/// Unclamped: a price outside the visible range maps outside the pane, and the
+/// painter's clip rect clips it.
+#[derive(Debug, Clone, Copy)]
+pub struct PriceMap {
+    transform: PriceTransform,
+    range: PriceRange,
+    top: f32,
+    bottom: f32,
+    inverted: bool,
+}
+
+impl PriceMap {
+    /// Maps `range` (scale units) onto `top..bottom` (points), the low end at the
+    /// bottom unless `inverted`.
+    pub fn new(
+        transform: PriceTransform,
+        range: PriceRange,
+        top: f32,
+        bottom: f32,
+        inverted: bool,
+    ) -> Self {
+        Self {
+            transform,
+            range,
+            top,
+            bottom,
+            inverted,
+        }
+    }
+
+    /// Returns the price transform.
+    pub fn transform(&self) -> PriceTransform {
+        self.transform
+    }
+
+    /// Returns the visible range in scale units.
+    pub fn range(&self) -> PriceRange {
+        self.range
+    }
+
+    /// Converts a price to a y coordinate.
+    #[inline]
+    pub fn price_to_y(&self, price: f64) -> f32 {
+        self.scale_to_y(self.transform.to_scale(price))
+    }
+
+    /// Converts a y coordinate to a price.
+    #[inline]
+    pub fn y_to_price(&self, y: f32) -> f64 {
+        self.transform.to_price(self.y_to_scale(y))
+    }
+
+    /// Converts scale units to a y coordinate.
+    ///
+    /// A flat range has no vertical extent to map onto, so every value lands on
+    /// the middle of the pane.
+    #[inline]
+    pub(crate) fn scale_to_y(&self, value: f64) -> f32 {
+        let span = self.range.max - self.range.min;
+        if span.abs() < f64::EPSILON {
+            return (self.top + self.bottom) / 2.0;
+        }
+        // Bounded so that a non-positive price on a log scale stays a finite coordinate off the pane.
+        let ratio = ((value - self.range.min) / span).clamp(-1e4, 1e4) as f32;
+        let height = self.bottom - self.top;
+        if self.inverted {
+            self.top + ratio * height
         } else {
-            (1.0 - ratio as f32) * self.height
-        };
-
-        y.clamp(0.0, self.height)
+            self.bottom - ratio * height
+        }
     }
 
-    /// Convert Y coord to price
-    pub fn coord_to_price(&self, y: f32) -> f64 {
-        // A zero-height scale has no inverse; treat every coordinate as the
-        // bottom of the range rather than dividing by zero.
-        if self.height.abs() < f32::EPSILON {
-            return self.denormalize_price(self.ratio_to_price(0.0));
+    /// Converts a y coordinate to scale units.
+    ///
+    /// A zero-height pane has no inverse, so the low end of the range is returned.
+    #[inline]
+    pub(crate) fn y_to_scale(&self, y: f32) -> f64 {
+        let height = self.bottom - self.top;
+        if height.abs() < f32::EPSILON {
+            return self.range.min;
         }
-
-        let ratio = if self.options.invert_scale {
-            (y / self.height) as f64
+        let ratio = if self.inverted {
+            (y - self.top) / height
         } else {
-            (1.0 - y / self.height) as f64
+            (self.bottom - y) / height
         };
-
-        let normalized = self.ratio_to_price(ratio);
-        self.denormalize_price(normalized)
-    }
-
-    /// Get current price range
-    pub fn price_range(&self) -> PriceRange {
-        self.price_range
-    }
-
-    /// Get visible price range (accounting for mode transformations)
-    pub fn visible_price_range(&self) -> PriceRange {
-        match self.options.mode {
-            PriceScaleMode::Normal => self.price_range,
-            PriceScaleMode::Logarithmic => {
-                // Return log-transformed range
-                PriceRange::new(
-                    self.price_to_log(self.price_range.min),
-                    self.price_to_log(self.price_range.max),
-                )
-            }
-            PriceScaleMode::Percentage => {
-                if let Some(first) = self.first_val {
-                    PriceRange::new(
-                        self.price_to_percent(self.price_range.min, first),
-                        self.price_to_percent(self.price_range.max, first),
-                    )
-                } else {
-                    self.price_range
-                }
-            }
-            PriceScaleMode::IndexedTo100 => {
-                if let Some(first) = self.first_val {
-                    PriceRange::new(
-                        self.price_to_idxed(self.price_range.min, first),
-                        self.price_to_idxed(self.price_range.max, first),
-                    )
-                } else {
-                    self.price_range
-                }
-            }
-        }
-    }
-
-    // ============= Internal transformation methods =============
-
-    /// Normalize price according to current mode (price -> normalized)
-    pub(crate) fn normalize_price(&self, price: f64) -> f64 {
-        match self.options.mode {
-            PriceScaleMode::Normal => price,
-            PriceScaleMode::Logarithmic => self.price_to_log(price),
-            PriceScaleMode::Percentage => {
-                if let Some(first) = self.first_val {
-                    self.price_to_percent(price, first)
-                } else {
-                    price
-                }
-            }
-            PriceScaleMode::IndexedTo100 => {
-                if let Some(first) = self.first_val {
-                    self.price_to_idxed(price, first)
-                } else {
-                    price
-                }
-            }
-        }
-    }
-
-    /// Denormalize price according to current mode (normalized -> price)
-    fn denormalize_price(&self, normalized: f64) -> f64 {
-        match self.options.mode {
-            PriceScaleMode::Normal => normalized,
-            PriceScaleMode::Logarithmic => self.log_to_price(normalized),
-            PriceScaleMode::Percentage => {
-                if let Some(first) = self.first_val {
-                    self.percent_to_price(normalized, first)
-                } else {
-                    normalized
-                }
-            }
-            PriceScaleMode::IndexedTo100 => {
-                if let Some(first) = self.first_val {
-                    self.indexed_to_price(normalized, first)
-                } else {
-                    normalized
-                }
-            }
-        }
-    }
-
-    /// Convert normalized price to ratio in range [0, 1]
-    fn price_to_ratio(&self, normalized_price: f64) -> f64 {
-        let normalized_range = match self.options.mode {
-            PriceScaleMode::Normal => self.price_range.length(),
-            PriceScaleMode::Logarithmic => {
-                self.price_to_log(self.price_range.max) - self.price_to_log(self.price_range.min)
-            }
-            PriceScaleMode::Percentage => {
-                if let Some(first) = self.first_val {
-                    self.price_to_percent(self.price_range.max, first)
-                        - self.price_to_percent(self.price_range.min, first)
-                } else {
-                    self.price_range.length()
-                }
-            }
-            PriceScaleMode::IndexedTo100 => {
-                if let Some(first) = self.first_val {
-                    self.price_to_idxed(self.price_range.max, first)
-                        - self.price_to_idxed(self.price_range.min, first)
-                } else {
-                    self.price_range.length()
-                }
-            }
-        };
-
-        let normalized_min = match self.options.mode {
-            PriceScaleMode::Normal => self.price_range.min,
-            PriceScaleMode::Logarithmic => self.price_to_log(self.price_range.min),
-            PriceScaleMode::Percentage => {
-                if let Some(first) = self.first_val {
-                    self.price_to_percent(self.price_range.min, first)
-                } else {
-                    self.price_range.min
-                }
-            }
-            PriceScaleMode::IndexedTo100 => {
-                if let Some(first) = self.first_val {
-                    self.price_to_idxed(self.price_range.min, first)
-                } else {
-                    self.price_range.min
-                }
-            }
-        };
-
-        ((normalized_price - normalized_min) / normalized_range.max(1e-12)).clamp(0.0, 1.0)
-    }
-
-    /// Convert ratio [0, 1] to normalized price
-    fn ratio_to_price(&self, ratio: f64) -> f64 {
-        let ratio_clamped = ratio.clamp(0.0, 1.0);
-
-        match self.options.mode {
-            PriceScaleMode::Normal => {
-                self.price_range.min + ratio_clamped * self.price_range.length()
-            }
-            PriceScaleMode::Logarithmic => {
-                let log_min = self.price_to_log(self.price_range.min);
-                let log_max = self.price_to_log(self.price_range.max);
-                log_min + ratio_clamped * (log_max - log_min)
-            }
-            PriceScaleMode::Percentage => {
-                if let Some(first) = self.first_val {
-                    let percent_min = self.price_to_percent(self.price_range.min, first);
-                    let percent_max = self.price_to_percent(self.price_range.max, first);
-                    percent_min + ratio_clamped * (percent_max - percent_min)
-                } else {
-                    self.price_range.min + ratio_clamped * self.price_range.length()
-                }
-            }
-            PriceScaleMode::IndexedTo100 => {
-                if let Some(first) = self.first_val {
-                    let indexed_min = self.price_to_idxed(self.price_range.min, first);
-                    let indexed_max = self.price_to_idxed(self.price_range.max, first);
-                    indexed_min + ratio_clamped * (indexed_max - indexed_min)
-                } else {
-                    self.price_range.min + ratio_clamped * self.price_range.length()
-                }
-            }
-        }
-    }
-
-    // ============= Mode-specific transformations =============
-
-    /// Logarithmic: price -> log(price)
-    fn price_to_log(&self, price: f64) -> f64 {
-        if price <= 0.0 {
-            return 0.0;
-        }
-        price.ln() / E.ln()
-    }
-
-    /// Logarithmic: log(price) -> price
-    fn log_to_price(&self, log_price: f64) -> f64 {
-        E.powf(log_price)
-    }
-
-    /// Percentage: price -> percentage change from first value
-    fn price_to_percent(&self, price: f64, first_val: f64) -> f64 {
-        if first_val == 0.0 {
-            return 0.0;
-        }
-        ((price - first_val) / first_val.abs()) * 100.0
-    }
-
-    /// Percentage: percentage -> price
-    fn percent_to_price(&self, percent: f64, first_val: f64) -> f64 {
-        first_val + (first_val * percent / 100.0)
-    }
-
-    /// IndexedTo100: price -> indexed to 100
-    fn price_to_idxed(&self, price: f64, first_val: f64) -> f64 {
-        if first_val == 0.0 {
-            return 100.0;
-        }
-        (price / first_val) * 100.0
-    }
-
-    /// IndexedTo100: indexed -> price
-    fn indexed_to_price(&self, indexed: f64, first_val: f64) -> f64 {
-        (indexed / 100.0) * first_val
+        self.range.min + ratio as f64 * (self.range.max - self.range.min)
     }
 }
 
@@ -503,110 +394,81 @@ impl PriceScale {
 mod tests {
     use super::*;
 
+    /// Hand-computed positions on a pane from y = 0 (top) to y = 100 (bottom).
     #[test]
-    fn test_normal_mode() {
-        let mut scale = PriceScale::new(100.0);
-        scale.auto_scale(0.0, 100.0);
+    fn price_map_places_prices_by_mode() {
+        use PriceScaleMode::*;
+        let ln = f64::ln;
+        // (mode, base, scale range, inverted, price, expected y)
+        let cases = [
+            (Normal, 0.0, (100.0, 200.0), false, 150.0, 50.0),
+            (Normal, 0.0, (100.0, 200.0), false, 120.0, 80.0),
+            // ln 100 is the mean of ln 10 and ln 1,000.
+            (Logarithmic, 0.0, (ln(10.0), ln(1000.0)), false, 100.0, 50.0),
+            // 55 is +10% of 50, the top of -10%..+10%.
+            (Percentage, 50.0, (-10.0, 10.0), false, 55.0, 0.0),
+            (Percentage, 50.0, (-10.0, 10.0), false, 50.0, 50.0),
+            // 45 is 90 when 50 is 100.
+            (IndexedTo100, 50.0, (90.0, 110.0), false, 45.0, 100.0),
+            (Normal, 0.0, (100.0, 200.0), true, 120.0, 20.0),
+            // Outside the range: above the pane, not on its edge.
+            (Normal, 0.0, (100.0, 200.0), false, 250.0, -50.0),
+            (Normal, 0.0, (100.0, 200.0), true, 50.0, -50.0),
+        ];
+        for (mode, base, (min, max), inverted, price, y) in cases {
+            let transform = PriceTransform { mode, base };
+            let map = PriceMap::new(transform, PriceRange::new(min, max), 0.0, 100.0, inverted);
+            let got = map.price_to_y(price);
+            assert!(
+                (got - y).abs() < 1e-3,
+                "{mode:?} {price}: y {got}, expected {y}"
+            );
+            let back = map.y_to_price(got);
+            assert!(
+                (back - price).abs() < 1e-3 * price,
+                "{mode:?} {price}: back {back}"
+            );
+        }
+    }
 
-        // Price 0 should be at bottom (y = height)
-        // Price 100 should be at top (y = 0)
-        let y_min = scale.price_to_coord(0.0);
-        let y_max = scale.price_to_coord(100.0);
+    /// Manual zoom must narrow ordinary intraday ranges, stop at a span tied to the
+    /// price level, and never overflow to infinite or NaN bounds when zooming out.
+    #[test]
+    fn zoom_stays_within_sane_span() {
+        let scale_with = |lo, hi| {
+            let mut s = PriceScale::new(PriceScaleOptions::default());
+            s.set_range(lo, hi);
+            s
+        };
+        // EURUSD, BTC and a series crossing zero, each zoomed in at its anchor.
+        for (lo, hi, anchor) in [
+            (1.0845, 1.0855, 1.085),
+            (99_500.0, 100_000.0, 99_750.0),
+            (-0.5, 0.5, 0.0),
+        ] {
+            let mut s = scale_with(lo, hi);
+            s.zoom((-0.1f64).exp(), anchor);
+            assert!(
+                s.range().max - s.range().min < hi - lo,
+                "({lo}, {hi}) -> {:?}",
+                s.range()
+            );
+        }
 
-        assert!(y_min > y_max, "Lower price should have higher Y coord");
+        let mut s = scale_with(90.0, 110.0);
+        for _ in 0..200 {
+            s.zoom((-1.0f64).exp(), 100.0);
+        }
+        // 1e-6 of a price of 100.
+        assert!(s.range().max - s.range().min >= 1e-4, "{:?}", s.range());
 
-        // Test reverse
-        let price_from_y = scale.coord_to_price(y_min);
+        for _ in 0..1000 {
+            s.zoom(1.0f64.exp(), 100.0);
+        }
+        let r = s.range();
         assert!(
-            (price_from_y - 0.0).abs() < 1.0,
-            "Should convert back to ~0"
-        );
-    }
-
-    #[test]
-    fn test_logarithmic_mode() {
-        let mut scale = PriceScale::new(100.0);
-        scale.set_options(PriceScaleOptions {
-            mode: PriceScaleMode::Logarithmic,
-            ..Default::default()
-        });
-        scale.auto_scale(1.0, 100.0);
-
-        // Logarithmic scale should compress higher values
-        let y_10 = scale.price_to_coord(10.0);
-        let y_100 = scale.price_to_coord(100.0);
-
-        assert!(y_10 > y_100);
-    }
-
-    #[test]
-    fn test_percentage_mode() {
-        let mut scale = PriceScale::new(100.0);
-        scale.set_options(PriceScaleOptions {
-            mode: PriceScaleMode::Percentage,
-            ..Default::default()
-        });
-        scale.set_first_val(100.0);
-        scale.auto_scale(90.0, 110.0);
-
-        // Test price transformation
-        // 90 is -10%, 110 is +10%, 100 is 0%
-        let percent_90 = scale.normalize_price(90.0);
-        let percent_100 = scale.normalize_price(100.0);
-        let percent_110 = scale.normalize_price(110.0);
-
-        assert!((percent_90 - (-10.0)).abs() < 0.1, "90 should be -10%");
-        assert!((percent_100 - 0.0).abs() < 0.1, "100 should be 0%");
-        assert!((percent_110 - 10.0).abs() < 0.1, "110 should be +10%");
-    }
-
-    #[test]
-    fn test_idxed_to_100_mode() {
-        let mut scale = PriceScale::new(100.0);
-        scale.set_options(PriceScaleOptions {
-            mode: PriceScaleMode::IndexedTo100,
-            ..Default::default()
-        });
-        scale.set_first_val(100.0);
-        scale.auto_scale(90.0, 110.0);
-
-        // Test price transformation
-        // 100 -> 100, 90 -> 90, 110 -> 110
-        let indexed_90 = scale.normalize_price(90.0);
-        let indexed_100 = scale.normalize_price(100.0);
-        let indexed_110 = scale.normalize_price(110.0);
-
-        assert!((indexed_90 - 90.0).abs() < 0.1, "90 should map to 90");
-        assert!((indexed_100 - 100.0).abs() < 0.1, "100 should map to 100");
-        assert!((indexed_110 - 110.0).abs() < 0.1, "110 should map to 110");
-    }
-
-    #[test]
-    fn test_coord_to_price_zero_height_is_finite() {
-        // A zero-height scale has no inverse; coord_to_price must return a
-        // finite price instead of dividing by zero.
-        let mut scale = PriceScale::new(0.0);
-        scale.auto_scale(100.0, 200.0);
-        let price = scale.coord_to_price(0.0);
-        assert!(price.is_finite());
-    }
-
-    #[test]
-    fn test_invert_scale() {
-        let mut scale = PriceScale::new(100.0);
-        scale.set_options(PriceScaleOptions {
-            invert_scale: true,
-            ..Default::default()
-        });
-        scale.auto_scale(0.0, 100.0);
-
-        // With inverted scale, higher prices should have higher Y coords
-        let y_0 = scale.price_to_coord(0.0);
-        let y_100 = scale.price_to_coord(100.0);
-
-        assert!(
-            y_100 > y_0,
-            "With inverted scale, higher price should have higher Y"
+            r.min.is_finite() && r.max.is_finite() && r.min < r.max,
+            "{r:?}"
         );
     }
 }

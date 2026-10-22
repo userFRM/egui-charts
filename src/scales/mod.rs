@@ -8,34 +8,27 @@
 //!
 //! | Component                  | Purpose                                                  |
 //! |---------------------------|----------------------------------------------------------|
-//! | [`PriceScale`]            | Price-to-Y mapping with Normal, Log, %, Indexed modes    |
-//! | [`DualPriceScaleManager`] | Left/right Y-axis management with series assignment      |
+//! | [`PriceScale`]            | Price axis range: autoscale, zoom, Normal/Log/%/Indexed  |
+//! | [`PriceMap`]              | Per-frame price-to-Y mapping produced by a [`PriceScale`] |
 //! | [`PriceMarkGenerator`]    | Smart tick placement on the price axis ("nice numbers")  |
 //! | [`TickMarkGenerator`]     | Hierarchical tick placement on the time axis              |
 //! | [`PriceFormatter`] trait  | Customizable price label formatting                      |
 //! | [`TimeFormatter`] trait   | Customizable time label formatting                       |
-//! | [`PriceDisplayMode`]      | Absolute / Percentage / Points / BPS display              |
-//! | [`AutoScaleMode`]         | Auto-scale strategies for the price axis                  |
 
-mod dual_pricescale;
-mod price_display;
 mod price_formatter;
 mod pricescale;
 mod pricescale_marks;
 mod time_formatter;
 mod timescale_marks;
 
-pub use dual_pricescale::{
-    DualPriceScaleManager, PosedPriceScaleOptions, PriceScaleId, SeriesScaleAssignment,
-};
-pub use price_display::{AutoScaleMode, PriceDisplayMode};
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
 };
 pub(crate) use pricescale::auto_scale_span;
 pub use pricescale::{
-    PriceRange, PriceScale, PriceScaleMargins, PriceScaleMode, PriceScaleOptions,
+    PriceMap, PriceRange, PriceScale, PriceScaleId, PriceScaleMargins, PriceScaleMode,
+    PriceScaleOptions, PriceTransform,
 };
 pub use pricescale_marks::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConfig};
 pub use time_formatter::{
