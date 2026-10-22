@@ -16,8 +16,8 @@
 //! - Standard: Bars, Candles, Hollow Candles, Volume Candles
 //! - Line-based: Line, Line with Markers, Step Line
 //! - Area-based: Area, HLC Area, Baseline
-//! - Japanese: Renko, Kagi, Line Break, Heikin-Ashi
-//! - Range-based: High-Low, Range Bars, Point & Figure
+//! - Japanese: Renko, Kagi, Line Break, Heikin-Ashi, Point & Figure
+//! - Range-based: High-Low, Range Bars
 //! - Advanced: TPO (Market Profile)
 
 use std::fmt;
