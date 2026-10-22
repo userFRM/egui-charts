@@ -3,7 +3,7 @@
 use super::command::Command;
 use super::fuzzy::{FuzzyMatch, fuzzy_match};
 use crate::icons::icons;
-use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Context, Key, Order, Rect, RichText, ScrollArea, Sense, TextEdit, Vec2};
 
@@ -157,13 +157,8 @@ impl CommandPalette {
                 egui::Frame::new()
                     .fill(ui.visuals().window_fill)
                     .stroke(ui.visuals().window_stroke)
-                    .corner_radius(DESIGN_TOKENS.rounding.lg)
-                    .shadow(egui::epaint::Shadow {
-                        offset: [0, 4],
-                        blur: 16,
-                        spread: 8,
-                        color: Color32::from_black_alpha(100),
-                    })
+                    .corner_radius(ui.visuals().window_corner_radius)
+                    .shadow(ui.visuals().window_shadow)
                     .show(ui, |ui| {
                         ui.set_width(modal_width);
                         ui.set_max_height(modal_max_height);
@@ -229,22 +224,6 @@ impl CommandPalette {
                             });
                             ui.add_space(DESIGN_TOKENS.spacing.xl);
                         } else {
-                            // Collect commands we need to render
-                            let items_to_render: Vec<_> = self
-                                .filtered
-                                .iter()
-                                .enumerate()
-                                .map(|(list_idx, (cmd_idx, _))| {
-                                    let cmd = &self.commands[*cmd_idx];
-                                    (
-                                        list_idx,
-                                        cmd.id.clone(),
-                                        cmd.label.clone(),
-                                        cmd.category.clone(),
-                                    )
-                                })
-                                .collect();
-
                             ScrollArea::vertical()
                                 .max_height(
                                     modal_max_height
@@ -253,69 +232,13 @@ impl CommandPalette {
                                 .show(ui, |ui| {
                                     ui.add_space(DESIGN_TOKENS.spacing.xs);
 
-                                    for (list_idx, cmd_id, label, category) in items_to_render {
-                                        let is_selected = list_idx == self.selected_index;
-
-                                        let bg_color = if is_selected {
-                                            DESIGN_TOKENS.semantic.command_palette.item_selected
-                                        } else {
-                                            Color32::TRANSPARENT
-                                        };
-
-                                        let (rect, response) = ui.allocate_exact_size(
-                                            Vec2::new(
-                                                ui.available_width(),
-                                                DESIGN_TOKENS.sizing.list_item_height,
-                                            ),
-                                            Sense::click(),
-                                        );
-
-                                        if ui.is_rect_visible(rect) {
-                                            let painter = ui.painter();
-
-                                            // Background
-                                            let hover_color = if response.hovered() && !is_selected
-                                            {
-                                                DESIGN_TOKENS.semantic.command_palette.item_hover
-                                            } else {
-                                                bg_color
-                                            };
-                                            painter.rect_filled(rect, 0.0, hover_color);
-
-                                            // Label
-                                            let text_color = if is_selected {
-                                                ui.visuals().strong_text_color()
-                                            } else {
-                                                ui.visuals().text_color()
-                                            };
-
-                                            let x = rect.min.x + DESIGN_TOKENS.spacing.md;
-                                            painter.text(
-                                                egui::pos2(x, rect.center().y),
-                                                egui::Align2::LEFT_CENTER,
-                                                &label,
-                                                egui::FontId::proportional(typography::LG),
-                                                text_color,
-                                            );
-
-                                            // Category (if any)
-                                            if let Some(ref cat) = category {
-                                                let cat_x = rect.max.x - DESIGN_TOKENS.spacing.md;
-                                                painter.text(
-                                                    egui::pos2(cat_x, rect.center().y),
-                                                    egui::Align2::RIGHT_CENTER,
-                                                    cat,
-                                                    egui::FontId::proportional(typography::SM),
-                                                    DESIGN_TOKENS
-                                                        .semantic
-                                                        .command_palette
-                                                        .shortcut_text,
-                                                );
-                                            }
-                                        }
-
-                                        if response.clicked() {
-                                            executed_command = Some(cmd_id);
+                                    for (list_idx, (cmd_idx, _)) in self.filtered.iter().enumerate()
+                                    {
+                                        let cmd = &self.commands[*cmd_idx];
+                                        if command_row(ui, cmd, list_idx == self.selected_index)
+                                            .clicked()
+                                        {
+                                            executed_command = Some(cmd.id.clone());
                                         }
                                     }
 
@@ -350,6 +273,98 @@ impl CommandPalette {
 
         executed_command
     }
+}
+
+/// Height of a row that shows a description under its label.
+const ROW_HEIGHT_WITH_DESCRIPTION: f32 = 40.0;
+
+/// Paint one result row: icon slot, label with optional description, then category and
+/// shortcut at the right.
+fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Response {
+    let theme = ui.active_theme();
+    let height = if cmd.description.is_some() {
+        ROW_HEIGHT_WITH_DESCRIPTION
+    } else {
+        DESIGN_TOKENS.sizing.list_item_height
+    };
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_selected, &cmd.label)
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+
+    let visuals = ui.visuals();
+    let (fill, text, icon_tint, secondary) = if is_selected {
+        let fg = visuals.selection.stroke.color;
+        (visuals.selection.bg_fill, fg, fg, fg)
+    } else {
+        let fill = if response.hovered() {
+            visuals.widgets.hovered.bg_fill
+        } else {
+            Color32::TRANSPARENT
+        };
+        let tint = visuals.widgets.noninteractive.fg_stroke.color;
+        (fill, visuals.text_color(), tint, visuals.weak_text_color())
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 0.0, fill);
+
+    // Every row reserves the icon slot, so labels line up.
+    let icon_size = DESIGN_TOKENS.sizing.icon_sm;
+    let icon_x = rect.min.x + theme.spacing.md;
+    if let Some(icon) = cmd.icon {
+        let icon_rect = Rect::from_min_size(
+            egui::pos2(icon_x, rect.center().y - icon_size / 2.0),
+            Vec2::splat(icon_size),
+        );
+        icon.as_image_tinted(icon_rect.size(), icon_tint)
+            .paint_at(ui, icon_rect);
+    }
+
+    let text_x = icon_x + icon_size + theme.spacing.lg;
+    let small = egui::FontId::proportional(theme.text.small);
+    // A description goes under the label; both meet at the row's middle.
+    let label_align = if cmd.description.is_some() {
+        egui::Align2::LEFT_BOTTOM
+    } else {
+        egui::Align2::LEFT_CENTER
+    };
+    let text_pos = egui::pos2(text_x, rect.center().y);
+    let body = egui::FontId::proportional(theme.text.body);
+    painter.text(text_pos, label_align, &cmd.label, body, text);
+    if let Some(description) = &cmd.description {
+        painter.text(
+            text_pos,
+            egui::Align2::LEFT_TOP,
+            description,
+            small.clone(),
+            secondary,
+        );
+    }
+
+    // Shortcut at the right edge, the category to its left.
+    let mut right = rect.max.x - theme.spacing.md;
+    let shortcut = cmd
+        .shortcut
+        .map(|shortcut| ui.ctx().format_shortcut(&shortcut));
+    for label in [shortcut.as_ref(), cmd.category.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        let drawn = painter.text(
+            egui::pos2(right, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            label,
+            small.clone(),
+            secondary,
+        );
+        right = drawn.min.x - theme.spacing.lg;
+    }
+
+    response
 }
 
 /// Handler for managing command palette state
