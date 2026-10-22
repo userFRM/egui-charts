@@ -150,9 +150,9 @@ impl Indicator for KAMA {
         let mut kama = first_prices.iter().sum::<f64>() / self.period as f64;
         self.values.push(IndicatorValue::Single(kama));
 
-        // Calculate remaining KAMA values
+        // N + 1 closes give the N price changes the efficiency ratio sums.
         for i in self.period..data.len() {
-            let prices: Vec<f64> = data[i + 1 - self.period..=i]
+            let prices: Vec<f64> = data[i - self.period..=i]
                 .iter()
                 .map(|bar| bar.close)
                 .collect();
@@ -221,62 +221,67 @@ mod tests {
         }
     }
 
+    /// Expected values from Kaufman's definition (n price changes per
+    /// efficiency ratio), seeded with the simple average of the first n
+    /// closes; fast 2, slow 30.
     #[test]
-    fn test_efficiency_ratio_trending() {
-        // Perfect uptrend: ER should be 1.0
-        let prices = vec![100.0, 101.0, 102.0, 103.0, 104.0];
-        let er = KAMA::efficiency_ratio(&prices);
-        assert!((er - 1.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_efficiency_ratio_ranging() {
-        // Choppy market: ER should be close to 0
-        let prices = vec![100.0, 102.0, 100.0, 102.0, 100.0];
-        let er = KAMA::efficiency_ratio(&prices);
-        // Change = 0, so ER = 0
-        assert!((er - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_kama_calculation() {
-        let mut kama = KAMA::new(5);
-
-        let data = vec![
-            make_bar(100.0),
-            make_bar(101.0),
-            make_bar(102.0),
-            make_bar(103.0),
-            make_bar(104.0),
-            make_bar(105.0),
-            make_bar(106.0),
+    fn calculate_matches_kaufman_reference() {
+        // (name, period, closes, expected KAMA per bar)
+        type Case = (&'static str, usize, &'static [f64], &'static [Option<f64>]);
+        let cases: &[Case] = &[
+            (
+                "choppy",
+                4,
+                &[10.0, 11.0, 10.5, 12.0, 11.0, 13.0, 12.5, 14.0, 13.0, 13.5],
+                &[
+                    None,
+                    None,
+                    None,
+                    Some(10.875),
+                    Some(10.88078101514626),
+                    Some(11.078408170242067),
+                    Some(11.210978306235772),
+                    Some(11.47106771973126),
+                    Some(11.613647858472564),
+                    Some(11.656395577253855),
+                ],
+            ),
+            (
+                "trend",
+                3,
+                &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                &[
+                    None,
+                    None,
+                    Some(2.0),
+                    Some(2.8888888888888884),
+                    Some(3.8271604938271597),
+                    Some(4.792866941015088),
+                ],
+            ),
+            (
+                "flat",
+                3,
+                &[7.0; 5],
+                &[None, None, Some(7.0), Some(7.0), Some(7.0)],
+            ),
+            ("short", 5, &[1.0, 2.0, 3.0], &[None, None, None]),
         ];
 
-        kama.calculate(&data);
-
-        assert_eq!(kama.values.len(), 7);
-
-        // First 4 values should be None
-        for i in 0..4 {
-            assert!(matches!(kama.values[i], IndicatorValue::None));
+        for (name, period, closes, expected) in cases {
+            let data: Vec<Bar> = closes.iter().map(|&c| make_bar(c)).collect();
+            let mut kama = KAMA::new(*period);
+            kama.calculate(&data);
+            assert_eq!(kama.values.len(), expected.len(), "{name}");
+            for (i, (got, want)) in kama.values.iter().zip(expected.iter()).enumerate() {
+                match (got, want) {
+                    (IndicatorValue::None, None) => {}
+                    (IndicatorValue::Single(g), Some(w)) => {
+                        assert!((g - w).abs() < 1e-12, "{name}[{i}]: got {g}, want {w}")
+                    }
+                    _ => panic!("{name}[{i}]: got {got:?}, want {want:?}"),
+                }
+            }
         }
-
-        // Fifth value should be present (first KAMA)
-        assert!(matches!(kama.values[4], IndicatorValue::Single(_)));
-    }
-
-    #[test]
-    fn test_smoothing_constant() {
-        let kama = KAMA::new(10);
-
-        // ER = 0 (ranging) should give slow SC
-        let sc_slow = kama.smoothing_constant(0.0);
-        let expected_slow = (2.0_f64 / 31.0).powi(2);
-        assert!((sc_slow - expected_slow).abs() < 0.0001);
-
-        // ER = 1 (trending) should give fast SC
-        let sc_fast = kama.smoothing_constant(1.0);
-        let expected_fast = (2.0_f64 / 3.0).powi(2);
-        assert!((sc_fast - expected_fast).abs() < 0.0001);
     }
 }
