@@ -6,7 +6,7 @@
 //!
 //! - [`IconButton`] - Simple icon button (most common)
 //! - [`SplitButton`] - Icon + dropdown arrow (category buttons)
-//! - Toggle button - On/off toggle with icon
+//! - [`Button`] - Text, icon or both, in a [`ButtonVariant`]
 //!
 //! # Usage
 //!
@@ -34,9 +34,8 @@ pub use icon_button::IconButton;
 pub use split_button::SplitButton;
 pub use variant::ButtonVariant;
 
-use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Response, Sense, Ui, Vec2};
+use egui::{Response, Ui, WidgetInfo, WidgetType};
 
 /// Button sizes
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -63,37 +62,38 @@ impl ButtonSize {
             ButtonSize::XL => DESIGN_TOKENS.sizing.button_xl,
         }
     }
-}
 
-/// Get button background color based on state
-pub fn button_bg(ui: &Ui, hovered: bool, selected: bool) -> Color32 {
-    if selected && hovered {
-        // Use theming helper for active+hover state
-        theming::active_hover_color(ui)
-    } else if selected {
-        theming::sel_color(ui)
-    } else if hovered {
-        theming::hover_color(ui)
-    } else {
-        Color32::TRANSPARENT
+    /// Icon size for this button size, or `scale` times the button size when one is set.
+    fn icon_pixels(&self, scale: Option<f32>) -> f32 {
+        scale.map_or(
+            match self {
+                ButtonSize::SM => DESIGN_TOKENS.sizing.icon_sm,
+                ButtonSize::MD => DESIGN_TOKENS.sizing.icon_md,
+                ButtonSize::LG | ButtonSize::XL => DESIGN_TOKENS.sizing.icon_lg,
+            },
+            |scale| self.pixels() * scale,
+        )
     }
 }
 
-/// Get icon color based on state
-pub fn icon_color(ui: &Ui, hovered: bool, selected: bool) -> Color32 {
-    let visuals = &ui.style().visuals;
-
-    if selected || hovered {
-        visuals.widgets.active.fg_stroke.color
-    } else {
-        visuals.widgets.noninteractive.fg_stroke.color
+/// Report a button to accessibility tools and attach its tooltip, which also shows while disabled.
+fn finish(response: Response, selected: bool, label: &str, tooltip: Option<&str>) -> Response {
+    response.widget_info(|| {
+        if selected {
+            WidgetInfo::selected(WidgetType::Button, response.enabled(), true, label)
+        } else {
+            WidgetInfo::labeled(WidgetType::Button, response.enabled(), label)
+        }
+    });
+    match tooltip {
+        Some(tip) => response.on_hover_text(tip).on_disabled_hover_text(tip),
+        None => response,
     }
 }
 
-/// Render a dialog close button (X).
+/// Render a dialog close button: an [`IconButton`] with the close icon.
 ///
-/// Used in dialog title bars. Draws an X glyph that looks like an [`IconButton`]
-/// at rest and on hover. Returns the click [`Response`].
+/// Returns the click [`Response`].
 ///
 /// # Example
 ///
@@ -108,41 +108,7 @@ pub fn icon_color(ui: &Ui, hovered: bool, selected: bool) -> Color32 {
 /// });
 /// ```
 pub fn dialog_close_button(ui: &mut Ui) -> Response {
-    let btn_size = Vec2::splat(DESIGN_TOKENS.sizing.icon_xl);
-    let (rect, response) = ui.allocate_exact_size(btn_size, Sense::click());
-    crate::styles::focus::draw_focus_ring(ui, &response);
-    let is_hovered = response.hovered();
-
-    // Same rest and hover look as `IconButton`: no outline, so only focus draws a ring.
-    ui.painter().rect_filled(
-        rect,
-        DESIGN_TOKENS.rounding.button,
-        button_bg(ui, is_hovered, false),
-    );
-    let stroke_color = if is_hovered {
-        theming::icon_hover_color(ui)
-    } else {
-        theming::icon_normal(ui)
-    };
-    let stroke_width = DESIGN_TOKENS.spacing.hairline + 0.5;
-
-    // Draw X glyph
-    let center = rect.center();
-    let half = DESIGN_TOKENS.spacing.sm + 1.0;
-    ui.painter().line_segment(
-        [
-            Pos2::new(center.x - half, center.y - half),
-            Pos2::new(center.x + half, center.y + half),
-        ],
-        egui::Stroke::new(stroke_width, stroke_color),
-    );
-    ui.painter().line_segment(
-        [
-            Pos2::new(center.x + half, center.y - half),
-            Pos2::new(center.x - half, center.y + half),
-        ],
-        egui::Stroke::new(stroke_width, stroke_color),
-    );
-
-    response
+    IconButton::new(&crate::icons::icons::CLOSE)
+        .tooltip("Close")
+        .show(ui)
 }

@@ -77,6 +77,11 @@ All notable changes to this project are documented in this file. The format is b
 - The `FilterWidget` search icon and clear button sit inside the field, 8 px from its edges, and the field no longer grows by a pixel when hovered or focused. Clicking the clear button now clears the query.
 - The `ColorPicker` swatch is 28 px with a border that stays visible on dark colours and brightens on hover. Its popup is as wide as the swatch grid and uses the popup border, and the row below the grid shows the hex value and opacity of the selected colour.
 - The compare symbols dialog draws its symbols, labels and background in the theme's colours when `CompareSymbolsConfig` leaves them at the default instead of drawing them transparent.
+- The `ui_kit` buttons share one state model. Rest, hover and press are each a visible step: neutral fills move one step further from the surface, and Primary and Danger fills darken, so pressed no longer equals hover or looks paler than it; a selected `Button`, `IconButton` or `SplitButton` is drawn as Primary, filled with the accent; `enabled(false)` renders exactly like a button inside `add_enabled_ui(false)`; and a disabled Primary or Danger button is drawn as Secondary, so its faded label stays as readable as other disabled buttons, with an accent outline on a disabled Primary `Button` so a selected one still reads as selected.
+- `ButtonVariant` colours follow the active theme: Primary is the theme accent with its hover and pressed shades and on-accent text, Secondary a neutral fill one step above the surface, Outlined a border in the secondary text colour, Ghost the primary text colour, and Danger the danger button reds with on-accent text.
+- `Button` is as wide as its laid-out label plus 12 px on each side, instead of an estimate from the byte length, so every label gets the same padding and labels with multi-byte characters fit.
+- `SplitButton` points its chevron down whether or not it is expanded.
+- The `ui_kit` buttons report their role, label (the tooltip for icon-only buttons), and enabled and selected state to accessibility tools, and show their tooltip while disabled.
 
 ### Changed
 
@@ -98,10 +103,15 @@ All notable changes to this project are documented in this file. The format is b
 - `SymbolInfo::default()` (in `ui::symbol_header`) has empty fields instead of AAPL, Apple Inc, NASDAQ and 1D. Migration: set the fields explicitly.
 - Iceberg takes its tick size from `IcebergDetector::with_tick_size` instead of guessing it from the first 100 bars, and Liquidity no longer defaults to a tick size of 1.0. Without a tick size, both divide the series' price span into 1,000 levels; set the instrument's tick size to key levels on it.
 - `CompareSymbolsDialog::show` takes the symbols to suggest (`show(ctx, &symbols)`, the same `&[model::Symbol]` that `SymbolSearchDialog::show` takes) and lists only those, with an empty state when there are none, instead of a built-in list of tickers the data source may not offer. Added symbols have an empty `CompareSymbol::exchange`, since `Symbol` carries no exchange. Migration: pass the symbols your data source offers.
+- `ButtonVariant::bg_color`, `fg_color` and `border_color` resolve colours from the theme applied with `apply_to_egui` and the `Ui`'s visuals instead of fixed design tokens, and `apply_to_style` sets them on a `Ui` instead of a `Style`; `fg_color` returns a real colour for Ghost and Outlined instead of `Color32::PLACEHOLDER`. Migration: pass `ui` as the first argument (call `apply_to_style` inside `ui.scope`); `border_color` no longer takes `hovered`.
+- `IconButton`, `SplitButton` and `Button` icons are 16, 20 or 24 px for small, medium and larger buttons (20 px at the default 28 px) instead of 60% of the button size; `icon_scale` still overrides this.
+- `SplitButton` occupies the same square cell as an `IconButton` of its size, with the chevron in the cell's corner, instead of a cell 10 px wider.
+- `dialog_close_button` is an `IconButton` showing `icons::CLOSE` with a "Close" tooltip.
 
 ### Removed
 
 - The unused `panel_bg`, `panel_border` and `header_bg` fields of `tokens::ModalSemanticTokens`. Migration: use the theme's `semantic.ui.panel_bg_floating` and `semantic.ui.border`.
+- `ui_kit::buttons::button_bg` and `ui_kit::buttons::icon_color`, which had no pressed state. Migration: use `ButtonVariant::Ghost.bg_color(ui, hovered, pressed)`, or `ButtonVariant::Primary` for a selected button, and `ButtonVariant::fg_color`.
 - The Volume Footprint and Session Volume chart types, which approximated per-price volume from bar totals, with their `icons::icons::CHART_VOLUME_FOOTPRINT` and `icons::icons::CHART_SESSION_VOLUME` icons, and the unused `model::footprint` module.
 - The `chart::series_api` module (`ISeriesApi`, `IPriceScaleApi`, `ITimeScaleApi`, `IStudyApi`, their implementations and option types), which nothing constructed.
 - `TradingChart::toggle_main_series_visibility` and the series context menu "Hide" entry (`SeriesContextMenuAction::Hide`), which had no effect.

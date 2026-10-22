@@ -482,11 +482,11 @@ pub fn all_themes() -> Vec<Theme> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// WCAG 2 contrast ratio of `fg` painted over the opaque `bg`.
-    fn contrast(fg: Color32, bg: Color32) -> f32 {
+    pub(crate) fn contrast(fg: Color32, bg: Color32) -> f32 {
         let luminance = |c: Color32| {
             let c = egui::Rgba::from(c);
             0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b()

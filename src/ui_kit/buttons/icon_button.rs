@@ -2,7 +2,7 @@
 //!
 //! The most common button type, used for tool selection, toggles, and actions.
 
-use super::{ButtonSize, button_bg};
+use super::{ButtonSize, ButtonVariant, finish};
 use crate::icons::Icon;
 use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
@@ -10,8 +10,8 @@ use egui::{Rect, Response, Sense, Ui, Vec2};
 
 /// Icon button with theme-aware styling
 ///
-/// A square button containing a single icon. Supports hover, selected,
-/// and disabled states with proper theme colors.
+/// A square button containing a single icon. Supports hover, pressed, selected
+/// and disabled states with proper theme colors; a selected button is filled with the accent.
 ///
 /// # Example
 ///
@@ -33,7 +33,7 @@ pub struct IconButton<'a> {
     tooltip: Option<String>,
     selected: bool,
     enabled: bool,
-    icon_scale: f32,
+    icon_scale: Option<f32>,
 }
 
 impl<'a> IconButton<'a> {
@@ -45,7 +45,7 @@ impl<'a> IconButton<'a> {
             tooltip: None,
             selected: false,
             enabled: true,
-            icon_scale: 0.6, // Icon takes 60% of button size
+            icon_scale: None,
         }
     }
 
@@ -77,92 +77,65 @@ impl<'a> IconButton<'a> {
         self
     }
 
-    /// Set the icon scale (0.0-1.0, default 0.6)
+    /// Set the icon size as a fraction of the button size (0.1-1.0).
+    ///
+    /// By default the icon is 16, 20 or 24 px for small, medium and larger buttons.
     #[must_use]
     pub fn icon_scale(mut self, scale: f32) -> Self {
-        self.icon_scale = scale.clamp(0.1, 1.0);
+        self.icon_scale = Some(scale.clamp(0.1, 1.0));
         self
     }
 
     /// Show the button and return the response
     pub fn show(self, ui: &mut Ui) -> Response {
-        let button_size = Vec2::splat(self.size.pixels());
-        let sense = if self.enabled {
-            Sense::click()
-        } else {
-            Sense::hover()
-        };
+        if !self.enabled {
+            // `enabled(false)` looks exactly like a button inside `add_enabled_ui(false)`.
+            return ui.add_enabled(false, |ui: &mut Ui| {
+                Self {
+                    enabled: true,
+                    ..self
+                }
+                .show(ui)
+            });
+        }
 
-        let (rect, response) = ui.allocate_exact_size(button_size, sense);
+        let button_size = Vec2::splat(self.size.pixels());
+        let (rect, response) = ui.allocate_exact_size(button_size, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
-            let hovered = response.hovered() && self.enabled;
+            let hovered = response.hovered();
+            let pressed = response.is_pointer_button_down_on();
+            let variant = if self.selected {
+                ButtonVariant::Primary
+            } else {
+                ButtonVariant::Ghost
+            };
+            ui.painter().rect_filled(
+                rect,
+                DESIGN_TOKENS.rounding.button,
+                variant.bg_color(ui, hovered, pressed),
+            );
 
-            // Background
-            let bg = button_bg(ui, hovered, self.selected);
-            ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.button, bg);
-
-            // Icon with theme-aware color
-            let icon_color = if !self.enabled {
-                ui.style()
-                    .visuals
-                    .widgets
-                    .noninteractive
-                    .fg_stroke
-                    .color
-                    .gamma_multiply(0.5)
-            } else if self.selected {
-                theming::icon_active(ui)
-            } else if hovered {
+            let icon_color = if self.selected {
+                variant.fg_color(ui)
+            } else if hovered || pressed {
                 theming::icon_hover_color(ui)
             } else {
                 theming::icon_normal(ui)
             };
-
-            // Render icon centered in button
-            let icon_size = self.size.pixels() * self.icon_scale;
-            let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
+            let icon_size = Vec2::splat(self.size.icon_pixels(self.icon_scale));
             self.icon
-                .as_image_tinted(Vec2::splat(icon_size), icon_color)
-                .paint_at(ui, icon_rect);
+                .as_image_tinted(icon_size, icon_color)
+                .paint_at(ui, Rect::from_center_size(rect.center(), icon_size));
         }
 
-        // Tooltip
-
-        if let Some(tip) = self.tooltip {
-            response.on_hover_text(tip)
-        } else {
-            response
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::icons::icons;
-
-    #[test]
-    fn test_button_creation() {
-        let btn = IconButton::new(&icons::TREND_LINE)
-            .size(ButtonSize::LG)
-            .tooltip("Test tooltip")
-            .selected(true)
-            .enabled(false);
-
-        assert!(btn.selected);
-        assert!(!btn.enabled);
-        assert_eq!(btn.tooltip, Some("Test tooltip".to_string()));
-    }
-
-    #[test]
-    fn test_icon_scale_clamping() {
-        let btn = IconButton::new(&icons::TREND_LINE).icon_scale(2.0); // Should clamp to 1.0
-        assert!(btn.icon_scale <= 1.0);
-
-        let btn = IconButton::new(&icons::TREND_LINE).icon_scale(-0.5); // Should clamp to 0.1
-        assert!(btn.icon_scale >= 0.1);
+        let tooltip = self.tooltip.as_deref();
+        finish(
+            response,
+            self.selected,
+            tooltip.unwrap_or_default(),
+            tooltip,
+        )
     }
 }

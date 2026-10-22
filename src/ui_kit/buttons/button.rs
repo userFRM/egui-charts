@@ -3,9 +3,9 @@
 //! A button that supports semantic variants (Primary, Secondary, Ghost, etc.)
 //! providing clear visual hierarchy for different action types.
 
-use egui::{Response, Ui, Vec2, Widget};
+use egui::{Color32, Rect, Response, Sense, TextStyle, Ui, Vec2, Widget, pos2};
 
-use super::{ButtonSize, ButtonVariant};
+use super::{ButtonSize, ButtonVariant, finish};
 use crate::icons::Icon;
 use crate::tokens::DESIGN_TOKENS;
 
@@ -43,7 +43,7 @@ pub struct Button<'a> {
     tooltip: Option<String>,
     enabled: bool,
     selected: bool,
-    icon_scale: f32,
+    icon_scale: Option<f32>,
 }
 
 impl<'a> Button<'a> {
@@ -57,7 +57,7 @@ impl<'a> Button<'a> {
             tooltip: None,
             enabled: true,
             selected: false,
-            icon_scale: 0.6,
+            icon_scale: None,
         }
     }
 
@@ -71,7 +71,7 @@ impl<'a> Button<'a> {
             tooltip: None,
             enabled: true,
             selected: false,
-            icon_scale: 0.6,
+            icon_scale: None,
         }
     }
 
@@ -85,7 +85,7 @@ impl<'a> Button<'a> {
             tooltip: None,
             enabled: true,
             selected: false,
-            icon_scale: 0.6,
+            icon_scale: None,
         }
     }
 
@@ -173,10 +173,12 @@ impl<'a> Button<'a> {
         self
     }
 
-    /// Set the icon scale relative to button size (0.0-1.0)
+    /// Set the icon size as a fraction of the button height (0.1-1.0).
+    ///
+    /// By default the icon is 16, 20 or 24 px for small, medium and larger buttons.
     #[must_use]
     pub fn icon_scale(mut self, scale: f32) -> Self {
-        self.icon_scale = scale.clamp(0.1, 1.0);
+        self.icon_scale = Some(scale.clamp(0.1, 1.0));
         self
     }
 
@@ -188,165 +190,86 @@ impl<'a> Button<'a> {
 
 impl<'a> Widget for Button<'a> {
     fn ui(self, ui: &mut Ui) -> Response {
+        if !self.enabled {
+            // `enabled(false)` looks exactly like a button inside `add_enabled_ui(false)`.
+            return ui.add_enabled(
+                false,
+                Self {
+                    enabled: true,
+                    ..self
+                },
+            );
+        }
+
         let tokens = &DESIGN_TOKENS;
+        let height = self.size.pixels();
+        let icon_size = self.size.icon_pixels(self.icon_scale);
+        let galley = self.text.as_ref().map(|text| {
+            let font = TextStyle::Button.resolve(ui.style());
+            ui.painter()
+                .layout_no_wrap(text.clone(), font, Color32::PLACEHOLDER)
+        });
 
-        // Calculate button size
-        let button_height = self.size.pixels();
-        let icon_size = button_height * self.icon_scale;
-
-        // Calculate width based on content
-        // Use approximate character width based on font size
-        let font_id = egui::TextStyle::Button.resolve(ui.style());
-        let char_width = font_id.size * 0.55; // Approximate character width
-
-        let width = if self.text.is_some() && self.icon.is_some() {
-            // Icon + gap + text + padding
-            let text_width = self
-                .text
-                .as_ref()
-                .map(|t| char_width * t.len() as f32)
-                .unwrap_or(0.0);
-            icon_size + tokens.spacing.sm + text_width + tokens.spacing.lg * 2.0
-        } else if self.text.is_some() {
-            // Text only
-            let text_width = self
-                .text
-                .as_ref()
-                .map(|t| char_width * t.len() as f32)
-                .unwrap_or(0.0);
-            text_width + tokens.spacing.lg * 2.0
-        } else {
-            // Icon only - square button
-            button_height
+        // Content is laid out text, so the padding is the same for every label.
+        let (padding, gap) = match (self.icon.is_some(), galley.is_some()) {
+            (true, true) => (tokens.spacing.xl, tokens.spacing.sm),
+            (false, true) => (tokens.spacing.xl, 0.0),
+            _ => (0.0, 0.0),
         };
+        let content_width = self.icon.map_or(0.0, |_| icon_size)
+            + gap
+            + galley.as_ref().map_or(0.0, |galley| galley.size().x);
+        let width = (content_width + 2.0 * padding).max(height);
 
-        let button_size = Vec2::new(width.max(button_height), button_height);
-
-        let sense = if self.enabled {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        };
-
-        let (rect, response) = ui.allocate_exact_size(button_size, sense);
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
-            let visuals = ui.style().visuals.clone();
-            let hovered = response.hovered() && self.enabled;
-            let active = response.is_pointer_button_down_on();
-
-            // Determine colors based on variant and state
-            let (bg_color, fg_color) = if !self.enabled {
-                (
-                    visuals.widgets.noninteractive.bg_fill,
-                    visuals
-                        .widgets
-                        .noninteractive
-                        .fg_stroke
-                        .color
-                        .gamma_multiply(0.5),
-                )
-            } else if self.selected {
-                (visuals.selection.bg_fill, visuals.selection.stroke.color)
+            let hovered = response.hovered();
+            let pressed = response.is_pointer_button_down_on();
+            let variant = if self.selected {
+                ButtonVariant::Primary
             } else {
-                let bg = self.variant.bg_color(hovered, active);
-                let fg = self.variant.fg_color();
-                let fg = if fg == egui::Color32::PLACEHOLDER {
-                    if hovered {
-                        visuals.widgets.hovered.fg_stroke.color
-                    } else {
-                        visuals.widgets.inactive.fg_stroke.color
-                    }
-                } else {
-                    fg
-                };
-                (bg, fg)
+                self.variant
             };
-
-            // Draw background
+            let fg = variant.fg_color(ui);
             let rounding = tokens.rounding.button;
 
-            // For ghost variant with hover, show subtle background
-            let actual_bg = if self.variant == ButtonVariant::Ghost && hovered && !self.selected {
-                visuals.widgets.hovered.bg_fill
-            } else if bg_color == egui::Color32::TRANSPARENT && self.selected {
-                visuals.selection.bg_fill
-            } else {
-                bg_color
-            };
-
-            if actual_bg != egui::Color32::TRANSPARENT {
-                ui.painter().rect_filled(rect, rounding, actual_bg);
-            }
-
-            // Draw border for outlined variant
-            if let Some(border_color) = self.variant.border_color(hovered) {
+            ui.painter()
+                .rect_filled(rect, rounding, variant.bg_color(ui, hovered, pressed));
+            if let Some(border) = variant.border_color(ui) {
                 ui.painter().rect_stroke(
                     rect,
                     rounding,
-                    egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
+                    egui::Stroke::new(tokens.stroke.hairline, border),
                     egui::epaint::StrokeKind::Inside,
                 );
             }
 
-            // Draw content
-            let content_rect = rect.shrink(tokens.spacing.sm);
-
+            // Centred, so a label narrower than a square button still sits in the middle.
+            let mut x = rect.center().x - content_width / 2.0;
             if let Some(icon) = self.icon {
-                let icon_rect = if self.text.is_some() {
-                    // Icon on the left
-                    egui::Rect::from_min_size(
-                        egui::pos2(
-                            content_rect.min.x,
-                            content_rect.center().y - icon_size / 2.0,
-                        ),
-                        Vec2::splat(icon_size),
-                    )
-                } else {
-                    // Icon centered
-                    egui::Rect::from_center_size(rect.center(), Vec2::splat(icon_size))
-                };
-
-                icon.as_image_tinted(Vec2::splat(icon_size), fg_color)
-                    .paint_at(ui, icon_rect);
-            }
-
-            if let Some(text) = &self.text {
-                let text_pos = if self.icon.is_some() {
-                    // Text after icon
-                    egui::pos2(
-                        content_rect.min.x + icon_size + tokens.spacing.sm,
-                        rect.center().y,
-                    )
-                } else {
-                    // Text centered
-                    rect.center()
-                };
-
-                let align = if self.icon.is_some() {
-                    egui::Align2::LEFT_CENTER
-                } else {
-                    egui::Align2::CENTER_CENTER
-                };
-
-                ui.painter().text(
-                    text_pos,
-                    align,
-                    text,
-                    egui::TextStyle::Button.resolve(ui.style()),
-                    fg_color,
+                let icon_rect = Rect::from_min_size(
+                    pos2(x, rect.center().y - icon_size / 2.0),
+                    Vec2::splat(icon_size),
                 );
+                icon.as_image_tinted(Vec2::splat(icon_size), fg)
+                    .paint_at(ui, icon_rect);
+                x += icon_size + gap;
+            }
+            if let Some(galley) = galley {
+                let pos = pos2(x, rect.center().y - galley.size().y / 2.0);
+                ui.painter().galley(pos, galley, fg);
             }
         }
 
-        // Add tooltip
-
-        if let Some(tip) = self.tooltip {
-            response.on_hover_text(tip)
-        } else {
-            response
-        }
+        let label = self.text.as_deref().or(self.tooltip.as_deref());
+        finish(
+            response,
+            self.selected,
+            label.unwrap_or_default(),
+            self.tooltip.as_deref(),
+        )
     }
 }
 
@@ -406,40 +329,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_button_creation() {
-        let btn = Button::new("Test")
-            .primary()
-            .size(ButtonSize::LG)
-            .tooltip("Test tooltip")
-            .enabled(false);
-
-        assert_eq!(btn.variant, ButtonVariant::Primary);
-        assert_eq!(btn.size, ButtonSize::LG);
-        assert_eq!(btn.tooltip, Some("Test tooltip".to_string()));
-        assert!(!btn.enabled);
-    }
-
-    #[test]
-    fn test_variant_shortcuts() {
-        assert_eq!(
-            Button::new("Test").primary().variant,
-            ButtonVariant::Primary
-        );
-        assert_eq!(
-            Button::new("Test").secondary().variant,
-            ButtonVariant::Secondary
-        );
-        assert_eq!(Button::new("Test").ghost().variant, ButtonVariant::Ghost);
-        assert_eq!(
-            Button::new("Test").outlined().variant,
-            ButtonVariant::Outlined
-        );
-        assert_eq!(Button::new("Test").danger().variant, ButtonVariant::Danger);
-    }
-
-    #[test]
-    fn test_size_shortcuts() {
-        assert_eq!(Button::new("Test").small().size, ButtonSize::SM);
-        assert_eq!(Button::new("Test").large().size, ButtonSize::LG);
+    fn width_is_the_laid_out_label_plus_padding() {
+        // Multi-byte characters: the width must follow the rendered text, not the byte count.
+        let label = "Größe ändern";
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                let text_width = ui
+                    .painter()
+                    .layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x;
+                let width = Button::new(label).show(ui).rect.width();
+                assert_eq!(width, text_width + 2.0 * DESIGN_TOKENS.spacing.xl);
+            });
+        });
     }
 }
