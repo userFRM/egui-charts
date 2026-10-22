@@ -32,12 +32,12 @@ impl CommandPalette {
 
     /// Add a command to the palette
     pub fn add_command(&mut self, command: Command) {
-        self.commands.push(command);
+        self.edit_commands(|commands| commands.push(command));
     }
 
     /// Remove a command by ID
     pub fn remove_command(&mut self, id: &str) {
-        self.commands.retain(|c| c.id != id);
+        self.edit_commands(|commands| commands.retain(|c| c.id != id));
     }
 
     /// Get the current search query
@@ -82,6 +82,24 @@ impl CommandPalette {
         // Reset selection if out of bounds
         if self.selected_index >= self.filtered.len() {
             self.selected_index = 0;
+        }
+    }
+
+    /// Applies `change` to the commands and rebuilds the rows, keeping the highlight on the command
+    /// it was on while that command is still listed.
+    fn edit_commands(&mut self, change: impl FnOnce(&mut Vec<Command>)) {
+        let highlighted = self
+            .filtered
+            .get(self.selected_index)
+            .map(|&(i, _)| self.commands[i].id.clone());
+        change(&mut self.commands);
+        self.update_filter();
+        if let Some(row) = highlighted.and_then(|id| {
+            self.filtered
+                .iter()
+                .position(|&(i, _)| self.commands[i].id == id)
+        }) {
+            self.selected_index = row;
         }
     }
 
@@ -429,5 +447,59 @@ impl CommandPaletteHandler {
 
         // Show the palette if open
         self.palette.show(ctx, &mut self.open)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, Modifiers, RawInput};
+
+    fn frame(ctx: &Context, palette: &mut CommandPalette, key: Option<Key>) -> Option<String> {
+        let events = key
+            .map(|key| Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            })
+            .into_iter()
+            .collect();
+        let (mut open, mut executed) = (true, None);
+        ctx.run_ui(
+            RawInput {
+                events,
+                ..Default::default()
+            },
+            |ui| executed = palette.show(ui.ctx(), &mut open),
+        )
+        .drop_without_applying_deltas();
+        executed
+    }
+
+    #[test]
+    fn changing_the_commands_keeps_the_rows_on_listed_commands() {
+        let palette = || {
+            CommandPalette::new(
+                ["a", "b", "c"]
+                    .into_iter()
+                    .map(|id| Command::new(id, id))
+                    .collect(),
+            )
+        };
+
+        // A removal leaves no row past the end of the list.
+        let (ctx, mut p) = (Context::default(), palette());
+        frame(&ctx, &mut p, None);
+        p.remove_command("b");
+        assert_eq!(frame(&ctx, &mut p, None), None);
+
+        // A removal above the highlighted command keeps the highlight on it.
+        let (ctx, mut p) = (Context::default(), palette());
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, Some(Key::ArrowDown));
+        p.remove_command("a");
+        assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("b"));
     }
 }
