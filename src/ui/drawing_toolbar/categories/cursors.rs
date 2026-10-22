@@ -105,7 +105,7 @@ impl ToolCategory for CursorsCategory {
         // Create submenu with cursor items
         let submenu_pos = Pos2::new(anchor_rect.right() + 4.0, anchor_rect.min.y);
 
-        egui::Area::new(egui::Id::new("cursors_submenu"))
+        egui::Area::new(egui::Id::unique("cursors_submenu"))
             .fixed_pos(submenu_pos)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
@@ -129,7 +129,7 @@ impl ToolCategory for CursorsCategory {
                         // Get cursor state from context (set by toolbar)
                         let cursor_state = ui.ctx().data(|d| {
                             d.get_temp::<crate::ui::drawing_toolbar::toolbar::CursorStateData>(
-                                egui::Id::new("cursor_state"),
+                                egui::Id::unique("cursor_state"),
                             )
                         });
 

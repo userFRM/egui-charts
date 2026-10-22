@@ -376,7 +376,7 @@ impl SeriesContextMenu {
             pos.y = screen_rect.min.y + DESIGN_TOKENS.sizing.context_menu.screen_edge_padding;
         }
 
-        egui::Area::new(egui::Id::new("series_context_menu"))
+        egui::Area::new(egui::Id::unique("series_context_menu"))
             .fixed_pos(pos)
             .order(egui::Order::Foreground)
             .interactable(true)

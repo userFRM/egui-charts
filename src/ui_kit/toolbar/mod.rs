@@ -54,7 +54,7 @@ impl ResponsiveToolbar {
     /// Create a new horizontal toolbar with the given ID
     pub fn horizontal(id: impl Hash + std::fmt::Debug) -> Self {
         Self {
-            id: Id::new(id),
+            id: Id::unique(id),
             orientation: Orientation::Horizontal,
             height: None,
         }
@@ -63,7 +63,7 @@ impl ResponsiveToolbar {
     /// Create a new vertical toolbar with the given ID
     pub fn vertical(id: impl Hash + std::fmt::Debug) -> Self {
         Self {
-            id: Id::new(id),
+            id: Id::unique(id),
             orientation: Orientation::Vertical,
             height: None,
         }

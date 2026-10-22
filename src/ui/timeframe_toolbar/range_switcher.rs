@@ -267,7 +267,7 @@ impl RangeSwitcher {
             selected: DateRange::Month1,
             config: RangeSwitcherConfig::default(),
             config_theme: Some((Theme::dark(), RangeSwitcherConfig::default())),
-            id: egui::Id::new("range_switcher"),
+            id: egui::Id::unique("range_switcher"),
         }
     }
 
@@ -277,13 +277,13 @@ impl RangeSwitcher {
             selected: config.ranges.first().copied().unwrap_or(DateRange::Month1),
             config,
             config_theme: None,
-            id: egui::Id::new("range_switcher"),
+            id: egui::Id::unique("range_switcher"),
         }
     }
 
     /// Create with custom ID (for multiple instances)
     pub fn with_id(mut self, id: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        self.id = egui::Id::new(id);
+        self.id = egui::Id::unique(id);
         self
     }
 

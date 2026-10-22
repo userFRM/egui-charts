@@ -214,7 +214,7 @@ impl Chart {
         #[cfg(feature = "icons")]
         {
             let ctx = ui.ctx().clone();
-            let loaders_installed = egui::Id::new("egui_charts::image_loaders_installed");
+            let loaders_installed = egui::Id::unique("egui_charts::image_loaders_installed");
             if !ctx.data(|d| d.get_temp::<bool>(loaders_installed).unwrap_or(false)) {
                 egui_extras::install_image_loaders(&ctx);
                 ctx.data_mut(|d| d.insert_temp(loaders_installed, true));
@@ -407,7 +407,7 @@ impl Chart {
                 price_rect.min.y + DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs,
             );
             let btn_rect = Rect::from_min_size(btn_pos, btn_size);
-            let btn_id = ui.id().with("jump_to_latest");
+            let btn_id = ui.scope_id().with("jump_to_latest");
             let btn_res = ui.interact(btn_rect, btn_id, egui::Sense::click());
 
             if btn_res.clicked() {
@@ -788,7 +788,7 @@ impl Chart {
 
         // Render "Jump to Latest" button
         if self.config.show_realtime_btn {
-            let btn_id = ui.id().with("jump_to_latest");
+            let btn_id = ui.scope_id().with("jump_to_latest");
             let btn_size = Vec2::new(
                 DESIGN_TOKENS.sizing.charts_ext.realtime_button_width,
                 DESIGN_TOKENS.sizing.button_md,

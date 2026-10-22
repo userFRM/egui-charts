@@ -74,18 +74,18 @@ serde = []
 # backend to run natively.  `glow` keeps the default-feature build buildable on
 # CI without a Vulkan/Metal toolchain, and the `x11`/`wayland` platform features
 # are required because `default-features = false` otherwise leaves `winit`
-# without a Linux backend.
-eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
-egui = "0.36.2"
+# without a Linux backend.  `clipboard` gives text fields copy and paste.
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "x11", "wayland"] }
+egui = "0.37.0"
 rand = "0.10.0"
 
 [dependencies]
 # Fonts are the application's choice: eframe enables egui's `default_fonts`.
-egui = { version = "0.36.2", default-features = false, features = ["serde"], optional = true }
+egui = { version = "0.37.0", default-features = false, features = ["serde"], optional = true }
 # The engine names colours as `egui::Color32`; without `widget` that path
 # resolves to this crate, which egui re-exports.
-ecolor = { version = "0.36.2", features = ["serde"] }
-egui_extras = { version = "0.36.2", default-features = false, optional = true }
+ecolor = { version = "0.37.0", features = ["serde"] }
+egui_extras = { version = "0.37.0", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }

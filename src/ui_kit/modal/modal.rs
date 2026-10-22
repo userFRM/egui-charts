@@ -21,7 +21,7 @@ impl Modal {
     /// Create a new modal with the given title
     pub fn new(id: impl std::hash::Hash + std::fmt::Debug, title: impl Into<String>) -> Self {
         Self {
-            id: Id::new(id),
+            id: Id::unique(id),
             title: title.into(),
             width: None,
             min_height: None,

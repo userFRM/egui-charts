@@ -1,6 +1,6 @@
 //! ButtonContent - Clickable button content for list items
 
-use egui::{Color32, Response, Ui, Vec2, WidgetInfo, WidgetType};
+use egui::{Color32, Response, Role, Ui, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
 use crate::theme::ThemeExt;
@@ -211,7 +211,7 @@ impl<'a> ListItemContent for ButtonContent<'a> {
         let response = context.response;
         response.widget_info(|| {
             WidgetInfo::labeled(
-                WidgetType::Button,
+                Role::Button,
                 !self.disabled && ui.is_enabled(),
                 self.label.as_deref().unwrap_or_default(),
             )

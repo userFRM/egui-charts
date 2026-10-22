@@ -483,7 +483,7 @@ impl TimeframeSelector {
         let mut toggle_custom = false;
         let mut custom_dialog = self.custom_dialog.clone();
 
-        egui::Area::new(egui::Id::new("timeframe_dropdown"))
+        egui::Area::new(egui::Id::unique("timeframe_dropdown"))
             .fixed_pos(dropdown_pos)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {

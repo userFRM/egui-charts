@@ -75,7 +75,7 @@ impl SettingsMenu {
         );
 
         let btn_rect = Rect::from_min_size(btn_pos, btn_size);
-        let btn_id = ui.id().with("settings_btn");
+        let btn_id = ui.scope_id().with("settings_btn");
 
         let response = ui.interact(btn_rect, btn_id, egui::Sense::click());
 
@@ -113,7 +113,7 @@ impl SettingsMenu {
             return;
         };
 
-        let popup_id = Id::new("settings_popup");
+        let popup_id = Id::unique("settings_popup");
         let popup_pos = Pos2::new(btn_rect.min.x - 200.0, btn_rect.min.y - 400.0);
 
         egui::Area::new(popup_id)

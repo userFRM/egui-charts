@@ -435,6 +435,19 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
         color: Color32::from_black_alpha(shadow_alpha / 2),
     };
 
+    // egui's built-in widgets keep the theme's compact look: small corners here, and tight
+    // padding and control height on the style below.
+    let widgets = &mut visuals.widgets;
+    for state in [
+        &mut widgets.noninteractive,
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        state.corner_radius = theme.radius.xs.into();
+    }
+
     ctx.set_visuals(visuals);
 
     let spacing = &theme.spacing;
@@ -442,6 +455,8 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
     style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
     style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
+    style.spacing.button_padding = egui::vec2(spacing.sm, DESIGN_TOKENS.spacing.hairline);
+    style.spacing.interact_size.y = DESIGN_TOKENS.sizing.control_height;
     ctx.set_global_style(style);
 
     // Store the theme so components resolve their colours from it while painting.

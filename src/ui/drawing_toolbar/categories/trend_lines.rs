@@ -127,7 +127,7 @@ pub fn render_tool_submenu(
 
     let submenu_pos = Pos2::new(anchor_rect.right() + 4.0, anchor_rect.min.y);
 
-    egui::Area::new(egui::Id::new(id))
+    egui::Area::new(egui::Id::unique(id))
         .fixed_pos(submenu_pos)
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {

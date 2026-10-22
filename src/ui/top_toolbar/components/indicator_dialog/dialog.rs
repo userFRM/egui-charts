@@ -121,7 +121,7 @@ impl IndicatorDialog {
         let (dialog_width, dialog_height) = (self.config.width, self.config.height);
 
         // Show modal overlay to block interactions behind the dialog
-        egui::Area::new(egui::Id::new("indicator_dialog_overlay"))
+        egui::Area::new(egui::Id::unique("indicator_dialog_overlay"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {

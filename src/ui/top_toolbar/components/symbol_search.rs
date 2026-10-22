@@ -235,10 +235,13 @@ impl SymbolSearchDialog {
         let mut sel_symbol = None;
         let mut should_close = false;
 
+        // Centred like the crate's other dialogs, but movable.
         egui::Window::new("Symbol Search")
             .collapsible(false)
             .resizable(false)
             .default_width(400.0)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 // Search input
                 ui.horizontal(|ui| {

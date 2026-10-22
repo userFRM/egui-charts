@@ -20,7 +20,7 @@ pub fn render_context_menu(
         return action;
     }
 
-    let menu_id = Id::new("object_tree_context_menu");
+    let menu_id = Id::unique("object_tree_context_menu");
 
     Area::new(menu_id)
         .fixed_pos(state.context_menu_pos)

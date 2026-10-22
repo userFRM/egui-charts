@@ -213,7 +213,7 @@ impl DialogFooter {
         // The footer height is measured on the previous frame; the window's sizing pass measures
         // it unpinned, so the first visible frame already has the window at its final size.
         let pinned = ui.stack().tags().contains(FIXED_HEIGHT_TAG);
-        let height_id = ui.id().with("dialog_footer_height");
+        let height_id = ui.scope_id().with("dialog_footer_height");
         if pinned && !ui.is_sizing_pass() {
             let height = ui.data(|d| d.get_temp::<f32>(height_id)).unwrap_or(0.0);
             ui.add_space((ui.available_height() - height).max(0.0));

@@ -39,6 +39,7 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
+use std::sync::{Arc, mpsc};
 
 use crate::sampledata::{
     DemoSymbol, bar_count_for_timeframe, chart_type_from_name, generate_sample_bars,
@@ -82,6 +83,9 @@ enum ScreenshotTarget {
     File(Option<std::path::PathBuf>),
     Clipboard,
 }
+
+/// A captured screenshot and where it goes.
+type Screenshot = (Arc<egui::ColorImage>, ScreenshotTarget);
 
 /// App state surfaced to the toolbars via `ChartAppState`.
 pub struct DemoAppState {
@@ -150,6 +154,8 @@ pub struct DemoApp {
 
     // A pending screenshot request the egui backend fulfils next frame.
     screenshot_requested: bool,
+    // egui's capture callback sends each screenshot here; the next frame delivers it.
+    screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
     // Transient status notice (text, time shown). Controls whose backing is a
     // stub/network/broker surface an honest message here rather than silently
@@ -235,6 +241,7 @@ impl DemoApp {
             replay: None,
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: false,
+            screenshots: mpsc::channel(),
             notice: None,
         }
     }
@@ -534,17 +541,15 @@ impl DemoApp {
         config: egui_charts::ui::export::ExportConfig,
         save_path: Option<std::path::PathBuf>,
     ) {
-        // Image exports route through the egui screenshot path, tagged with
-        // where the delivered image goes.
+        // Image exports go through egui's screenshot request, which hands the
+        // captured image to `target`.
         let target = match config.format {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
             ExportFormat::Svg => unreachable!("SVG is not in EXPORT_FORMATS"),
         };
-        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(
-            target,
-        )));
+        self.request_screenshot(ctx, target);
     }
 
     fn export_csv(&self, save_path: Option<std::path::PathBuf>) {
@@ -1293,32 +1298,28 @@ impl DemoApp {
         }
     }
 
+    fn request_screenshot(&self, ctx: &egui::Context, target: ScreenshotTarget) {
+        let (sender, repaint) = (self.screenshots.0.clone(), ctx.clone());
+        ctx.request_screenshot(move |image| {
+            // The receiver lives as long as the app, so this fails only during shutdown.
+            let _ = sender.send((image, target));
+            // egui does not repaint when the capture arrives.
+            repaint.request_repaint();
+        });
+    }
+
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
         if self.screenshot_requested {
             self.screenshot_requested = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            self.request_screenshot(ctx, ScreenshotTarget::File(None));
         }
 
-        // Pull any delivered screenshot out of egui's event queue and deliver it.
-        let shot = ctx.input(|i| {
-            i.events.iter().find_map(|e| match e {
-                egui::Event::Screenshot {
-                    image, user_data, ..
-                } => Some((image.clone(), user_data.clone())),
-                _ => None,
-            })
-        });
-        let Some((image, user_data)) = shot else {
-            return;
-        };
-        match user_data
-            .data
-            .as_ref()
-            .and_then(|d| d.downcast_ref::<ScreenshotTarget>())
-        {
-            Some(ScreenshotTarget::Clipboard) => ctx.copy_image((*image).clone()),
-            Some(ScreenshotTarget::File(path)) => self.save_screenshot(&image, path.clone()),
-            None => self.save_screenshot(&image, None),
+        // Deliver the screenshots captured since the last frame.
+        while let Ok((image, target)) = self.screenshots.1.try_recv() {
+            match target {
+                ScreenshotTarget::Clipboard => ctx.copy_image((*image).clone()),
+                ScreenshotTarget::File(path) => self.save_screenshot(&image, path),
+            }
         }
     }
 
@@ -1341,7 +1342,7 @@ impl DemoApp {
             self.notice = None;
             return;
         };
-        egui::Area::new(egui::Id::new("demo_notice"))
+        egui::Area::new(egui::Id::unique("demo_notice"))
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -56.0))
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style())

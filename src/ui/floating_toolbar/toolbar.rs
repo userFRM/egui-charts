@@ -1,14 +1,9 @@
 //! Floating Selection Toolbar Implementation
 //!
 //! Floating toolbar for object customization.
-//!
-//! Note: This toolbar uses text-emoji icon buttons rather than the SVG-based
-//! [`crate::ui_kit::buttons::IconButton`]. When dedicated SVG icons are added
-//! for these actions (settings, duplicate, lock, visibility, delete), the
-//! `render_icon_button` helper should migrate to ui_kit's `IconButton`.
 
 use crate::ext::UiExt;
-use crate::styles::typography;
+use crate::icons::{Icon, icons};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
@@ -179,7 +174,7 @@ impl FloatingSelectionToolbar {
         // Take ownership of colors temporarily for mutation
         let mut temp_colors: Vec<Color32> = self.color_slots.iter().map(|s| s.color).collect();
 
-        let area_response = egui::Area::new(egui::Id::new("floating_selection_toolbar"))
+        let area_response = egui::Area::new(egui::Id::unique("floating_selection_toolbar"))
             .fixed_pos(self.position)
             .order(egui::Order::Foreground)
             .interactable(true)
@@ -241,26 +236,37 @@ impl FloatingSelectionToolbar {
                             }
 
                             // Settings button (gear icon)
-                            if Self::render_icon_button(ui, "⚙", "Settings").clicked() {
+                            if Self::render_icon_button(ui, &icons::SETTINGS, "Settings").clicked()
+                            {
                                 inner_action = Some(FloatingToolbarAction::OpenSettings);
                             }
 
                             // Duplicate button
-                            if Self::render_icon_button(ui, "⧉", "Duplicate").clicked() {
+                            if Self::render_icon_button(ui, &icons::DUPLICATE, "Duplicate")
+                                .clicked()
+                            {
                                 inner_action = Some(FloatingToolbarAction::Duplicate);
                             }
 
                             Self::render_separator(ui);
 
                             // Lock button
-                            let lock_icon = if is_locked { "🔒" } else { "🔓" };
+                            let lock_icon = if is_locked {
+                                &icons::LOCK
+                            } else {
+                                &icons::UNLOCK
+                            };
                             let lock_tooltip = if is_locked { "Unlock" } else { "Lock" };
                             if Self::render_icon_button(ui, lock_icon, lock_tooltip).clicked() {
                                 inner_action = Some(FloatingToolbarAction::ToggleLock);
                             }
 
                             // Visibility button
-                            let vis_icon = if is_visible { "👁" } else { "◌" };
+                            let vis_icon = if is_visible {
+                                &icons::EYE
+                            } else {
+                                &icons::EYE_HIDE
+                            };
                             let vis_tooltip = if is_visible { "Hide" } else { "Show" };
                             if Self::render_icon_button(ui, vis_icon, vis_tooltip).clicked() {
                                 inner_action = Some(FloatingToolbarAction::ToggleVisibility);
@@ -362,7 +368,7 @@ impl FloatingSelectionToolbar {
         ui.space_xs();
     }
 
-    fn render_icon_button(ui: &mut Ui, icon: &str, tooltip: &str) -> Response {
+    fn render_icon_button(ui: &mut Ui, icon: &Icon, tooltip: &str) -> Response {
         let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_btn);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 
@@ -378,20 +384,12 @@ impl FloatingSelectionToolbar {
             );
         }
 
-        // Icon text
         let text_color = if is_hovered {
             ui.style().visuals.strong_text_color()
         } else {
             ui.style().visuals.text_color().gamma_multiply(0.8)
         };
-
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            icon,
-            egui::FontId::proportional(typography::MD),
-            text_color,
-        );
+        Self::paint_icon(ui, rect, icon, text_color);
 
         response.on_hover_text(tooltip)
     }
@@ -418,15 +416,14 @@ impl FloatingSelectionToolbar {
         } else {
             ui.style().visuals.text_color().gamma_multiply(0.8)
         };
-
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "🗑",
-            egui::FontId::proportional(typography::MD),
-            text_color,
-        );
+        Self::paint_icon(ui, rect, &icons::TRASH, text_color);
 
         response.on_hover_text("Delete")
+    }
+
+    fn paint_icon(ui: &Ui, rect: Rect, icon: &Icon, tint: Color32) {
+        let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
+        icon.as_image_tinted(size, tint)
+            .paint_at(ui, Rect::from_center_size(rect.center(), size));
     }
 }

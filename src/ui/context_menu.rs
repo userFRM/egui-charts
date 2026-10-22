@@ -378,7 +378,7 @@ impl ChartContextMenu {
         let mut should_close = false;
         let mut sel_action = ContextMenuAction::None;
 
-        egui::Area::new(egui::Id::new("chart_ctx_menu"))
+        egui::Area::new(egui::Id::unique("chart_ctx_menu"))
             .fixed_pos(pos)
             .order(egui::Order::Foreground)
             .interactable(true)

@@ -68,6 +68,7 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
         button_xl: 40.0,
         button_xxl: 48.0,
         list_item_height: 28.0,
+        control_height: 18.0,
         toolbar: ToolbarSizingTokens {
             top_height: 48.0,
             left_width: 52.0,

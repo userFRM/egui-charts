@@ -155,7 +155,7 @@ impl NotificationPanel {
         let mut y_offset = 0.0;
 
         for toast in visible_toasts {
-            let toast_id = egui::Id::new("toast").with(toast.id);
+            let toast_id = egui::Id::unique("toast").with(toast.id);
 
             // Calculate position
             let pos = match self.config.position {

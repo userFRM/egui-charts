@@ -39,7 +39,7 @@ pub use split_button::SplitButton;
 pub use variant::ButtonVariant;
 
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Response, Ui, WidgetInfo, WidgetType};
+use egui::{Response, Role, Ui, WidgetInfo};
 
 /// Button sizes
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -84,9 +84,9 @@ impl ButtonSize {
 fn finish(response: Response, selected: bool, label: &str, tooltip: Option<&str>) -> Response {
     response.widget_info(|| {
         if selected {
-            WidgetInfo::selected(WidgetType::Button, response.enabled(), true, label)
+            WidgetInfo::selected(Role::Button, response.enabled(), true, label)
         } else {
-            WidgetInfo::labeled(WidgetType::Button, response.enabled(), label)
+            WidgetInfo::labeled(Role::Button, response.enabled(), label)
         }
     });
     match tooltip {

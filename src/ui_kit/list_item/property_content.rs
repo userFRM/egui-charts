@@ -1,6 +1,6 @@
 //! PropertyContent - Key-value pair display for list items
 
-use egui::{Color32, Response, Ui, WidgetInfo, WidgetType};
+use egui::{Color32, Response, Role, Ui, WidgetInfo};
 
 use super::content::{ContentContext, ListItemContent};
 
@@ -73,7 +73,7 @@ impl ListItemContent for PropertyContent {
 
         context.response.widget_info(|| {
             WidgetInfo::labeled(
-                WidgetType::Label,
+                Role::Label,
                 ui.is_enabled(),
                 format!("{}: {}", self.label, self.value),
             )

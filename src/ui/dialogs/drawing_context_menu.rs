@@ -256,7 +256,7 @@ impl DrawingContextMenu {
         let screen_rect = ctx.content_rect();
         let pos = self.clamp_position_to_screen(screen_rect, menu_width, menu_height);
 
-        egui::Area::new(egui::Id::new("drawing_context_menu"))
+        egui::Area::new(egui::Id::unique("drawing_context_menu"))
             .fixed_pos(pos)
             .order(egui::Order::Foreground)
             .interactable(true)

@@ -34,7 +34,7 @@ impl Section {
     /// Create a new section
     pub fn new(id: impl std::hash::Hash + std::fmt::Debug, title: impl Into<String>) -> Self {
         Self {
-            id: Id::new(id),
+            id: Id::unique(id),
             title: title.into(),
             default_open: true,
             icon: None,

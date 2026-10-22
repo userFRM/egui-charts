@@ -25,8 +25,8 @@
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::command_palette::fuzzy_match;
 use egui::{
-    Id, Key, Margin, Popup, Response, ScrollArea, Sense, TextEdit, TextStyle, Ui, Vec2, WidgetInfo,
-    WidgetType,
+    Id, Key, Margin, Popup, Response, Role, ScrollArea, Sense, TextEdit, TextStyle, Ui, Vec2,
+    WidgetInfo,
 };
 
 /// Result of showing the autocomplete widget
@@ -85,7 +85,7 @@ impl<'a> AutocompleteEdit<'a> {
 
     /// Set a unique ID salt for this widget
     pub fn id_salt(mut self, id: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        self.id_salt = Some(Id::new(id));
+        self.id_salt = Some(Id::unique(id));
         self
     }
 
@@ -117,7 +117,9 @@ impl<'a> AutocompleteEdit<'a> {
     pub fn show(self, ui: &mut Ui) -> AutocompleteResponse {
         // Horizontal text inset shared by the input and its suggestions.
         let inset = DESIGN_TOKENS.spacing.lg;
-        let base_id = self.id_salt.unwrap_or_else(|| ui.id().with("autocomplete"));
+        let base_id = self
+            .id_salt
+            .unwrap_or_else(|| ui.scope_id().with("autocomplete"));
         let popup_id = base_id.with("popup");
         let selected_idx_id = base_id.with("selected_idx");
 
@@ -221,7 +223,7 @@ impl<'a> AutocompleteEdit<'a> {
                                 );
                                 item_response.widget_info(|| {
                                     WidgetInfo::selected(
-                                        WidgetType::SelectableLabel,
+                                        Role::Button,
                                         true,
                                         is_selected,
                                         suggestion,

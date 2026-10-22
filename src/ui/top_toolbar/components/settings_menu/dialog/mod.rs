@@ -350,7 +350,7 @@ impl SettingsDialog {
         );
 
         // Make it clickable
-        let close_res = ui.interact(close_rect, ui.id().with("close_btn"), Sense::click());
+        let close_res = ui.interact(close_rect, ui.scope_id().with("close_btn"), Sense::click());
 
         // Determine colors based on hover state
         let (bg_color, icon_color) = if close_res.hovered() {
@@ -611,7 +611,7 @@ impl SettingsDialog {
         template_btn: &Response,
         action: SettingsAction,
     ) -> SettingsAction {
-        let menu_id = ui.id().with("template_menu");
+        let menu_id = ui.scope_id().with("template_menu");
         let menu_rect = Rect::from_min_size(
             template_btn.rect.left_bottom() + Vec2::new(0.0, DESIGN_TOKENS.spacing.xs),
             Vec2::new(

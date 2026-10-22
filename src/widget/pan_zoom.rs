@@ -691,6 +691,7 @@ mod tests {
                 unit: egui::MouseWheelUnit::Line,
                 delta: egui::vec2(0.0, -1.0),
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
                 modifiers,
             };
             frame(&ctx, &mut chart, 0.04, vec![wheel]);

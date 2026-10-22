@@ -33,6 +33,8 @@ pub struct SizingTokens {
     pub button_xl: f32,
     pub button_xxl: f32,
     pub list_item_height: f32,
+    /// Minimum height of egui's built-in controls: buttons, checkboxes, combo boxes and text fields.
+    pub control_height: f32,
     // Sub-modules
     pub toolbar: ToolbarSizingTokens,
     pub panel: PanelSizingTokens,

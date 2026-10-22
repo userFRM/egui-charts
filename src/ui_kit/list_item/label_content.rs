@@ -1,6 +1,6 @@
 //! LabelContent - Simple text content with optional icon
 
-use egui::{Response, RichText, Ui, Vec2, WidgetInfo, WidgetType};
+use egui::{Response, RichText, Role, Ui, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
 use crate::styles::icons;
@@ -105,12 +105,7 @@ impl<'a> ListItemContent for LabelContent<'a> {
 
         let content_rect = context.rect;
         context.response.widget_info(|| {
-            WidgetInfo::selected(
-                WidgetType::SelectableLabel,
-                ui.is_enabled(),
-                context.selected,
-                &self.text,
-            )
+            WidgetInfo::selected(Role::Button, ui.is_enabled(), context.selected, &self.text)
         });
 
         if ui.is_rect_visible(content_rect) {

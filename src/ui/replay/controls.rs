@@ -280,7 +280,7 @@ impl<'a> ReplayControls<'a> {
 
         // Speed dropdown using ComboBox
         let speed_label = state.speed.label();
-        let combo_id = ui.id().with("speed_combo");
+        let combo_id = ui.scope_id().with("speed_combo");
 
         egui::ComboBox::from_id_salt(combo_id)
             .selected_text(RichText::new(&speed_label).color(colors.speed_color))

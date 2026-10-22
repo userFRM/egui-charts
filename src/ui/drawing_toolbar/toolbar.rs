@@ -591,7 +591,7 @@ impl DrawingToolbar {
         // Store cursor state in context for the cursor submenu to access
         ui.ctx().data_mut(|d| {
             d.insert_temp(
-                egui::Id::new("cursor_state"),
+                egui::Id::unique("cursor_state"),
                 CursorStateData {
                     current_cursor: self.state.current_cursor_type,
                     eraser_mode: self.state.eraser_mode_enabled,
@@ -673,7 +673,7 @@ impl DrawingToolbar {
     ) -> (egui::InnerResponse<()>, Option<[u8; 4]>) {
         let mut sel_color = None;
 
-        let area_res = egui::Area::new(egui::Id::new("color_picker_popup"))
+        let area_res = egui::Area::new(egui::Id::unique("color_picker_popup"))
             .fixed_pos(popup_pos)
             .order(egui::Order::Foreground)
             .constrain(true)
@@ -861,7 +861,7 @@ impl DrawingToolbar {
     pub fn show_floating(&mut self, ui: &mut Ui, position: Pos2) -> Option<DrawingToolType> {
         let mut new_selection = None;
 
-        egui::Area::new(egui::Id::new("floating_drawing_toolbar"))
+        egui::Area::new(egui::Id::unique("floating_drawing_toolbar"))
             .fixed_pos(position)
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()

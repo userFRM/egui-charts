@@ -93,7 +93,7 @@ impl TemplatesButton {
 
         let mut action = None;
 
-        egui::Area::new(egui::Id::new("template_name_dialog"))
+        egui::Area::new(egui::Id::unique("template_name_dialog"))
             .fixed_pos(popup_pos)
             .order(egui::Order::Foreground)
             .constrain(true)

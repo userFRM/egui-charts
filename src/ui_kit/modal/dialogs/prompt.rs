@@ -55,7 +55,7 @@ impl PromptDialog {
     /// Create a new prompt dialog
     pub fn new(id: impl std::hash::Hash + std::fmt::Debug, title: impl Into<String>) -> Self {
         Self {
-            id: Id::new(id),
+            id: Id::unique(id),
             title: title.into(),
             message: None,
             placeholder: String::new(),

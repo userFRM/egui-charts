@@ -142,7 +142,7 @@ impl FloatingReplayControl {
     /// Create a new floating replay control
     pub fn new() -> Self {
         Self {
-            id: Id::new("floating_replay_control"),
+            id: Id::unique("floating_replay_control"),
             state: ReplayControlState::default(),
             position: None,
             visible: false,

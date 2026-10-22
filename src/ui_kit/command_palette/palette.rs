@@ -140,7 +140,7 @@ impl CommandPalette {
             .min(screen_rect.height() - DESIGN_TOKENS.sizing.command_palette.margin_y);
 
         // Modal window
-        egui::Area::new(egui::Id::new("command_palette"))
+        egui::Area::new(egui::Id::unique("command_palette"))
             .order(Order::Foreground)
             .anchor(
                 egui::Align2::CENTER_TOP,

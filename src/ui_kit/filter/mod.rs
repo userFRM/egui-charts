@@ -22,9 +22,7 @@
 //! # });
 //! ```
 
-use egui::{
-    Margin, Rect, Response, Sense, TextEdit, Ui, Vec2, Widget, WidgetInfo, WidgetType, pos2,
-};
+use egui::{Margin, Rect, Response, Role, Sense, TextEdit, Ui, Vec2, Widget, WidgetInfo, pos2};
 
 use crate::icons::icons;
 use crate::tokens::DESIGN_TOKENS;
@@ -189,7 +187,7 @@ fn search_field(
     if show_clear && !query.is_empty() {
         let rect = icon_rect(response.rect.right() - inset - icon_size / 2.0);
         let clear = ui.interact(rect, response.id.with("clear"), Sense::click());
-        clear.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Clear filter"));
+        clear.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Clear filter"));
         icons::CLOSE
             .as_image_tinted(Vec2::splat(icon_size), tint)
             .paint_at(ui, rect);

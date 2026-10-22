@@ -214,7 +214,7 @@ impl ChartTypeSelector {
         let current = self.current;
         let dropdown_width = self.config.dropdown_width;
 
-        egui::Area::new(egui::Id::new("chart_type_dropdown"))
+        egui::Area::new(egui::Id::unique("chart_type_dropdown"))
             .fixed_pos(dropdown_pos)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {

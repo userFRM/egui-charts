@@ -196,7 +196,7 @@ impl<'a> SubmenuBuilder<'a> {
         );
 
         // Render submenu using egui::Area (floats above other UI)
-        let area_res = egui::Area::new(egui::Id::new("submenu_builder"))
+        let area_res = egui::Area::new(egui::Id::unique("submenu_builder"))
             .fixed_pos(submenu_pos)
             .order(egui::Order::Foreground)
             .constrain(true)

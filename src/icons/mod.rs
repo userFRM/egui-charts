@@ -251,6 +251,7 @@ pub mod icons {
     pub const ZOOM_OUT: Icon = crate::icon_from_path!("ui/zoom-out.svg");
     pub const MAGNET: Icon = crate::icon_from_path!("ui/magnet.svg");
     pub const TRASH: Icon = crate::icon_from_path!("ui/trash.svg");
+    pub const DUPLICATE: Icon = crate::icon_from_path!("ui/duplicate.svg");
     pub const STAR_EMPTY: Icon = crate::icon_from_path!("ui/star.svg");
     pub const STAR_FILLED: Icon = crate::icon_from_path!("ui/star-filled.svg");
     pub const LAYOUT_GRID: Icon = crate::icon_from_path!("ui/layout-grid.svg");

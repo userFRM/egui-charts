@@ -54,7 +54,7 @@ impl ConfirmDialog {
         message: impl Into<String>,
     ) -> Self {
         Self {
-            id: Id::new(id),
+            id: Id::unique(id),
             title: title.into(),
             message: message.into(),
             confirm_text: "Confirm".to_string(),
