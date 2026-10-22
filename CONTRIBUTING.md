@@ -84,24 +84,28 @@ The bundled library examples can be run with the usual cargo invocation, for exa
 A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/lib.rs) for the full table):
 
 - [`model`](src/model): domain types (`Bar`, `Symbol`, `Timeframe`, `ChartType`) and the Renko/Kagi/P&F transforms.
-- [`data`](src/data.rs): the `DataSource` trait and data-update abstractions.
-- [`chart`](src/chart): the chart engine (pan/zoom, hit-testing, coordinate mapping, series rendering, interaction).
+- [`data`](src/data): the `DataSource` and `Datafeed` contracts, trades, depth and bar merging.
+- [`chart`](src/chart): rendering, hit-testing, coordinate mapping, overlays, `ChartBuilder` and `TradingChart`.
+- [`services`](src/services): traits a host implements for storage, symbol search, signals, alerts and a trading account; nothing calls them yet.
 - [`drawings`](src/drawings): drawing tools, selection, handles, undo/redo.
 - [`studies`](src/studies): technical indicators, the `Indicator` trait, and `IndicatorRegistry`.
 - [`scales`](src/scales): price and time scales, tick generators, formatters.
 - [`config`](src/config): chart configuration and options.
 - [`validation`](src/validation): OHLC integrity and data-quality checks.
 - [`theme`](src/theme) / [`tokens`](src/tokens) / [`styles`](src/styles): the design-token theme system.
-- [`widget`](src/widget): the `Chart` egui widget, `ChartBuilder`, and `TradingChart`.
-- [`ext`](src/ext): extension traits (`UiExt`, `ResponseExt`, widget builders).
+- [`widget`](src/widget): the `Chart` egui widget, with pan and zoom, keyboard and drawing input, and indicator panes.
+- [`ext`](src/ext): extension traits (`UiExt`, `ResponseExt`, widget builders), with the `ui` feature.
 - [`icons`](src/icons): compile-time embedded SVG icons.
 
 ### Feature flags
 
-The default build is the core engine, theme system, chart widget, and compile-time icons.
+The default build includes the chart widget, the icons, the built-in studies and the application-level UI components. An application that only shows charts uses `default-features = false, features = ["widget"]`. With `default-features = false` alone the crate is the headless engine (`model`, `scales`, `data`, `services`, `tokens`, `validation` and the `Indicator` trait layer of `studies`), which does not depend on egui.
 
+- `widget` (**default on**): the egui chart widget and the modules built on it (`chart`, `drawings`, `config`, `theme`, `styles`, `widget`). Required by `icons` and `ui`.
+- `studies` (**default on**): the built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. Required by `ui`.
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
-- `ui` (off): application-level UI (toolbars, panels, sidebars, dialogs) and the `ui_kit` widget library it is built on. Enable this when building a full trading-terminal interface around the engine.
+- `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ext` helpers. Enables `icons` and `studies`.
+- `serde` (off): `Serialize` and `Deserialize` for `theme::Theme`.
 
 ## Contribution workflow
 
@@ -115,19 +119,24 @@ We keep a tight, predictable workflow so `main` is always releasable.
 
 ## Local gate (run before every push)
 
-CI mirrors these checks exactly. Run them from the repository root and make sure each passes before you push:
+CI runs these checks, with `RUSTFLAGS=-Dwarnings` set in `ci.yml`. Run them from the repository root and make sure each passes before you push:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-features -- -D warnings
-cargo clippy -- -D warnings
+cargo build
+cargo build --no-default-features
+cargo build --no-default-features --features widget
+cargo build --no-default-features --features studies
+cargo build --all-features
+cargo build --examples
+cargo clippy --all-targets -- -D warnings
+cargo clippy --all-features --all-targets -- -D warnings
 cargo clippy --no-default-features --all-targets -- -D warnings
 cargo clippy --no-default-features --features widget --all-targets -- -D warnings
 cargo clippy --no-default-features --features studies --all-targets -- -D warnings
 cargo test --all-features --lib
-cargo test --doc
-cargo build --all-features
-cargo build --no-default-features
+cargo test --doc --all-features
+RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps --all-features
 ```
 
 And for the web demo:
@@ -136,7 +145,7 @@ And for the web demo:
 cd examples/demo && trunk build --release
 ```
 
-CI runs clippy with warnings denied. Its `stable` toolchain is current stable, which is newer than the 1.95 MSRV, so run clippy on current stable to catch the same lints CI will. CI additionally builds the docs with warnings denied (`cargo doc --no-deps --all-features`) and runs a dependency audit (`cargo audit`), so it is worth keeping doc comments warning-clean.
+CI runs clippy with warnings denied. Its `stable` toolchain is current stable, which is newer than the 1.95 MSRV, so run clippy on current stable to catch the same lints CI will. It also checks the dependency tree and runs `cargo audit`.
 
 ## Code style
 
