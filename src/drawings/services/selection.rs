@@ -164,35 +164,27 @@ impl SelectionService {
 mod tests {
     use super::*;
 
+    /// `select` replaces the selection in single mode and extends it in multi
+    /// mode. Either way the last selected drawing becomes primary, and the
+    /// return value reports whether the selected set changed.
     #[test]
-    fn test_single_select() {
-        let mut sel = SelectionService::new();
+    fn select_replaces_or_extends_by_mode() {
+        let cases = [
+            (false, [true, true, true, true, false], vec![2]),
+            (true, [true, true, true, false, false], vec![1, 2, 3]),
+        ];
+        for (multi, changed, selected) in cases {
+            let mut sel = SelectionService::new();
+            sel.set_multi_select_mode(multi);
 
-        assert!(!sel.has_selection());
-        assert!(sel.select(1));
-        assert!(sel.is_selected(1));
-        assert_eq!(sel.primary(), Some(1));
+            let returned = [1, 2, 3, 2, 2].map(|id| sel.select(id));
 
-        // Select another - first should be deselected
-        assert!(sel.select(2));
-        assert!(!sel.is_selected(1));
-        assert!(sel.is_selected(2));
-        assert_eq!(sel.selection_count(), 1);
-    }
-
-    #[test]
-    fn test_multi_select() {
-        let mut sel = SelectionService::new();
-        sel.set_multi_select_mode(true);
-
-        sel.select(1);
-        sel.select(2);
-        sel.select(3);
-
-        assert!(sel.is_selected(1));
-        assert!(sel.is_selected(2));
-        assert!(sel.is_selected(3));
-        assert_eq!(sel.selection_count(), 3);
+            assert_eq!(returned, changed, "multi={multi}");
+            let mut ids: Vec<_> = sel.selected_ids().collect();
+            ids.sort_unstable();
+            assert_eq!(ids, selected, "multi={multi}");
+            assert_eq!(sel.primary(), Some(2), "multi={multi}");
+        }
     }
 
     #[test]
@@ -241,8 +233,10 @@ mod tests {
         let mut sel = SelectionService::new();
         sel.select_all([1, 2, 3]);
 
-        assert_eq!(sel.selection_count(), 3);
-        assert!(sel.primary().is_some());
+        let mut ids: Vec<_> = sel.selected_ids().collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [1, 2, 3]);
+        assert_eq!(sel.primary(), Some(1));
     }
 
     #[test]
