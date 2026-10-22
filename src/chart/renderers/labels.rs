@@ -6,7 +6,7 @@ use crate::scales::{
     TickMarkGeneratorConfig, TimeFormatter,
 };
 use crate::styles::typography;
-use crate::tokens::DESIGN_TOKENS;
+use crate::theme::ThemeExt;
 use chrono::Duration;
 use egui::layers::ShapeIdx;
 use egui::{Color32, FontId, Pos2, Rect, Shape};
@@ -354,10 +354,11 @@ pub fn render_legend(
     painter.galley(Pos2::new(x, y - 2.0), symbol_galley.clone(), colors.text);
     x += symbol_galley.rect.width() + 8.0;
 
-    // Bullet separator
+    // Bullet separator, in the colour of the O, H, L and C labels
+    let label_color = painter.ctx().active_theme().chart.axis_text_secondary;
     let sep_font = FontId::proportional(typography::SM);
-    let sep = painter.layout_no_wrap("•".to_string(), sep_font.clone(), Color32::GRAY);
-    painter.galley(Pos2::new(x, y), sep.clone(), Color32::GRAY);
+    let sep = painter.layout_no_wrap("•".to_string(), sep_font.clone(), label_color);
+    painter.galley(Pos2::new(x, y), sep.clone(), label_color);
     x += sep.rect.width() + 8.0;
 
     // Timeframe
@@ -368,7 +369,6 @@ pub fn render_legend(
     // OHLC values with labels and color coding
     let label_font = FontId::proportional(typography::SM);
     let val_font = FontId::proportional(typography::SM);
-    let label_color = DESIGN_TOKENS.semantic.extended.disabled; // Dim gray for labels
 
     // O (Open)
     let o_label = painter.layout_no_wrap("O ".to_string(), label_font.clone(), label_color);
