@@ -5,6 +5,7 @@ use crate::ext::UiExt;
 use crate::styles::typography;
 use crate::theme::{Theme, ThemeExt, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::dialog::centred_title;
 use chrono::{Datelike, NaiveDate};
 use egui::{Color32, Sense, Stroke, StrokeKind, Ui, Vec2, Window};
 
@@ -138,7 +139,7 @@ impl DatePicker {
         let mut is_open = self.is_open;
         let frame = egui::Frame::window(&ctx.global_style()).fill(self.config.bg_color);
 
-        Window::new("Go to")
+        Window::new(centred_title(ctx, "Go to"))
             .open(&mut is_open)
             .resizable(false)
             .collapsible(false)

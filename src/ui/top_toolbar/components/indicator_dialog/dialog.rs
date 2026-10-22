@@ -11,6 +11,7 @@ use crate::studies::*;
 use crate::styles::typography;
 use crate::theme::Theme;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::dialog::centred_title;
 use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Ui, Vec2, Window};
 use std::collections::HashSet;
 
@@ -137,7 +138,7 @@ impl IndicatorDialog {
             .fill(self.config.bg_color)
             .corner_radius(corner_radius as u8);
 
-        Window::new("Indicators")
+        Window::new(centred_title(ctx, "Indicators"))
             .open(&mut is_open)
             .resizable(false)
             .collapsible(false)

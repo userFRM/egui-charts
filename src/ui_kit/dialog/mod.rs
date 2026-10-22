@@ -24,6 +24,25 @@ pub(crate) fn dialog_frame(style: &Style) -> Frame {
     Frame::window(style).inner_margin(DESIGN_TOKENS.spacing.xxl)
 }
 
+/// The height of the heading row, which egui gives a window's title and its buttons.
+fn heading_row_height(ctx: &Context) -> f32 {
+    // Resolve the font first: `fonts_mut` holds the context's lock, which `global_style` takes too.
+    let font = egui::TextStyle::Heading.resolve(&ctx.global_style());
+    ctx.fonts_mut(|f| f.row_height(&font))
+}
+
+/// The title of an `egui::Window` with a close button, centred over the whole title bar.
+///
+/// egui centres a title in the space left of the close button, which it sizes to the heading
+/// row height; a blank atom of that size on the left balances it.
+pub(crate) fn centred_title<'a>(ctx: &Context, title: &'a str) -> egui::Atoms<'a> {
+    let blank = egui::Atom {
+        size: Some(Vec2::splat(heading_row_height(ctx))),
+        ..Default::default()
+    };
+    egui::Atoms::new((blank, title))
+}
+
 /// A centered dialog window with standard styling.
 ///
 /// The requested size is the preferred size of the content inside the 16 px padding: the content

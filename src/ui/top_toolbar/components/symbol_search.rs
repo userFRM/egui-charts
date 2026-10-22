@@ -48,6 +48,7 @@ use crate::model::Symbol;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
+use crate::ui_kit::dialog::centred_title;
 use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2, Window};
 
 // =============================================================================
@@ -611,7 +612,7 @@ impl CompareSymbolsDialog {
         let config = self.config.resolved(&ctx.global_style().visuals);
         let frame = egui::Frame::window(&ctx.global_style()).fill(config.bg_color);
 
-        Window::new("Compare symbol")
+        Window::new(centred_title(ctx, "Compare symbol"))
             .open(&mut is_open)
             .resizable(false)
             .collapsible(false)
