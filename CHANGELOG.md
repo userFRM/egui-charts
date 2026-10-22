@@ -155,6 +155,7 @@ All notable changes to this project are documented in this file. The format is b
 - A new drawing is pink (`DrawingManagerOptions::default_color`), a colour no default study uses, instead of a blue close to the EMA's.
 - The legend's O, H, L and C labels and the bullet after the symbol use the theme's secondary axis text colour instead of fixed greys ([#459](https://github.com/userFRM/egui-charts/issues/459)), and its values and change the theme's success and error colours instead of the candle colours, which read at 3:1 on the light chart.
 - The chart, series and drawing context menus hide the crosshair, its labels and the tooltip while they are open, open 2 px from the pointer (the drawing menu 6 px, clear of the clicked handle) and flip to the other side of it to stay 8 px inside the window, size themselves from the laid-out text and elide labels wider than 300 px, and draw with the theme's menu frame, hover fill and shadow. Rows show the bound shortcut, formatted for the platform ("Ctrl+R" on Linux and Windows), only for actions with a key binding; the crate handles only Delete, destructive rows ("Remove 5 indicators", "Delete") use the danger colour, both menus format the clicked price with thousands separators, and every row reports its label and role to accessibility tools.
+- `NotificationPanel` stacks its toasts 8 px apart, newest nearest the corner, 16 px from the window corner. Every toast was drawn at the same spot, flush to the corner, so only one was visible.
 
 ### Changed
 

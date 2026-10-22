@@ -2,11 +2,12 @@
 //!
 //! A panel for displaying toast notifications.
 
-use egui::{Align2, Color32, Context, Order, Pos2, RichText, Ui, Vec2};
+use egui::{Align2, Color32, Context, Order, RichText, Ui, Vec2};
 
 use super::toast::Toast;
 use super::toasts::{Toasts, current_time_seconds};
 use crate::icons::icons;
+use crate::theme::{Spacing, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 
 /// Position for the notification panel
@@ -41,25 +42,6 @@ impl NotificationPosition {
             NotificationPosition::BottomRight | NotificationPosition::BottomLeft => -1.0,
         }
     }
-
-    /// Get the base position for this corner
-    fn base_pos(&self, screen_rect: egui::Rect) -> Pos2 {
-        let margin = DESIGN_TOKENS.spacing.lg;
-        match self {
-            NotificationPosition::TopRight => {
-                Pos2::new(screen_rect.right() - margin, screen_rect.top() + margin)
-            }
-            NotificationPosition::BottomRight => {
-                Pos2::new(screen_rect.right() - margin, screen_rect.bottom() - margin)
-            }
-            NotificationPosition::BottomLeft => {
-                Pos2::new(screen_rect.left() + margin, screen_rect.bottom() - margin)
-            }
-            NotificationPosition::TopLeft => {
-                Pos2::new(screen_rect.left() + margin, screen_rect.top() + margin)
-            }
-        }
-    }
 }
 
 /// Configuration for the notification panel
@@ -80,7 +62,7 @@ impl Default for NotificationPanelConfig {
             position: NotificationPosition::BottomRight,
             max_visible: 5,
             width: DESIGN_TOKENS.sizing.notification.panel_width,
-            gap: DESIGN_TOKENS.spacing.md,
+            gap: Spacing::default().lg,
         }
     }
 }
@@ -146,36 +128,28 @@ impl NotificationPanel {
     /// Internal: show toasts and return IDs of dismissed toasts
     fn show_toasts(&self, ctx: &Context, toasts: &[Toast]) -> Vec<u64> {
         let mut dismissed = Vec::new();
-        let screen_rect = ctx.content_rect();
-        let base_pos = self.config.position.base_pos(screen_rect);
+        let corner = self.config.position.anchor();
+        let margin = ctx.active_theme().spacing.xxl;
+        let base_pos = corner.pos_in_rect(&ctx.content_rect().shrink(margin));
         let stack_dir = self.config.position.stack_direction();
 
-        // Show toasts (limited to max_visible)
+        // Show toasts (limited to max_visible), newest nearest the corner
         let visible_toasts: Vec<_> = toasts.iter().rev().take(self.config.max_visible).collect();
         let mut y_offset = 0.0;
 
         for toast in visible_toasts {
             let toast_id = egui::Id::unique("toast").with(toast.id);
 
-            // Calculate position
-            let pos = match self.config.position {
-                NotificationPosition::TopRight | NotificationPosition::TopLeft => {
-                    Pos2::new(base_pos.x, base_pos.y + y_offset)
-                }
-                NotificationPosition::BottomRight | NotificationPosition::BottomLeft => {
-                    Pos2::new(base_pos.x, base_pos.y - y_offset)
-                }
-            };
-
-            // Show toast in an Area
+            // A pivot, not an anchor: egui ignores `fixed_pos` on an anchored area.
+            let pos = base_pos + Vec2::new(0.0, stack_dir * y_offset);
             let response = egui::Area::new(toast_id)
                 .order(Order::Foreground)
-                .anchor(self.config.position.anchor(), [0.0, 0.0])
+                .pivot(corner)
                 .fixed_pos(pos)
                 .show(ctx, |ui| self.render_toast(ui, toast));
 
             // Track height for stacking
-            y_offset += (response.response.rect.height() + self.config.gap) * stack_dir.abs();
+            y_offset += response.response.rect.height() + self.config.gap;
 
             // Check if toast was dismissed
             if response.inner {
@@ -269,5 +243,40 @@ impl NotificationPanel {
         });
 
         dismissed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toasts_stack_8_px_apart_16_px_from_the_corner() {
+        let ctx = Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1000.0, 800.0));
+        let mut toasts = Toasts::new();
+        toasts.add(Toast::info("Chart layout saved").permanent());
+        toasts.add(Toast::error("Could not load symbol XYZ").permanent());
+        // A sizing pass, then a visible frame.
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                NotificationPanel::new().show_with_toasts(ui.ctx(), &mut toasts);
+            })
+            .drop_without_applying_deltas();
+        }
+        let rect = |toast: &Toast| {
+            ctx.memory(|m| m.area_rect(egui::Id::unique("toast").with(toast.id)))
+                .unwrap()
+        };
+        let (older, newer) = (rect(&toasts.toasts()[0]), rect(&toasts.toasts()[1]));
+        assert_eq!(
+            newer.right_bottom(),
+            screen.right_bottom() - Vec2::splat(16.0)
+        );
+        assert_eq!(newer.top() - older.bottom(), 8.0);
     }
 }
