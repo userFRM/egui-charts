@@ -5,6 +5,7 @@
 
 use crate::icons::{Icon, icons};
 use crate::styles::icons as icon_sizes;
+use crate::theme::context::ThemeContextExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::ConnectionState;
 use egui::{Color32, Response, RichText, Ui, Vec2, Widget};
@@ -34,12 +35,12 @@ impl<'a> ConnectionStatusIndicator<'a> {
     }
 
     /// Get color for the current state
-    fn state_color(&self) -> Color32 {
+    fn state_color(&self, ui: &Ui) -> Color32 {
         match self.state {
             ConnectionState::Connected => DESIGN_TOKENS.semantic.extended.bullish,
             ConnectionState::Connecting => DESIGN_TOKENS.semantic.status.caution,
             ConnectionState::Reconnecting { .. } => DESIGN_TOKENS.semantic.status.caution,
-            ConnectionState::Disconnected => DESIGN_TOKENS.semantic.ui.text_muted_dark,
+            ConnectionState::Disconnected => ui.ctx().theme_data().ui_text_muted,
             ConnectionState::Failed(_) => DESIGN_TOKENS.semantic.extended.bearish,
         }
     }
@@ -73,7 +74,7 @@ impl<'a> ConnectionStatusIndicator<'a> {
 
 impl<'a> Widget for ConnectionStatusIndicator<'a> {
     fn ui(self, ui: &mut Ui) -> Response {
-        let color = self.state_color();
+        let color = self.state_color(ui);
         let icon = self.state_icon();
 
         ui.horizontal(|ui| {

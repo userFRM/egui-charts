@@ -165,7 +165,7 @@ impl ChartGridSelector {
         let hover_color = visuals.widgets.hovered.bg_fill;
         let selected_color = visuals.selection.bg_fill;
         let text_color = visuals.text_color();
-        let strong_color = visuals.strong_text_color();
+        let on_selected = visuals.selection.stroke.color;
 
         let dropdown_rect = self.dropdown_rect(btn_rect);
 
@@ -214,6 +214,8 @@ impl ChartGridSelector {
                     .rect_filled(item_rect, DESIGN_TOKENS.rounding.sm, bg);
             }
 
+            let label_color = if is_current { on_selected } else { text_color };
+
             // Grid icon (mini representation)
             let (cols, rows) = layout.grid_size();
             let icon_size = 12.0;
@@ -225,11 +227,10 @@ impl ChartGridSelector {
                 cols,
                 rows,
                 icon_size,
-                text_color,
+                label_color,
             );
 
             // Label
-            let label_color = if is_current { strong_color } else { text_color };
             ui.painter().text(
                 Pos2::new(
                     item_rect.min.x

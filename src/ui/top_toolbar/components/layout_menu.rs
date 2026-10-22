@@ -15,7 +15,8 @@ struct MenuColors {
     selected: Color32,
     text: Color32,
     muted: Color32,
-    strong: Color32,
+    /// Text and icons drawn on the `selected` fill.
+    on_selected: Color32,
     faint_bg: Color32,
 }
 
@@ -28,7 +29,7 @@ impl MenuColors {
             selected: visuals.selection.bg_fill,
             text: visuals.text_color(),
             muted: visuals.widgets.noninteractive.fg_stroke.color,
-            strong: visuals.strong_text_color(),
+            on_selected: visuals.selection.stroke.color,
             faint_bg: visuals.faint_bg_color,
         }
     }
@@ -555,7 +556,7 @@ impl LayoutMenu {
             egui::Align2::CENTER_CENTER,
             "Create",
             egui::FontId::proportional(typography::SM),
-            colors.strong,
+            colors.on_selected,
         );
 
         btn_res.clicked()
@@ -595,7 +596,7 @@ impl LayoutMenu {
         // Layout icon
         let icon = if layout.is_default { "*" } else { "-" };
         let icon_color = if is_current {
-            colors.strong
+            colors.on_selected
         } else {
             colors.muted
         };
@@ -609,7 +610,7 @@ impl LayoutMenu {
 
         // Layout name
         let name_color = if is_current {
-            colors.strong
+            colors.on_selected
         } else {
             colors.text
         };
@@ -624,7 +625,7 @@ impl LayoutMenu {
         // Cloud sync indicator
         if layout.is_cloud_synced {
             let cloud_color = if is_current {
-                colors.strong
+                colors.on_selected
             } else {
                 colors.muted
             };
