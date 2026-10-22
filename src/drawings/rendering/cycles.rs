@@ -352,13 +352,13 @@ impl Drawing {
     }
 
     /// Renders a sine wave line for cyclical analysis.
-    /// Features: amplitude/wavelength controls, phase offset, smooth curve.
+    /// The anchors are a peak and a trough half a period apart; the curve extends across the chart.
     pub(crate) fn render_sine_line(&self, painter: &egui::Painter, chart_rect: Rect) {
         if self.points.len() < 2 {
             return;
         }
-        let p1 = self.points[0]; // Start/center of wave
-        let p2 = self.points[1]; // Defines wavelength and amplitude
+        let p1 = self.points[0];
+        let p2 = self.points[1];
 
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
@@ -367,22 +367,9 @@ impl Drawing {
             self.color[3],
         );
 
-        // Calculate wavelength (horizontal distance between points = half wavelength)
         let wavelength = (p2.x - p1.x).abs() * 2.0;
-        if wavelength < 10.0 {
-            return;
-        }
-
-        // Calculate amplitude (vertical distance from center)
-        let amplitude = (p2.y - p1.y).abs();
-        let center_y = p1.y;
-
-        // Phase offset (0 starts at zero crossing going up)
-        let phase = if p2.y < p1.y {
-            0.0 // Going up from p1 to p2
-        } else {
-            std::f32::consts::PI // Going down
-        };
+        let amplitude = (p2.y - p1.y).abs() / 2.0;
+        let center_y = (p1.y + p2.y) / 2.0;
 
         // Draw sine wave extending across chart
         let segments = 200;
@@ -396,9 +383,10 @@ impl Drawing {
             let t = i as f32 / segments as f32;
             let x = start_x + t * x_range;
 
-            // Calculate phase at this x position
-            let wave_phase = ((x - p1.x) / wavelength) * 2.0 * std::f32::consts::PI + phase;
-            let y = center_y + amplitude * wave_phase.sin();
+            // Anchors too close together draw nothing; the first sample returns before any paint.
+            let Some(y) = sine_line_y(p1, p2, x) else {
+                return;
+            };
 
             let current = Pos2::new(x, y);
 
@@ -423,10 +411,8 @@ impl Drawing {
             gap_len,
         );
 
-        // Draw amplitude guides (dashed horizontal lines at peaks)
-        let peak_y = center_y - amplitude;
-        let trough_y = center_y + amplitude;
-        for y in [peak_y, trough_y] {
+        // Draw amplitude guides (dashed horizontal lines at the peak and trough)
+        for y in [p1.y, p2.y] {
             draw_dashed_line(
                 painter,
                 Pos2::new(left, y),
@@ -463,7 +449,7 @@ impl Drawing {
         let wavelength_label = format!("λ: {wave_bars} bars");
         let wave_bg = Rect::from_center_size(
             Pos2::new(
-                p1.x + wavelength / 4.0,
+                (p1.x + p2.x) / 2.0,
                 center_y + DESIGN_TOKENS.spacing.xxl + DESIGN_TOKENS.spacing.sm,
             ),
             egui::vec2(
@@ -491,7 +477,7 @@ impl Drawing {
 
         // Amplitude label
         let amp_price = if !self.chart_points.is_empty() && self.chart_points.len() >= 2 {
-            (self.chart_points[1].price - self.chart_points[0].price).abs()
+            (self.chart_points[1].price - self.chart_points[0].price).abs() / 2.0
         } else {
             (amplitude / 10.0) as f64
         };
@@ -522,5 +508,46 @@ impl Drawing {
             font,
             color,
         );
+    }
+}
+
+/// The sine line's y at `x`, with a peak or trough at each anchor and half a period between them.
+/// `None` when the anchors are less than 5 px apart horizontally.
+fn sine_line_y(p1: Pos2, p2: Pos2, x: f32) -> Option<f32> {
+    let half_period = p2.x - p1.x;
+    if half_period.abs() < 5.0 {
+        return None;
+    }
+    let center = (p1.y + p2.y) / 2.0;
+    Some(center + (p1.y - center) * (std::f32::consts::PI * (x - p1.x) / half_period).cos())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sine_line_passes_through_both_anchors_half_a_period_apart() {
+        // Expected values from y = c + (p1.y - c) * cos(pi * (x - p1.x) / (p2.x - p1.x)), c = (p1.y + p2.y) / 2.
+        let (a, b) = (Pos2::new(100.0, 50.0), Pos2::new(150.0, 150.0));
+        let cases = [
+            (a, b, 100.0, Some(50.0)),
+            (a, b, 150.0, Some(150.0)),
+            (a, b, 125.0, Some(100.0)),
+            (a, b, 200.0, Some(50.0)),
+            (a, b, 112.5, Some(64.644_66)),
+            (a, b, 75.0, Some(100.0)),
+            (b, a, 100.0, Some(50.0)),
+            (b, a, 125.0, Some(100.0)),
+            (a, Pos2::new(104.0, 150.0), 100.0, None),
+        ];
+        for (p1, p2, x, want) in cases {
+            let got = sine_line_y(p1, p2, x);
+            let ok = match (got, want) {
+                (Some(g), Some(w)) => (g - w).abs() < 1e-4,
+                (g, w) => g == w,
+            };
+            assert!(ok, "p1 {p1:?} p2 {p2:?} x {x}: got {got:?}, want {want:?}");
+        }
     }
 }
