@@ -1,14 +1,16 @@
 use crate::model::Bar;
-/// Trend Intensity Index (TII)
-/// Measures the strength of a trend by comparing price to a moving avg
-/// Values above 50 indicate uptrend, below 50 indicate downtrend
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Trend Intensity Index (TII), after M. H. Pee (Technical Analysis of Stocks & Commodities, June 2002).
+///
+/// Over the last `period` bars, the share of the deviations of the close from its `2 * period` bar simple moving average that lies above it, weighted by size: `100 * SD+ / (SD+ + SD-)`.
+/// Values above 50 indicate an uptrend, below 50 a downtrend.
+/// The first value is on bar `3 * period - 2`; when every deviation is zero the value is 50.
 #[derive(Clone)]
 pub struct TrendIntensityIndex {
-    /// Period for SMA calculation
+    /// Number of deviations summed; the moving average spans twice as many bars.
     period: usize,
     values: Vec<IndicatorValue>,
     color: Color32,
@@ -47,46 +49,44 @@ impl Indicator for TrendIntensityIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let window = &data[i + 1 - self.period..=i];
-
-                // Calculate SMA
-                let sma: f64 = window.iter().map(|b| b.close).sum::<f64>() / self.period as f64;
-
-                // Count bars above and below SMA
-                let mut up_cnt = 0;
-                let mut down_cnt = 0;
-
-                for bar in window {
-                    if bar.close > sma {
-                        up_cnt += 1;
-                    } else if bar.close < sma {
-                        down_cnt += 1;
-                    }
+        let n = self.period;
+        let ma_len = n.saturating_mul(2);
+        let first = ma_len.saturating_add(n) - 2;
+        // Deviation of each close from the moving average ending on its bar, once it exists.
+        let dev: Vec<f64> = data
+            .iter()
+            .enumerate()
+            .map(|(i, bar)| {
+                if i + 1 < ma_len {
+                    return 0.0;
                 }
+                // Summing the differences keeps a flat window's deviation exactly zero.
+                let window = &data[i + 1 - ma_len..=i];
+                window.iter().map(|b| bar.close - b.close).sum::<f64>() / ma_len as f64
+            })
+            .collect();
 
-                // Calculate TII
-                let total = up_cnt + down_cnt;
-                let tii = if total > 0 {
-                    (up_cnt as f64 / total as f64) * 100.0
-                } else {
-                    50.0
-                };
-
-                self.values.push(IndicatorValue::Single(tii));
+        self.values.clear();
+        for i in 0..data.len() {
+            if i < first {
+                self.values.push(IndicatorValue::None);
+                continue;
             }
+            let (mut up, mut down) = (0.0, 0.0);
+            for &d in &dev[i + 1 - n..=i] {
+                if d > 0.0 {
+                    up += d;
+                } else {
+                    down -= d;
+                }
+            }
+            let total = up + down;
+            let tii = if total > 0.0 {
+                100.0 * up / total
+            } else {
+                50.0
+            };
+            self.values.push(IndicatorValue::Single(tii));
         }
     }
 
@@ -245,22 +245,44 @@ mod tests {
         }
     }
 
+    /// Expected values follow M. H. Pee, "Trend Intensity Index", Technical Analysis of Stocks & Commodities, June 2002, computed independently in exact arithmetic.
     #[test]
-    fn test_tii() {
-        let mut tii = TrendIntensityIndex::new(10);
-
-        // Uptrending data
-        let data: Vec<Bar> = (0..20)
-            .map(|i| make_bar(100.0 + i as f64, 101.0 + i as f64))
-            .collect();
-
-        tii.calculate(&data);
-
-        assert_eq!(tii.values.len(), 20);
-
-        // In uptrend, TII should be >= 50 (linear uptrend gives exactly 50)
-        if let IndicatorValue::Single(v) = tii.values.last().unwrap() {
-            assert!(*v >= 50.0);
+    fn tii_matches_published_definition() {
+        let rising: Vec<f64> = (0..90).map(|i| 100.0 + i as f64).collect();
+        let falling: Vec<f64> = rising.iter().rev().copied().collect();
+        let mixed = [
+            10.0, 12.0, 11.0, 14.0, 13.0, 15.0, 12.0, 16.0, 14.0, 13.0, 17.0, 15.0,
+        ];
+        // (period, closes, first bar with a value, values from that bar on)
+        let cases: [(usize, &[f64], usize, &[f64]); 4] = [
+            (30, &rising, 88, &[100.0, 100.0]),
+            (30, &falling, 88, &[0.0, 0.0]),
+            (3, &[0.1; 9], 7, &[50.0, 50.0]),
+            (
+                3,
+                &mixed,
+                7,
+                &[600.0 / 7.0, 75.0, 75.0, 75.0, 1800.0 / 23.0],
+            ),
+        ];
+        for (period, closes, first, expected) in cases {
+            let data: Vec<Bar> = closes.iter().map(|&c| make_bar(c, c)).collect();
+            let mut tii = TrendIntensityIndex::new(period);
+            tii.calculate(&data);
+            let got: Vec<Option<f64>> = tii
+                .values()
+                .iter()
+                .map(|v| match v {
+                    IndicatorValue::Single(x) => Some(*x),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(got.len(), closes.len());
+            assert!(got[..first].iter().all(Option::is_none), "{got:?}");
+            for (i, want) in expected.iter().enumerate() {
+                let v = got[first + i].expect("value after warm-up");
+                assert!((v - want).abs() < 1e-12, "bar {}: {v} != {want}", first + i);
+            }
         }
     }
 
