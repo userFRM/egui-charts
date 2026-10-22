@@ -99,12 +99,41 @@ impl Indicator for VolumePriceTrend {
     }
 }
 
+/// Length of the NVI and PVI signal line, the published one-year EMA of the index.
+const SIGNAL_LEN: f64 = 255.0;
+
+/// The index from 1000, moved by the close's percentage change on the bars where `counts(volume,
+/// previous volume)` holds, and its EMA signal line seeded with the first index value.
+fn volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> Vec<IndicatorValue> {
+    let Some(first) = data.first() else {
+        return Vec::new();
+    };
+    let alpha = 2.0 / (SIGNAL_LEN + 1.0);
+    let (mut index, mut signal) = (1000.0, 1000.0);
+    let mut values = Vec::with_capacity(data.len());
+    values.push(IndicatorValue::Multiple(vec![index, signal]));
+    let mut prev = first;
+    for bar in &data[1..] {
+        if counts(bar.volume, prev.volume) && prev.close != 0.0 {
+            index += index * ((bar.close - prev.close) / prev.close);
+        }
+        signal += (index - signal) * alpha;
+        values.push(IndicatorValue::Multiple(vec![index, signal]));
+        prev = bar;
+    }
+    values
+}
+
 /// Negative Volume Index (NVI)
-/// Focuses on days with declining volume
+///
+/// Starts at 1000 and moves by the close's percentage change only on bars whose volume fell.
+/// Outputs `Multiple([index, signal])`: the signal line is the 255-bar EMA of the index, seeded
+/// with the first index value so that it starts at bar 0 like the index.
 #[derive(Clone)]
 pub struct NegativeVolumeIndex {
     values: Vec<IndicatorValue>,
     color: Color32,
+    signal_color: Color32,
     visible: bool,
 }
 
@@ -113,6 +142,7 @@ impl NegativeVolumeIndex {
         Self {
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.error, // Red
+            signal_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
         }
     }
@@ -139,24 +169,7 @@ impl Indicator for NegativeVolumeIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // Start at 1000
-        let mut nvi = 1000.0;
-        self.values.push(IndicatorValue::Single(nvi));
-
-        for i in 1..data.len() {
-            // Only update NVI when volume decreases
-            if data[i].volume < data[i - 1].volume && data[i - 1].close != 0.0 {
-                let pct_change = (data[i].close - data[i - 1].close) / data[i - 1].close;
-                nvi += nvi * pct_change;
-            }
-            self.values.push(IndicatorValue::Single(nvi));
-        }
+        self.values = volume_index(data, |volume, prev| volume < prev);
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -164,12 +177,15 @@ impl Indicator for NegativeVolumeIndex {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        vec![self.color, self.signal_color]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if !colors.is_empty() {
-            self.color = colors[0];
+        if let Some(&color) = colors.first() {
+            self.color = color;
+        }
+        if let Some(&color) = colors.get(1) {
+            self.signal_color = color;
         }
     }
 
@@ -189,17 +205,25 @@ impl Indicator for NegativeVolumeIndex {
         Box::new(self.clone())
     }
 
+    fn line_cnt(&self) -> usize {
+        2
+    }
+
     fn line_names(&self) -> Vec<String> {
-        vec!["NVI".to_string()]
+        vec!["NVI".to_string(), "Signal".to_string()]
     }
 }
 
 /// Positive Volume Index (PVI)
-/// Focuses on days with rising volume
+///
+/// Starts at 1000 and moves by the close's percentage change only on bars whose volume rose.
+/// Outputs `Multiple([index, signal])`: the signal line is the 255-bar EMA of the index, seeded
+/// with the first index value so that it starts at bar 0 like the index.
 #[derive(Clone)]
 pub struct PositiveVolumeIndex {
     values: Vec<IndicatorValue>,
     color: Color32,
+    signal_color: Color32,
     visible: bool,
 }
 
@@ -208,6 +232,7 @@ impl PositiveVolumeIndex {
         Self {
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.success, // Green
+            signal_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
         }
     }
@@ -234,24 +259,7 @@ impl Indicator for PositiveVolumeIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // Start at 1000
-        let mut pvi = 1000.0;
-        self.values.push(IndicatorValue::Single(pvi));
-
-        for i in 1..data.len() {
-            // Only update PVI when volume increases
-            if data[i].volume > data[i - 1].volume && data[i - 1].close != 0.0 {
-                let pct_change = (data[i].close - data[i - 1].close) / data[i - 1].close;
-                pvi += pvi * pct_change;
-            }
-            self.values.push(IndicatorValue::Single(pvi));
-        }
+        self.values = volume_index(data, |volume, prev| volume > prev);
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -259,12 +267,15 @@ impl Indicator for PositiveVolumeIndex {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        vec![self.color, self.signal_color]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if !colors.is_empty() {
-            self.color = colors[0];
+        if let Some(&color) = colors.first() {
+            self.color = color;
+        }
+        if let Some(&color) = colors.get(1) {
+            self.signal_color = color;
         }
     }
 
@@ -284,8 +295,12 @@ impl Indicator for PositiveVolumeIndex {
         Box::new(self.clone())
     }
 
+    fn line_cnt(&self) -> usize {
+        2
+    }
+
     fn line_names(&self) -> Vec<String> {
-        vec!["PVI".to_string()]
+        vec!["PVI".to_string(), "Signal".to_string()]
     }
 }
 
@@ -325,21 +340,78 @@ mod tests {
         }
     }
 
+    /// Index and signal line against the published definition. On a bar whose volume fell (NVI)
+    /// or rose (PVI), the index is multiplied by close / previous close (Fosback, "Stock Market
+    /// Logic", 1976). The index starts at 1000 and the signal is its 255-day EMA (StockCharts
+    /// ChartSchool, "Negative Volume Index (NVI)"), seeded with its first value as the crate's
+    /// EMA is. Expected values were computed independently in exact rational arithmetic. Hand
+    /// check, NVI bar 1: the index rises 5% to 1050 and the signal is
+    /// 1000 + (1050 - 1000) * 2 / 256 = 1000.390625.
     #[test]
-    fn test_nvi_pvi() {
-        let mut nvi = NegativeVolumeIndex::new();
-        let mut pvi = PositiveVolumeIndex::new();
-
-        let data = vec![
-            make_bar(100.0, 1000.0),
-            make_bar(105.0, 800.0),  // Volume down, price up
-            make_bar(108.0, 1200.0), // Volume up, price up
+    fn nvi_pvi_match_published_definition() {
+        // Volume down, up, unchanged with a zero close, down after a zero close, unchanged, up after
+        // a zero close (the index holds without a previous close), down, up.
+        let data: Vec<Bar> = [
+            (100.0, 1000.0),
+            (105.0, 800.0),
+            (108.0, 1200.0),
+            (0.0, 1200.0),
+            (50.0, 900.0),
+            (0.0, 900.0),
+            (40.0, 1100.0),
+            (44.0, 700.0),
+            (33.0, 1400.0),
+        ]
+        .iter()
+        .map(|&(close, volume)| make_bar(close, volume))
+        .collect();
+        let nvi = [
+            (1000.0, 1000.0),
+            (1050.0, 1000.390625),
+            (1050.0, 1000.7781982421875),
+            (1050.0, 1001.1627435684204),
+            (1050.0, 1001.5442846342921),
+            (1050.0, 1001.9228449105867),
+            (1050.0, 1002.2984476847228),
+            (1155.0, 1003.4914285621859),
+            (1155.0, 1004.6750892765438),
         ];
-
-        nvi.calculate(&data);
-        pvi.calculate(&data);
-
-        assert_eq!(nvi.values.len(), 3);
-        assert_eq!(pvi.values.len(), 3);
+        let pvi = [
+            (1000.0, 1000.0),
+            (1000.0, 1000.0),
+            (1028.5714285714287, 1000.2232142857143),
+            (1028.5714285714287, 1000.4446847098214),
+            (1028.5714285714287, 1000.6644248962402),
+            (1028.5714285714287, 1000.8824483624527),
+            (1028.5714285714287, 1001.0987685203353),
+            (1028.5714285714287, 1001.3133986769844),
+            (771.4285714285714, 999.5174234641062),
+        ];
+        let cases = [
+            (
+                Box::new(NegativeVolumeIndex::new()) as Box<dyn Indicator>,
+                nvi,
+            ),
+            (Box::new(PositiveVolumeIndex::new()), pvi),
+        ];
+        for (mut study, expected) in cases {
+            study.calculate(&data);
+            assert_eq!(study.line_cnt(), 2, "{}", study.name());
+            assert_eq!(study.values().len(), expected.len(), "{}", study.name());
+            for (bar, (value, &(index, signal))) in study.values().iter().zip(&expected).enumerate()
+            {
+                let IndicatorValue::Multiple(lines) = value else {
+                    panic!(
+                        "{} bar {bar}: expected index and signal, got {value:?}",
+                        study.name()
+                    );
+                };
+                assert!(
+                    (lines[0] - index).abs() < 1e-12 && (lines[1] - signal).abs() < 1e-12,
+                    "{} bar {bar}: got {lines:?}, expected [{index}, {signal}]",
+                    study.name()
+                );
+            }
+        }
     }
 }
