@@ -28,10 +28,11 @@
 //!
 //! At minimum, implement [`symbols`](DataSource::symbols),
 //! [`subscribe`](DataSource::subscribe), [`unsubscribe`](DataSource::unsubscribe),
-//! [`poll`](DataSource::poll), [`fetch_historical`](DataSource::fetch_historical),
-//! and [`get_timeframe`](DataSource::get_timeframe).  The remaining methods have
-//! sensible defaults that opt out of optional capabilities (search, marks, server
-//! time).
+//! [`poll`](DataSource::poll), [`fetch_historical`](DataSource::fetch_historical)
+//! and [`get_timeframe`](DataSource::get_timeframe). A source that serves history
+//! also returns `true` from [`supports_historical`](DataSource::supports_historical);
+//! the default is `false`, and the chart then never calls `fetch_historical`. The
+//! other methods default to not offering search, marks or server time.
 //!
 //! # Provided types
 //!
@@ -417,7 +418,8 @@ pub trait MaybeSend {}
 #[cfg(target_arch = "wasm32")]
 impl<T: ?Sized> MaybeSend for T {}
 
-/// Source of instrument metadata, history and live updates.
+/// Source of instrument metadata, history and live updates. No chart consumes it yet;
+/// `TradingChart` reads a [`DataSource`].
 ///
 /// Methods are called on the UI thread and must return promptly. Do the work elsewhere and answer
 /// through the [`Reply`] or [`Sink`] you were given, from any thread, runtime or browser task.
