@@ -617,7 +617,7 @@ impl CompareSymbolsDialog {
             .resizable(false)
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            // egui sizes a window from outside its frame, so add the frame to the content size.
+            // egui sizes a window from outside its frame, so add the frame to keep the content width.
             .fixed_size(Vec2::new(config.width, config.height) + frame.total_margin().sum())
             .frame(frame)
             .show(ctx, |ui| {
