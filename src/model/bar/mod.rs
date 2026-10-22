@@ -33,10 +33,12 @@
 mod bar;
 mod bar_data;
 mod io;
+mod levels;
 mod patterns;
 
 // Re-export main types
 pub use bar::Bar;
 pub(crate) use bar::SeriesFingerprint;
 pub use bar_data::{BarData, MAX_BARS, MAX_VISIBLE_BARS};
+pub(crate) use levels::{bar_level_keys, level_grid, level_key};
 pub use patterns::CandlePatterns;

@@ -44,6 +44,12 @@ All notable changes to this project are documented in this file. The format is b
 - Rainbow Oscillator keeps a running sum instead of every SMA level, so a huge level count no longer exhausts memory.
 - Volume profiles refuse a row count above 10,000 and yield `None` for every bar instead of allocating that many rows for each bar.
 - Iceberg and Liquidity key prices on one grid per series, the tick size widened to a whole number of ticks when the series spans more than 1,000 ticks, and skip bars with a non-finite price or an inverted range, so an infinite or 1e12 print no longer hangs the chart or exhausts memory. Because the grid comes from the whole series, a bar that extends its range can change earlier values. Liquidity scans its levels once per bar instead of three times, and Iceberg keeps its levels in a dense vector.
+- Iceberg, Stop Run and Liquidity plot in their own pane instead of on the price scale, where their scores and ratios drew nothing. Iceberg and Stop Run plot 0 on the bars they do not flag, so flags show as spikes.
+- Liquidity records a sweep only for heavy levels inside the bar's range that held their volume before the bar, as one sweep per side of the level holding the bar's open, covering the swept range and volume, instead of one sweep for every heavy level at or beyond the bar's low or high, prices the bar never traded. Sweep storage now grows with the number of bars: on 20,000 synthetic bars with a 0.01 tick and period 500 it went from 1,684,762 sweeps and 57 MB peak memory to 25,443 sweeps and 6 MB. Migration: `LiquiditySweep::swept_price` is replaced by `price_low` and `price_high`, and `is_clean` now means the bar closed back beyond the swept levels.
+- Liquidity keeps a level touched in the first `period` bars for `period` bars, like any other level, instead of dropping levels touched on the first bar at once.
+- Iceberg counts a level's volume over the same `period` bars as its touches; the volume used to grow without bound while the touches decayed, and the window held one bar more than `period`.
+- `to_tpo_profiles` widens the tick size to a whole number of ticks when the bars span more than 1,000 ticks and skips bars with a non-finite or inverted range, so one wide or infinite bar no longer hangs the chart or exhausts memory. Migration: `TPOProfile` has a `tick_size` field holding the row height used, which `TPOProfile::new` takes as a second argument; pass it to `tpo_count_at`, `price_levels`, `letters_at` and `classify_shape`.
+- The CVD, Iceberg, Stop Run and Liquidity documentation states that they are estimated from bars and use no trade or order book data.
 - Selected rows, tabs, menu items and calendar days render white on the accent instead of an empty accent bar (the selection text colour equalled the fill).
 - Tooltips, popups and menus have padding, a hairline border, an elevated fill, a small radius and a tight shadow; windows get padding and a border.
 - `apply_to_egui` sets item spacing, window padding and menu padding from the design tokens instead of zero, so labels no longer touch their controls; toolbars, dropdown rows and stacked chart panes keep their own explicit gaps.
@@ -79,6 +85,7 @@ All notable changes to this project are documented in this file. The format is b
 - `TradingChart` context menus follow the theme applied with `apply_to_egui` once there is one; the theme passed to `ChartBuilder::with_theme` only colours them before that.
 - `ChartBuilder` no longer defaults the symbol to `BTCUSDT`: a chart built without `with_symbol` has an empty symbol, shows no symbol and does not subscribe to or fetch from its data source until `TradingChart::set_symbol` is called. Migration: call `with_symbol` to keep the previous behaviour.
 - `SymbolInfo::default()` (in `ui::symbol_header`) has empty fields instead of AAPL, Apple Inc, NASDAQ and 1D. Migration: set the fields explicitly.
+- Iceberg takes its tick size from `IcebergDetector::with_tick_size` instead of guessing it from the first 100 bars, and Liquidity no longer defaults to a tick size of 1.0. Without a tick size, both divide the series' price span into 1,000 levels; set the instrument's tick size to key levels on it.
 
 ### Removed
 
@@ -90,6 +97,8 @@ All notable changes to this project are documented in this file. The format is b
 - The unused series renderers `chart::series::{LineSeries, AreaSeries, BaselineSeries, HistogramSeries, BarSeries}` and the `Series` trait with `SeriesData` and `SeriesType`, which the chart never drew through. No replacement; the chart renders its series from `ChartType`.
 - The `model::enums` module of wire-format enums, which nothing used, with `ChartType::to_chart_style` and `From<ChartStyle> for ChartType`. Migration: use `scales::PriceScaleMode` for `PriceScaleMode`, `ChartType` for `ChartStyle`, and `drawings::LineStyle` for `LineStyle` (it has no large-dashed or sparse-dotted style); `CrosshairMode` and `ColorType` are unrelated to `config::CrosshairMode` and `model::ColorType` and, like `ChartMode`, `Timezone`, `MagnetMode`, `Orientation`, `Size`, `Resolution`, `ChartTheme`, `PriceLineSource`, `ScaleLocation`, `BackgroundType`, `OverrideLineStyle`, `OverridePriceAxisLastValueMode`, `ChartStyleParameters`, `ClearMarksMode`, `MarkLocation`, `StudyPlotType`, `StudyDisplayTarget`, `StudyInputType`, `StudyTargetPriceScale`, `LineStudyPlotStyle`, `OhlcStudyPlotStyle` and `FilledAreaType`, have no replacement.
 - The `templates` module. Migration: import `SettingsTemplate` and `TemplateManager` from `ui::model`.
+- `CVDMode::TickSplit`, which computed the same estimate as `CVDMode::ClosePosition` while claiming footprint data; use `ClosePosition`. `CVD::with_histogram`, which had no effect, with no replacement.
+- `StopRunIndicator::with_reversal_window`, which only lengthened the warm-up; the reversal is tested on the breaking bar. Remove the call.
 
 ## [0.2.0] - 2026-06-04
 

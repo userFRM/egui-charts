@@ -1,7 +1,8 @@
 //! # Stop Run Indicator
 //!
-//! Detects stop hunt patterns where price briefly breaks a swing
-//! high/low and then reverses.
+//! Detects bars that break a recent swing high or low and reverse within the
+//! same bar. This is a price pattern on bars; it has no data on where stop
+//! orders rest.
 
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
@@ -10,18 +11,23 @@ use egui::Color32;
 
 /// Stop Run / Stop Hunt Indicator
 ///
-/// Identifies potential stop run patterns:
-/// - Price breaks recent swing high/low
-/// - Quick reversal after the break
-/// - Optional volume confirmation
+/// Flags a bar that:
+/// - breaks the lowest low (or highest high) of the previous `swing_period`
+///   bars, when that extreme is neither their first nor their last bar, by at
+///   least `break_threshold` times their average true range,
+/// - closes back above that low (below that high) or closes up (down), and
+/// - with volume confirmation on (the default), trades more than
+///   `volume_threshold` times their average volume.
+///
+/// The value, plotted in its own pane, is the reversal from the bar's extreme
+/// to its close in average true ranges, capped at 1: positive for a bullish
+/// run (low broken), negative for a bearish run, and 0 on other bars.
 #[derive(Clone)]
 pub struct StopRunIndicator {
     /// Lookback period for swing detection
     swing_period: usize,
     /// Minimum ATR multiple for valid break
     break_threshold: f64,
-    /// Bars to look for reversal
-    reversal_window: usize,
     /// Require volume confirmation
     require_volume_confirmation: bool,
     /// Volume threshold (multiple of average)
@@ -51,7 +57,7 @@ pub struct StopRunDetection {
     pub volume: f64,
     /// Reversal magnitude (how far it reversed)
     pub reversal_magnitude: f64,
-    /// Confidence score
+    /// Reversal from the bar's extreme to its close in average true ranges, capped at 1
     pub confidence: f64,
 }
 
@@ -70,7 +76,6 @@ impl StopRunIndicator {
         Self {
             swing_period: swing_period.max(1),
             break_threshold: 0.5, // 0.5 ATR minimum break
-            reversal_window: 3,
             require_volume_confirmation: true,
             volume_threshold: 1.5,
             values: Vec::new(),
@@ -84,12 +89,6 @@ impl StopRunIndicator {
     /// Set break threshold (ATR multiple)
     pub fn with_break_threshold(mut self, threshold: f64) -> Self {
         self.break_threshold = threshold;
-        self
-    }
-
-    /// Set reversal window
-    pub fn with_reversal_window(mut self, window: usize) -> Self {
-        self.reversal_window = window.max(1);
         self
     }
 
@@ -218,14 +217,14 @@ impl Indicator for StopRunIndicator {
     }
 
     fn desc(&self) -> &str {
-        "Stop Run Detector - Identifies stop hunt patterns"
+        "Stop Run Detector - Swing break reversed within the bar"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
         self.detections.clear();
 
-        if data.len() < self.swing_period.saturating_add(self.reversal_window) {
+        if data.len() < self.swing_period {
             for _ in 0..data.len() {
                 self.values.push(IndicatorValue::None);
             }
@@ -258,8 +257,7 @@ impl Indicator for StopRunIndicator {
                         || bar.volume > avg_volume * self.volume_threshold;
 
                     if reversed && volume_ok {
-                        let confidence =
-                            (reversal_magnitude / atr).min(1.0) * if volume_ok { 1.0 } else { 0.7 };
+                        let confidence = (reversal_magnitude / atr).min(1.0);
 
                         detected = Some(StopRunDetection {
                             bar_idx: idx,
@@ -288,8 +286,7 @@ impl Indicator for StopRunIndicator {
                         || bar.volume > avg_volume * self.volume_threshold;
 
                     if reversed && volume_ok {
-                        let confidence =
-                            (reversal_magnitude / atr).min(1.0) * if volume_ok { 1.0 } else { 0.7 };
+                        let confidence = (reversal_magnitude / atr).min(1.0);
 
                         detected = Some(StopRunDetection {
                             bar_idx: idx,
@@ -311,7 +308,7 @@ impl Indicator for StopRunIndicator {
                 self.values.push(IndicatorValue::Single(value));
                 self.detections.push(detection);
             } else {
-                self.values.push(IndicatorValue::None);
+                self.values.push(IndicatorValue::Single(0.0));
             }
         }
     }
@@ -334,7 +331,7 @@ impl Indicator for StopRunIndicator {
     }
 
     fn is_overlay(&self) -> bool {
-        true // Stop runs are marked on the main chart
+        false
     }
 
     fn is_visible(&self) -> bool {

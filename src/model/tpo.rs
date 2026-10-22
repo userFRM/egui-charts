@@ -15,8 +15,10 @@
 //! [`TPOProfile`]s.
 
 use crate::model::Bar;
+use crate::model::bar::{bar_level_keys, level_grid};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
 
 /// Letter sequence for TPO periods (A, B, C... Z, a, b...)
 const TPO_LETTERS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -42,6 +44,11 @@ pub struct TPOLetter {
 pub struct TPOProfile {
     /// Session timestamp
     pub session_date: DateTime<Utc>,
+    /// Row height the profile's prices are keyed on: the configured tick size,
+    /// widened to a whole number of ticks when the bars span more than 1,000
+    /// ticks, or the span divided into 1,000 rows without a usable tick size.
+    /// Pass it to the methods that take a `tick_size`.
+    pub tick_size: f64,
     /// All TPO letters in this profile
     pub letters: Vec<TPOLetter>,
     /// TPO count at each price level
@@ -73,7 +80,8 @@ pub struct TPOProfile {
 /// Configuration for TPO chart generation and rendering.
 #[derive(Debug, Clone)]
 pub struct TPOConfig {
-    /// Tick size for price grouping (e.g., 0.25 for ES futures)
+    /// Tick size for price grouping (e.g., 0.25 for ES futures). [`to_tpo_profiles`]
+    /// widens it to bound the rows; see [`TPOProfile::tick_size`].
     pub tick_size: f64,
     /// Duration of each period in minutes (typically 30)
     pub period_minutes: u32,
@@ -157,10 +165,11 @@ pub enum SessionType {
 }
 
 impl TPOProfile {
-    /// Create a new empty TPO profile
-    pub fn new(session_date: DateTime<Utc>) -> Self {
+    /// Create a new empty TPO profile keyed on rows of `tick_size`
+    pub fn new(session_date: DateTime<Utc>, tick_size: f64) -> Self {
         Self {
             session_date,
+            tick_size,
             letters: Vec::new(),
             price_tpo_count: HashMap::new(),
             poc_price: 0.0,
@@ -266,6 +275,10 @@ fn key_to_price(key: i64, tick_size: f64) -> f64 {
 
 /// Transform bars into TPO profiles
 ///
+/// Rows are `config.tick_size` widened so the bars cover at most about 1,000
+/// rows (see [`TPOProfile::tick_size`]). Bars with a non-finite high or low or
+/// an inverted range are skipped.
+///
 /// # Arguments
 /// * `bars` - Source OHLCV bars
 /// * `config` - TPO configuration
@@ -289,8 +302,13 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
     let mut current_session_start: Option<DateTime<Utc>> = None;
     let mut period_idx = 0;
     let mut last_period_start: Option<DateTime<Utc>> = None;
+    let tick_size = level_grid(bars, config.tick_size);
 
     for bar in bars {
+        let Some((low_key, high_key)) = bar_level_keys(bar, tick_size) else {
+            continue;
+        };
+
         // Check if we need to start a new session (new day)
         let session_date = bar.time.date_naive();
         let is_new_session = current_session_start
@@ -305,7 +323,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
             }
 
             // Start new profile
-            current_profile = Some(TPOProfile::new(bar.time));
+            current_profile = Some(TPOProfile::new(bar.time, tick_size));
             current_session_start = Some(bar.time);
             period_idx = 0;
             last_period_start = Some(bar.time);
@@ -330,7 +348,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
 
         // Add TPO letters for all price levels touched by this bar
         if let Some(ref mut profile) = current_profile {
-            add_tpo_letters(profile, bar, letter, period_idx, config.tick_size);
+            add_tpo_letters(profile, bar, low_key..=high_key, letter, period_idx);
 
             // Update profile high/low
             profile.profile_high = profile.profile_high.max(bar.high);
@@ -361,19 +379,16 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
     profiles
 }
 
-/// Add TPO letters for a bar
+/// Add TPO letters for a bar at the row `keys` it spans
 fn add_tpo_letters(
     profile: &mut TPOProfile,
     bar: &Bar,
+    keys: RangeInclusive<i64>,
     letter: char,
     period_idx: usize,
-    tick_size: f64,
 ) {
-    let low_key = price_to_key(bar.low, tick_size);
-    let high_key = price_to_key(bar.high, tick_size);
-
-    for key in low_key..=high_key {
-        let price = key_to_price(key, tick_size);
+    for key in keys {
+        let price = key_to_price(key, profile.tick_size);
 
         profile.letters.push(TPOLetter {
             price,
@@ -398,7 +413,7 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
         .iter()
         .max_by_key(|(_, count)| *count)
         .unwrap();
-    profile.poc_price = key_to_price(*poc_key, config.tick_size);
+    profile.poc_price = key_to_price(*poc_key, profile.tick_size);
 
     // Calculate total TPOs
     let total_tpos: usize = profile.price_tpo_count.values().sum();
@@ -464,20 +479,20 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
         }
     }
 
-    profile.value_area_low = key_to_price(va_low_key, config.tick_size);
-    profile.value_area_high = key_to_price(va_high_key, config.tick_size);
+    profile.value_area_low = key_to_price(va_low_key, profile.tick_size);
+    profile.value_area_high = key_to_price(va_high_key, profile.tick_size);
 
     // Find single prints (price levels with only 1 TPO)
     profile.single_prints = profile
         .price_tpo_count
         .iter()
         .filter(|(_, count)| **count == 1)
-        .map(|(&key, _)| key_to_price(key, config.tick_size))
+        .map(|(&key, _)| key_to_price(key, profile.tick_size))
         .collect();
 
     // Check for poor high/low (multiple TPOs at extreme)
-    let high_key = price_to_key(profile.profile_high, config.tick_size);
-    let low_key = price_to_key(profile.profile_low, config.tick_size);
+    let high_key = price_to_key(profile.profile_high, profile.tick_size);
+    let low_key = price_to_key(profile.profile_low, profile.tick_size);
 
     profile.has_poor_high = profile.price_tpo_count.get(&high_key).unwrap_or(&0) > &1;
     profile.has_poor_low = profile.price_tpo_count.get(&low_key).unwrap_or(&0) > &1;
@@ -583,59 +598,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tpo_profile_creation() {
-        let bars = create_test_bars();
-        let config = TPOConfig {
-            tick_size: 1.0,
-            ..Default::default()
-        };
-        let profiles = to_tpo_profiles(&bars, &config);
-
-        assert_eq!(profiles.len(), 1);
-        let profile = &profiles[0];
-
-        // Should have letters at multiple price levels
-        assert!(!profile.letters.is_empty());
-        assert!(!profile.price_tpo_count.is_empty());
-    }
-
-    #[test]
-    fn test_tpo_poc_calculation() {
-        let bars = create_test_bars();
-        let config = TPOConfig {
-            tick_size: 1.0,
-            ..Default::default()
-        };
-        let profiles = to_tpo_profiles(&bars, &config);
-
-        assert_eq!(profiles.len(), 1);
-        let profile = &profiles[0];
-
-        // POC should be within the price range
-        assert!(profile.poc_price >= 99.0 && profile.poc_price <= 104.0);
-    }
-
-    #[test]
-    fn test_tpo_value_area() {
-        let bars = create_test_bars();
-        let config = TPOConfig {
-            tick_size: 1.0,
-            value_area_pct: 0.70,
-            ..Default::default()
-        };
-        let profiles = to_tpo_profiles(&bars, &config);
-
-        let profile = &profiles[0];
-
-        // Value area should contain POC
-        assert!(profile.is_in_value_area(profile.poc_price));
-        // Value area high should be >= POC
-        assert!(profile.value_area_high >= profile.poc_price);
-        // Value area low should be <= POC
-        assert!(profile.value_area_low <= profile.poc_price);
-    }
-
-    #[test]
     fn test_tpo_initial_balance() {
         let bars = create_test_bars();
         let config = TPOConfig {
@@ -651,17 +613,6 @@ mod tests {
         assert!(profile.initial_balance_high > 0.0);
         assert!(profile.initial_balance_low > 0.0);
         assert!(profile.initial_balance_high >= profile.initial_balance_low);
-    }
-
-    #[test]
-    fn test_price_key_conversion() {
-        let price = 100.5;
-        let tick_size = 0.25;
-
-        let key = price_to_key(price, tick_size);
-        let back = key_to_price(key, tick_size);
-
-        assert!((back - 100.5).abs() < 0.01);
     }
 
     /// Build a single bar at a chosen offset from a fixed session start.
@@ -805,5 +756,18 @@ mod tests {
         assert_eq!(profile.poc_price, 100.0);
         assert_eq!(profile.value_area_low, 100.0);
         assert_eq!(profile.value_area_high, 100.0);
+    }
+
+    #[test]
+    fn rows_per_series_are_bounded() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
+        let bars = [bar_at(start, 0, 0.0, 1e6, 0.0, 1.0)];
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let profile = &to_tpo_profiles(&bars, &config)[0];
+        // 1e6 ticks widen to rows of 1,000 ticks: 0, 1,000, ..., 1e6
+        assert_eq!((profile.tick_size, profile.letters.len()), (1_000.0, 1_001));
     }
 }

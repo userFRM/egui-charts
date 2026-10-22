@@ -1,7 +1,8 @@
 //! # Cumulative Volume Delta (CVD) Indicator
 //!
-//! CVD tracks the running sum of buying volume minus selling volume.
-//! Useful for identifying divergences between price and order flow.
+//! CVD is the running sum of each bar's volume delta, buying minus selling
+//! volume. Bars do not say which trades were buys, so the delta is estimated
+//! from the bar's shape; see [`CVDMode`].
 
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
@@ -9,8 +10,8 @@ use egui::Color32;
 
 /// Cumulative Volume Delta (CVD)
 ///
-/// Shows the running total of (buy volume - sell volume).
-/// Volume is estimated using bar internals when tick data unavailable.
+/// Shows the running total of (buy volume - sell volume), with each bar's split
+/// estimated from its open, high, low and close.
 #[derive(Clone)]
 pub struct CVD {
     /// Values calculated from bars
@@ -21,13 +22,9 @@ pub struct CVD {
     visible: bool,
     /// CVD calculation mode
     mode: CVDMode,
-    /// Show histogram alongside line
-    show_histogram: bool,
-    /// Reset at session start
-    reset_at_session: bool,
 }
 
-/// CVD calculation mode
+/// How [`CVD`] estimates a bar's delta from its prices
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CVDMode {
     /// Estimate based on bar close position within range
@@ -35,8 +32,6 @@ pub enum CVDMode {
     ClosePosition,
     /// Estimate based on body ratio
     BodyRatio,
-    /// Use tick volume split (requires footprint data)
-    TickSplit,
     /// Bullish candles = buy, bearish = sell
     Simple,
 }
@@ -49,20 +44,12 @@ impl CVD {
             color: Color32::from_rgb(76, 175, 80), // Green for volume/delta
             visible: true,
             mode: CVDMode::default(),
-            show_histogram: false,
-            reset_at_session: false,
         }
     }
 
     /// Set the CVD calculation mode
     pub fn with_mode(mut self, mode: CVDMode) -> Self {
         self.mode = mode;
-        self
-    }
-
-    /// Show histogram
-    pub fn with_histogram(mut self, show: bool) -> Self {
-        self.show_histogram = show;
         self
     }
 
@@ -96,11 +83,6 @@ impl CVD {
                 let direction = if bar.close >= bar.open { 1.0 } else { -1.0 };
                 bar.volume * body_ratio * direction
             }
-            CVDMode::TickSplit => {
-                // Would need footprint data - fallback to close position
-                let close_pos = (bar.close - bar.low) / range;
-                bar.volume * (2.0 * close_pos - 1.0)
-            }
             CVDMode::Simple => {
                 // Bullish = buy, bearish = sell
                 if bar.close >= bar.open {
@@ -125,29 +107,14 @@ impl Indicator for CVD {
     }
 
     fn desc(&self) -> &str {
-        "Cumulative Volume Delta - Running sum of buy/sell volume difference"
+        "Cumulative Volume Delta - Running sum of buy minus sell volume, estimated from bars"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.is_empty() {
-            return;
-        }
-
         let mut cumulative_delta = 0.0;
-        let mut last_session_date = data[0].time.date_naive();
-
         for bar in data {
-            // Check for session reset
-            if self.reset_at_session {
-                let current_date = bar.time.date_naive();
-                if current_date != last_session_date {
-                    cumulative_delta = 0.0;
-                    last_session_date = current_date;
-                }
-            }
-
             let delta = self.estimate_delta(bar);
             cumulative_delta += delta;
 

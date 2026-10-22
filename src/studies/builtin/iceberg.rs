@@ -1,29 +1,37 @@
-//! # Iceberg Order Detector
+//! # Iceberg Detector
 //!
-//! Detects hidden large orders that refresh at the same price level.
-//! Icebergs are characterized by repeated fills at the same price.
+//! Flags bars that close at a price level the recent bars kept trading at with
+//! heavy volume. Bars carry no order book or trade data, so this is a proxy for
+//! repeated activity at one price, estimated from bars; it cannot see hidden
+//! orders.
 
 use crate::model::Bar;
+use crate::model::bar::{bar_level_keys, level_grid, level_key};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
-/// Iceberg Order Detector
+/// Iceberg Detector, estimated from bars.
 ///
-/// Identifies potential iceberg orders by detecting:
-/// - High volume at specific price levels
-/// - Repeated touches of the same price
-/// - Large cumulative volume relative to visible size
+/// Each bar's volume is spread evenly over the price levels between its low and
+/// high. A bar is flagged when the level of its close was touched by at least
+/// `min_touches` of the last `period` bars and holds at least `volume_threshold`
+/// times the series' average bar volume from them. The value is a score from 0
+/// to 1 on flagged bars and 0 on other bars, plotted in its own pane.
 ///
-/// Prices are keyed on the estimated tick size, widened to a whole number of
-/// ticks when the series spans more than 1,000 ticks so it covers at most about
-/// 1,000 levels; detection prices are multiples of that grid. Because the grid
-/// comes from the whole series, a bar that extends its range can change earlier
-/// values. Bars with a non-finite price or an inverted range are not tracked.
+/// Levels lie on the configured tick size (see
+/// [`with_tick_size`](Self::with_tick_size)), widened to a whole number of
+/// ticks when the series spans more than 1,000 ticks so it covers at most
+/// about 1,000 levels; detection prices are multiples of that grid. Because the
+/// grid and the average volume come from the whole series, a bar that extends
+/// the series can change earlier values. Bars with a non-finite price or an
+/// inverted range are not tracked.
 #[derive(Clone)]
 pub struct IcebergDetector {
-    /// Period for lookback analysis
+    /// Number of bars a level's touches and volume are counted over
     period: usize,
+    /// Instrument tick size; zero when not configured
+    tick_size: f64,
     /// Minimum volume threshold (as multiple of average)
     volume_threshold: f64,
     /// Minimum touches at price level to flag
@@ -40,20 +48,21 @@ pub struct IcebergDetector {
     detections: Vec<IcebergDetection>,
 }
 
-/// A detected iceberg order
+/// A bar flagged by [`IcebergDetector`]
 #[derive(Debug, Clone)]
 pub struct IcebergDetection {
     /// Bar index where detected
     pub bar_idx: usize,
     /// Price level
     pub price: f64,
-    /// Cumulative volume at this level
+    /// Volume at this level over the window
     pub volume: f64,
-    /// Number of touches
+    /// Number of bars in the window that touched the level
     pub touches: usize,
-    /// Side (true = buy/bid, false = sell/ask)
+    /// Whether the bar that began the level's current run of touches closed at or
+    /// above its open; that bar may have left the window
     pub is_buy_side: bool,
-    /// Confidence score (0.0 - 1.0)
+    /// Score from 0 to 1: touches and volume relative to twice their thresholds
     pub confidence: f64,
 }
 
@@ -62,6 +71,7 @@ impl IcebergDetector {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            tick_size: 0.0,
             volume_threshold: 2.0,
             min_touches: 3,
             values: Vec::new(),
@@ -70,6 +80,14 @@ impl IcebergDetector {
             visible: true,
             detections: Vec::new(),
         }
+    }
+
+    /// Set the instrument's tick size, which levels are keyed on. With zero
+    /// (the default), a negative or a non-finite value, levels are the series'
+    /// price span divided into 1,000 levels instead.
+    pub fn with_tick_size(mut self, tick_size: f64) -> Self {
+        self.tick_size = tick_size;
+        self
     }
 
     /// Set volume threshold
@@ -110,7 +128,7 @@ impl Indicator for IcebergDetector {
     }
 
     fn desc(&self) -> &str {
-        "Iceberg Order Detector - Identifies hidden large orders"
+        "Iceberg Detector - Repeated heavy price levels, estimated from bars"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -128,13 +146,14 @@ impl Indicator for IcebergDetector {
         let avg_volume: f64 = data.iter().map(|b| b.volume).sum::<f64>() / data.len() as f64;
         let volume_threshold = avg_volume * self.volume_threshold;
 
-        // Estimate tick size from price data, widened to bound the level count
-        let tick_size = super::level_grid(data, estimate_tick_size(data));
-        // Quantize a tracked bar (see the type docs) to its low, high and close keys.
+        let tick_size = level_grid(data, self.tick_size);
+        // Quantize a tracked bar (see the type docs) to its low, high and close keys,
+        // with the volume it spreads on each level between its low and high.
         let keys = |bar: &Bar| {
-            let (low, high) = super::bar_level_keys(bar, tick_size)?;
+            let (low, high) = bar_level_keys(bar, tick_size)?;
+            let share = bar.volume / (high.abs_diff(low) + 1) as f64;
             let close = bar.close.is_finite();
-            close.then(|| (low, high, super::level_key(bar.close, tick_size)))
+            close.then(|| (low, high, level_key(bar.close, tick_size), share))
         };
 
         // Track price levels and their touches. Tracked keys lie on the grid between
@@ -143,7 +162,7 @@ impl Indicator for IcebergDetector {
         let (first, last) = data
             .iter()
             .filter_map(keys)
-            .fold((i64::MAX, i64::MIN), |(lo, hi), (low, high, close)| {
+            .fold((i64::MAX, i64::MIN), |(lo, hi), (low, high, close, _)| {
                 (lo.min(low).min(close), hi.max(high).max(close))
             });
         let slot = |key: i64| (key >= first).then(|| usize::try_from(key.abs_diff(first)).ok())?;
@@ -151,12 +170,22 @@ impl Indicator for IcebergDetector {
             vec![(0, 0.0, 0, false); slot(last).map_or(0, |i| i + 1)];
 
         for (idx, bar) in data.iter().enumerate() {
+            // Drop the bar leaving the window, so levels count the last `period` bars
+            if idx >= self.period
+                && let Some((low_key, high_key, _, share)) = keys(&data[idx - self.period])
+            {
+                for key in low_key..=high_key {
+                    if let Some(entry) = slot(key).and_then(|i| price_levels.get_mut(i)) {
+                        entry.0 = entry.0.saturating_sub(1);
+                        entry.1 -= share;
+                    }
+                }
+            }
+
             let mut value = IndicatorValue::None;
-            if let Some((low_key, high_key, close_key)) = keys(bar) {
+            if let Some((low_key, high_key, close_key, share)) = keys(bar) {
                 let is_bullish = bar.close >= bar.open;
 
-                // Track all price levels in this bar
-                let levels = (high_key.abs_diff(low_key) + 1) as f64;
                 for key in low_key..=high_key {
                     let Some(entry) = slot(key).and_then(|i| price_levels.get_mut(i)) else {
                         continue;
@@ -165,10 +194,10 @@ impl Indicator for IcebergDetector {
                         *entry = (0, 0.0, idx, is_bullish);
                     }
                     entry.0 += 1; // touches
-                    entry.1 += bar.volume / levels; // volume per level
+                    entry.1 += share;
                 }
 
-                // Check for iceberg detection
+                value = IndicatorValue::Single(0.0);
                 if let Some((touches, vol, _, is_buy)) =
                     slot(close_key).and_then(|i| price_levels.get(i))
                     && *touches > 0
@@ -187,23 +216,10 @@ impl Indicator for IcebergDetector {
                         is_buy_side: *is_buy,
                         confidence,
                     });
-
-                    // Mark with confidence score
                     value = IndicatorValue::Single(confidence);
                 }
             }
             self.values.push(value);
-
-            // Decay old price level data (sliding window)
-            if idx >= self.period
-                && let Some((old_low_key, old_high_key, _)) = keys(&data[idx - self.period])
-            {
-                for key in old_low_key..=old_high_key {
-                    if let Some(entry) = slot(key).and_then(|i| price_levels.get_mut(i)) {
-                        entry.0 = entry.0.saturating_sub(1);
-                    }
-                }
-            }
         }
     }
 
@@ -225,7 +241,7 @@ impl Indicator for IcebergDetector {
     }
 
     fn is_overlay(&self) -> bool {
-        true // Icebergs are marked on the main chart
+        false
     }
 
     fn is_visible(&self) -> bool {
@@ -245,95 +261,39 @@ impl Indicator for IcebergDetector {
     }
 }
 
-/// Estimate tick size from price data
-fn estimate_tick_size(bars: &[Bar]) -> f64 {
-    if bars.is_empty() {
-        return 0.01;
-    }
-
-    // Find the smallest price difference
-    let mut min_diff = f64::MAX;
-    for i in 1..bars.len().min(100) {
-        let diffs = [
-            (bars[i].high - bars[i - 1].high).abs(),
-            (bars[i].low - bars[i - 1].low).abs(),
-            (bars[i].close - bars[i - 1].close).abs(),
-        ];
-
-        for diff in diffs {
-            if diff > 0.0001 && diff < min_diff {
-                min_diff = diff;
-            }
-        }
-    }
-
-    // Round to common tick sizes
-    if min_diff < 0.001 {
-        0.0001
-    } else if min_diff < 0.01 {
-        0.001
-    } else if min_diff < 0.1 {
-        0.01
-    } else if min_diff < 0.5 {
-        0.25
-    } else if min_diff < 1.0 {
-        0.5
-    } else {
-        1.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
 
-    fn create_iceberg_bars() -> Vec<Bar> {
-        let ts = Utc::now();
-        let mut bars = Vec::new();
-
-        // Create bars that repeatedly touch 100.0 (iceberg pattern)
-        for i in 0..20 {
-            let base = if i % 2 == 0 { 99.0 } else { 100.0 };
-            bars.push(Bar {
-                time: ts,
-                open: base + 0.5,
-                high: 101.0, // All touch 100.0 level
-                low: 99.0,   // All touch 100.0 level
-                close: 100.0,
-                volume: 1000.0,
-            });
-        }
-
-        bars
-    }
-
+    /// A level's touches and volume both cover the last `period` bars only.
     #[test]
-    fn test_iceberg_detection() {
-        let mut detector = IcebergDetector::new(10).with_min_touches(3);
-        let bars = create_iceberg_bars();
-
-        detector.calculate(&bars);
-
-        // Should detect icebergs due to repeated touches at 100.0
-        assert!(!detector.detections.is_empty());
-    }
-
-    #[test]
-    fn test_tick_size_estimation() {
-        let ts = Utc::now();
-        let bars: Vec<Bar> = (0..10)
-            .map(|i| Bar {
-                time: ts,
-                open: 100.0 + i as f64 * 0.25,
-                high: 100.5 + i as f64 * 0.25,
-                low: 99.5 + i as f64 * 0.25,
-                close: 100.25 + i as f64 * 0.25,
-                volume: 1000.0,
-            })
+    fn level_volume_leaves_the_window_with_its_touches() {
+        let bar = Bar {
+            time: Utc::now(),
+            open: 100.0,
+            high: 100.0,
+            low: 100.0,
+            close: 100.0,
+            volume: 10.0,
+        };
+        let mut detector = IcebergDetector::new(2)
+            .with_min_touches(1)
+            .with_volume_threshold(1.0);
+        detector.calculate(&vec![bar; 5]);
+        let seen: Vec<_> = detector
+            .detections()
+            .iter()
+            .map(|d| (d.bar_idx, d.touches, d.volume))
             .collect();
-
-        let tick = estimate_tick_size(&bars);
-        assert!(tick <= 0.5); // Should detect ~0.25 tick size
+        // Two bars of 10 at one level once the window is full
+        let expected = [
+            (0, 1, 10.0),
+            (1, 2, 20.0),
+            (2, 2, 20.0),
+            (3, 2, 20.0),
+            (4, 2, 20.0),
+        ];
+        assert_eq!(seen, expected);
     }
 }

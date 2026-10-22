@@ -218,7 +218,7 @@ fn draw_session_profile(
         return;
     }
 
-    let tick_size = config.tick_size;
+    let tick_size = profile.tick_size;
     let column_width = PERIOD_COLUMN_PX;
     let use_letters = column_width >= LETTER_MIN_COLUMN_PX
         && matches!(

@@ -37,7 +37,7 @@ Each item is marked as complete, partial, or missing.
 - [x] **Point & Figure**: X/O column rendering, max 1000 columns
 
 #### Advanced
-- [x] **Time Price Opportunity (TPO)**: Rendered by the chart type dispatch (value area, POC, initial balance); default 30-minute periods, sessions split on the UTC date, profiles built from the visible bars
+- [x] **Time Price Opportunity (TPO)**: Rendered by the chart type dispatch (value area, POC, initial balance); default 30-minute periods, sessions split on the UTC date, profiles built from the visible bars, at most about 1,000 rows, bars with a non-finite price skipped
 
 ### Pan / Zoom
 - [x] Mouse wheel zoom (centered on cursor)
@@ -307,7 +307,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] OBV, VWAP (optional reset on UTC date change; the indicator dialog builds it without reset, so it is cumulative), Anchored VWAP
 - [x] MFI, A/D Line, CMF, Klinger Oscillator (signal not drawn)
 - [x] Ease of Movement, Net Volume, Volume ROC, Volume Oscillator
-- [x] CVD: Cumulative Volume Delta (3 estimation modes)
+- [x] CVD: Cumulative Volume Delta, each bar's delta estimated from its close position, body ratio or direction, in its own pane
 - [ ] Volume Profile Visible Range, Volume Profile Fixed Range: bin volume over the whole history; bin 0 is plotted on the price scale, so nothing visible draws
 - [x] VWMA, Balance of Power
 - [x] Volume Price Trend, NVI, PVI
@@ -336,10 +336,10 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Pivot Points: Standard, Fibonacci, Woodie, Camarilla, DeMark formulas over a rolling N-bar window; only the pivot line is drawn
 - [ ] ZigZag: percentage swing detection computes pivots, but they are isolated values and nothing is drawn
 
-### Order Flow (1/4)
-- [ ] Iceberg Detector: volume anomaly and confidence score estimated from bars; the scores are plotted on the price scale, so nothing visible is drawn on a normal chart
-- [ ] Stop Run: swing-break-and-reversal pattern on bars; emits rare confidence values on the price scale, so it seldom draws anything
-- [ ] Liquidity Tracker: rolling liquidity ratio plotted on the price scale; the sweep test flags prices the bar never traded
+### Order Flow (4/4, estimated from bars; no trade or order book data)
+- [x] Iceberg Detector: 0 to 1 score in its own pane for bars closing at a price level that enough of the last N bars touched with heavy volume, each bar's volume spread evenly over its range; it cannot see hidden orders. Levels use the tick size set with `with_tick_size`, otherwise the series' price span in 1,000 levels
+- [x] Stop Run: signed score in its own pane for bars that break the prior swing low or high and reverse within the bar
+- [x] Liquidity Tracker: largest volume accumulated at one price level, in multiples of the average bar volume, in its own pane; sweeps (the heavy levels a bar traded through, one per side of the level holding its open) and zones are available through the API only
 - [x] CVD (also in Volume)
 
 ### Price Oscillators (1/1)

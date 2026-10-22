@@ -439,7 +439,7 @@ mod tests {
             Box::new(WilliamsAD::new()),
             Box::new(MarketFacilitationIndex::new()),
             Box::new(IcebergDetector::new(l(0))),
-            Box::new(StopRunIndicator::new(l(0)).with_reversal_window(l(1))),
+            Box::new(StopRunIndicator::new(l(0))),
             Box::new(LiquidityTracker::new(l(0))),
             Box::new(PivotPoints::new(l(0))),
             Box::new(ZigZag::new(5.0, l(0))),
