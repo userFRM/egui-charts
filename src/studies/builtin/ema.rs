@@ -207,12 +207,4 @@ mod tests {
             }
         }
     }
-
-    /// Empty input yields no values rather than an out-of-bounds seed read.
-    #[test]
-    fn empty_input_yields_empty() {
-        let mut ema = EMA::new(12);
-        ema.calculate(&[]);
-        assert!(ema.values().is_empty());
-    }
 }

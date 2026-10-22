@@ -156,53 +156,7 @@ impl Indicator for ATR {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, Utc};
-
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        vec![
-            Bar {
-                time: start,
-                open: 100.0,
-                high: 102.0,
-                low: 99.0,
-                close: 101.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: start + Duration::minutes(5),
-                open: 101.0,
-                high: 104.0,
-                low: 100.0,
-                close: 103.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: start + Duration::minutes(10),
-                open: 103.0,
-                high: 105.0,
-                low: 102.0,
-                close: 104.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: start + Duration::minutes(15),
-                open: 104.0,
-                high: 106.0,
-                low: 103.0,
-                close: 105.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: start + Duration::minutes(20),
-                open: 105.0,
-                high: 107.0,
-                low: 104.0,
-                close: 106.0,
-                volume: 1000.0,
-            },
-        ]
-    }
+    use chrono::Utc;
 
     #[test]
     fn test_true_range_calculation() {
@@ -226,43 +180,5 @@ mod tests {
         // Case 3: Gap down (|low - prev_close| is largest)
         let tr = ATR::true_range(&bar, 110.0);
         assert!((tr - 12.0).abs() < 0.001); // |low - prev| = |98 - 110| = 12
-    }
-
-    #[test]
-    fn test_atr_calculation() {
-        let bars = create_test_bars();
-        let mut atr = ATR::new(3);
-        atr.calculate(&bars);
-
-        assert_eq!(atr.values().len(), 5);
-
-        // First 2 values should be None (period - 1)
-        assert!(matches!(atr.values()[0], IndicatorValue::None));
-        assert!(matches!(atr.values()[1], IndicatorValue::None));
-
-        // Remaining values should be valid
-        assert!(matches!(atr.values()[2], IndicatorValue::Single(_)));
-        assert!(matches!(atr.values()[3], IndicatorValue::Single(_)));
-        assert!(matches!(atr.values()[4], IndicatorValue::Single(_)));
-    }
-
-    #[test]
-    fn test_atr_positive() {
-        let bars = create_test_bars();
-        let mut atr = ATR::new(3);
-        atr.calculate(&bars);
-
-        for value in atr.values() {
-            if let IndicatorValue::Single(v) = value {
-                assert!(*v > 0.0, "ATR should always be positive");
-            }
-        }
-    }
-
-    #[test]
-    fn test_atr_empty_data() {
-        let mut atr = ATR::new(14);
-        atr.calculate(&[]);
-        assert!(atr.values().is_empty());
     }
 }

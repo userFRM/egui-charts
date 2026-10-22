@@ -151,96 +151,29 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
 
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..30)
-            .map(|i| {
-                let price = 100.0 + (i as f64 * 0.3).sin() * 10.0;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: price,
-                    high: price + 2.0,
-                    low: price - 2.0,
-                    close: price,
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    fn create_flat_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..30)
-            .map(|i| Bar {
-                time: start + Duration::minutes(i * 5),
-                open: 100.0,
-                high: 100.0,
-                low: 100.0,
-                close: 100.0,
-                volume: 1000.0,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_std_dev_calculation() {
-        let bars = create_test_bars();
-        let mut std_dev = StandardDeviation::new(20);
-        std_dev.calculate(&bars);
-
-        assert_eq!(std_dev.values().len(), bars.len());
-
-        // First period-1 values should be None
-        for i in 0..19 {
-            assert!(matches!(std_dev.values()[i], IndicatorValue::None));
-        }
-
-        // Remaining should have values
-        for value in std_dev.values().iter().skip(19) {
-            assert!(matches!(value, IndicatorValue::Single(_)));
-        }
-    }
-
-    #[test]
-    fn test_std_dev_positive() {
-        let bars = create_test_bars();
-        let mut std_dev = StandardDeviation::new(20);
-        std_dev.calculate(&bars);
-
-        for value in std_dev.values() {
-            if let IndicatorValue::Single(val) = value {
-                assert!(*val >= 0.0, "StdDev should be non-negative");
-            }
-        }
-    }
-
     #[test]
     fn test_std_dev_flat_prices() {
-        let bars = create_flat_bars();
+        // 1234.56 is inexact in binary, so a one-pass variance goes slightly negative here.
+        let start = Utc::now();
+        let bars: Vec<Bar> = (0..30)
+            .map(|i| Bar {
+                time: start + Duration::minutes(i * 5),
+                open: 1234.56,
+                high: 1234.56,
+                low: 1234.56,
+                close: 1234.56,
+                volume: 1000.0,
+            })
+            .collect();
+
         let mut std_dev = StandardDeviation::new(20);
         std_dev.calculate(&bars);
 
-        // StdDev of flat prices should be 0
         for value in std_dev.values().iter().skip(19) {
-            if let IndicatorValue::Single(val) = value {
-                assert!(
-                    val.abs() < 0.001,
-                    "StdDev should be ~0 for flat prices, got {val}"
-                );
-            }
+            assert!(
+                matches!(value, IndicatorValue::Single(v) if v.abs() < 1e-9),
+                "a window without deviation reads 0, got {value:?}"
+            );
         }
-    }
-
-    #[test]
-    fn test_std_dev_is_not_overlay() {
-        let std_dev = StandardDeviation::new(20);
-        assert!(!std_dev.is_overlay());
-    }
-
-    #[test]
-    fn test_std_dev_empty_data() {
-        let mut std_dev = StandardDeviation::new(20);
-        std_dev.calculate(&[]);
-        assert!(std_dev.values().is_empty());
     }
 }

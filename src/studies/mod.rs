@@ -61,6 +61,8 @@ mod custom;
 pub mod factory;
 mod indicator_trait;
 mod palette;
+#[cfg(test)]
+mod reference;
 mod stepper;
 
 pub use builtin::*;

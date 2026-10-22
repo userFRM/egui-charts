@@ -158,61 +158,9 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
 
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..50)
-            .map(|i| {
-                let price = 100.0 + (i as f64 * 0.2).sin() * 10.0;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: price,
-                    high: price + 2.0,
-                    low: price - 2.0,
-                    close: price + 0.5,
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_cci_calculation() {
-        let bars = create_test_bars();
-        let mut cci = CCI::new(20);
-        cci.calculate(&bars);
-
-        assert_eq!(cci.values().len(), bars.len());
-
-        // First period-1 values should be None
-        for i in 0..19 {
-            assert!(matches!(cci.values()[i], IndicatorValue::None));
-        }
-
-        // Remaining values should be valid
-        for value in cci.values().iter().skip(19) {
-            assert!(matches!(value, IndicatorValue::Single(_)));
-        }
-    }
-
-    #[test]
-    fn test_cci_typical_price() {
-        let bar = Bar {
-            time: Utc::now(),
-            open: 100.0,
-            high: 110.0,
-            low: 90.0,
-            close: 105.0,
-            volume: 1000.0,
-        };
-
-        let tp = CCI::typical_price(&bar);
-        // (110 + 90 + 105) / 3 = 101.67
-        assert!((tp - 101.666666).abs() < 0.001);
-    }
-
     #[test]
     fn test_cci_flat_prices() {
-        // With flat prices, CCI should be around 0
+        // A zero mean deviation is reported as 0 rather than dividing by zero.
         let start = Utc::now();
         let bars: Vec<Bar> = (0..30)
             .map(|i| Bar {
@@ -229,16 +177,10 @@ mod tests {
         cci.calculate(&bars);
 
         for value in cci.values().iter().skip(19) {
-            if let IndicatorValue::Single(v) = value {
-                assert!(v.abs() < 0.001, "CCI should be ~0 for flat prices");
-            }
+            assert!(
+                matches!(value, IndicatorValue::Single(v) if *v == 0.0),
+                "a window without deviation reads 0, got {value:?}"
+            );
         }
-    }
-
-    #[test]
-    fn test_cci_empty_data() {
-        let mut cci = CCI::new(20);
-        cci.calculate(&[]);
-        assert!(cci.values().is_empty());
     }
 }

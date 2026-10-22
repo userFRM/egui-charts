@@ -198,42 +198,6 @@ mod tests {
             .collect()
     }
 
-    /// The output must stay one-to-one with the input bars: exactly `period`
-    /// leading `None`s, the first RSI at index `period`, and equal length. A
-    /// one-bar shift here would misalign RSI against every other indicator.
-    #[test]
-    fn output_length_matches_bar_count() {
-        let closes: Vec<f64> = (0..40).map(|i| 100.0 + (i as f64).sin() * 5.0).collect();
-        let bars = bars_from_closes(&closes);
-
-        let mut rsi = RSI::new(14);
-        rsi.calculate(&bars);
-
-        assert_eq!(
-            rsi.values().len(),
-            bars.len(),
-            "RSI output length must equal the input bar count",
-        );
-
-        for (i, v) in rsi.values().iter().take(14).enumerate() {
-            assert!(
-                matches!(v, IndicatorValue::None),
-                "bar {i} must be warmup None",
-            );
-        }
-        assert!(
-            matches!(rsi.values()[14], IndicatorValue::Single(_)),
-            "first RSI value must land exactly at index `period`",
-        );
-        assert!(
-            rsi.values()[13..]
-                .iter()
-                .skip(1)
-                .all(|v| matches!(v, IndicatorValue::Single(_))),
-            "every bar from `period` onward must carry a value",
-        );
-    }
-
     /// A monotonically rising series has no losses, so RSI saturates at 100.
     /// This pins both the value and that the first computed bar is correct.
     #[test]

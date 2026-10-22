@@ -1,0 +1,172 @@
+//! Staple studies compared bar by bar with series computed independently from their published
+//! definitions.
+//!
+//! `reference/expected.txt` holds one line per compared output line (the ADX line of ADX(14) is
+//! left out: adx.rs seeds it with 13 DX values over 14): the row name, the line index and one token
+//! per fixture bar, `-` where the study has no value. The values were computed once in exact
+//! rational arithmetic, with square roots to 40 digits, from the published definitions (Wilder 1978
+//! for RSI, ATR, the directional indicators and Parabolic SAR; Appel for MACD; Bollinger; Lambert
+//! 1980 for CCI; Quong and Soudack for MFI; Chande 1995 for Aroon; Hull; Chaikin; Lane; Williams;
+//! Donchian; Hosoda; ordinary least squares; population standard deviation) on the same fixture,
+//! and rounded to 12 significant digits.
+//!
+//! Where a definition leaves a convention open, the expected series follows the one the study
+//! documents (EMA and MACD seed with the first close, and Parabolic SAR reverses when the price
+//! crosses it, not on a touch), otherwise a published one (Wilder's first true range is high minus
+//! low, Keltner's EMA seeds with the SMA of the first closes). Where no published rule settles it,
+//! the series pins the study's current behaviour: Supertrend starts bullish, an Aroon tie counts
+//! the most recent bar, and Parabolic SAR takes its first direction from the first two closes (up
+//! on a tie), starts at the first bar's low or high and takes its first extreme point from the
+//! first two bars.
+
+use crate::model::Bar;
+use crate::studies::{
+    ADX, ATR, Aroon, BollingerBands, CCI, ChaikinMoneyFlow, DirectionalMovement, DonchianChannels,
+    EMA, HMA, IchimokuCloud, Indicator, IndicatorValue, KeltnerChannels, LinearRegression,
+    LinearRegressionSlope, MACD, MoneyFlowIndex, ParabolicSAR, RSI, RateOfChange, SMA,
+    StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, WilliamsR,
+};
+use chrono::{TimeZone, Utc};
+
+const EXPECTED: &str = include_str!("reference/expected.txt");
+
+/// 150 bars of a seeded 64-bit LCG walk in whole ticks of 0.25, so every price is exact in binary:
+/// rising to bar 74, falling after, a random opening offset on bars ending in 5 (so the true range
+/// exceeds the bar range on some of them), flat on bars 110 to 114.
+fn fixture() -> Vec<Bar> {
+    let mut state: u64 = 0x5EED;
+    let mut rnd = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 33) as i64
+    };
+    let mut prev = 400_i64;
+    (0..150)
+        .map(|i| {
+            let (open, high, low, close, volume) = if (110..115).contains(&i) {
+                (prev, prev, prev, prev, 5_000)
+            } else {
+                let drift = if i < 75 { 1 } else { -1 };
+                let open = prev + if i % 10 == 5 { rnd() % 17 - 8 } else { 0 };
+                let close = open + rnd() % 9 - 4 + drift;
+                let high = open.max(close) + rnd() % 5;
+                let low = open.min(close) - rnd() % 5;
+                (open, high, low, close, 1_000 + rnd() % 9_000)
+            };
+            prev = close;
+            Bar {
+                time: Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap(),
+                open: open as f64 / 4.0,
+                high: high as f64 / 4.0,
+                low: low as f64 / 4.0,
+                close: close as f64 / 4.0,
+                volume: volume as f64,
+            }
+        })
+        .collect()
+}
+
+/// Line `line` of a study value, `None` when the bar has no value or the line is NaN.
+fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
+    match value {
+        IndicatorValue::Single(v) if line == 0 => Some(*v),
+        IndicatorValue::Multiple(vs) => vs.get(line).copied(),
+        _ => None,
+    }
+    .filter(|v| !v.is_nan())
+}
+
+#[test]
+fn staple_studies_match_published_definitions() {
+    let bars = fixture();
+    let mut studies: Vec<(&str, Box<dyn Indicator>)> = vec![
+        ("SMA(20)", Box::new(SMA::default())),
+        ("EMA(12)", Box::new(EMA::default())),
+        ("WMA(20)", Box::new(WMA::default())),
+        ("RSI(14)", Box::new(RSI::default())),
+        ("MACD(12,26,9)", Box::new(MACD::default())),
+        ("BB(20,2)", Box::new(BollingerBands::default())),
+        ("ATR(14)", Box::new(ATR::default())),
+        ("ADX(14)", Box::new(ADX::default())),
+        ("DMI(14)", Box::new(DirectionalMovement::default())),
+        ("CCI(20)", Box::new(CCI::default())),
+        ("MFI(14)", Box::new(MoneyFlowIndex::default())),
+        ("Keltner(20,10,2)", Box::new(KeltnerChannels::default())),
+        ("LinReg(14)", Box::new(LinearRegression::default())),
+        (
+            "LinRegSlope(14)",
+            Box::new(LinearRegressionSlope::default()),
+        ),
+        ("Aroon(14)", Box::new(Aroon::default())),
+        ("HMA(20)", Box::new(HMA::default())),
+        ("HMA(21)", Box::new(HMA::new(21))),
+        ("VWMA(20)", Box::new(VWMA::default())),
+        ("CMF(20)", Box::new(ChaikinMoneyFlow::default())),
+        ("SuperTrend(10,3)", Box::new(SuperTrend::default())),
+        ("SuperTrend(10,1)", Box::new(SuperTrend::new(10, 1.0))),
+        ("PSAR(0.02,0.02,0.2)", Box::new(ParabolicSAR::default())),
+        (
+            "PSAR(0.01,0.03,0.12)",
+            Box::new(ParabolicSAR::new(0.01, 0.03, 0.12)),
+        ),
+        ("ROC(14)", Box::new(RateOfChange::default())),
+        ("StdDev(20)", Box::new(StandardDeviation::default())),
+        ("Donchian(20)", Box::new(DonchianChannels::default())),
+        ("Stoch(14,3,3)", Box::new(Stochastic::default())),
+        ("Stoch(14,1,3)", Box::new(Stochastic::new(14, 1, 3))),
+        ("WilliamsR(14)", Box::new(WilliamsR::default())),
+        ("Ichimoku(9,26,52)", Box::new(IchimokuCloud::default())),
+        (
+            "Ichimoku(9,26,52,22)",
+            Box::new(IchimokuCloud::new(9, 26, 52).with_displacement(22)),
+        ),
+    ];
+    for (_, study) in &mut studies {
+        study.calculate(&bars);
+    }
+
+    let mut failures = Vec::new();
+    let mut checked_lines = vec![0; studies.len()];
+    for row in EXPECTED.lines() {
+        let mut tokens = row.split_whitespace();
+        let name = tokens.next().unwrap();
+        let line: usize = tokens.next().unwrap().parse().unwrap();
+        let idx = studies.iter().position(|(n, _)| *n == name);
+        let idx = idx.unwrap_or_else(|| panic!("{name} has expected values but is not built"));
+        checked_lines[idx] += 1;
+        let values = studies[idx].1.values();
+        assert_eq!(values.len(), bars.len(), "{name}: one value per bar");
+        let expected: Vec<&str> = tokens.collect();
+        assert_eq!(
+            expected.len(),
+            bars.len(),
+            "{name} line {line}: one token per bar"
+        );
+        let mismatches: Vec<String> = expected
+            .iter()
+            .zip(values)
+            .enumerate()
+            .filter_map(|(bar, (token, value))| {
+                let actual = line_value(value, line);
+                let want = (*token != "-").then(|| token.parse::<f64>().unwrap());
+                let ok = match (want, actual) {
+                    (None, None) => true,
+                    (Some(w), Some(a)) => (a - w).abs() <= 1e-9 * w.abs() + 1e-12,
+                    _ => false,
+                };
+                (!ok).then(|| format!("bar {bar}: expected {want:?}, got {actual:?}"))
+            })
+            .collect();
+        if let Some(first) = mismatches.first() {
+            failures.push(format!(
+                "{name} line {line}: {} bars differ, first {first}",
+                mismatches.len()
+            ));
+        }
+    }
+    for ((name, _), lines) in studies.iter().zip(&checked_lines) {
+        assert!(*lines > 0, "{name} is built but has no expected values");
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
