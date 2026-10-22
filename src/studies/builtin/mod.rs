@@ -634,9 +634,10 @@ const MAX_PROFILE_ROWS: usize = 10_000;
 /// Most price levels a level-keyed study (Iceberg, Liquidity) spreads one series over.
 const MAX_PRICE_LEVELS: f64 = 1_000.0;
 
-/// Price grid a level-keyed study keys one series by: `tick`, widened when the
-/// finite prices of `data` span more than [`MAX_PRICE_LEVELS`] ticks. Every key
-/// is a multiple of the grid, so a series touches about that many levels at most.
+/// Price grid a level-keyed study keys one series by: `tick`, widened to a whole
+/// number of ticks when the finite prices of `data` span more than
+/// [`MAX_PRICE_LEVELS`] ticks. Every key is a multiple of the grid, so a series
+/// touches about that many levels at most.
 fn level_grid(data: &[crate::model::Bar], tick: f64) -> f64 {
     let (low, high) = data
         .iter()
@@ -644,7 +645,13 @@ fn level_grid(data: &[crate::model::Bar], tick: f64) -> f64 {
         .filter(|p| p.is_finite())
         .fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p), hi.max(p)));
     // Dividing before subtracting keeps the span finite for prices near f64::MAX.
-    tick.max(high / MAX_PRICE_LEVELS - low / MAX_PRICE_LEVELS)
+    let level_span = high / MAX_PRICE_LEVELS - low / MAX_PRICE_LEVELS;
+    if tick > 0.0 && tick.is_finite() {
+        // A whole number of ticks keeps level prices on the tick
+        tick * (level_span / tick).ceil().max(1.0)
+    } else {
+        tick.max(level_span)
+    }
 }
 
 /// Grid key of a price; the f64 division saturates instead of overflowing.

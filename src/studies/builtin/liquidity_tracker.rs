@@ -15,10 +15,12 @@ use std::collections::HashMap;
 /// - Liquidity sweeps (price moves through liquidity zones)
 /// - Liquidity imbalances
 ///
-/// Prices are keyed on the tick size, widened when the series spans more than
-/// 1,000 ticks so it covers at most about 1,000 levels; level, zone and sweep
-/// prices are multiples of that grid. Bars with a non-finite price or an
-/// inverted range are not tracked: they add no volume.
+/// Prices are keyed on the tick size, widened to a whole number of ticks when
+/// the series spans more than 1,000 ticks so it covers at most about 1,000
+/// levels; level, zone and sweep prices are multiples of that grid. Because the
+/// grid comes from the whole series, a bar that extends its range can change
+/// earlier values. Bars with a non-finite price or an inverted range are not
+/// tracked: they add no volume.
 #[derive(Clone)]
 pub struct LiquidityTracker {
     /// Period for analysis
