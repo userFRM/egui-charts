@@ -1,10 +1,11 @@
 //! The trades of one series, kept for order flow.
 //!
-//! A page adds trades up to the oldest held trade and leaves later ones to the live stream. History
-//! and live trades join exactly when both carry ids: a trade whose id is already held is dropped.
-//! Without ids, a page only adds trades older than every held trade, and live trades at or before
-//! the newest trade a page added are dropped, so trades sharing the boundary instant may be lost
-//! but are never counted twice.
+//! A page adds trades up to the oldest held trade and leaves later ones to the live stream. A trade
+//! whose id is already held is dropped, whatever its time, so history and live trades join exactly
+//! when both carry ids. Otherwise time decides: a page adds a trade at the instant of the oldest
+//! held trade only if it and every held trade at that instant carry ids, and a live trade is
+//! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
+//! sharing the boundary instant may be lost but are never counted twice.
 
 use crate::model::Tick;
 use chrono::{DateTime, Utc};
@@ -14,8 +15,13 @@ use std::collections::{HashSet, VecDeque};
 pub(crate) struct Trades {
     trades: VecDeque<Tick>,
     capacity: usize,
+    /// Ids of the held trades.
+    ids: HashSet<u64>,
     /// Time of the newest trade a page added: live trades without an id at or before it repeat it.
     paged_until: Option<DateTime<Utc>>,
+    /// Time of the newest trade without an id a page added: any live trade at or before it may
+    /// repeat it.
+    paged_without_id_until: Option<DateTime<Utc>>,
 }
 
 impl Trades {
@@ -23,7 +29,9 @@ impl Trades {
         Self {
             trades: VecDeque::new(),
             capacity,
+            ids: HashSet::new(),
             paged_until: None,
+            paged_without_id_until: None,
         }
     }
 
@@ -36,25 +44,28 @@ impl Trades {
         self.trades.iter()
     }
 
-    /// Appends a trade validated by the caller, evicting the oldest beyond capacity.
+    /// Appends a trade validated by the caller unless its id is held, evicting the oldest beyond
+    /// capacity.
     pub(crate) fn push(&mut self, trade: Tick) {
+        if trade.id.is_some_and(|id| !self.ids.insert(id)) {
+            return;
+        }
         self.trades.push_back(trade);
-        if self.trades.len() > self.capacity {
-            self.trades.pop_front();
+        if self.trades.len() > self.capacity
+            && let Some(id) = self.trades.pop_front().and_then(|evicted| evicted.id)
+        {
+            self.ids.remove(&id);
         }
     }
 
     /// Appends `newer`, the trades pushed since the last drain, without those a page already added.
     pub(crate) fn append(&mut self, newer: Trades) {
         for trade in newer.trades {
-            let repeated = match trade.id {
-                // A repeat has the same time, so only held trades at or after it can match.
-                Some(id) => (self.trades.iter().rev())
-                    .take_while(|held| held.ts >= trade.ts)
-                    .any(|held| held.id == Some(id)),
-                None => self.paged_until.is_some_and(|until| trade.ts <= until),
+            let paged_until = match trade.id {
+                Some(_) => self.paged_without_id_until,
+                None => self.paged_until,
             };
-            if !repeated {
+            if paged_until.is_none_or(|until| trade.ts > until) {
                 self.push(trade);
             }
         }
@@ -68,22 +79,25 @@ impl Trades {
         let rejected = (received - page.len()) as u64;
         // Stable, so trades sharing a time keep the feed's order.
         page.sort_by_key(|trade| trade.ts);
-        let newest = page.last().map(|trade| trade.ts);
-        let oldest = self.trades.iter().map(|trade| trade.ts).min();
-        let held: HashSet<u64> = (self.trades.iter())
-            .filter(|held| Some(held.ts) <= newest)
-            .filter_map(|held| held.id)
-            .collect();
-        page.retain(|trade| match trade.id {
-            Some(id) => !held.contains(&id) && oldest.is_none_or(|oldest| trade.ts <= oldest),
-            None => oldest.is_none_or(|oldest| trade.ts < oldest),
-        });
-        let room = self.capacity.saturating_sub(self.trades.len());
-        let mut added = page.into_iter().rev().take(room).peekable();
-        if let Some(newest) = added.peek() {
-            self.paged_until = self.paged_until.max(Some(newest.ts));
+        if let Some(oldest) = self.trades.iter().map(|trade| trade.ts).min() {
+            let ids_at_oldest = (self.trades.iter())
+                .filter(|held| held.ts == oldest)
+                .all(|held| held.id.is_some());
+            page.retain(|trade| {
+                trade.ts < oldest || (trade.ts == oldest && trade.id.is_some() && ids_at_oldest)
+            });
         }
-        added.for_each(|trade| self.trades.push_front(trade));
+        let room = self.capacity.saturating_sub(self.trades.len());
+        let added = (page.into_iter().rev())
+            .filter(|trade| trade.id.is_none_or(|id| self.ids.insert(id)))
+            .take(room);
+        for trade in added {
+            self.paged_until = self.paged_until.max(Some(trade.ts));
+            if trade.id.is_none() {
+                self.paged_without_id_until = self.paged_without_id_until.max(Some(trade.ts));
+            }
+            self.trades.push_front(trade);
+        }
         rejected
     }
 }
@@ -119,11 +133,15 @@ mod tests {
     #[test]
     fn the_store_is_bounded_and_joins_pages_without_repeats() {
         let id = |trade: Tick, id| trade.with_id(id);
+        let later = |mut trade: Tick, micros| {
+            trade.ts += TimeDelta::microseconds(micros);
+            trade
+        };
         #[rustfmt::skip]
         let cases = [
             ("the oldest trades make room", 3,
-                vec![Live(vec![trade(10, 10.0), trade(11, 11.0), trade(12, 12.0),
-                    trade(13, 13.0)])],
+                vec![Live(vec![id(trade(10, 10.0), 10), trade(11, 11.0), trade(12, 12.0)]),
+                    Live(vec![trade(13, 13.0)])],
                 vec![11.0, 12.0, 13.0], 0),
             ("a page fills free room in front, without invalid or repeated trades", 4,
                 vec![Live(vec![trade(10, 10.0), trade(11, 11.0), trade(12, 12.0)]),
@@ -155,6 +173,26 @@ mod tests {
                         id(trade(7, 5.0), 5)]),
                     Live(vec![id(trade(6, 4.0), 4), id(trade(7, 5.0), 5)])],
                 vec![1.0, 3.0, 4.0, 5.0], 0),
+            ("with ids, a replayed live trade is dropped wherever the held one sits", 10,
+                vec![Page(vec![id(trade(8, 8.0), 8), id(trade(9, 9.0), 9)]),
+                    Live(vec![id(trade(7, 7.0), 7), id(trade(8, 8.0), 8), id(trade(9, 9.0), 9)])],
+                vec![8.0, 9.0, 7.0], 0),
+            ("with ids, a live trade stamped later than the page's copy is dropped", 10,
+                vec![Page(vec![id(trade(5, 5.0), 5)]),
+                    Live(vec![id(later(trade(5, 5.0), 400), 5)])],
+                vec![5.0], 0),
+            ("with ids, a page trade stamped earlier than the live copy is dropped", 10,
+                vec![Live(vec![id(later(trade(5, 5.0), 400), 5)]),
+                    Page(vec![id(trade(4, 4.0), 4), id(trade(5, 5.0), 5)])],
+                vec![4.0, 5.0], 0),
+            ("a page without ids drops live trades with ids at or before its newest trade", 10,
+                vec![Page(vec![trade(1, 1.0), trade(2, 2.0)]),
+                    Live(vec![id(trade(2, 2.0), 2), id(trade(3, 3.0), 3)])],
+                vec![1.0, 2.0, 3.0], 0),
+            ("a page with ids drops trades at the instant of a held trade without one", 10,
+                vec![Live(vec![trade(5, 5.0)]),
+                    Page(vec![id(trade(4, 4.0), 4), id(trade(5, 5.0), 5)])],
+                vec![4.0, 5.0], 0),
             ("a page is sorted by time, keeping the order of trades sharing a time", 10,
                 vec![Page(vec![trade(5, 4.0), trade(5, 3.0), trade(4, 2.0)])],
                 vec![2.0, 4.0, 3.0], 0),
@@ -174,6 +212,8 @@ mod tests {
             }
             let held = Vec::from_iter(store.iter().map(|trade| trade.price));
             assert_eq!((held, dropped), (prices, rejected), "{name}");
+            let ids = store.iter().filter(|trade| trade.id.is_some()).count();
+            assert_eq!(store.ids.len(), ids, "{name}: held ids");
         }
     }
 }
