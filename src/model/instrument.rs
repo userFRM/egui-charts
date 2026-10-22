@@ -1,16 +1,20 @@
-//! Instrument metadata reported by a feed.
+//! Instrument metadata reported by a feed or a search service.
 
 use super::SymbolType;
 use chrono::{NaiveTime, Weekday};
 use chrono_tz::Tz;
 
-/// What a feed reports about a symbol. Build it with [`Instrument::new`] and the `with_` setters;
+/// What a feed or a search service reports about a symbol. Build it with [`Instrument::new`] and the `with_` setters;
 /// fields left out stay unknown.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Instrument {
     /// The symbol as the feed knows it.
     pub symbol: String,
+    /// Full name, such as "Apple Inc.".
+    pub description: Option<String>,
+    /// Exchange or venue, such as "NASDAQ".
+    pub exchange: Option<String>,
     /// Instrument type.
     pub symbol_type: Option<SymbolType>,
     /// Smallest price increment: positive and finite. Consumers ignore any other value.
@@ -30,6 +34,8 @@ impl Instrument {
     pub fn new(symbol: impl Into<String>) -> Self {
         Self {
             symbol: symbol.into(),
+            description: None,
+            exchange: None,
             symbol_type: None,
             tick_size: None,
             price_decimals: None,
@@ -37,6 +43,18 @@ impl Instrument {
             time_zone: None,
             session: None,
         }
+    }
+
+    /// Sets [`description`](Self::description).
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Sets [`exchange`](Self::exchange).
+    pub fn with_exchange(mut self, exchange: impl Into<String>) -> Self {
+        self.exchange = Some(exchange.into());
+        self
     }
 
     /// Sets [`symbol_type`](Self::symbol_type).

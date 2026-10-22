@@ -561,11 +561,11 @@ pub enum FeedStatus {
     Disconnected,
 }
 
-/// Why a feed could not answer.
+/// Why a feed or another service could not answer.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum FeedError {
-    /// The feed does not offer this request.
+    /// The feed or service does not offer this request.
     NotSupported,
     SymbolNotFound(String),
     RateLimited {
@@ -573,7 +573,7 @@ pub enum FeedError {
     },
     Network(String),
     InvalidData(String),
-    /// The feed dropped a [`Reply`] without answering.
+    /// The feed or service dropped a [`Reply`] without answering.
     Unanswered,
     Other(String),
 }
@@ -581,7 +581,7 @@ pub enum FeedError {
 impl fmt::Display for FeedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotSupported => f.write_str("not supported by the feed"),
+            Self::NotSupported => f.write_str("not supported"),
             Self::SymbolNotFound(symbol) => write!(f, "symbol not found: {symbol}"),
             Self::RateLimited {
                 retry_after: Some(after),
@@ -589,7 +589,7 @@ impl fmt::Display for FeedError {
             Self::RateLimited { retry_after: None } => f.write_str("rate limited"),
             Self::Network(message) => write!(f, "network error: {message}"),
             Self::InvalidData(message) => write!(f, "invalid data: {message}"),
-            Self::Unanswered => f.write_str("no answer from the feed"),
+            Self::Unanswered => f.write_str("no answer"),
             Self::Other(message) => f.write_str(message),
         }
     }
