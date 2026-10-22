@@ -355,11 +355,9 @@ impl PriceMarkGenerator {
         if pixels_per_mark < self.config.min_spacing {
             // Sort by weight descending, then by price
             marks.sort_by(|a, b| {
-                b.weight.cmp(&a.weight).then_with(|| {
-                    a.price
-                        .partial_cmp(&b.price)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                b.weight
+                    .cmp(&a.weight)
+                    .then_with(|| a.price.total_cmp(&b.price))
             });
 
             // Keep marks with sufficient spacing
@@ -375,11 +373,7 @@ impl PriceMarkGenerator {
             }
 
             // Sort back by price
-            filtered.sort_by(|a, b| {
-                a.price
-                    .partial_cmp(&b.price)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            filtered.sort_by(|a, b| a.price.total_cmp(&b.price));
             marks = filtered;
         }
 
@@ -387,18 +381,12 @@ impl PriceMarkGenerator {
         if marks.len() > self.config.max_marks {
             // Keep the highest weight marks
             marks.sort_by(|a, b| {
-                b.weight.cmp(&a.weight).then_with(|| {
-                    a.price
-                        .partial_cmp(&b.price)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                b.weight
+                    .cmp(&a.weight)
+                    .then_with(|| a.price.total_cmp(&b.price))
             });
             marks.truncate(self.config.max_marks);
-            marks.sort_by(|a, b| {
-                a.price
-                    .partial_cmp(&b.price)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            marks.sort_by(|a, b| a.price.total_cmp(&b.price));
         }
 
         marks

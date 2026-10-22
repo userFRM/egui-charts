@@ -111,20 +111,26 @@ impl BarData {
 
     // ============= Aggregation Methods =============
 
-    /// Returns the min price (low) across all bars
+    /// Returns the min price (low) across all bars.
+    ///
+    /// Non-finite values are skipped; `None` when no finite value remains.
     pub fn min_price(&self) -> Option<f64> {
         self.bars
             .iter()
             .map(|c| c.low)
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .filter(|v| v.is_finite())
+            .min_by(f64::total_cmp)
     }
 
-    /// Returns the max price (high) across all bars
+    /// Returns the max price (high) across all bars.
+    ///
+    /// Non-finite values are skipped; `None` when no finite value remains.
     pub fn max_price(&self) -> Option<f64> {
         self.bars
             .iter()
             .map(|c| c.high)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .filter(|v| v.is_finite())
+            .max_by(f64::total_cmp)
     }
 
     /// Returns the price range (max_high - min_low)
@@ -134,12 +140,15 @@ impl BarData {
         Some((min, max))
     }
 
-    /// Returns the max volume across all bars
+    /// Returns the max volume across all bars.
+    ///
+    /// Non-finite values are skipped; `None` when no finite value remains.
     pub fn max_volume(&self) -> Option<f64> {
         self.bars
             .iter()
             .map(|c| c.volume)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .filter(|v| v.is_finite())
+            .max_by(f64::total_cmp)
     }
 
     /// Returns the total volume across all bars
@@ -277,12 +286,46 @@ mod tests {
 
     #[test]
     fn test_aggregations() {
-        let data = create_test_bars();
-
-        assert_eq!(data.min_price(), Some(95.0));
-        assert_eq!(data.max_price(), Some(120.0));
-        assert_eq!(data.max_volume(), Some(1500.0));
-        assert_eq!(data.total_volume(), 3700.0);
+        let (nan, inf) = (f64::NAN, f64::INFINITY);
+        // (case, rows of (low, high, volume), expected (min_price, max_price, max_volume))
+        let cases = [
+            (
+                "finite only",
+                vec![
+                    (95.0, 110.0, 1000.0),
+                    (100.0, 115.0, 1500.0),
+                    (105.0, 120.0, 1200.0),
+                ],
+                (Some(95.0), Some(120.0), Some(1500.0)),
+            ),
+            (
+                "NaN first",
+                vec![(nan, nan, nan), (95.0, 110.0, 1000.0)],
+                (Some(95.0), Some(110.0), Some(1000.0)),
+            ),
+            (
+                "NaN last",
+                vec![(95.0, 110.0, 1000.0), (nan, nan, nan)],
+                (Some(95.0), Some(110.0), Some(1000.0)),
+            ),
+            (
+                "infinite high",
+                vec![(95.0, inf, 1000.0), (100.0, 110.0, 1500.0)],
+                (Some(95.0), Some(110.0), Some(1500.0)),
+            ),
+            ("all NaN", vec![(nan, nan, nan)], (None, None, None)),
+        ];
+        let now = Utc::now();
+        for (case, rows, expected) in cases {
+            let data = BarData::from_bars(
+                rows.iter()
+                    .map(|&(low, high, volume)| Bar::new(now, low, high, low, low, volume))
+                    .collect(),
+            );
+            let actual = (data.min_price(), data.max_price(), data.max_volume());
+            assert_eq!(actual, expected, "{case}");
+        }
+        assert_eq!(create_test_bars().total_volume(), 3700.0);
     }
 
     #[test]

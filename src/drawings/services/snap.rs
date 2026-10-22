@@ -187,16 +187,12 @@ impl SnapService {
         result
     }
 
-    /// Find closest value within snap distance
+    /// Find closest value within snap distance. A NaN distance orders last and fails the
+    /// distance check, so a NaN value is never chosen and a NaN `target` is left unsnapped.
     fn find_closest(&self, values: &[f32], target: f32) -> Option<f32> {
         values
             .iter()
-            .min_by(|a, b| {
-                (target - **a)
-                    .abs()
-                    .partial_cmp(&(target - **b).abs())
-                    .unwrap()
-            })
+            .min_by(|a, b| (target - **a).abs().total_cmp(&(target - **b).abs()))
             .filter(|&&closest| (target - closest).abs() < self.options.snap_distance)
             .copied()
     }
@@ -346,6 +342,30 @@ mod tests {
         let point = Pos2::new(101.0, 101.0);
         let snapped = service.snap_point(point, &targets);
         assert_eq!(snapped, point); // No snapping
+    }
+
+    #[test]
+    fn test_snap_to_price_ignores_non_finite_values() {
+        let service = SnapService::new();
+        let nan = f32::NAN;
+        // (point y, price targets, expected y)
+        let cases = [
+            (10.5, vec![10.0, nan], 10.0),
+            (10.5, vec![nan, 10.0], 10.0),
+            (nan, vec![10.0, 11.0], nan),
+            (10.5, vec![f32::INFINITY], 10.5),
+        ];
+        for (y, prices, expected) in cases {
+            let snapped = service.snap_point(
+                Pos2::new(0.0, y),
+                &SnapTargets::with_price_time(prices.clone(), vec![]),
+            );
+            assert!(
+                snapped.y == expected || (snapped.y.is_nan() && expected.is_nan()),
+                "y {y} targets {prices:?}: got {}",
+                snapped.y
+            );
+        }
     }
 
     #[test]
