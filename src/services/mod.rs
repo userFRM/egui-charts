@@ -5,6 +5,7 @@
 //! [`Reply`](crate::data::Reply), or push updates through an [`Events`] stream, from any thread,
 //! runtime or browser task.
 
+mod alerts;
 mod broker;
 #[cfg_attr(
     not(test),
@@ -15,6 +16,7 @@ mod search;
 mod signals;
 mod storage;
 
+pub use alerts::{AlertEvent, Alerts};
 pub use broker::{AccountEvent, Broker};
 pub use events::Events;
 pub use search::{SymbolQuery, SymbolSearch};

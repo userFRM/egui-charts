@@ -11,6 +11,7 @@
 //! - `markers`, `annotations` - Chart overlays
 //! - `strategy` - A strategy run's trades and equity, and its performance metrics
 
+mod alert;
 mod annotations;
 pub mod bar;
 mod chart_type;
@@ -37,6 +38,7 @@ mod timescale;
 pub mod tpo;
 mod trading;
 
+pub use alert::{Alert, AlertCondition, AlertFrequency, AlertId, AlertStatus};
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
