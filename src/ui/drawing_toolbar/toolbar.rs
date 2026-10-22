@@ -160,6 +160,8 @@ impl DrawingToolbar {
                     .max_rect(sidebar_rect)
                     .layout(egui::Layout::top_down(egui::Align::Center)),
             );
+            // Buttons and separators carry their own token gaps.
+            child_ui.spacing_mut().item_spacing = Vec2::ZERO;
 
             action = self.render_toolbar_content(&mut child_ui, sidebar_rect);
         }
@@ -793,7 +795,7 @@ impl DrawingToolbar {
         is_selected: bool,
     ) {
         if is_selected {
-            let selection_color = ui.style().visuals.selection.stroke.color;
+            let selection_color = ui.style().visuals.selection.bg_fill;
             ui.painter().rect_stroke(
                 rect,
                 DESIGN_TOKENS.rounding.sm,

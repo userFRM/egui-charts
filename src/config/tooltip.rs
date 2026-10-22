@@ -5,6 +5,7 @@
 //! - **Tracking**: Fixed horizontal bar at the top of the chart showing OHLC data
 //! - **Magnifier**: Circular zoom lens for detailed data inspection on dense charts
 
+use crate::theme::ThemeContextExt;
 /// Tooltip Configuration for data tooltips.
 ///
 /// Provides three tooltip variants:
@@ -79,10 +80,10 @@ pub struct TooltipOptions {
     /// Only applies when mode is Magnifier
     pub magnifier_size: f32,
 
-    /// Background color for floating tooltip
+    /// Background color for floating tooltip (`Color32::PLACEHOLDER`: active theme)
     pub background_color: Color32,
 
-    /// Text color for tooltip content
+    /// Text color for tooltip content (`Color32::PLACEHOLDER`: active theme)
     pub text_color: Color32,
 
     /// Border color for tooltip (bullish)
@@ -100,7 +101,7 @@ pub struct TooltipOptions {
     /// Tracking bar height (for Tracking mode)
     pub tracking_bar_height: f32,
 
-    /// Tracking bar background color
+    /// Tracking bar background color (`Color32::PLACEHOLDER`: active theme)
     pub tracking_bar_background: Color32,
 }
 
@@ -116,19 +117,51 @@ impl Default for TooltipOptions {
             show_indicators: true,
             magnifier_zoom: 2.0,
             magnifier_size: 120.0,
-            background_color: DESIGN_TOKENS.semantic.extended.chart_tooltip_bg,
-            text_color: DESIGN_TOKENS.semantic.extended.chart_text,
+            background_color: Color32::PLACEHOLDER,
+            text_color: Color32::PLACEHOLDER,
             border_color_bullish: DESIGN_TOKENS.semantic.extended.bullish,
             border_color_bearish: DESIGN_TOKENS.semantic.extended.bearish,
             font_size: 11.0,
             price_precision: 8,
             tracking_bar_height: 24.0,
-            tracking_bar_background: DESIGN_TOKENS.semantic.chart.bg,
+            tracking_bar_background: Color32::PLACEHOLDER,
         }
     }
 }
 
 impl TooltipOptions {
+    /// These options with `Color32::PLACEHOLDER` colours taken from the theme applied to
+    /// `ctx`, or from the dark chart tokens when none has been applied.
+    pub(crate) fn resolved(&self, ctx: &egui::Context) -> Self {
+        let chart = ctx.active_theme().map(|theme| theme.semantic.chart);
+        let tokens = &DESIGN_TOKENS.semantic;
+        let or = |color: Color32, themed: Option<Color32>, fallback: Color32| {
+            if color == Color32::PLACEHOLDER {
+                themed.unwrap_or(fallback)
+            } else {
+                color
+            }
+        };
+        Self {
+            background_color: or(
+                self.background_color,
+                chart.map(|c| c.bg_tooltip),
+                tokens.extended.chart_tooltip_bg,
+            ),
+            text_color: or(
+                self.text_color,
+                chart.map(|c| c.axis_text),
+                tokens.extended.chart_text,
+            ),
+            tracking_bar_background: or(
+                self.tracking_bar_background,
+                chart.map(|c| c.bg),
+                tokens.chart.bg,
+            ),
+            ..self.clone()
+        }
+    }
+
     /// Create tooltip options with floating mode
     pub fn floating() -> Self {
         Self {

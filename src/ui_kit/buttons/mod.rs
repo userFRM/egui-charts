@@ -90,10 +90,10 @@ pub fn icon_color(ui: &Ui, hovered: bool, selected: bool) -> Color32 {
     }
 }
 
-/// Render a styled dialog close button (X) with rounded rect border.
+/// Render a dialog close button (X).
 ///
-/// Used in dialog title bars. Draws a selection-colored outlined square
-/// with an X glyph inside. Returns the click [`Response`].
+/// Used in dialog title bars. Draws an X glyph that looks like an [`IconButton`]
+/// at rest and on hover. Returns the click [`Response`].
 ///
 /// # Example
 ///
@@ -110,24 +110,21 @@ pub fn icon_color(ui: &Ui, hovered: bool, selected: bool) -> Color32 {
 pub fn dialog_close_button(ui: &mut Ui) -> Response {
     let btn_size = Vec2::splat(DESIGN_TOKENS.sizing.icon_xl);
     let (rect, response) = ui.allocate_exact_size(btn_size, Sense::click());
+    crate::styles::focus::draw_focus_ring(ui, &response);
     let is_hovered = response.hovered();
 
-    // Stroke color: brighter on hover, slightly dimmed at rest
-    let stroke_color = if is_hovered {
-        ui.style().visuals.selection.bg_fill
-    } else {
-        ui.style().visuals.selection.bg_fill.gamma_multiply(0.7)
-    };
-
-    let stroke_width = DESIGN_TOKENS.spacing.hairline + 0.5;
-
-    // Draw rounded rect border
-    ui.painter().rect_stroke(
+    // Same rest and hover look as `IconButton`: no outline, so only focus draws a ring.
+    ui.painter().rect_filled(
         rect,
-        DESIGN_TOKENS.rounding.sm,
-        egui::Stroke::new(stroke_width, stroke_color),
-        egui::StrokeKind::Inside,
+        DESIGN_TOKENS.rounding.button,
+        button_bg(ui, is_hovered, false),
     );
+    let stroke_color = if is_hovered {
+        theming::icon_hover_color(ui)
+    } else {
+        theming::icon_normal(ui)
+    };
+    let stroke_width = DESIGN_TOKENS.spacing.hairline + 0.5;
 
     // Draw X glyph
     let center = rect.center();

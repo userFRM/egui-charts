@@ -333,7 +333,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
         self.draw_item_bg(ui, rect, &response, is_selected);
 
         // Text content
-        self.draw_item_content(ui, rect, template);
+        self.draw_item_content(ui, rect, template, is_selected);
 
         // Handle selection and actions
         self.handle_item_interaction(template, &response, is_selected)
@@ -351,8 +351,21 @@ impl<'a> IndicatorTemplatePanel<'a> {
         }
     }
 
-    fn draw_item_content(&self, ui: &mut Ui, rect: Rect, template: &IndicatorTemplate) {
+    fn draw_item_content(
+        &self,
+        ui: &mut Ui,
+        rect: Rect,
+        template: &IndicatorTemplate,
+        is_selected: bool,
+    ) {
         let text_x = rect.min.x + DESIGN_TOKENS.spacing.lg;
+        let visuals = ui.visuals();
+        let (text, weak) = if is_selected {
+            let on_accent = visuals.selection.stroke.color;
+            (on_accent, on_accent.gamma_multiply(0.8))
+        } else {
+            (visuals.text_color(), visuals.weak_text_color())
+        };
 
         // Template name
         ui.painter().text(
@@ -360,7 +373,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
             egui::Align2::LEFT_CENTER,
             &template.name,
             egui::FontId::proportional(typography::MD),
-            ui.visuals().text_color(),
+            text,
         );
 
         // Parameter summary and shared badge
@@ -376,7 +389,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
             egui::Align2::LEFT_CENTER,
             &suffix,
             egui::FontId::proportional(typography::XS),
-            ui.visuals().weak_text_color(),
+            weak,
         );
     }
 

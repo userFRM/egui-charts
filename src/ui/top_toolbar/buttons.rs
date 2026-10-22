@@ -37,6 +37,7 @@ impl<'a> ToolbarIconButton<'a> {
         let icon_size = self.config.small_icon_size;
         let btn_size = self.config.btn_size;
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(btn_size), Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response);
 
         // Background with theme-aware colors
         let bg_color = if response.is_pointer_button_down_on() {
@@ -109,6 +110,7 @@ impl<'a> IconTextButton<'a> {
 
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response);
 
         // All paint operations wrapped with visibility check
         if ui.is_rect_visible(rect) {
@@ -201,6 +203,7 @@ impl TextButton {
 
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response);
 
         // Background
         let bg_color = if response.is_pointer_button_down_on() {
@@ -272,6 +275,7 @@ impl PillButtonFilled {
 
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
             // Blue background
@@ -325,6 +329,7 @@ impl PillButtonOutlined {
 
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
             // Background: transparent or subtle hover
@@ -409,6 +414,7 @@ impl<'a> TextIconButton<'a> {
 
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
             // Background

@@ -627,6 +627,9 @@ impl Chart {
         // Clear previous frame's indicator pane info
         self.last_rendered_indicator_panes.clear();
 
+        // Panes are stacked edge to edge with explicit gaps; restore the host spacing after.
+        let host_spacing = std::mem::take(&mut ui.spacing_mut().item_spacing);
+
         // Calculate total height needed for indicator panes FIRST
         // This allows us to reserve space before the main chart
         let indicator_pane_height = if let Some(indicators) = indicators {
@@ -821,6 +824,7 @@ impl Chart {
             }
         }
 
+        ui.spacing_mut().item_spacing = host_spacing;
         response
     }
 

@@ -51,6 +51,7 @@ pub fn render_floating_tooltip(
     candle: &Bar,
     options: &TooltipOptions,
 ) {
+    let options = &options.resolved(painter.ctx());
     let mut tooltip_lines = Vec::new();
 
     if options.show_time {
@@ -168,6 +169,7 @@ pub fn render_tracking_tooltip(
     candle: &Bar,
     options: &TooltipOptions,
 ) {
+    let options = &options.resolved(painter.ctx());
     let bar_height = options.tracking_bar_height;
     let bar_rect = Rect::from_min_size(chart_rect.min, Vec2::new(chart_rect.width(), bar_height));
 

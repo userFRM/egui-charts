@@ -82,6 +82,7 @@ impl SplitButton {
         let button_size = Vec2::new(button_width, button_height);
 
         let (rect, response) = ui.allocate_exact_size(button_size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();

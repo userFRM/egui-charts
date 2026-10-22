@@ -12,6 +12,7 @@ struct DropdownColors {
     bg: Color32,
     hover: Color32,
     selected: Color32,
+    on_selected: Color32,
     text: Color32,
     muted: Color32,
     border: Color32,
@@ -25,6 +26,7 @@ impl DropdownColors {
             bg: visuals.window_fill,
             hover: visuals.widgets.hovered.bg_fill,
             selected: visuals.selection.bg_fill,
+            on_selected: visuals.selection.stroke.color,
             text: visuals.text_color(),
             muted: visuals.widgets.noninteractive.fg_stroke.color,
             border: visuals.widgets.noninteractive.bg_stroke.color,
@@ -485,6 +487,8 @@ impl TimeframeSelector {
             .fixed_pos(dropdown_pos)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
+                // Rows are sized to sit edge to edge.
+                ui.spacing_mut().item_spacing.y = 0.0;
                 Self::draw_dropdown_frame(ui, &colors, dropdown_width, |ui| {
                     Self::draw_dropdown_content(ui, &colors, current, &favorites, &mut action);
 
@@ -686,11 +690,17 @@ impl TimeframeSelector {
                 .rect_filled(rect, DESIGN_TOKENS.rounding.sm, colors.hover);
         }
 
+        let (text, muted) = if is_current {
+            (colors.on_selected, colors.on_selected.gamma_multiply(0.8))
+        } else {
+            (colors.text, colors.muted)
+        };
+
         // Star indicator
         let (star_char, star_color) = if is_fav {
             ("*", colors.favorite)
         } else {
-            ("*", colors.muted)
+            ("*", muted)
         };
         ui.painter().text(
             Pos2::new(rect.min.x + DESIGN_TOKENS.spacing.lg, rect.center().y),
@@ -706,7 +716,7 @@ impl TimeframeSelector {
             egui::Align2::LEFT_CENTER,
             tf.display(),
             egui::FontId::proportional(typography::MD),
-            colors.text,
+            text,
         );
 
         // Long description
@@ -715,7 +725,7 @@ impl TimeframeSelector {
             egui::Align2::LEFT_CENTER,
             tf.display_long(),
             egui::FontId::proportional(typography::SM),
-            colors.muted,
+            muted,
         );
 
         response.clicked()

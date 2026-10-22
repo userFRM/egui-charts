@@ -164,12 +164,15 @@ impl DialogFooter {
                 ui.add_space(DESIGN_TOKENS.spacing.lg);
 
                 // Primary button (rightmost)
-                let btn = egui::Button::new(RichText::new(&self.primary_label))
-                    .fill(ui.style().visuals.selection.bg_fill)
-                    .min_size(Vec2::new(
-                        DESIGN_TOKENS.sizing.button_min_width_xs,
-                        DESIGN_TOKENS.sizing.button_md,
-                    ));
+                let btn = egui::Button::new(
+                    RichText::new(&self.primary_label)
+                        .color(ui.style().visuals.selection.stroke.color),
+                )
+                .fill(ui.style().visuals.selection.bg_fill)
+                .min_size(Vec2::new(
+                    DESIGN_TOKENS.sizing.button_min_width_xs,
+                    DESIGN_TOKENS.sizing.button_md,
+                ));
                 if ui.add_enabled(self.primary_enabled, btn).clicked() {
                     primary_clicked = true;
                 }
@@ -214,12 +217,15 @@ impl DialogFooter {
                 ui.add_space(DESIGN_TOKENS.spacing.lg);
 
                 // Primary button (rightmost)
-                let btn = egui::Button::new(RichText::new(&self.primary_label))
-                    .fill(ui.style().visuals.selection.bg_fill)
-                    .min_size(Vec2::new(
-                        DESIGN_TOKENS.sizing.button_min_width_xs,
-                        DESIGN_TOKENS.sizing.button_md,
-                    ));
+                let btn = egui::Button::new(
+                    RichText::new(&self.primary_label)
+                        .color(ui.style().visuals.selection.stroke.color),
+                )
+                .fill(ui.style().visuals.selection.bg_fill)
+                .min_size(Vec2::new(
+                    DESIGN_TOKENS.sizing.button_min_width_xs,
+                    DESIGN_TOKENS.sizing.button_md,
+                ));
                 if ui.add_enabled(self.primary_enabled, btn).clicked() {
                     primary_clicked = true;
                 }

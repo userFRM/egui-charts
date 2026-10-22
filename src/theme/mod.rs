@@ -59,6 +59,8 @@ pub use components::{
     MenuStyle, PanelStyle, SettingsDialogStyle, ToolbarStyle, VolumeStyle,
 };
 pub use context::{ThemeContextExt, ThemeData, ThemeUiExt};
+#[cfg(feature = "ui")]
+pub(crate) use context::{ThemeDerived, follow_active_theme, theme_derived};
 pub use manager::ThemeManager;
 pub use presets::ThemePreset;
 pub use semantic::{
@@ -383,7 +385,8 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
 
     // Window/panel backgrounds
     visuals.panel_fill = ui.panel_bg;
-    visuals.window_fill = ui.panel_bg;
+    // Windows, popups, menus and tooltips sit one elevation step above panels.
+    visuals.window_fill = ui.panel_bg_floating;
     visuals.extreme_bg_color = ui.panel_bg;
     // faint_bg_color must match panel_fill to avoid thin line at window top
     // Previously used a different color for "visible gaps" but this caused artifacts
@@ -412,33 +415,44 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
 
-    // Selection
-    visuals.selection.bg_fill = ui.accent;
-    visuals.selection.stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.accent);
+    // Selection: egui paints selected labels in `selection.stroke`, on top of `bg_fill`.
+    visuals.selection.bg_fill = ui.selection_bg;
+    visuals.selection.stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.selection_text);
 
     // Hyperlinks
     visuals.hyperlink_color = ui.accent;
 
-    // Window chrome - no stroke to avoid line at top
-    visuals.window_stroke = egui::Stroke::NONE;
+    // Floating chrome: hairline border, small radius and a tight shadow that stays close to
+    // the surface instead of smearing over neighbouring toolbars.
+    let shadow_alpha = if theme.is_dark_ui() { 96 } else { 32 };
+    visuals.window_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border);
+    visuals.window_corner_radius = DESIGN_TOKENS.rounding.dialog.into();
+    visuals.menu_corner_radius = DESIGN_TOKENS.rounding.sm.into();
     visuals.window_shadow = egui::epaint::Shadow {
-        offset: [2, 4],
-        blur: 8,
+        offset: [0, 4],
+        blur: 16,
         spread: 0,
-        color: Color32::from_black_alpha(80),
+        color: Color32::from_black_alpha(shadow_alpha),
+    };
+    visuals.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 2],
+        blur: 6,
+        spread: 0,
+        color: Color32::from_black_alpha(shadow_alpha / 2),
     };
 
     ctx.set_visuals(visuals);
 
-    // Set spacing to minimize gaps
+    let spacing = &DESIGN_TOKENS.spacing;
     let mut style = (*ctx.style()).clone();
-    style.spacing.window_margin = egui::Margin::ZERO;
-    style.spacing.menu_margin = egui::Margin::ZERO;
-    style.spacing.item_spacing = egui::Vec2::ZERO;
+    style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
+    style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
+    style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
     ctx.set_style(style);
 
-    // Also store theme data for chart colors
+    // Store the theme so components resolve their colours from it while painting.
     ctx.set_theme_data(ThemeData::from_theme(theme));
+    context::set_active_theme(ctx, theme.clone());
 }
 
 // ============================================================================
@@ -456,4 +470,24 @@ pub fn all_themes() -> Vec<Theme> {
         .iter()
         .map(|p| Theme::from_preset(*p))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_text_is_readable_on_the_selection_fill() {
+        for theme in all_themes() {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &theme);
+            let selection = ctx.style().visuals.selection;
+            assert_ne!(
+                selection.stroke.color,
+                selection.bg_fill,
+                "{}: selected labels would vanish into the selection fill",
+                theme.name()
+            );
+        }
+    }
 }

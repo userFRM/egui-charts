@@ -288,6 +288,8 @@ impl ChartBuilder {
     ///
     /// The theme is applied to the [`ChartConfig`] during [`build`](Self::build),
     /// controlling colors for background, candles, grid, axes, and overlays.
+    /// The chart's context menus use it only until a theme is applied with
+    /// [`apply_to_egui`](crate::theme::apply_to_egui); from then on they follow that theme.
     #[must_use]
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
@@ -636,7 +638,8 @@ pub struct TradingChart {
     historical_fetch_threshold: usize,
     /// Progressive loading: whether more historical data is available
     has_more_historical_data: bool,
-    /// Theme used to render the built-in right-click context menus.
+    /// Theme for the built-in right-click context menus until one is applied with
+    /// [`apply_to_egui`](crate::theme::apply_to_egui), which then takes precedence.
     #[cfg(feature = "ui")]
     theme: Theme,
     /// Turnkey right-click context-menu state. Populated and shown by
@@ -857,6 +860,7 @@ impl TradingChart {
     /// is chosen, the action is stored for [`take_context_action`](Self::take_context_action).
     #[cfg(feature = "ui")]
     fn handle_context_menus(&mut self, ctx: &egui::Context) {
+        use crate::theme::ThemeContextExt;
         use crate::widget::RightClickTarget;
 
         if let Some(target) = self.chart.take_right_click() {
@@ -882,7 +886,8 @@ impl TradingChart {
             }
         }
 
-        let theme = &self.theme;
+        let active = ctx.active_theme();
+        let theme = active.as_ref().unwrap_or(&self.theme);
         self.context_menus.chart.show(ctx, theme);
         self.context_menus.series.show(ctx, theme);
         self.context_menus.drawing.show(ctx, theme);

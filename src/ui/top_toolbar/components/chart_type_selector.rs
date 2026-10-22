@@ -219,6 +219,8 @@ impl ChartTypeSelector {
             .fixed_pos(dropdown_pos)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
+                // Rows are sized to sit edge to edge.
+                ui.spacing_mut().item_spacing.y = 0.0;
                 Self::draw_dropdown_frame(ui, &colors, dropdown_width, |ui| {
                     self.draw_chart_type_list(ui, &colors, current, dropdown_width, &mut action);
                 });
@@ -308,7 +310,7 @@ impl ChartTypeSelector {
             Vec2::splat(icon_size),
         );
         let icon_color = if is_current {
-            theming::icon_active(ui)
+            colors.on_selected
         } else if response.hovered() {
             theming::icon_hover_color(ui)
         } else {
@@ -321,7 +323,7 @@ impl ChartTypeSelector {
 
         // Name
         let name_color = if is_current {
-            colors.strong
+            colors.on_selected
         } else {
             colors.text
         };
@@ -338,7 +340,7 @@ impl ChartTypeSelector {
 
         // Description
         let desc_color = if is_current {
-            colors.strong.gamma_multiply(0.7)
+            colors.on_selected.gamma_multiply(0.8)
         } else {
             colors.muted
         };
@@ -360,7 +362,7 @@ impl ChartTypeSelector {
                 egui::Align2::CENTER_CENTER,
                 "v",
                 egui::FontId::proportional(typography::MD),
-                colors.strong,
+                colors.on_selected,
             );
         }
 
@@ -381,7 +383,7 @@ struct ChartTypeDropdownColors {
     text: Color32,
     muted: Color32,
     border: Color32,
-    strong: Color32,
+    on_selected: Color32,
 }
 
 impl ChartTypeDropdownColors {
@@ -394,7 +396,7 @@ impl ChartTypeDropdownColors {
             text: visuals.text_color(),
             muted: visuals.widgets.noninteractive.fg_stroke.color,
             border: visuals.widgets.noninteractive.bg_stroke.color,
-            strong: visuals.strong_text_color(),
+            on_selected: visuals.selection.stroke.color,
         }
     }
 }

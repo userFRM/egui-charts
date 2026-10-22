@@ -115,6 +115,8 @@ impl TopToolbar {
     /// Desktop layout: horizontal toolbar contents.
     fn show_contents_desktop(&mut self, ui: &mut Ui, symbol: &str) -> TopToolbarAction {
         let mut action = TopToolbarAction::None;
+        // Controls carry their own token gaps (`space_*`, separators).
+        ui.spacing_mut().item_spacing.x = 0.0;
 
         // Menu button (burger) - leftmost
         self.show_menu_button(ui, &mut action);
@@ -228,7 +230,7 @@ impl TopToolbar {
     }
 
     /// Right-aligned controls (RTL)
-    /// Order: Publish | Trade | Camera | Fullscreen | Settings | QuickSearch | sep | Save▼ | LayoutSetup
+    /// Order: Publish | Trade | Camera | Fullscreen | Settings | QuickSearch | sep | Save▼ | LayoutSetup | Theme
     fn show_right_controls(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
         ui.space_lg();
 
@@ -314,6 +316,13 @@ impl TopToolbar {
             *action = TopToolbarAction::Layout(LayoutAction::OpenMenu);
         }
         ui.space_sm();
+
+        if ToolbarIconButton::new(&embedded_icons::THEME_TOGGLE, "Toggle Theme", &self.config)
+            .show(ui)
+            .clicked()
+        {
+            *action = TopToolbarAction::ThemeToggle;
+        }
     }
 
     /// Menu button (burger icon)

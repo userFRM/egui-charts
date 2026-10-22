@@ -3,7 +3,7 @@
 //! A date picker dialog with calendar for navigating to specific dates.
 use crate::ext::UiExt;
 use crate::styles::typography;
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemePreset, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{Datelike, NaiveDate};
 use egui::{Color32, Sense, Stroke, StrokeKind, Ui, Vec2, Window};
@@ -45,6 +45,17 @@ impl Default for DatePickerConfig {
     }
 }
 
+theme_derived!(DatePickerConfig {
+    width,
+    height,
+    bg_color,
+    text_color,
+    muted_color,
+    hover_color,
+    sel_color,
+    today_color
+});
+
 /// Action from date picker
 #[derive(Debug, Clone, PartialEq)]
 pub enum DatePickerAction {
@@ -72,6 +83,8 @@ pub struct DatePicker {
     range_end: Option<NaiveDate>,
     /// Configuration
     config: DatePickerConfig,
+    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(ThemePreset, DatePickerConfig)>,
 }
 
 impl Default for DatePicker {
@@ -92,6 +105,7 @@ impl DatePicker {
             range_start: None,
             range_end: None,
             config: DatePickerConfig::default(),
+            config_theme: Some((ThemePreset::Dark, DatePickerConfig::default())),
         }
     }
 
@@ -109,6 +123,12 @@ impl DatePicker {
 
     /// Show the date picker dialog
     pub fn show(&mut self, ctx: &egui::Context) -> DatePickerAction {
+        follow_active_theme(
+            ctx,
+            &mut self.config_theme,
+            &mut self.config,
+            DatePickerConfig::from_theme,
+        );
         let mut action = DatePickerAction::None;
 
         if !self.is_open {

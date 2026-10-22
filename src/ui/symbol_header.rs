@@ -102,15 +102,15 @@ pub struct SymbolHeaderConfig {
 
 impl Default for SymbolHeaderConfig {
     fn default() -> Self {
-        // Note: These are placeholder colors - actual rendering uses ui.style().visuals
+        // `Color32::PLACEHOLDER` colours resolve from the active egui style while painting.
         Self {
             height: DESIGN_TOKENS.sizing.symbol_header.height,
             bg_color: Color32::TRANSPARENT, // Let parent Frame show through
-            text_color: Color32::from_gray(200),
-            label_color: Color32::from_gray(140),
+            text_color: Color32::PLACEHOLDER,
+            label_color: Color32::PLACEHOLDER,
             bullish_color: DESIGN_TOKENS.semantic.extended.bullish, // Canonical bullish teal
             bearish_color: DESIGN_TOKENS.semantic.extended.bearish, // Canonical bearish red
-            separator_color: Color32::from_gray(80),
+            separator_color: Color32::PLACEHOLDER,
             show_company_name: true,
             show_bid_ask: true,
             show_volume: true,
@@ -119,10 +119,32 @@ impl Default for SymbolHeaderConfig {
 }
 
 impl SymbolHeaderConfig {
-    /// Create config from theme - always uses light UI chrome
-    pub fn from_theme(_theme: &crate::theme::Theme) -> Self {
-        // Light UI chrome always
-        Self::default()
+    /// Create config with colours fixed to `theme`.
+    pub fn from_theme(theme: &crate::theme::Theme) -> Self {
+        let ui = &theme.semantic.ui;
+        Self {
+            text_color: ui.text,
+            label_color: ui.text_secondary,
+            separator_color: ui.border,
+            ..Self::default()
+        }
+    }
+
+    /// This config with `Color32::PLACEHOLDER` colours taken from `visuals`.
+    fn resolved(&self, visuals: &egui::Visuals) -> Self {
+        let or = |c: Color32, style: Color32| if c == Color32::PLACEHOLDER { style } else { c };
+        Self {
+            text_color: or(self.text_color, visuals.strong_text_color()),
+            label_color: or(
+                self.label_color,
+                visuals.widgets.noninteractive.fg_stroke.color,
+            ),
+            separator_color: or(
+                self.separator_color,
+                visuals.widgets.noninteractive.bg_stroke.color,
+            ),
+            ..self.clone()
+        }
     }
 }
 
@@ -165,14 +187,15 @@ impl SymbolHeader {
 
     /// Show the symbol header
     pub fn show(&self, ui: &mut Ui) -> Response {
+        let config = &self.config.resolved(ui.visuals());
         let (response, painter) = ui.allocate_painter(
-            Vec2::new(ui.available_width(), self.config.height),
+            Vec2::new(ui.available_width(), config.height),
             Sense::hover(),
         );
         let rect = response.rect;
 
         // Background - REMOVED: Let parent Frame's fill show through
-        // painter.rect_filled(rect, CornerRadius::ZERO, self.config.bg_color);
+        // painter.rect_filled(rect, CornerRadius::ZERO, config.bg_color);
 
         let mut x = rect.min.x + DESIGN_TOKENS.spacing.sm;
         let center_y = rect.center().y;
@@ -181,7 +204,7 @@ impl SymbolHeader {
         let symbol_galley = painter.layout_no_wrap(
             self.symbol_info.symbol.clone(),
             egui::FontId::proportional(typography::LG),
-            self.config.text_color,
+            config.text_color,
         );
         painter.galley(
             Pos2::new(x, center_y - symbol_galley.size().y / 2.0),
@@ -191,7 +214,7 @@ impl SymbolHeader {
         x += symbol_galley.size().x + DESIGN_TOKENS.spacing.sm;
 
         // Company name • Exchange • Timeframe
-        if self.config.show_company_name {
+        if config.show_company_name {
             let info_text = format!(
                 "{} • {} • {}",
                 self.symbol_info.company_name,
@@ -201,7 +224,7 @@ impl SymbolHeader {
             let info_galley = painter.layout_no_wrap(
                 info_text,
                 egui::FontId::proportional(typography::MD),
-                self.config.label_color,
+                config.label_color,
             );
             painter.galley(
                 Pos2::new(x, center_y - info_galley.size().y / 2.0),
@@ -214,6 +237,7 @@ impl SymbolHeader {
         // Separator
         self.draw_separator(
             &painter,
+            config,
             x,
             rect.min.y + DESIGN_TOKENS.spacing.xs,
             rect.max.y - DESIGN_TOKENS.spacing.xs,
@@ -222,46 +246,57 @@ impl SymbolHeader {
 
         // OHLC values
         let price_color = if self.ohlc.is_bullish() {
-            self.config.bullish_color
+            config.bullish_color
         } else {
-            self.config.bearish_color
+            config.bearish_color
         };
 
         // O: value
         x = self.draw_labeled_val(
             &painter,
+            config,
             x,
             center_y,
             "O",
             self.ohlc.open,
-            self.config.label_color,
+            config.label_color,
         );
         x += DESIGN_TOKENS.spacing.sm;
 
         // H: value
         x = self.draw_labeled_val(
             &painter,
+            config,
             x,
             center_y,
             "H",
             self.ohlc.high,
-            self.config.label_color,
+            config.label_color,
         );
         x += DESIGN_TOKENS.spacing.sm;
 
         // L: value
         x = self.draw_labeled_val(
             &painter,
+            config,
             x,
             center_y,
             "L",
             self.ohlc.low,
-            self.config.label_color,
+            config.label_color,
         );
         x += DESIGN_TOKENS.spacing.sm;
 
         // C: value (colored)
-        x = self.draw_labeled_val(&painter, x, center_y, "C", self.ohlc.close, price_color);
+        x = self.draw_labeled_val(
+            &painter,
+            config,
+            x,
+            center_y,
+            "C",
+            self.ohlc.close,
+            price_color,
+        );
         x += DESIGN_TOKENS.spacing.sm;
 
         // Change (+/-value (percent%))
@@ -291,6 +326,7 @@ impl SymbolHeader {
         // Separator
         self.draw_separator(
             &painter,
+            config,
             x,
             rect.min.y + DESIGN_TOKENS.spacing.xs,
             rect.max.y - DESIGN_TOKENS.spacing.xs,
@@ -298,7 +334,7 @@ impl SymbolHeader {
         x += DESIGN_TOKENS.spacing.md;
 
         // Bid/Ask boxes
-        if self.config.show_bid_ask && self.quote.bid > 0.0 {
+        if config.show_bid_ask && self.quote.bid > 0.0 {
             // SELL box (red background)
             x = self.draw_quote_box(
                 &painter,
@@ -306,7 +342,7 @@ impl SymbolHeader {
                 center_y,
                 self.quote.bid,
                 "SELL",
-                self.config.bearish_color,
+                config.bearish_color,
             );
             x += DESIGN_TOKENS.spacing.xs;
             // BUY box (green background)
@@ -316,13 +352,14 @@ impl SymbolHeader {
                 center_y,
                 self.quote.ask,
                 "BUY",
-                self.config.bullish_color,
+                config.bullish_color,
             );
             x += DESIGN_TOKENS.spacing.md;
 
             // Separator
             self.draw_separator(
                 &painter,
+                config,
                 x,
                 rect.min.y + DESIGN_TOKENS.spacing.xs,
                 rect.max.y - DESIGN_TOKENS.spacing.xs,
@@ -331,12 +368,12 @@ impl SymbolHeader {
         }
 
         // Volume
-        if self.config.show_volume {
+        if config.show_volume {
             let vol_text = format!("Vol {}", self.format_volume(self.ohlc.volume));
             let vol_galley = painter.layout_no_wrap(
                 vol_text,
                 egui::FontId::proportional(typography::MD),
-                self.config.label_color,
+                config.label_color,
             );
             painter.galley(
                 Pos2::new(x, center_y - vol_galley.size().y / 2.0),
@@ -348,16 +385,24 @@ impl SymbolHeader {
         response
     }
 
-    fn draw_separator(&self, painter: &egui::Painter, x: f32, y1: f32, y2: f32) {
+    fn draw_separator(
+        &self,
+        painter: &egui::Painter,
+        config: &SymbolHeaderConfig,
+        x: f32,
+        y1: f32,
+        y2: f32,
+    ) {
         painter.line_segment(
             [Pos2::new(x, y1), Pos2::new(x, y2)],
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, self.config.separator_color),
+            Stroke::new(DESIGN_TOKENS.stroke.hairline, config.separator_color),
         );
     }
 
     fn draw_labeled_val(
         &self,
         painter: &egui::Painter,
+        config: &SymbolHeaderConfig,
         x: f32,
         center_y: f32,
         label: &str,
@@ -368,7 +413,7 @@ impl SymbolHeader {
         let label_galley = painter.layout_no_wrap(
             format!("{label}:"),
             egui::FontId::proportional(typography::MD),
-            self.config.label_color,
+            config.label_color,
         );
         painter.galley(
             Pos2::new(x, center_y - label_galley.size().y / 2.0),

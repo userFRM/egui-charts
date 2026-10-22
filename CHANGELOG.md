@@ -8,6 +8,9 @@ All notable changes to this project are documented in this file. The format is b
 
 - `data::Datafeed`, a callback contract for market data: a feed answers instrument and history requests once through a `data::Reply` (dropping it unanswered reports `FeedError::Unanswered`) and pushes live bars, trades, status and errors through a per-subscription `data::Sink`, from any thread, runtime or browser task. Pushes coalesce on arrival into one bar per time slot, so memory follows the bars that changed rather than the update rate. Supporting types: `HistoryRequest`, `HistoryPage`, `Subscription`, `SubscriptionId`, `FeedStatus`, `FeedError`, `FeedState` and `MaybeSend` in `data`, `Instrument` and `BarClock` in `model`. Charts do not consume it yet; `DataSource` is unchanged.
 - `model::Bar` implements `PartialEq`.
+- `ThemeContextExt::active_theme` returns the theme last passed to `apply_to_egui`, so components can resolve colours while painting. It has a default implementation returning `None`, so existing implementors of the trait still compile.
+- `tokens::UiSemanticTokens` gains `panel_bg_floating_dark`, the fill of popups, menus and windows in dark themes. Struct literals of `UiSemanticTokens` must set it.
+- A theme toggle in the top toolbar emits `TopToolbarAction::ThemeToggle`.
 
 ### Fixed
 
@@ -34,12 +37,27 @@ All notable changes to this project are documented in this file. The format is b
 - Rainbow Oscillator keeps a running sum instead of every SMA level, so a huge level count no longer exhausts memory.
 - Volume profiles refuse a row count above 10,000 and yield `None` for every bar instead of allocating that many rows for each bar.
 - Iceberg and Liquidity key prices on one grid per series, the tick size widened to a whole number of ticks when the series spans more than 1,000 ticks, and skip bars with a non-finite price or an inverted range, so an infinite or 1e12 print no longer hangs the chart or exhausts memory. Because the grid comes from the whole series, a bar that extends its range can change earlier values. Liquidity scans its levels once per bar instead of three times, and Iceberg keeps its levels in a dense vector.
+- Selected rows, tabs, menu items and calendar days render white on the accent instead of an empty accent bar (the selection text colour equalled the fill).
+- Tooltips, popups and menus have padding, a hairline border, an elevated fill, a small radius and a tight shadow; windows get padding and a border.
+- `apply_to_egui` sets item spacing, window padding and menu padding from the design tokens instead of zero, so labels no longer touch their controls; toolbars, dropdown rows and stacked chart panes keep their own explicit gaps.
+- Switching the theme repaints everything: the bottom toolbar, date picker, range switcher, timeframe bar, right panel tabs, symbol header, chart context menus, OHLC tooltip, replay bar and command palette resolve their colours from the active theme instead of keeping the dark theme they were built with. Fields a caller sets on the public `config` of `TimeframeToolbar`, `TimeframeBar` or `RightPanelTabs` are kept; only the fields left at their theme-derived value follow the theme.
+- Custom-painted buttons (top toolbar, drawing toolbar, widget bar and the `ui_kit` buttons) draw a focus ring when they have keyboard focus.
+- The dialog close button no longer draws an accent outline at rest; it looks like an icon button, so only keyboard focus draws a ring around it.
+- The command palette search icon follows the theme instead of staying white, so it is visible in the light theme.
+- The native demo starts on Linux: it enables wgpu's default backends instead of none.
 
 ### Changed
 
 - Replaced the bundled icon set with original artwork drawn on a 24 px grid. Toolbar, chart-type and widget-bar icons now render at 24 px, and close buttons, the cross cursor, alert and toast states, move to pane, add to watchlist, the replay next-bar button, the price range tool, the arrow tool and the note, callout, comment, table, image and other annotation tools show their own icons.
 - `Drawing::render`, `Drawing::render_original`, and `DrawingManager::render_all` take a `drawings::rendering::ChartView` holding the chart's bars and coordinate mapping. Migration: build `ChartView { bars, bar_to_x, price_to_y }` from the series and the closures passed to `update_all_screen_coords`, and pass it as the last argument.
 - `Chart::handle_drawings` no longer takes the last close price.
+- `TooltipOptions::default()` leaves `background_color`, `text_color` and `tracking_bar_background` as `Color32::PLACEHOLDER`, which resolves from the active theme; set them explicitly to keep fixed colours.
+- `SymbolHeaderConfig::default()` text, label and separator colours are `Color32::PLACEHOLDER` and follow the egui style; `SymbolHeaderConfig::from_theme` now uses the theme it is given.
+- `apply_to_egui` sets `visuals.selection.stroke` to the theme's on-accent text colour (white) instead of the accent. Code that read `selection.stroke.color` as the accent colour should read `selection.bg_fill` instead.
+- `apply_to_egui` sets `item_spacing` to 8 x 4, `window_margin` to 12 and `menu_margin` to 8 x 4 instead of zero. Layouts that relied on zero spacing should set `ui.spacing_mut().item_spacing = Vec2::ZERO` locally.
+- `apply_to_egui` sets `visuals.window_fill` to `UiSemanticTokens::panel_bg_floating`, which in dark themes is now (42, 46, 57), one step above `panel_bg`, instead of equal to it. Popups and windows also get a hairline border and a smaller shadow.
+- The `text_on_primary`, `text_on_primary_hovered`, `icon_on_primary` and `icon_on_primary_hovered` tokens of `ListItemSemanticTokens` are white instead of the accent and near-black, so content on a selected list item is readable.
+- `TradingChart` context menus follow the theme applied with `apply_to_egui` once there is one; the theme passed to `ChartBuilder::with_theme` only colours them before that.
 
 ### Removed
 

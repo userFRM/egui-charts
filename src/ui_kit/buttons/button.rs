@@ -229,6 +229,7 @@ impl<'a> Widget for Button<'a> {
         };
 
         let (rect, response) = ui.allocate_exact_size(button_size, sense);
+        crate::styles::focus::draw_focus_ring(ui, &response);
 
         if ui.is_rect_visible(rect) {
             let visuals = ui.style().visuals.clone();

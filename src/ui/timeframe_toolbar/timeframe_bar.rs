@@ -4,7 +4,7 @@
 
 use crate::icons::icons as embedded_icons;
 use crate::styles::typography;
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemePreset, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{Local, Timelike};
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
@@ -85,6 +85,17 @@ impl Default for TimeframeBarConfig {
     }
 }
 
+theme_derived!(TimeframeBarConfig {
+    height,
+    bg_color,
+    text_color,
+    active_text_color,
+    active_bg,
+    hover_bg,
+    border_color,
+    btn_padding
+});
+
 /// Action returned by the timeframe bar
 #[derive(Clone, Debug, PartialEq)]
 pub enum TimeframeBarAction {
@@ -104,6 +115,8 @@ pub struct TimeframeBar {
     pub active_timeframe: QuickTimeframe,
     pub show_adj: bool,
     pub adj_enabled: bool,
+    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(ThemePreset, TimeframeBarConfig)>,
 }
 
 impl Default for TimeframeBar {
@@ -113,6 +126,7 @@ impl Default for TimeframeBar {
             active_timeframe: QuickTimeframe::OneDay,
             show_adj: true,
             adj_enabled: true,
+            config_theme: Some((ThemePreset::Dark, TimeframeBarConfig::default())),
         }
     }
 }
@@ -126,6 +140,7 @@ impl TimeframeBar {
     /// Set a custom configuration
     pub fn with_config(mut self, config: TimeframeBarConfig) -> Self {
         self.config = config;
+        self.config_theme = None;
         self
     }
 
@@ -137,6 +152,12 @@ impl TimeframeBar {
 
     /// Show the timeframe bar
     pub fn show(&mut self, ui: &mut Ui) -> TimeframeBarAction {
+        follow_active_theme(
+            ui.ctx(),
+            &mut self.config_theme,
+            &mut self.config,
+            TimeframeBarConfig::from_theme,
+        );
         let mut action = TimeframeBarAction::None;
 
         let (response, painter) = ui.allocate_painter(

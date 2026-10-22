@@ -2,7 +2,7 @@
 //!
 //! Provides quick date range selection buttons: 1D, 5D, 1M, 6M, YTD, 1Y, 5Y, All
 use crate::styles::typography;
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemePreset, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use egui::{Color32, FontId, Pos2, Response, Stroke, Ui, Vec2};
@@ -223,6 +223,22 @@ impl Default for RangeSwitcherConfig {
     }
 }
 
+theme_derived!(RangeSwitcherConfig {
+    ranges,
+    btn_height,
+    btn_min_width,
+    spacing,
+    background_color,
+    active_color,
+    hover_color,
+    text_color,
+    active_text_color,
+    border_radius,
+    font_size,
+    show_border,
+    border_color
+});
+
 /// Range Switcher Widget
 ///
 /// Displays horizontal row of date range btns (1D, 5D, 1M, etc.)
@@ -232,6 +248,8 @@ pub struct RangeSwitcher {
     selected: DateRange,
     /// Configuration
     config: RangeSwitcherConfig,
+    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(ThemePreset, RangeSwitcherConfig)>,
     /// Unique ID for the widget
     id: egui::Id,
 }
@@ -248,6 +266,7 @@ impl RangeSwitcher {
         Self {
             selected: DateRange::Month1,
             config: RangeSwitcherConfig::default(),
+            config_theme: Some((ThemePreset::Dark, RangeSwitcherConfig::default())),
             id: egui::Id::new("range_switcher"),
         }
     }
@@ -257,6 +276,7 @@ impl RangeSwitcher {
         Self {
             selected: config.ranges.first().copied().unwrap_or(DateRange::Month1),
             config,
+            config_theme: None,
             id: egui::Id::new("range_switcher"),
         }
     }
@@ -294,6 +314,12 @@ impl RangeSwitcher {
 
     /// Render the range switcher and return the newly selected range (if changed)
     pub fn show(&mut self, ui: &mut Ui) -> Option<DateRange> {
+        follow_active_theme(
+            ui.ctx(),
+            &mut self.config_theme,
+            &mut self.config,
+            RangeSwitcherConfig::from_theme,
+        );
         let mut new_selection = None;
 
         ui.horizontal(|ui| {

@@ -91,7 +91,7 @@ impl UiSemanticTokens {
             Self {
                 panel_bg: tokens.ui.panel_bg_dark,
                 panel_bg_secondary: tokens.ui.panel_bg_secondary_dark,
-                panel_bg_floating: tokens.ui.panel_bg_dark,
+                panel_bg_floating: tokens.ui.panel_bg_floating_dark,
 
                 toolbar_bg: tokens.ui.panel_bg_dark,
                 toolbar_separator: tokens.ui.border_subtle_dark,

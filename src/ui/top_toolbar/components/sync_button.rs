@@ -112,7 +112,7 @@ impl SyncButton {
         let icon_rect =
             Rect::from_center_size(rect.center(), Vec2::splat(DESIGN_TOKENS.sizing.icon_sm));
         let icon_color = if any_sync_enabled {
-            visuals.selection.stroke.color
+            accent_color
         } else if response.hovered() {
             theming::icon_hover_color(ui)
         } else {

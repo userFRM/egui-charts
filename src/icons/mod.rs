@@ -222,6 +222,7 @@ pub mod icons {
     pub const REDO: Icon = crate::icon_from_path!("ui/redo.svg");
     pub const CHEVRON_DOWN: Icon = crate::icon_from_path!("ui/chevron-down.svg");
     pub const FULLSCREEN: Icon = crate::icon_from_path!("ui/fullscreen.svg");
+    pub const THEME_TOGGLE: Icon = crate::icon_from_path!("ui/theme-toggle.svg");
     pub const QUICK_SEARCH: Icon = crate::icon_from_path!("ui/search.svg");
     pub const WIDGET_BAR_CALENDAR: Icon = crate::icon_from_path!("ui/calendar.svg");
     pub const GO_TO_DATE: Icon = crate::icon_from_path!("ui/go-to-date.svg");

@@ -153,11 +153,8 @@ impl CommandPalette {
             )
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(DESIGN_TOKENS.semantic.modal.panel_bg)
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        DESIGN_TOKENS.semantic.modal.panel_border,
-                    ))
+                    .fill(ui.visuals().window_fill)
+                    .stroke(ui.visuals().window_stroke)
                     .corner_radius(DESIGN_TOKENS.rounding.lg)
                     .shadow(egui::epaint::Shadow {
                         offset: [0, 4],
@@ -175,9 +172,12 @@ impl CommandPalette {
                             ui.add_space(DESIGN_TOKENS.spacing.md);
 
                             // Search icon
+                            let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
                             ui.add(
-                                icons::QUICK_SEARCH
-                                    .as_image(Vec2::splat(DESIGN_TOKENS.sizing.icon_md)),
+                                icons::QUICK_SEARCH.as_image_tinted(
+                                    Vec2::splat(DESIGN_TOKENS.sizing.icon_md),
+                                    tint,
+                                ),
                             );
                             ui.add_space(DESIGN_TOKENS.spacing.sm);
 
@@ -218,7 +218,7 @@ impl CommandPalette {
                             ui.centered_and_justified(|ui| {
                                 ui.label(
                                     RichText::new("No commands found")
-                                        .color(DESIGN_TOKENS.semantic.ui.text_muted_dark),
+                                        .color(ui.visuals().weak_text_color()),
                                 );
                             });
                             ui.add_space(DESIGN_TOKENS.spacing.xl);
@@ -278,9 +278,9 @@ impl CommandPalette {
 
                                             // Label
                                             let text_color = if is_selected {
-                                                DESIGN_TOKENS.semantic.ui.text_dark
+                                                ui.visuals().strong_text_color()
                                             } else {
-                                                DESIGN_TOKENS.semantic.ui.text_secondary_dark
+                                                ui.visuals().text_color()
                                             };
 
                                             let x = rect.min.x + DESIGN_TOKENS.spacing.md;

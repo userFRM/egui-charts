@@ -288,8 +288,12 @@ impl SettingsDialog {
                             ui.set_min_width(
                                 DESIGN_TOKENS.sizing.settings_dialog.content_min_width,
                             );
-                            ui.spacing_mut().item_spacing.y =
-                                DESIGN_TOKENS.sizing.settings_dialog.row_spacing;
+                            // Rows keep the dialog's own rhythm; controls within a row get the
+                            // standard gap instead of the zero used to butt sidebar and content.
+                            ui.spacing_mut().item_spacing = Vec2::new(
+                                DESIGN_TOKENS.spacing.lg,
+                                DESIGN_TOKENS.sizing.settings_dialog.row_spacing,
+                            );
 
                             match self.active_tab {
                                 SettingsTab::Symbol => self.draw_symbol_tab(ui, style),

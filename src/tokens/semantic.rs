@@ -66,6 +66,7 @@ pub struct UiSemanticTokens {
     pub border_subtle_light: Color32,
     pub panel_bg_dark: Color32,
     pub panel_bg_secondary_dark: Color32,
+    pub panel_bg_floating_dark: Color32,
     pub text_dark: Color32,
     pub text_secondary_dark: Color32,
     pub text_muted_dark: Color32,

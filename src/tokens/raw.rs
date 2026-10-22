@@ -62,6 +62,7 @@ pub(super) struct RawUiSemanticTokens {
     pub border_subtle_light: RawColor,
     pub panel_bg_dark: RawColor,
     pub panel_bg_secondary_dark: RawColor,
+    pub panel_bg_floating_dark: RawColor,
     pub text_dark: RawColor,
     pub text_secondary_dark: RawColor,
     pub text_muted_dark: RawColor,

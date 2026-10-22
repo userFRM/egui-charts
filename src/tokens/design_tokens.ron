@@ -113,6 +113,7 @@
             // Dark mode UI
             panel_bg_dark: "gray_900",
             panel_bg_secondary_dark: "gray_800",
+            panel_bg_floating_dark: (42, 46, 57), // Popups, menus, tooltips: one step above panels
             text_dark: (209, 212, 220),
             text_secondary_dark: "gray_600",
             text_muted_dark: "gray_500",
@@ -344,15 +345,15 @@
             noninteractive_text: "gray_500",
 
             // Text on selection (primary bg)
-            text_on_primary: "blue_500",
-            text_on_primary_hovered: "gray_950",
+            text_on_primary: "white",
+            text_on_primary_hovered: "white",
 
             // Icon colors
             default_icon: "gray_500",
             hovered_icon: "gray_600",
             active_icon: "gray_700",
-            icon_on_primary: "blue_500",
-            icon_on_primary_hovered: "gray_900",
+            icon_on_primary: "white",
+            icon_on_primary_hovered: "white",
         ),
 
         // ==========================================================================

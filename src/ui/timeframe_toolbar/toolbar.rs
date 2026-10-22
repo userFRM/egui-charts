@@ -8,7 +8,7 @@ use super::{DateRange, SessionType, TimeframeToolbarAction, TimeframeToolbarStat
 use crate::ext::UiExt;
 use crate::icons::icons as embedded_icons;
 use crate::styles::{icons as icon_sizes, stroke, typography};
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemePreset, follow_active_theme, theme_derived};
 use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::toolbar::ResponsiveToolbar;
@@ -20,6 +20,8 @@ pub struct TimeframeToolbar {
     pub state: TimeframeToolbarState,
     /// Configuration
     pub config: TimeframeToolbarConfig,
+    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(ThemePreset, TimeframeToolbarConfig)>,
 }
 
 /// Configuration for the bottom panel appearance
@@ -79,6 +81,21 @@ impl Default for TimeframeToolbarConfig {
     }
 }
 
+theme_derived!(TimeframeToolbarConfig {
+    background_color,
+    border_color,
+    text_color,
+    hover_text_color,
+    active_text_color,
+    separator_color,
+    hover_bg,
+    active_bg,
+    font_size,
+    panel_height,
+    btn_padding_h,
+    btn_padding_v
+});
+
 impl Default for TimeframeToolbar {
     fn default() -> Self {
         Self::new()
@@ -91,6 +108,7 @@ impl TimeframeToolbar {
         Self {
             state: TimeframeToolbarState::default(),
             config: TimeframeToolbarConfig::default(),
+            config_theme: Some((ThemePreset::Dark, TimeframeToolbarConfig::default())),
         }
     }
 
@@ -99,6 +117,7 @@ impl TimeframeToolbar {
         Self {
             state: TimeframeToolbarState::default(),
             config,
+            config_theme: None,
         }
     }
 
@@ -109,6 +128,12 @@ impl TimeframeToolbar {
 
     /// Show bottom panel and return action
     pub fn show(&mut self, ui: &mut Ui) -> TimeframeToolbarAction {
+        follow_active_theme(
+            ui.ctx(),
+            &mut self.config_theme,
+            &mut self.config,
+            TimeframeToolbarConfig::from_theme,
+        );
         // Update time on each frame
         self.state.update_time();
 

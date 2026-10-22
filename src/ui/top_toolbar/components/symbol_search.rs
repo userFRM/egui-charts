@@ -357,6 +357,10 @@ impl SymbolSearchDialog {
         frame
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
+                if is_sel {
+                    ui.visuals_mut().override_text_color =
+                        Some(ui.visuals().selection.stroke.color);
+                }
 
                 ui.horizontal(|ui| {
                     // Symbol name (bold)

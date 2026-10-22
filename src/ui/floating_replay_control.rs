@@ -325,15 +325,16 @@ impl FloatingReplayControl {
     fn render_control(&mut self, ui: &mut Ui) -> ReplayControlAction {
         let mut action = ReplayControlAction::None;
 
-        // Background frame - dark semi-transparent (uses chart tooltip styling)
-        let bg_color = DESIGN_TOKENS.semantic.extended.chart_tooltip_bg;
-        let border_color = DESIGN_TOKENS.semantic.chart.crosshair_label_bg;
+        // Floating surface colours follow the active theme.
+        let visuals = ui.visuals();
+        let (bg_color, border) = (visuals.window_fill, visuals.window_stroke);
+        let (text_color, muted_color) = (visuals.strong_text_color(), visuals.weak_text_color());
         let btn_size = Vec2::splat(DESIGN_TOKENS.sizing.floating_toolbar.button_size);
         let icon_size = icon_sizes::COMPACT;
 
         egui::Frame::new()
             .fill(bg_color)
-            .stroke(egui::Stroke::new(1.0_f32, border_color))
+            .stroke(border)
             .corner_radius(DESIGN_TOKENS.rounding.md)
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
@@ -341,10 +342,9 @@ impl FloatingReplayControl {
                     ui.spacing_mut().item_spacing.x = 2.0;
 
                     // Drag handle (grip icon)
-                    ui.add(icons::UI_DRAG_HANDLE.as_image_tinted(
-                        Vec2::splat(icon_size),
-                        DESIGN_TOKENS.semantic.extended.text_muted,
-                    ));
+                    ui.add(
+                        icons::UI_DRAG_HANDLE.as_image_tinted(Vec2::splat(icon_size), muted_color),
+                    );
 
                     ui.add_space(4.0);
                     ui.separator();
@@ -426,7 +426,7 @@ impl FloatingReplayControl {
                         .selected_text(
                             RichText::new(current_speed.label())
                                 .size(12.0)
-                                .color(DESIGN_TOKENS.semantic.chart.crosshair_label_text),
+                                .color(text_color),
                         )
                         .width(55.0)
                         .show_ui(ui, |ui| {
@@ -448,7 +448,7 @@ impl FloatingReplayControl {
                         ui.label(
                             RichText::new(&self.state.symbol)
                                 .size(11.0)
-                                .color(DESIGN_TOKENS.semantic.chart.crosshair_label_text)
+                                .color(text_color)
                                 .strong(),
                         );
                     }
@@ -458,7 +458,7 @@ impl FloatingReplayControl {
                         ui.label(
                             RichText::new(format!("{:.1}%", self.state.progress_pct))
                                 .size(10.0)
-                                .color(DESIGN_TOKENS.semantic.extended.text_muted),
+                                .color(muted_color),
                         );
                     }
 

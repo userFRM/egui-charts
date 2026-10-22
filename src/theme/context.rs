@@ -278,6 +278,15 @@ pub trait ThemeContextExt {
     /// Get theme data from context
     fn theme_data(&self) -> ThemeData;
 
+    /// The theme last passed to [`apply_to_egui`](super::apply_to_egui), if any.
+    ///
+    /// Components read their colours from it while painting, so switching themes
+    /// repaints everything on the next frame. The default returns `None`, as for a
+    /// context no theme has been applied to.
+    fn active_theme(&self) -> Option<super::Theme> {
+        None
+    }
+
     /// Check if current UI is dark mode
     fn is_dark_ui(&self) -> bool;
 
@@ -295,6 +304,10 @@ impl ThemeContextExt for Context {
             .unwrap_or_default()
     }
 
+    fn active_theme(&self) -> Option<super::Theme> {
+        self.data(|d| d.get_temp::<super::Theme>(egui::Id::NULL.with("active_theme")))
+    }
+
     fn is_dark_ui(&self) -> bool {
         self.theme_data().is_dark_ui
     }
@@ -302,6 +315,11 @@ impl ThemeContextExt for Context {
     fn is_dark_chart(&self) -> bool {
         self.theme_data().is_dark_chart
     }
+}
+
+/// Store the theme [`ThemeContextExt::active_theme`] returns.
+pub(crate) fn set_active_theme(ctx: &Context, theme: super::Theme) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::NULL.with("active_theme"), theme));
 }
 
 /// Extension trait for egui::Ui to access theme colors
@@ -511,4 +529,100 @@ pub fn get_icon_hover_color(ctx: &Context) -> Color32 {
 /// Get icon active color (accent blue - consistent across themes)
 pub fn get_icon_active_color() -> Color32 {
     DESIGN_TOKENS.semantic.ui.icon_active
+}
+
+/// A component config derived from a theme, whose fields can follow a new theme one by one.
+#[cfg(feature = "ui")]
+pub(crate) trait ThemeDerived {
+    /// Move every field still equal to its value in `old` to its value in `new`,
+    /// keeping the fields the caller has changed.
+    fn follow(&mut self, old: &Self, new: &Self);
+}
+
+/// Implement [`ThemeDerived`] for a config struct, listing all of its fields.
+#[cfg(feature = "ui")]
+macro_rules! theme_derived {
+    ($config:ty { $($field:ident),+ $(,)? }) => {
+        impl $crate::theme::ThemeDerived for $config {
+            fn follow(&mut self, old: &Self, new: &Self) {
+                // Exhaustive, so a field added to the struct must be listed here.
+                let Self { $($field),+ } = self;
+                $(if *$field == old.$field {
+                    *$field = new.$field.clone();
+                })+
+            }
+        }
+    };
+}
+#[cfg(feature = "ui")]
+pub(crate) use theme_derived;
+
+/// Rederive a theme-derived component config when the active theme's preset changes.
+///
+/// `derived` holds the preset and config that `config` was last derived from, or
+/// `None` for a config the caller supplied, which is never replaced. Fields the
+/// caller has changed since are kept; the others follow the new theme.
+#[cfg(feature = "ui")]
+pub(crate) fn follow_active_theme<C: ThemeDerived>(
+    ctx: &Context,
+    derived: &mut Option<(super::ThemePreset, C)>,
+    config: &mut C,
+    from_theme: impl FnOnce(&super::Theme) -> C,
+) {
+    if let Some(theme) = ctx.active_theme()
+        && let Some((preset, old)) = derived
+        && *preset != theme.preset
+    {
+        let new = from_theme(&theme);
+        config.follow(old, &new);
+        *preset = theme.preset;
+        *old = new;
+    }
+}
+
+#[cfg(all(test, feature = "ui"))]
+mod tests {
+    use super::*;
+    use crate::theme::{Theme, apply_to_egui};
+    use crate::ui::timeframe_toolbar::{TimeframeToolbar, TimeframeToolbarConfig};
+
+    #[test]
+    fn theme_derived_config_follows_the_active_theme_and_keeps_caller_edits() {
+        let ctx = Context::default();
+        let mut themed = TimeframeToolbar::new();
+        themed.config.panel_height = 40.0;
+        themed.config.text_color = Color32::RED;
+        let mut custom =
+            TimeframeToolbar::with_config(TimeframeToolbarConfig::from_theme(&Theme::dark()));
+
+        // Classic differs from the Dark config the toolbar is built with; Dark and Light are later changes.
+        for theme in [Theme::classic(), Theme::dark(), Theme::light()] {
+            let _ = ctx.run(Default::default(), |ctx| {
+                apply_to_egui(ctx, &theme);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    themed.show(ui);
+                    custom.show(ui);
+                });
+            });
+            let name = format!("{:?}", theme.preset);
+            assert_eq!(
+                themed.config.panel_height, 40.0,
+                "{name}: edited height replaced"
+            );
+            assert_eq!(
+                themed.config.text_color,
+                Color32::RED,
+                "{name}: edited colour replaced"
+            );
+            assert_eq!(
+                themed.config.border_color, theme.semantic.ui.border,
+                "{name}: untouched colour stale"
+            );
+            assert_eq!(
+                custom.config.border_color,
+                Theme::dark().semantic.ui.border,
+                "{name}: with_config replaced"
+            );
+        }
+    }
 }

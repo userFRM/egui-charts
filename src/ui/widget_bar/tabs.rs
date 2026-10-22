@@ -4,7 +4,7 @@
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::{icons, stroke, typography};
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemePreset, follow_active_theme, theme_derived};
 use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -84,6 +84,19 @@ impl Default for RightPanelTabsConfig {
     }
 }
 
+theme_derived!(RightPanelTabsConfig {
+    tab_bar_width,
+    tab_button_size,
+    bg_color,
+    tab_bar_bg,
+    active_tab_bg,
+    hover_bg,
+    pressed_bg,
+    icon_color,
+    active_icon_color,
+    border_color
+});
+
 /// Action returned by the right panel tabs
 #[derive(Clone, Debug, PartialEq)]
 pub enum RightPanelAction {
@@ -97,6 +110,8 @@ pub struct RightPanelTabs {
     pub active_tab: RightPanelTab,
     pub config: RightPanelTabsConfig,
     pub available_tabs: Vec<RightPanelTab>,
+    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(ThemePreset, RightPanelTabsConfig)>,
 }
 
 impl Default for RightPanelTabs {
@@ -105,6 +120,7 @@ impl Default for RightPanelTabs {
             active_tab: RightPanelTab::Alerts,
             config: RightPanelTabsConfig::default(),
             available_tabs: vec![RightPanelTab::Alerts, RightPanelTab::ObjectTree],
+            config_theme: Some((ThemePreset::Dark, RightPanelTabsConfig::default())),
         }
     }
 }
@@ -116,6 +132,7 @@ impl RightPanelTabs {
 
     pub fn with_config(mut self, config: RightPanelTabsConfig) -> Self {
         self.config = config;
+        self.config_theme = None;
         self
     }
 
@@ -132,6 +149,12 @@ impl RightPanelTabs {
     /// Show the tab bar on the right edge
     /// Returns the action and consumed width for the tab bar
     pub fn show_tab_bar(&mut self, ui: &mut Ui) -> RightPanelAction {
+        follow_active_theme(
+            ui.ctx(),
+            &mut self.config_theme,
+            &mut self.config,
+            RightPanelTabsConfig::from_theme,
+        );
         let mut action = RightPanelAction::None;
 
         let available_height = ui.available_height();
@@ -162,6 +185,7 @@ impl RightPanelTabs {
 
             // Check for clicks
             let btn_res = ui.allocate_rect(btn_rect, Sense::click());
+            crate::styles::focus::draw_focus_ring(ui, &btn_res);
             let is_hovered = btn_res.hovered();
             let is_pressed = btn_res.is_pointer_button_down_on();
 

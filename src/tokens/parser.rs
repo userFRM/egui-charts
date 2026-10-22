@@ -510,6 +510,7 @@ fn resolve_tokens(raw: RawDesignTokens) -> DesignTokens {
                 border_subtle_light: resolve_color(&raw.semantic.ui.border_subtle_light),
                 panel_bg_dark: resolve_color(&raw.semantic.ui.panel_bg_dark),
                 panel_bg_secondary_dark: resolve_color(&raw.semantic.ui.panel_bg_secondary_dark),
+                panel_bg_floating_dark: resolve_color(&raw.semantic.ui.panel_bg_floating_dark),
                 text_dark: resolve_color(&raw.semantic.ui.text_dark),
                 text_secondary_dark: resolve_color(&raw.semantic.ui.text_secondary_dark),
                 text_muted_dark: resolve_color(&raw.semantic.ui.text_muted_dark),
