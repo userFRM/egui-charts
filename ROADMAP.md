@@ -278,7 +278,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 ### Trend / Overlay (8/8)
 - [x] ADX: ADX, +DI, -DI lines
 - [x] SuperTrend: ATR-based trailing stop
-- [x] Ichimoku Cloud: Tenkan and Kijun; Senkou A/B and Chikou computed but not displaced, all lines start at bar 52
+- [x] Ichimoku Cloud: Tenkan and Kijun; Senkou A/B plotted the displacement ahead and Chikou the displacement behind; the part of the cloud projected past the last bar is not drawn
 - [x] Parabolic SAR: SAR values with acceleration factor, drawn as a connected line
 - [x] Directional Movement (DMI): +DI and -DI computed; only +DI is drawn
 - [x] Vortex Indicator: VI+ and VI- computed; only VI+ is drawn
@@ -336,9 +336,9 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [ ] ZigZag: percentage swing detection computes pivots, but they are isolated values and nothing is drawn
 
 ### Order Flow (4/4, estimated from bars; no trade or order book data)
-- [x] Iceberg Detector: 0 to 1 score in its own pane for bars closing at a price level that enough of the last N bars touched with heavy volume, each bar's volume spread evenly over its range; it cannot see hidden orders. Levels use the tick size set with `with_tick_size`, otherwise the series' price span in 1,000 levels
+- [x] Iceberg Detector: 0 to 1 score in its own pane for bars closing at a price level that enough of the last N bars touched with heavy volume, each bar's volume spread evenly over its range; it cannot see hidden orders. Levels use the tick size set with `with_tick_size`, otherwise the price span of the bars so far in about 1,000 levels
 - [x] Stop Run: signed score in its own pane for bars that break the prior swing low or high and reverse within the bar
-- [x] Liquidity Tracker: largest volume accumulated at one price level, in multiples of the average bar volume, in its own pane; sweeps (the heavy levels a bar traded through, one per side of the level holding its open) and zones are available through the API only
+- [x] Liquidity Tracker: largest volume the last N bars spread on one price level, in multiples of the average bar volume, in its own pane; sweeps (the heavy levels a bar traded through, one per side of the level holding its open) and zones are available through the API only
 - [x] CVD (also in Volume)
 
 ### Price Oscillators (1/1)

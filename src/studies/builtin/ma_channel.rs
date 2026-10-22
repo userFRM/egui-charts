@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Moving Average Channel
 use crate::studies::{Indicator, IndicatorValue};
@@ -14,10 +15,11 @@ pub struct MAChannel {
 }
 
 impl MAChannel {
+    /// `offset_percent` is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(period: usize, offset_percent: f64) -> Self {
         Self {
             period: period.max(1),
-            offset_percent,
+            offset_percent: clamp_param(offset_percent, 0.0, f64::MAX),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Upper

@@ -5,31 +5,34 @@
 //! carry no order book or trade data, so levels stand in for resting
 //! liquidity, estimated from bars.
 
+use super::{clamp_param, window_volume};
 use crate::model::Bar;
-use crate::model::bar::{bar_level_keys, level_grid, level_key};
+use crate::model::bar::{GrowingGrid, bar_level_keys, level_key};
 use crate::studies::{Indicator, IndicatorValue};
 use egui::Color32;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::ops::RangeInclusive;
 
 /// Liquidity Tracker, estimated from bars.
 ///
 /// Each bar's volume is spread evenly over the price levels between its low and
-/// high. A level keeps the volume of every bar that touched it until no bar has
-/// touched it for `period` bars, and is heavy once it holds `volume_threshold`
-/// times the series' average bar volume. The value, plotted in its own pane, is
-/// the largest level volume after each bar in multiples of the average bar
-/// volume. [`sweeps`](Self::sweeps) and [`zones`](Self::zones) give the heavy
-/// levels each bar traded through and the clusters of heavy levels.
+/// high. A level holds the volume the last `period` bars spread on it, and is
+/// heavy once it holds `volume_threshold` times their average bar volume. The
+/// value, plotted in its own pane, is the largest level volume after each bar
+/// in multiples of that average. [`sweeps`](Self::sweeps) and
+/// [`zones`](Self::zones) give the heavy levels each bar traded through and
+/// the clusters of heavy levels after the last bar.
 ///
 /// Levels lie on the configured tick size (see
-/// [`with_tick_size`](Self::with_tick_size)), widened to a whole number of
-/// ticks when the series spans more than 1,000 ticks so it covers at most
-/// about 1,000 levels; level, zone and sweep prices are multiples of that grid.
-/// Because the grid and the average volume come from the whole series, a bar
-/// that extends the series can change earlier values. Bars with a non-finite
-/// price or an inverted range are not tracked: they add no volume.
+/// [`with_tick_size`](Self::with_tick_size)), widened to the tick times a
+/// power of two once the bars up to the current one span more than 1,000
+/// ticks, so they cover at most about 1,000 levels; level, zone and sweep
+/// prices are multiples of that grid. Each value and sweep uses only its bar
+/// and the bars before it, so appending bars never changes earlier ones. Bars
+/// with a non-finite price or an inverted range are not tracked: they add no
+/// volume.
 #[derive(Clone)]
 pub struct LiquidityTracker {
     /// Period for analysis
@@ -146,24 +149,26 @@ impl LiquidityTracker {
             high_liq_color: Color32::from_rgba_unmultiplied(255, 215, 0, 128), // Gold
             sweep_color: Color32::from_rgba_unmultiplied(255, 0, 255, 180),    // Magenta
             visible: true,
-            liquidity_map: HashMap::new(),
+            liquidity_map: HashMap::default(),
             zones: Vec::new(),
             sweeps: Vec::new(),
         }
     }
 
-    /// Set the instrument's tick size, which levels are keyed on. With zero
-    /// (the default), a negative or a non-finite value, levels are the series'
-    /// price span divided into 1,000 levels instead.
+    /// Set the instrument's tick size, which levels are keyed on, clamped into
+    /// 0 to `f64::MAX`, NaN to 0. With zero (the default), levels divide the
+    /// price span of the bars so far into about 1,000 levels instead, rounded
+    /// to a power of two.
     pub fn with_tick_size(mut self, tick_size: f64) -> Self {
-        self.tick_size = tick_size;
-        self.grid = tick_size;
+        self.tick_size = clamp_param(tick_size, 0.0, f64::MAX);
+        self.grid = self.tick_size;
         self
     }
 
-    /// Set volume threshold
+    /// Set the volume threshold, as a multiple of the average bar volume,
+    /// clamped into 0 to `f64::MAX`, NaN to 0
     pub fn with_volume_threshold(mut self, threshold: f64) -> Self {
-        self.volume_threshold = threshold;
+        self.volume_threshold = clamp_param(threshold, 0.0, f64::MAX);
         self
     }
 
@@ -229,6 +234,52 @@ impl LiquidityTracker {
         level.side_bias += if is_buy { volume } else { -volume };
     }
 
+    /// The levels a tracked bar (see the type docs) spreads its volume on, as its
+    /// first and last key and the volume per level: its range, or the level of
+    /// its close when the range is empty.
+    fn spread(&self, bar: &Bar) -> Option<(i64, i64, f64)> {
+        let (low, high) = bar_level_keys(bar, self.grid)?;
+        if bar.high - bar.low > 0.0 {
+            Some((low, high, bar.volume / (high.abs_diff(low) + 1) as f64))
+        } else {
+            let close = self.price_to_key(bar.close);
+            bar.close.is_finite().then_some((close, close, bar.volume))
+        }
+    }
+
+    /// Add the volume `bar` spreads on its levels.
+    fn add_bar(&mut self, bar_idx: usize, bar: &Bar) {
+        if let Some((low_key, high_key, volume)) = self.spread(bar) {
+            for key in low_key..=high_key {
+                self.add_volume(key, volume, bar_idx, bar.close >= bar.open);
+            }
+        }
+    }
+
+    /// Take back the volume `bar` spread on its levels, dropping the levels no
+    /// bar touches any more.
+    fn remove_bar(&mut self, bar: &Bar) {
+        let Some((low_key, high_key, volume)) = self.spread(bar) else {
+            return;
+        };
+        let bias = if bar.close >= bar.open {
+            volume
+        } else {
+            -volume
+        };
+        for key in low_key..=high_key {
+            if let Entry::Occupied(mut entry) = self.liquidity_map.entry(key) {
+                let level = entry.get_mut();
+                level.touches = level.touches.saturating_sub(1);
+                level.volume -= volume;
+                level.side_bias -= bias;
+                if level.touches == 0 {
+                    entry.remove();
+                }
+            }
+        }
+    }
+
     /// Record the heavy levels among `keys` that `bar` traded through, before its
     /// own volume is added: one sweep for those below the level of its open, one
     /// for those above it.
@@ -280,20 +331,6 @@ impl LiquidityTracker {
                 });
             }
         }
-    }
-
-    /// Drop levels untouched for `period` bars and return the largest remaining
-    /// level volume, in one pass over the levels.
-    fn decay(&mut self, bar_idx: usize) -> f64 {
-        let mut max_liq = 0.0_f64;
-        self.liquidity_map.retain(|_, level| {
-            let keep = bar_idx - level.last_touch < self.period;
-            if keep {
-                max_liq = max_liq.max(level.volume);
-            }
-            keep
-        });
-        max_liq
     }
 
     /// Identify liquidity zones (clusters of significant levels)
@@ -389,41 +426,38 @@ impl Indicator for LiquidityTracker {
         self.zones.clear();
         self.sweeps.clear();
 
-        if data.is_empty() {
-            return;
-        }
-
-        // Calculate average volume
-        let avg_volume: f64 = data.iter().map(|b| b.volume).sum::<f64>() / data.len() as f64;
-        let threshold = avg_volume * self.volume_threshold;
-        self.grid = level_grid(data, self.tick_size);
-
+        let mut grid = GrowingGrid::new(self.tick_size);
+        let mut avg_volume = 0.0;
+        let mut volume = 0.0;
         for (idx, bar) in data.iter().enumerate() {
-            let is_bullish = bar.close >= bar.open;
-            let range = bar.high - bar.low;
-
-            match bar_level_keys(bar, self.grid) {
-                Some((low_key, high_key)) if range > 0.0 => {
-                    self.record_sweeps(bar, idx, low_key..=high_key, threshold);
-
-                    // Distribute volume across price levels touched
-                    let levels_count = (high_key.abs_diff(low_key) + 1) as f64;
-                    let vol_per_level = bar.volume / levels_count;
-
-                    for key in low_key..=high_key {
-                        self.add_volume(key, vol_per_level, idx, is_bullish);
-                    }
+            // The levels hold the `period` bars before this one, keyed again when the grid changes
+            let regrid = grid.push(bar);
+            self.grid = grid.grid();
+            if regrid {
+                self.liquidity_map.clear();
+                for i in idx.saturating_sub(self.period)..idx {
+                    self.add_bar(i, &data[i]);
                 }
-                // Doji - all volume at close
-                Some(_) if bar.close.is_finite() => {
-                    self.add_volume(self.price_to_key(bar.close), bar.volume, idx, is_bullish)
-                }
-                // Untracked bar (see the type docs): no volume added
-                _ => {}
             }
+            volume = window_volume(data, idx, self.period, volume);
+            avg_volume = volume / (idx + 1).min(self.period) as f64;
 
-            // Decay old liquidity and take the value for this bar (max liquidity ratio)
-            let max_liq = self.decay(idx);
+            if bar.high - bar.low > 0.0
+                && let Some((low_key, high_key, _)) = self.spread(bar)
+            {
+                let threshold = avg_volume * self.volume_threshold;
+                self.record_sweeps(bar, idx, low_key..=high_key, threshold);
+            }
+            if let Some(leaving) = idx.checked_sub(self.period) {
+                self.remove_bar(&data[leaving]);
+            }
+            self.add_bar(idx, bar);
+
+            // The value for this bar: the largest level volume over the last `period` bars
+            let max_liq = self
+                .liquidity_map
+                .values()
+                .fold(0.0_f64, |max, level| max.max(level.volume));
 
             let liquidity_ratio = if avg_volume > 0.0 {
                 max_liq / avg_volume
@@ -480,6 +514,31 @@ impl Indicator for LiquidityTracker {
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    /// A level holds the volume of the last `period` bars only, so the ratio
+    /// stops growing once the window is full while price stays in a range.
+    #[test]
+    fn level_volume_is_limited_to_the_window() {
+        let bar = Bar {
+            time: Utc::now(),
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.0,
+            volume: 30.0,
+        };
+        let mut tracker = LiquidityTracker::new(5).with_tick_size(1.0);
+        tracker.calculate(&vec![bar; 12]);
+        // Each bar puts 10 on each of 99, 100 and 101; the average bar volume is 30
+        for (i, value) in tracker.values().iter().enumerate() {
+            let expected = (i + 1).min(5) as f64 * 10.0 / 30.0;
+            assert!(
+                matches!(value, IndicatorValue::Single(v) if (v - expected).abs() < 1e-9),
+                "bar {i}: {value:?}, expected {expected}"
+            );
+        }
+        assert_eq!(tracker.values().len(), 12);
+    }
 
     /// A bar sweeps the heavy levels it traded through, one record per side.
     #[test]

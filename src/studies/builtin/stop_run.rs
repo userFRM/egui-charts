@@ -4,6 +4,7 @@
 //! same bar. This is a price pattern on bars; it has no data on where stop
 //! orders rest.
 
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -86,9 +87,10 @@ impl StopRunIndicator {
         }
     }
 
-    /// Set break threshold (ATR multiple)
+    /// Set the break threshold, as a multiple of the average true range,
+    /// clamped into 0 to `f64::MAX`, NaN to 0
     pub fn with_break_threshold(mut self, threshold: f64) -> Self {
-        self.break_threshold = threshold;
+        self.break_threshold = clamp_param(threshold, 0.0, f64::MAX);
         self
     }
 

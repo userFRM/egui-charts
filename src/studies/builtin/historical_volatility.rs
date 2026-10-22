@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Historical Volatility (HV)
 /// Measures the annualized standard deviation of log returns
@@ -28,8 +29,10 @@ impl HistoricalVolatility {
         }
     }
 
+    /// Set the bars per year the volatility is annualized over, clamped into 0 to
+    /// `f64::MAX`, NaN to 0.
     pub fn with_trading_days(mut self, days: f64) -> Self {
-        self.trading_days = days;
+        self.trading_days = clamp_param(days, 0.0, f64::MAX);
         self
     }
 

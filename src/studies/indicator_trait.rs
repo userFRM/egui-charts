@@ -46,8 +46,11 @@ pub enum IndicatorValue {
 /// # Lifecycle
 ///
 /// 1. Construct the indicator with desired parameters. Built-in indicators
-///    raise a length (period, smoothing, level or row count) of 0 to 1. No
-///    length or bar value makes `calculate` panic or allocate without bound.
+///    raise a length (period, smoothing, level or row count) of 0 to 1, and
+///    clamp a float parameter (multiplier, percentage, divisor, threshold or
+///    tick size) into the range its constructor or setter documents, NaN to
+///    the bottom of that range. No length, parameter or bar value makes
+///    `calculate` panic or allocate without bound.
 /// 2. Call [`calculate`](Indicator::calculate) with bar data.
 /// 3. Read results via [`values`](Indicator::values).
 /// 4. The rendering layer queries [`is_overlay`](Indicator::is_overlay),

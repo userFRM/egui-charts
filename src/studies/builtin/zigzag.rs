@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// ZigZag Indicator
 /// Identifies significant price swings by filtering out smaller movements
@@ -32,9 +33,10 @@ pub struct ZigZag {
 }
 
 impl ZigZag {
+    /// `deviation_percent` is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(deviation_percent: f64, depth: usize) -> Self {
         Self {
-            deviation_percent,
+            deviation_percent: clamp_param(deviation_percent, 0.0, f64::MAX),
             depth: depth.max(1),
             mode: ZigZagMode::HighLow,
             values: Vec::new(),

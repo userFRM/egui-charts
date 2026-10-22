@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Percent B (%B)
 /// Shows where price is relative to Bollinger Bands
@@ -18,10 +19,11 @@ pub struct PercentB {
 }
 
 impl PercentB {
+    /// `multiplier` is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(period: usize, multiplier: f64) -> Self {
         Self {
             period: period.max(1),
-            multiplier,
+            multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
             visible: true,

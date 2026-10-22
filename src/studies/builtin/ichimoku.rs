@@ -31,6 +31,14 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Ichimoku Cloud indicator
+///
+/// Each value is `[tenkan, kijun, senkou_a, senkou_b, chikou]`, with NaN for a
+/// line that has no value at that bar, and `None` where no line has one. The
+/// value at bar `i` holds Senkou Span A and B computed on bar `i - displacement`
+/// and the close of bar `i + displacement` as the Chikou Span, so the spans are
+/// already displaced. There is one value per bar, so the leading spans computed
+/// on the last `displacement` bars, which fall after the last bar, are not
+/// output, and the Chikou Span is NaN on the last `displacement` bars.
 #[derive(Clone)]
 pub struct IchimokuCloud {
     tenkan_period: usize,
@@ -54,11 +62,12 @@ impl IchimokuCloud {
     /// * `kijun_period` - Kijun-sen period (typically 26)
     /// * `senkou_b_period` - Senkou Span B period (typically 52)
     pub fn new(tenkan_period: usize, kijun_period: usize, senkou_b_period: usize) -> Self {
+        let kijun_period = kijun_period.max(1);
         Self {
             tenkan_period: tenkan_period.max(1),
-            kijun_period: kijun_period.max(1),
+            kijun_period,
             senkou_b_period: senkou_b_period.max(1),
-            displacement: kijun_period, // Usually same as kijun_period
+            displacement: kijun_period,
             values: Vec::new(),
             tenkan_color: DESIGN_TOKENS.semantic.extended.info, // Blue
             kijun_color: DESIGN_TOKENS.semantic.extended.error, // Red
@@ -80,7 +89,8 @@ impl IchimokuCloud {
         Self::new(9, 26, 52)
     }
 
-    /// Set custom displacement
+    /// Set the number of bars Senkou Span A and B are plotted ahead and the
+    /// Chikou Span behind (the Kijun period by default; 0 plots them unshifted)
     pub fn with_displacement(mut self, displacement: usize) -> Self {
         self.displacement = displacement;
         self
@@ -131,69 +141,28 @@ impl Indicator for IchimokuCloud {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let min_period = self.senkou_b_period;
-        if data.len() < min_period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // Calculate components
-        let mut tenkan = vec![f64::NAN; data.len()];
-        let mut kijun = vec![f64::NAN; data.len()];
-        let mut senkou_a = vec![f64::NAN; data.len()];
-        let mut senkou_b = vec![f64::NAN; data.len()];
-        let mut chikou = vec![f64::NAN; data.len()];
-
+        let mid = |end: usize, period: usize| {
+            (end + 1 >= period).then(|| Self::donchian_mid(data, end, period))
+        };
+        let d = self.displacement;
         for i in 0..data.len() {
-            // Tenkan-sen (Conversion Line)
-            if i >= self.tenkan_period - 1 {
-                tenkan[i] = Self::donchian_mid(data, i, self.tenkan_period);
-            }
+            let tenkan = mid(i, self.tenkan_period);
+            let kijun = mid(i, self.kijun_period);
+            // Leading spans: computed on bar i - d, plotted on bar i
+            let base = i.checked_sub(d);
+            let span_a = base.and_then(|j| {
+                Some((mid(j, self.tenkan_period)? + mid(j, self.kijun_period)?) / 2.0)
+            });
+            let span_b = base.and_then(|j| mid(j, self.senkou_b_period));
+            // Lagging span: the close of bar i + d, plotted on bar i
+            let chikou = i.checked_add(d).and_then(|j| data.get(j)).map(|b| b.close);
 
-            // Kijun-sen (Base Line)
-            if i >= self.kijun_period - 1 {
-                kijun[i] = Self::donchian_mid(data, i, self.kijun_period);
-            }
-
-            // Senkou Span A (Leading Span A) - displaced forward
-            // Note: We calculate current value; rendering should shift it forward
-            if i >= self.kijun_period - 1 && !tenkan[i].is_nan() && !kijun[i].is_nan() {
-                senkou_a[i] = (tenkan[i] + kijun[i]) / 2.0;
-            }
-
-            // Senkou Span B (Leading Span B) - displaced forward
-            if i >= self.senkou_b_period - 1 {
-                senkou_b[i] = Self::donchian_mid(data, i, self.senkou_b_period);
-            }
-
-            // Chikou Span (Lagging Span) - close price, displaced backward
-            // Note: We store the close price; rendering should shift it backward
-            chikou[i] = data[i].close;
-        }
-
-        // Build output values: [tenkan, kijun, senkou_a, senkou_b, chikou]
-        for i in 0..data.len() {
-            if i < self.senkou_b_period - 1 {
-                self.values.push(IndicatorValue::None);
+            let row = [tenkan, kijun, span_a, span_b, chikou];
+            self.values.push(if row.iter().all(Option::is_none) {
+                IndicatorValue::None
             } else {
-                self.values.push(IndicatorValue::Multiple(vec![
-                    if tenkan[i].is_nan() { 0.0 } else { tenkan[i] },
-                    if kijun[i].is_nan() { 0.0 } else { kijun[i] },
-                    if senkou_a[i].is_nan() {
-                        0.0
-                    } else {
-                        senkou_a[i]
-                    },
-                    if senkou_b[i].is_nan() {
-                        0.0
-                    } else {
-                        senkou_b[i]
-                    },
-                    chikou[i],
-                ]));
-            }
+                IndicatorValue::Multiple(row.map(|v| v.unwrap_or(f64::NAN)).to_vec())
+            });
         }
     }
 
@@ -265,41 +234,74 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
 
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..100)
-            .map(|i| {
-                let price = 100.0 + (i as f64 * 0.1).sin() * 20.0;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: price,
-                    high: price + 2.0,
-                    low: price - 2.0,
-                    close: price + 0.5,
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
+    /// Tenkan(3), Kijun(5), Senkou B(8) and a displacement of 5 on 20 bars,
+    /// against values computed by hand from the textbook definitions: Senkou A
+    /// and B are plotted 5 bars after the bar they are computed on, and Chikou
+    /// is the close of the bar 5 bars later.
     #[test]
-    fn test_ichimoku_calculation() {
-        let bars = create_test_bars();
-        let mut ichimoku = IchimokuCloud::new(9, 26, 52);
+    fn spans_are_displaced() {
+        let highs = [
+            12., 14., 13., 15., 17., 16., 18., 20., 19., 21., 23., 22., 20., 19., 21., 24., 25.,
+            23., 22., 26.,
+        ];
+        let lows = [
+            10., 11., 11., 12., 14., 14., 15., 17., 17., 18., 20., 19., 18., 17., 18., 21., 22.,
+            21., 20., 23.,
+        ];
+        let closes = [
+            11., 13., 12., 14., 16., 15., 17., 19., 18., 20., 22., 20., 19., 18., 20., 23., 24.,
+            22., 21., 25.,
+        ];
+        let start = Utc::now();
+        let bars: Vec<Bar> = (0..20)
+            .map(|i| Bar {
+                time: start + Duration::minutes(i as i64),
+                open: closes[i],
+                high: highs[i],
+                low: lows[i],
+                close: closes[i],
+                volume: 1.0,
+            })
+            .collect();
+        let n = f64::NAN;
+        // [tenkan, kijun, senkou A, senkou B, chikou] per bar
+        let expected = [
+            [n, n, n, n, 15.0],
+            [n, n, n, n, 17.0],
+            [12.0, n, n, n, 19.0],
+            [13.0, n, n, n, 18.0],
+            [14.0, 13.5, n, n, 20.0],
+            [14.5, 14.0, n, n, 22.0],
+            [16.0, 14.5, n, n, 20.0],
+            [17.0, 16.0, n, n, 19.0],
+            [17.5, 17.0, n, n, 18.0],
+            [19.0, 17.5, 13.75, n, 20.0],
+            [20.0, 19.0, 14.25, n, 23.0],
+            [20.5, 20.0, 15.25, n, 24.0],
+            [20.5, 20.0, 16.5, 15.0, 22.0],
+            [19.5, 20.0, 17.25, 15.5, 21.0],
+            [19.0, 20.0, 18.25, 16.0, 25.0],
+            [20.5, 20.5, 19.5, 17.5, n],
+            [21.5, 21.0, 20.25, 18.5, n],
+            [23.0, 21.0, 20.25, 18.5, n],
+            [22.5, 21.5, 19.75, 19.0, n],
+            [23.0, 23.0, 19.5, 20.0, n],
+        ];
+
+        let mut ichimoku = IchimokuCloud::new(3, 5, 8);
         ichimoku.calculate(&bars);
 
         assert_eq!(ichimoku.values().len(), bars.len());
-
-        // First senkou_b_period - 1 values should be None
-        for i in 0..51 {
-            assert!(matches!(ichimoku.values()[i], IndicatorValue::None));
-        }
-
-        // Remaining values should have 5 components
-        for value in ichimoku.values().iter().skip(51) {
-            if let IndicatorValue::Multiple(vals) = value {
-                assert_eq!(vals.len(), 5, "Should have 5 components");
-            }
+        for (i, (value, row)) in ichimoku.values().iter().zip(expected).enumerate() {
+            let IndicatorValue::Multiple(got) = value else {
+                panic!("bar {i}: {value:?}");
+            };
+            let same = got.len() == 5
+                && got
+                    .iter()
+                    .zip(row)
+                    .all(|(g, e)| (g.is_nan() && e.is_nan()) || *g == e);
+            assert!(same, "bar {i}: {got:?} != {row:?}");
         }
     }
 
@@ -313,23 +315,6 @@ mod tests {
     fn test_ichimoku_is_overlay() {
         let ichimoku = IchimokuCloud::new(9, 26, 52);
         assert!(ichimoku.is_overlay());
-    }
-
-    #[test]
-    fn test_ichimoku_tenkan_faster_than_kijun() {
-        // Tenkan uses shorter period, so should be more responsive
-        let bars = create_test_bars();
-        let mut ichimoku = IchimokuCloud::new(9, 26, 52);
-        ichimoku.calculate(&bars);
-
-        // Count crossovers - Tenkan should cross Kijun during trends
-        let mut _crossovers = 0;
-        for value in ichimoku.values().iter().skip(52) {
-            if let IndicatorValue::Multiple(vals) = value {
-                // Just verify both are calculated
-                assert!(vals[0] > 0.0 && vals[1] > 0.0);
-            }
-        }
     }
 
     #[test]

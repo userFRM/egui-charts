@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Commodity Selection Index (CSI)
 /// Developed by Welles Wilder
@@ -18,10 +19,11 @@ pub struct CommoditySelectionIndex {
 }
 
 impl CommoditySelectionIndex {
+    /// `cost` is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(period: usize, cost: f64) -> Self {
         Self {
             period: period.max(1),
-            cost,
+            cost: clamp_param(cost, 0.0, f64::MAX),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.brown, // Brown
             visible: true,

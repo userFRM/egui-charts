@@ -22,6 +22,7 @@
 //! keltner.calculate(&bars);
 //! ```
 
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -46,12 +47,12 @@ impl KeltnerChannels {
     /// # Arguments
     /// * `ema_period` - EMA period for middle line (typically 20)
     /// * `atr_period` - ATR period (typically 10)
-    /// * `multiplier` - ATR multiplier (typically 2.0)
+    /// * `multiplier` - ATR multiplier (typically 2.0), clamped into 0 to `f64::MAX`, NaN to 0
     pub fn new(ema_period: usize, atr_period: usize, multiplier: f64) -> Self {
         Self {
             ema_period: ema_period.max(1),
             atr_period: atr_period.max(1),
-            multiplier,
+            multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: Vec::new(),
             upper_color: DESIGN_TOKENS.semantic.extended.pink, // Pink
             middle_color: DESIGN_TOKENS.semantic.extended.purple, // Purple

@@ -11,11 +11,20 @@ const MAX_PRICE_LEVELS: f64 = 1_000.0;
 /// divided into [`MAX_PRICE_LEVELS`] levels, or 1.0 for a flat series. Every key
 /// is a multiple of the grid, so a series touches about that many levels at most.
 pub(crate) fn level_grid(data: &[Bar], tick: f64) -> f64 {
-    let (low, high) = data
-        .iter()
-        .flat_map(|b| [b.low, b.high, b.close])
+    let (low, high) = data.iter().fold((f64::MAX, f64::MIN), extend);
+    range_grid(low, high, tick)
+}
+
+/// `range` extended by the finite low, high and close of `bar`.
+fn extend((low, high): (f64, f64), bar: &Bar) -> (f64, f64) {
+    [bar.low, bar.high, bar.close]
+        .into_iter()
         .filter(|p| p.is_finite())
-        .fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p), hi.max(p)));
+        .fold((low, high), |(lo, hi), p| (lo.min(p), hi.max(p)))
+}
+
+/// [`level_grid`] of bars whose finite prices run from `low` to `high`.
+fn range_grid(low: f64, high: f64, tick: f64) -> f64 {
     // Dividing before subtracting keeps the span finite for prices near f64::MAX.
     let level_span = high / MAX_PRICE_LEVELS - low / MAX_PRICE_LEVELS;
     if tick > 0.0 && tick.is_finite() {
@@ -27,6 +36,53 @@ pub(crate) fn level_grid(data: &[Bar], tick: f64) -> f64 {
         }
     }
     if level_span > 0.0 { level_span } else { 1.0 }
+}
+
+/// The grid of a series read one bar at a time: [`level_grid`] of the bars so
+/// far, raised to the tick (1.0 without a usable tick) times a power of two. A
+/// bar's keys therefore depend only on the bars up to it, and the grid changes
+/// only as the span of those bars grows, at most once per doubling.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GrowingGrid {
+    low: f64,
+    high: f64,
+    tick: f64,
+    grid: f64,
+}
+
+impl GrowingGrid {
+    pub(crate) fn new(tick: f64) -> Self {
+        Self {
+            low: f64::MAX,
+            high: f64::MIN,
+            tick,
+            grid: range_grid(f64::MAX, f64::MIN, tick),
+        }
+    }
+
+    /// The grid of the bars taken in so far.
+    pub(crate) fn grid(&self) -> f64 {
+        self.grid
+    }
+
+    /// Take in `bar` and return whether the grid changed.
+    pub(crate) fn push(&mut self, bar: &Bar) -> bool {
+        (self.low, self.high) = extend((self.low, self.high), bar);
+        let grid = range_grid(self.low, self.high, self.tick);
+        let unit = if self.tick > 0.0 && self.tick.is_finite() {
+            self.tick
+        } else {
+            1.0
+        };
+        let raised = unit * (grid / unit).log2().ceil().exp2();
+        // A subnormal tick or span overflows or underflows the power of two
+        let grid = if raised.is_finite() && raised > 0.0 {
+            raised
+        } else {
+            grid
+        };
+        std::mem::replace(&mut self.grid, grid) != grid
+    }
 }
 
 /// Grid key of a price; the f64 division saturates instead of overflowing.

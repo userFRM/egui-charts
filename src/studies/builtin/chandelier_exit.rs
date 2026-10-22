@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Chandelier Exit
 /// Trailing stop-loss indicator based on ATR
@@ -19,10 +20,11 @@ pub struct ChandelierExit {
 }
 
 impl ChandelierExit {
+    /// `multiplier` is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(period: usize, multiplier: f64) -> Self {
         Self {
             period: period.max(1),
-            multiplier,
+            multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Long exit

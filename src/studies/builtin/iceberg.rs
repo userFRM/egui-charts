@@ -5,27 +5,30 @@
 //! repeated activity at one price, estimated from bars; it cannot see hidden
 //! orders.
 
+use super::{clamp_param, window_volume};
 use crate::model::Bar;
-use crate::model::bar::{bar_level_keys, level_grid, level_key};
+use crate::model::bar::{GrowingGrid, bar_level_keys, level_key};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 /// Iceberg Detector, estimated from bars.
 ///
 /// Each bar's volume is spread evenly over the price levels between its low and
 /// high. A bar is flagged when the level of its close was touched by at least
 /// `min_touches` of the last `period` bars and holds at least `volume_threshold`
-/// times the series' average bar volume from them. The value is a score from 0
-/// to 1 on flagged bars and 0 on other bars, plotted in its own pane.
+/// times their average bar volume from them. The value is a score from 0 to 1
+/// on flagged bars and 0 on other bars, plotted in its own pane.
 ///
 /// Levels lie on the configured tick size (see
-/// [`with_tick_size`](Self::with_tick_size)), widened to a whole number of
-/// ticks when the series spans more than 1,000 ticks so it covers at most
-/// about 1,000 levels; detection prices are multiples of that grid. Because the
-/// grid and the average volume come from the whole series, a bar that extends
-/// the series can change earlier values. Bars with a non-finite price or an
-/// inverted range are not tracked.
+/// [`with_tick_size`](Self::with_tick_size)), widened to the tick times a
+/// power of two once the bars up to the current one span more than 1,000
+/// ticks, so they cover at most about 1,000 levels; detection prices are
+/// multiples of that grid. Each value uses only its bar and the bars before
+/// it, so appending bars never changes earlier values. Bars with a non-finite
+/// price or an inverted range are not tracked.
 #[derive(Clone)]
 pub struct IcebergDetector {
     /// Number of bars a level's touches and volume are counted over
@@ -59,7 +62,8 @@ pub struct IcebergDetection {
     pub volume: f64,
     /// Number of bars in the window that touched the level
     pub touches: usize,
-    /// Whether the bar that began the level's current run of touches closed at or
+    /// Whether the bar that began the level's current run of touches, or, after
+    /// the grid widens, the oldest bar in the window on the level, closed at or
     /// above its open; that bar may have left the window
     pub is_buy_side: bool,
     /// Score from 0 to 1: touches and volume relative to twice their thresholds
@@ -82,17 +86,19 @@ impl IcebergDetector {
         }
     }
 
-    /// Set the instrument's tick size, which levels are keyed on. With zero
-    /// (the default), a negative or a non-finite value, levels are the series'
-    /// price span divided into 1,000 levels instead.
+    /// Set the instrument's tick size, which levels are keyed on, clamped into
+    /// 0 to `f64::MAX`, NaN to 0. With zero (the default), levels divide the
+    /// price span of the bars so far into about 1,000 levels instead, rounded
+    /// to a power of two.
     pub fn with_tick_size(mut self, tick_size: f64) -> Self {
-        self.tick_size = tick_size;
+        self.tick_size = clamp_param(tick_size, 0.0, f64::MAX);
         self
     }
 
-    /// Set volume threshold
+    /// Set the volume threshold, as a multiple of the average bar volume,
+    /// clamped into 0 to `f64::MAX`, NaN to 0
     pub fn with_volume_threshold(mut self, threshold: f64) -> Self {
-        self.volume_threshold = threshold;
+        self.volume_threshold = clamp_param(threshold, 0.0, f64::MAX);
         self
     }
 
@@ -135,89 +141,81 @@ impl Indicator for IcebergDetector {
         self.values.clear();
         self.detections.clear();
 
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // Calculate average volume for threshold
-        let avg_volume: f64 = data.iter().map(|b| b.volume).sum::<f64>() / data.len() as f64;
-        let volume_threshold = avg_volume * self.volume_threshold;
-
-        let tick_size = level_grid(data, self.tick_size);
-        // Quantize a tracked bar (see the type docs) to its low, high and close keys,
-        // with the volume it spreads on each level between its low and high.
-        let keys = |bar: &Bar| {
-            let (low, high) = bar_level_keys(bar, tick_size)?;
-            let share = bar.volume / (high.abs_diff(low) + 1) as f64;
-            let close = bar.close.is_finite();
-            close.then(|| (low, high, level_key(bar.close, tick_size), share))
-        };
-
-        // Track price levels and their touches. Tracked keys lie on the grid between
-        // the series' lowest and highest key, so the levels fit a dense vector; a
-        // level with no touches is absent.
-        let (first, last) = data
-            .iter()
-            .filter_map(keys)
-            .fold((i64::MAX, i64::MIN), |(lo, hi), (low, high, close, _)| {
-                (lo.min(low).min(close), hi.max(high).max(close))
-            });
-        let slot = |key: i64| (key >= first).then(|| usize::try_from(key.abs_diff(first)).ok())?;
-        let mut price_levels: Vec<(usize, f64, usize, bool)> =
-            vec![(0, 0.0, 0, false); slot(last).map_or(0, |i| i + 1)];
-
+        let mut grid = GrowingGrid::new(self.tick_size);
+        // Per touched level: touches, volume, and whether the bar that began the
+        // current run of touches closed at or above its open
+        let mut levels: HashMap<i64, (usize, f64, bool)> = HashMap::default();
+        let mut volume = 0.0;
         for (idx, bar) in data.iter().enumerate() {
-            // Drop the bar leaving the window, so levels count the last `period` bars
-            if idx >= self.period
-                && let Some((low_key, high_key, _, share)) = keys(&data[idx - self.period])
+            volume = window_volume(data, idx, self.period, volume);
+            let regrid = grid.push(bar);
+            let grid = grid.grid();
+            // Quantize a tracked bar (see the type docs) to its low, high and close keys,
+            // with the volume it spreads on each level between its low and high.
+            let keys = |bar: &Bar| {
+                let (low, high) = bar_level_keys(bar, grid)?;
+                let share = bar.volume / (high.abs_diff(low) + 1) as f64;
+                let close = bar.close.is_finite();
+                close.then(|| (low, high, level_key(bar.close, grid), share))
+            };
+            let add = |levels: &mut HashMap<i64, (usize, f64, bool)>, bar: &Bar| {
+                if let Some((low_key, high_key, _, share)) = keys(bar) {
+                    for key in low_key..=high_key {
+                        let level = levels.entry(key).or_insert((0, 0.0, bar.close >= bar.open));
+                        level.0 += 1;
+                        level.1 += share;
+                    }
+                }
+            };
+
+            // The levels hold the `period` bars before this one, keyed again when the grid changes
+            if regrid {
+                levels.clear();
+                for bar in &data[idx.saturating_sub(self.period)..idx] {
+                    add(&mut levels, bar);
+                }
+            }
+            if let Some(leaving) = idx.checked_sub(self.period)
+                && let Some((low_key, high_key, _, share)) = keys(&data[leaving])
             {
                 for key in low_key..=high_key {
-                    if let Some(entry) = slot(key).and_then(|i| price_levels.get_mut(i)) {
-                        entry.0 = entry.0.saturating_sub(1);
-                        entry.1 -= share;
+                    if let Entry::Occupied(mut entry) = levels.entry(key) {
+                        let level = entry.get_mut();
+                        level.0 = level.0.saturating_sub(1);
+                        level.1 -= share;
+                        if level.0 == 0 {
+                            entry.remove();
+                        }
                     }
                 }
             }
+            add(&mut levels, bar);
 
-            let mut value = IndicatorValue::None;
-            if let Some((low_key, high_key, close_key, share)) = keys(bar) {
-                let is_bullish = bar.close >= bar.open;
+            let Some((_, _, close_key, _)) = keys(bar) else {
+                self.values.push(IndicatorValue::None);
+                continue;
+            };
+            let avg_volume = volume / (idx + 1).min(self.period) as f64;
+            let volume_threshold = avg_volume * self.volume_threshold;
 
-                for key in low_key..=high_key {
-                    let Some(entry) = slot(key).and_then(|i| price_levels.get_mut(i)) else {
-                        continue;
-                    };
-                    if entry.0 == 0 {
-                        *entry = (0, 0.0, idx, is_bullish);
-                    }
-                    entry.0 += 1; // touches
-                    entry.1 += share;
-                }
+            let mut value = IndicatorValue::Single(0.0);
+            if let Some(&(touches, vol, is_buy)) = levels.get(&close_key)
+                && touches >= self.min_touches
+                && vol >= volume_threshold
+            {
+                let price = close_key as f64 * grid;
+                let confidence = (touches as f64 / (self.min_touches as f64 * 2.0)).min(1.0)
+                    * (vol / (volume_threshold * 2.0)).min(1.0);
 
-                value = IndicatorValue::Single(0.0);
-                if let Some((touches, vol, _, is_buy)) =
-                    slot(close_key).and_then(|i| price_levels.get(i))
-                    && *touches > 0
-                    && *touches >= self.min_touches
-                    && *vol >= volume_threshold
-                {
-                    let price = close_key as f64 * tick_size;
-                    let confidence = (*touches as f64 / (self.min_touches as f64 * 2.0)).min(1.0)
-                        * (*vol / (volume_threshold * 2.0)).min(1.0);
-
-                    self.detections.push(IcebergDetection {
-                        bar_idx: idx,
-                        price,
-                        volume: *vol,
-                        touches: *touches,
-                        is_buy_side: *is_buy,
-                        confidence,
-                    });
-                    value = IndicatorValue::Single(confidence);
-                }
+                self.detections.push(IcebergDetection {
+                    bar_idx: idx,
+                    price,
+                    volume: vol,
+                    touches,
+                    is_buy_side: is_buy,
+                    confidence,
+                });
+                value = IndicatorValue::Single(confidence);
             }
             self.values.push(value);
         }

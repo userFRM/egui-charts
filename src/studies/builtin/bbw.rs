@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -17,10 +18,11 @@ pub struct BollingerBandsWidth {
 }
 
 impl BollingerBandsWidth {
+    /// `std_dev` is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(period: usize, std_dev: f64) -> Self {
         Self {
             period: period.max(1),
-            std_dev,
+            std_dev: clamp_param(std_dev, 0.0, f64::MAX),
             values: Vec::new(),
             colors: vec![DESIGN_TOKENS.semantic.extended.purple],
             visible: true,

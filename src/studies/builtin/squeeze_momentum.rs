@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Squeeze Momentum Indicator
 /// Combines Bollinger Bands and Keltner Channels to identify periods of low volatility
@@ -43,15 +44,19 @@ impl SqueezeMomentum {
         }
     }
 
+    /// Set the Bollinger Bands period and multiplier; `mult` is clamped into 0
+    /// to `f64::MAX`, NaN to 0.
     pub fn with_bb_params(mut self, period: usize, mult: f64) -> Self {
         self.bb_period = period.max(1);
-        self.bb_mult = mult;
+        self.bb_mult = clamp_param(mult, 0.0, f64::MAX);
         self
     }
 
+    /// Set the Keltner Channel period and multiplier; `mult` is clamped into 0
+    /// to `f64::MAX`, NaN to 0.
     pub fn with_kc_params(mut self, period: usize, mult: f64) -> Self {
         self.kc_period = period.max(1);
-        self.kc_mult = mult;
+        self.kc_mult = clamp_param(mult, 0.0, f64::MAX);
         self
     }
 

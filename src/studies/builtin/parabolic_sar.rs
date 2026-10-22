@@ -23,6 +23,7 @@
 //! psar.calculate(&bars);
 //! ```
 
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -47,11 +48,15 @@ impl ParabolicSAR {
     /// * `initial_af` - Starting acceleration factor (typically 0.02)
     /// * `af_step` - AF increment (typically 0.02)
     /// * `max_af` - Max AF (typically 0.2)
+    ///
+    /// `initial_af` and `af_step` are clamped into 0.001 to 1, NaN to 0.001, and
+    /// `max_af` into `initial_af` to 1, NaN to `initial_af`.
     pub fn new(initial_af: f64, af_step: f64, max_af: f64) -> Self {
+        let initial_af = clamp_param(initial_af, 0.001, 1.0);
         Self {
-            initial_af: initial_af.max(0.001),
-            af_step: af_step.max(0.001),
-            max_af: max_af.max(initial_af),
+            initial_af,
+            af_step: clamp_param(af_step, 0.001, 1.0),
+            max_af: clamp_param(max_af, initial_af, 1.0),
             values: Vec::new(),
             bullish_color: DESIGN_TOKENS.semantic.extended.bullish,
             bearish_color: DESIGN_TOKENS.semantic.extended.bearish,

@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Moving Average Envelopes
 use crate::studies::{Indicator, IndicatorValue};
@@ -15,10 +16,11 @@ pub struct Envelopes {
 }
 
 impl Envelopes {
+    /// `percent` is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(period: usize, percent: f64, ma_type: &str) -> Self {
         Self {
             period: period.max(1),
-            percent,
+            percent: clamp_param(percent, 0.0, f64::MAX),
             ma_type: ma_type.to_string(),
             values: Vec::new(),
             colors: vec![

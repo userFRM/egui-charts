@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Accumulation Swing Index (ASI)
 /// Developed by Welles Wilder
@@ -16,9 +17,11 @@ pub struct AccumulationSwingIndex {
 }
 
 impl AccumulationSwingIndex {
+    /// `limit_move` is clamped into `f64::EPSILON` to `f64::MAX`, NaN to `f64::EPSILON`; a
+    /// smaller limit move only scales the index up.
     pub fn new(limit_move: f64) -> Self {
         Self {
-            limit_move,
+            limit_move: clamp_param(limit_move, f64::EPSILON, f64::MAX),
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
             visible: true,

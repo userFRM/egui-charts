@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Ease of Movement (EoM / EMV)
 /// Relates price change to volume to identify the ease at which prices move
@@ -28,8 +29,9 @@ impl EaseOfMovement {
         }
     }
 
+    /// Set the volume divisor, clamped into `f64::EPSILON` to `f64::MAX`, NaN to `f64::EPSILON`.
     pub fn with_divisor(mut self, divisor: f64) -> Self {
-        self.divisor = divisor;
+        self.divisor = clamp_param(divisor, f64::EPSILON, f64::MAX);
         self
     }
 

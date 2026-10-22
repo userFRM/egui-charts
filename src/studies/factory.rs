@@ -321,8 +321,12 @@ mod tests {
         }
     }
 
-    /// Every built-in, with its `k`-th length parameter set to `l(k)`.
-    fn builtins_with_lengths(l: impl Fn(usize) -> usize) -> Vec<Box<dyn Indicator>> {
+    /// Every built-in, with its `k`-th length parameter set to `l(k)` and each
+    /// float parameter of conventional value `v` set to `x(v)`.
+    fn builtins_with(
+        l: impl Fn(usize) -> usize,
+        x: impl Fn(f64) -> f64,
+    ) -> Vec<Box<dyn Indicator>> {
         vec![
             Box::new(SMA::new(l(0))),
             Box::new(EMA::new(l(0))),
@@ -330,7 +334,7 @@ mod tests {
             Box::new(DEMA::new(l(0))),
             Box::new(TEMA::new(l(0))),
             Box::new(HMA::new(l(0))),
-            Box::new(ALMA::new(l(0), 0.85, 6.0)),
+            Box::new(ALMA::new(l(0), x(0.85), x(6.0))),
             Box::new(VWMA::new(l(0))),
             Box::new(LSMA::new(l(0))),
             Box::new(SWMA::new()),
@@ -342,7 +346,7 @@ mod tests {
             Box::new(ZLEMA::new(l(0))),
             Box::new(HammingMA::new(l(0))),
             Box::new(MultipleMA::new()),
-            Box::new(MAChannel::new(l(0), 1.0)),
+            Box::new(MAChannel::new(l(0), x(1.0))),
             Box::new(EMACross::new(l(0), l(1))),
             Box::new(MACross::new(l(0), l(1))),
             Box::new(RSI::new(l(0))),
@@ -385,41 +389,41 @@ mod tests {
             Box::new(PriceOscillator::new(l(0), l(1), l(2))),
             Box::new(VolumeOscillator::new(l(0), l(1))),
             Box::new(BalanceOfPower::new(l(0))),
-            Box::new(EaseOfMovement::new(l(0))),
+            Box::new(EaseOfMovement::new(l(0)).with_divisor(x(1e6))),
             Box::new(ADX::new(l(0))),
-            Box::new(SuperTrend::new(l(0), 3.0)),
+            Box::new(SuperTrend::new(l(0), x(3.0))),
             Box::new(IchimokuCloud::new(l(0), l(1), l(2))),
-            Box::new(ParabolicSAR::new(0.02, 0.02, 0.2)),
+            Box::new(ParabolicSAR::new(x(0.02), x(0.02), x(0.2))),
             Box::new(DirectionalMovement::new(l(0))),
             Box::new(VortexIndicator::new(l(0))),
             Box::new(
                 SqueezeMomentum::new()
-                    .with_bb_params(l(0), 2.0)
-                    .with_kc_params(l(1), 1.5),
+                    .with_bb_params(l(0), x(2.0))
+                    .with_kc_params(l(1), x(1.5)),
             ),
             Box::new(TrendIntensityIndex::new(l(0))),
             Box::new(TrendDetectionIndex::new(l(0))),
             Box::new(Qstick::new(l(0))),
             Box::new(ChoppinessIndex::new(l(0))),
             Box::new(ElderImpulseSystem::new(l(0), l(1), l(2), l(3))),
-            Box::new(BollingerBands::new(l(0), 2.0)),
-            Box::new(BollingerBandsWidth::new(l(0), 2.0)),
+            Box::new(BollingerBands::new(l(0), x(2.0))),
+            Box::new(BollingerBandsWidth::new(l(0), x(2.0))),
             Box::new(ATR::new(l(0))),
             Box::new(TrueRange::new()),
-            Box::new(KeltnerChannels::new(l(0), l(1), 2.0)),
+            Box::new(KeltnerChannels::new(l(0), l(1), x(2.0))),
             Box::new(DonchianChannels::new(l(0))),
             Box::new(StandardDeviation::new(l(0))),
-            Box::new(HistoricalVolatility::new(l(0))),
+            Box::new(HistoricalVolatility::new(l(0)).with_trading_days(x(252.0))),
             Box::new(ChaikinVolatility::new(l(0), l(1))),
-            Box::new(ChandelierExit::new(l(0), 3.0)),
-            Box::new(AccelerationBands::new(l(0), 4.0)),
-            Box::new(Envelopes::new(l(0), 2.5, "SMA")),
-            Box::new(PercentB::new(l(0), 2.0)),
+            Box::new(ChandelierExit::new(l(0), x(3.0))),
+            Box::new(AccelerationBands::new(l(0), x(4.0))),
+            Box::new(Envelopes::new(l(0), x(2.5), "SMA")),
+            Box::new(PercentB::new(l(0), x(2.0))),
             Box::new(CloseToCloseVol::new(l(0))),
             Box::new(OhlcVolatility::new(l(0))),
             Box::new(VolatilityIndex::new(l(0))),
             Box::new(ZeroTrendVol::new(l(0))),
-            Box::new(CommoditySelectionIndex::new(l(0), 1.0)),
+            Box::new(CommoditySelectionIndex::new(l(0), x(1.0))),
             Box::new(OnBalanceVolume::new()),
             Box::new(VolumeWeightedAvgPrice::new()),
             Box::new(AnchoredVWAP::new(0)),
@@ -437,22 +441,30 @@ mod tests {
             Box::new(NegativeVolumeIndex::new()),
             Box::new(PositiveVolumeIndex::new()),
             Box::new(WilliamsAD::new()),
-            Box::new(MarketFacilitationIndex::new()),
-            Box::new(IcebergDetector::new(l(0))),
-            Box::new(StopRunIndicator::new(l(0))),
-            Box::new(LiquidityTracker::new(l(0))),
+            Box::new(MarketFacilitationIndex::new().with_divisor(x(1.0))),
+            Box::new(
+                IcebergDetector::new(l(0))
+                    .with_tick_size(x(0.0))
+                    .with_volume_threshold(x(2.0)),
+            ),
+            Box::new(StopRunIndicator::new(l(0)).with_break_threshold(x(0.5))),
+            Box::new(
+                LiquidityTracker::new(l(0))
+                    .with_tick_size(x(0.0))
+                    .with_volume_threshold(x(2.0)),
+            ),
             Box::new(PivotPoints::new(l(0))),
-            Box::new(ZigZag::new(5.0, l(0))),
+            Box::new(ZigZag::new(x(5.0), l(0))),
             Box::new(PriceChannel::new(l(0))),
             Box::new(CorrelationCoefficient::new(l(0))),
             Box::new(CorrelationLogReturns::new(l(0))),
             Box::new(LinearRegression::new(l(0))),
             Box::new(LinearRegressionSlope::new(l(0))),
             Box::new(StandardError::new(l(0))),
-            Box::new(StandardErrorBands::new(l(0), 2.0)),
+            Box::new(StandardErrorBands::new(l(0), x(2.0))),
             Box::new(RankCorrelationIndex::new(l(0))),
             Box::new(MajorityRule::new(l(0))),
-            Box::new(AccumulationSwingIndex::new(0.5)),
+            Box::new(AccumulationSwingIndex::new(x(0.5))),
             Box::new(TypicalPrice::new()),
             Box::new(MedianPrice::new()),
             Box::new(WeightedClose::new()),
@@ -468,7 +480,8 @@ mod tests {
 
     /// No built-in may panic, hang or allocate without bound, whatever its
     /// lengths and bars. Lengths below the minimum clamp at construction, so
-    /// a zero length must give exactly the output of the smallest valid one.
+    /// a zero length must give exactly the output of the smallest valid one,
+    /// and float parameters clamp into their documented range.
     #[test]
     fn degenerate_lengths_and_hostile_bars_are_survivable() {
         use crate::model::Bar;
@@ -540,7 +553,7 @@ mod tests {
         ];
 
         let factory = IndicatorFactory::new();
-        let mut covered: Vec<String> = builtins_with_lengths(|_| 1)
+        let mut covered: Vec<String> = builtins_with(|_| 1, |v| v)
             .iter()
             .map(|s| s.name().to_string())
             .collect();
@@ -562,7 +575,7 @@ mod tests {
 
         let mut failures = Vec::new();
         for n in lengths {
-            for mut study in builtins_with_lengths(|k| n[k]) {
+            for mut study in builtins_with(|k| n[k], |v| v) {
                 for (label, bars) in &datasets {
                     let len = catch_unwind(AssertUnwindSafe(|| {
                         study.calculate(bars);
@@ -582,9 +595,9 @@ mod tests {
                 }
             }
         }
-        for (mut zero, mut one) in builtins_with_lengths(|_| 0)
+        for (mut zero, mut one) in builtins_with(|_| 0, |v| v)
             .into_iter()
-            .zip(builtins_with_lengths(|_| 1))
+            .zip(builtins_with(|_| 1, |v| v))
         {
             if catch_unwind(AssertUnwindSafe(|| {
                 zero.calculate(&normal);
@@ -596,7 +609,103 @@ mod tests {
                 failures.push(format!("{}(0) differs from {}(1)", zero.name(), one.name()));
             }
         }
+
+        // Float parameters clamp into their documented range at construction, NaN to its
+        // bottom: NaN, -inf and -1 must give the output of 0.0, and +inf that of f64::MAX.
+        // The bottom of every range must still draw wherever the conventional value does.
+        let run = |x: fn(f64) -> f64| {
+            let mut studies = builtins_with(|_| 14, x);
+            for study in &mut studies {
+                // A study that panics is reported by the table above
+                let _ = catch_unwind(AssertUnwindSafe(|| study.calculate(&normal)));
+            }
+            studies
+        };
+        let (conventional, bottom) = (run(|v| v), run(|_| 0.0));
+        for (label, hostile, clamped) in [
+            ("NaN", run(|_| f64::NAN), &bottom),
+            ("-inf", run(|_| f64::NEG_INFINITY), &bottom),
+            ("-1", run(|_| -1.0), &bottom),
+            ("+inf", run(|_| f64::INFINITY), &run(|_| f64::MAX)),
+        ] {
+            for (study, clamped) in hostile.iter().zip(clamped) {
+                if format!("{:?}", study.values()) != format!("{:?}", clamped.values()) {
+                    failures.push(format!(
+                        "{} with float parameters {label} not clamped",
+                        study.name()
+                    ));
+                }
+            }
+        }
+        let finite = |v: &IndicatorValue| match v {
+            IndicatorValue::Single(x) => vec![x.is_finite()],
+            IndicatorValue::Multiple(xs) => xs.iter().map(|x| x.is_finite()).collect(),
+            IndicatorValue::None => Vec::new(),
+        };
+        for (study, conventional) in bottom.iter().zip(&conventional) {
+            let lost = study
+                .values()
+                .iter()
+                .zip(conventional.values())
+                .any(|(b, c)| {
+                    let (b, c) = (finite(b), finite(c));
+                    c.iter()
+                        .enumerate()
+                        .any(|(k, c)| *c && !b.get(k).copied().unwrap_or(false))
+                });
+            if lost {
+                failures.push(format!(
+                    "{} with float parameters at 0.0 loses values",
+                    study.name()
+                ));
+            }
+        }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// A bar's value may depend only on that bar and the bars before it, so
+    /// appending bars, here with heavier volume and a wider price range, must
+    /// leave the values of the bars already computed unchanged.
+    #[test]
+    fn appending_bars_leaves_earlier_values_unchanged() {
+        use crate::model::Bar;
+        use chrono::{TimeZone, Utc};
+
+        let bars: Vec<Bar> = (0..300)
+            .map(|i| {
+                let (c, volume) = if i < 150 {
+                    (100.0 + 3.0 * (i as f64 / 5.0).sin(), 100.0)
+                } else {
+                    (100.0 + 15.0 * (i - 150) as f64, 1000.0)
+                };
+                Bar {
+                    time: Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    open: c - 0.5,
+                    high: c + 1.0,
+                    low: c - 1.0,
+                    close: c,
+                    volume,
+                }
+            })
+            .collect();
+        let studies: [fn() -> Box<dyn Indicator>; 2] = [
+            || Box::new(IcebergDetector::new(20).with_tick_size(1.0)),
+            || Box::new(LiquidityTracker::new(20).with_tick_size(1.0)),
+        ];
+        let mut changed = Vec::new();
+        for make in studies {
+            let (mut prefix, mut full) = (make(), make());
+            prefix.calculate(&bars[..150]);
+            full.calculate(&bars);
+            let values = prefix.values().iter().zip(full.values());
+            if let Some((i, (a, b))) = values
+                .enumerate()
+                .find(|(_, (a, b))| format!("{a:?}") != format!("{b:?}"))
+            {
+                changed.push(format!("{} bar {i}: {a:?} became {b:?}", prefix.name()));
+            }
+        }
+        assert!(changed.is_empty(), "{}", changed.join("\n"));
     }
 
     /// The factory exposes the full built-in catalogue. This pins the count so

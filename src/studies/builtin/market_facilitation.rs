@@ -1,3 +1,4 @@
+use super::clamp_param;
 use crate::model::Bar;
 /// Market Facilitation Index (MFI / BW MFI)
 /// Developed by Bill Williams
@@ -25,8 +26,9 @@ impl MarketFacilitationIndex {
         }
     }
 
+    /// Set the volume divisor, clamped into `f64::EPSILON` to `f64::MAX`, NaN to `f64::EPSILON`.
     pub fn with_divisor(mut self, divisor: f64) -> Self {
-        self.divisor = divisor;
+        self.divisor = clamp_param(divisor, f64::EPSILON, f64::MAX);
         self
     }
 

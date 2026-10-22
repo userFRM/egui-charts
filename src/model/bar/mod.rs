@@ -41,5 +41,5 @@ pub use bar::Bar;
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
 pub use bar_data::{BarData, MAX_BARS, MAX_VISIBLE_BARS};
-pub(crate) use levels::{bar_level_keys, level_grid, level_key};
+pub(crate) use levels::{GrowingGrid, bar_level_keys, level_grid, level_key};
 pub use patterns::CandlePatterns;

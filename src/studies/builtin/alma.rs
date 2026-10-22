@@ -22,6 +22,7 @@
 //! alma.calculate(&bars);
 //! ```
 
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -43,12 +44,13 @@ impl ALMA {
     ///
     /// # Arguments
     /// * `period` - Lookback period (typically 9)
-    /// * `offset` - Weight offset 0-1 (typically 0.85)
-    /// * `sigma` - Gaussian sigma (typically 6.0)
+    /// * `offset` - Weight offset (typically 0.85), clamped into 0 to 1, NaN to 0
+    /// * `sigma` - Gaussian sigma (typically 6.0), clamped into 0.001 to 100, NaN
+    ///   to 0.001; a larger sigma narrows the weights until they all underflow to zero
     pub fn new(period: usize, offset: f64, sigma: f64) -> Self {
         let period = period.max(1);
-        let offset = offset.clamp(0.0, 1.0);
-        let sigma = sigma.max(0.001);
+        let offset = clamp_param(offset, 0.0, 1.0);
+        let sigma = clamp_param(sigma, 0.001, 100.0);
 
         Self {
             period,
