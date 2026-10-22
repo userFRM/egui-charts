@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct EaseOfMovement {
     /// SMA smoothing period (typically 14)
     period: usize,
-    /// Divisor for volume (typically 1,000,000 for stocks)
+    /// Volume divisor: Arms states volume in units of 10,000
     divisor: f64,
     values: Vec<IndicatorValue>,
     color: Color32,
@@ -22,14 +22,14 @@ impl EaseOfMovement {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            divisor: 1_000_000.0,
+            divisor: 10_000.0,
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
         }
     }
 
-    /// Set the volume divisor, clamped into `f64::EPSILON` to `f64::MAX`, NaN to `f64::EPSILON`.
+    /// Set the volume divisor, 10,000 by default (Arms states volume in units of 10,000), clamped into `f64::EPSILON` to `f64::MAX`, NaN to `f64::EPSILON`.
     pub fn with_divisor(mut self, divisor: f64) -> Self {
         self.divisor = clamp_param(divisor, f64::EPSILON, f64::MAX);
         self
@@ -168,29 +168,62 @@ mod tests {
         }
     }
 
+    /// Arms' definition with volume in 10,000s, from the worked example in
+    /// "Arms' Ease of Movement: Adding Volume to the Equation" (AAII Journal,
+    /// October 2001): EMV 0.00638 on the second bar.
     #[test]
-    fn test_eom_calculation() {
-        let mut eom = EaseOfMovement::new(3).with_divisor(1.0);
-
-        let data = vec![
-            make_bar(105.0, 95.0, 100.0, 1000.0),
-            make_bar(110.0, 100.0, 105.0, 1000.0),
-            make_bar(115.0, 105.0, 110.0, 1000.0),
-            make_bar(120.0, 110.0, 115.0, 1000.0),
-            make_bar(125.0, 115.0, 120.0, 1000.0),
+    fn default_divisor_matches_reference() {
+        // June 19 volume implied by the article's box ratio of 60.37 on a 1.63 range.
+        let example = [(75.10, 74.10, 584_800.0), (75.80, 74.17, 984_031.0)];
+        let trend = [
+            example[0],
+            example[1],
+            (76.20, 75.00, 700_000.0),
+            (75.90, 74.60, 1_200_000.0),
+            (77.00, 75.50, 900_000.0),
+            (77.40, 76.10, 650_000.0),
+        ];
+        let flat = [(100.0, 100.0, 1_000.0); 4];
+        let cases = [
+            (
+                "worked example",
+                &example[..],
+                1,
+                vec![None, Some(0.00637733973828067)],
+            ),
+            (
+                "trend",
+                &trend[..],
+                3,
+                vec![
+                    None,
+                    None,
+                    None,
+                    Some(0.004376176738157037),
+                    Some(0.007805952380952369),
+                    Some(0.007625000000000039),
+                ],
+            ),
+            ("flat", &flat[..], 2, vec![None, None, Some(0.0), Some(0.0)]),
         ];
 
-        eom.calculate(&data);
-
-        assert_eq!(eom.values.len(), 5);
-
-        // Should have valid values after period warmup
-        let valid_cnt = eom
-            .values
-            .iter()
-            .filter(|v| matches!(v, IndicatorValue::Single(_)))
-            .count();
-
-        assert!(valid_cnt > 0);
+        for (name, bars, period, expected) in cases {
+            let data: Vec<Bar> = bars
+                .iter()
+                .map(|&(h, l, v)| make_bar(h, l, (h + l) / 2.0, v))
+                .collect();
+            let mut eom = EaseOfMovement::new(period);
+            eom.calculate(&data);
+            assert_eq!(eom.values.len(), expected.len(), "{name}");
+            for (i, (got, want)) in eom.values.iter().zip(expected.iter()).enumerate() {
+                match (got, want) {
+                    (IndicatorValue::None, None) => {}
+                    (IndicatorValue::Single(g), Some(w)) => {
+                        assert!((g - w).abs() <= 1e-12, "{name}[{i}]: got {g}, want {w}")
+                    }
+                    _ => panic!("{name}[{i}]: got {got:?}, want {want:?}"),
+                }
+            }
+        }
     }
 }

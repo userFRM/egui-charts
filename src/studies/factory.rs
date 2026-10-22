@@ -389,7 +389,7 @@ mod tests {
             Box::new(PriceOscillator::new(l(0), l(1), l(2))),
             Box::new(VolumeOscillator::new(l(0), l(1))),
             Box::new(BalanceOfPower::new(l(0))),
-            Box::new(EaseOfMovement::new(l(0)).with_divisor(x(1e6))),
+            Box::new(EaseOfMovement::new(l(0)).with_divisor(x(1e4))),
             Box::new(ADX::new(l(0))),
             Box::new(SuperTrend::new(l(0), x(3.0))),
             Box::new(IchimokuCloud::new(l(0), l(1), l(2))),
