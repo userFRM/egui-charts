@@ -2,7 +2,7 @@
 
 # egui-charts
 
-**Production-grade financial charting engine for [egui](https://github.com/emilk/egui).**
+**Financial charting engine for [egui](https://github.com/emilk/egui).**
 
 [![CI](https://github.com/userFRM/egui-charts/workflows/CI/badge.svg)](https://github.com/userFRM/egui-charts/actions)
 [![crates.io](https://img.shields.io/crates/v/egui-charts.svg)](https://crates.io/crates/egui-charts)
@@ -18,17 +18,17 @@
 
 ---
 
-18 chart types (17 fully wired; TPO is in progress). 95 drawing tools. 130+ technical indicators. Full design-token theme system. Pure Rust: compiles to native and WebAssembly with zero JavaScript dependencies.
+Candlestick, bar, line, area, Japanese and range chart types, drawing tools, technical indicators and a design-token theme system. Pure Rust: compiles to native targets and WebAssembly with no JavaScript dependencies.
 
 ---
 
 ## When This Is Useful
 
-- **You need full-featured trading charts inside an egui application**: candlesticks, OHLC, Heikin-Ashi, Renko, Kagi, Market Profile, and 12 more chart types out of the box.
-- **You're building a Tauri desktop trading terminal** — designed as a drop-in rendering engine with toolbar, panel, and dialog UI behind a feature flag.
-- **You want interactive drawings and indicators** — 95 drawing tools with undo/redo, magnet snapping, and persistence; 130+ indicators with a uniform trait interface.
-- **You need a themeable, token-driven design system** — five presets (Classic, Dark, Light, Midnight, High Contrast) backed by a RON-based token pipeline.
-- **You want one codebase for desktop and web** — the same `Chart` widget renders natively on Linux/macOS/Windows and in the browser via WebAssembly.
+- **You need financial charts inside an egui application:** candlesticks, OHLC bars, Heikin-Ashi, Renko, Kagi, Market Profile (TPO) and other chart types.
+- **You're building a Tauri desktop trading terminal:** the chart is an egui widget, with optional toolbar, panel and dialog UI behind the `ui` feature.
+- **You want interactive drawings and indicators:** drawing tools with undo/redo, and indicators behind one `Indicator` trait.
+- **You need a themeable, token-driven design system:** five presets (Classic, Dark, Light, Midnight, High Contrast) backed by a RON-based token pipeline.
+- **You want one codebase for desktop and web:** the same `Chart` widget renders natively on Linux/macOS/Windows and in the browser via WebAssembly.
 
 ---
 
@@ -40,8 +40,8 @@ graph LR
     B --> C["Chart Engine<br/><i>pan · zoom · coords</i>"]
     C --> D["Renderers<br/><i>candles · lines · series</i>"]
     D --> E["egui::Painter"]
-    F["Studies<br/><i>130+ indicators</i>"] --> C
-    G["Drawings<br/><i>95 tools</i>"] --> C
+    F["Studies<br/><i>indicators</i>"] --> C
+    G["Drawings<br/><i>drawing tools</i>"] --> C
     H["Theme<br/><i>tokens · styles</i>"] --> D
 
     style A fill:#2d333b,stroke:#539bf5,color:#adbac7
@@ -57,29 +57,29 @@ graph LR
 <details>
 <summary><strong>Module map</strong></summary>
 
-```
+```text
 egui-charts/src/
-├── chart/                     Rendering engine, pan/zoom, hit-testing, series, overlays
+├── chart/                     Rendering engine, pan/zoom, hit-testing, overlays
 │   ├── builder.rs             ChartBuilder fluent API + TradingChart runtime wrapper
-│   ├── renderers/             Per-chart-type rendering (candles, renko, kagi, TPO…)
+│   ├── rendering/             Per-chart-type rendering (candles, lines, areas, Renko, Kagi, TPO…)
+│   ├── renderers/             Crosshair, indicator lines, labels, markers, session breaks
 │   ├── coords/                Coordinate mapping (chart ↔ screen space)
-│   ├── pan_zoom.rs            Smooth pan/zoom with kinetic scrolling, elastic bounce
-│   ├── indicators/            Indicator pane rendering and layout
-│   └── series/                Series data management and rendering dispatch
-├── drawings/                  95 drawing tools with full interaction lifecycle
+│   ├── pan_zoom.rs            Pan/zoom with kinetic scrolling
+│   └── indicators/            Indicator hit testing and selection rendering
+├── drawings/                  Drawing tools: creation, selection, handles, undo/redo
 │   ├── domain/                Pure types: DrawingToolType, Drawing, ChartPoint, options
 │   ├── services/              Selection, undo/redo (command pattern), snapping, z-ordering
 │   ├── rendering/             Category-specific renderers (lines, fibonacci, patterns…)
-│   └── persistence.rs         JSON serialization for save/load
-├── studies/                   130+ technical indicators
+│   └── persistence.rs         Serializable drawing types (not yet wired to save/load)
+├── studies/                   Technical indicators
 │   ├── builtin/               All indicator implementations
-│   ├── factory.rs             IndicatorFactory — dynamic creation by name
+│   ├── factory.rs             IndicatorFactory: dynamic creation by name
 │   ├── indicator_trait.rs     Core Indicator trait and IndicatorValue enum
 │   └── custom.rs              Runtime indicator creation with closures
 ├── model/                     Domain types: Bar, BarData, Symbol, Timeframe, ChartType
 ├── scales/                    Price scales (linear, log, %), time scales, formatters
 ├── config/                    ChartConfig, ChartOptions, crosshair, tooltip, keyboard
-├── data.rs                    DataSource trait — pluggable data provider interface
+├── data.rs                    DataSource trait: pluggable data provider interface
 ├── validation/                OHLC integrity checks, timestamp ordering
 ├── theme/                     Theme system: presets, semantic tokens, component styles
 ├── tokens/                    RON-based design tokens (colors, spacing, typography)
@@ -103,36 +103,43 @@ Add the dependency:
 
 ```toml
 [dependencies]
-egui-charts = "0.1"
+egui-charts = "0.2"
 ```
 
-Create a chart in your egui app:
+Create a chart in your egui app (this example uses `eframe`):
 
 ```rust
-use egui_charts::{ChartBuilder, Chart};
+use egui_charts::{ChartBuilder, TradingChart};
 use egui_charts::model::Timeframe;
 use egui_charts::theme::Theme;
 
+struct App {
+    chart: TradingChart,
+}
+
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.chart.update(); // poll the data source, load older bars
+            self.chart.show(ui); // render the chart
+        });
+    }
+}
+
 // Build a chart with the fluent API
-let mut chart = ChartBuilder::new()
+let chart = ChartBuilder::new()
     .with_symbol("BTCUSDT")
     .with_timeframe(Timeframe::Hour1)
     .with_theme(Theme::dark())
     .with_drawing_tools()
     .build();
-
-// In your egui update loop:
-fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-    egui::CentralPanel::default().show(ctx, |ui| {
-        self.chart.update();     // poll data, progressive loading
-        self.chart.show(ui);     // render the chart
-    });
-}
+let app = App { chart };
 ```
 
 For a minimal price sparkline (no grid, no crosshair, no tools):
 
 ```rust
+# use egui_charts::ChartBuilder;
 let mini = ChartBuilder::price_chart()
     .with_symbol("ETHUSDT")
     .with_visible_candles(30)
@@ -156,27 +163,27 @@ let mini = ChartBuilder::price_chart()
 
 | Feature | Default | Description |
 |---|:---:|---|
-| `icons` | **on** | 160+ compile-time embedded SVG icons. Required by `ui`. Disable with `default-features = false` to save binary size. |
+| `icons` | **on** | Compile-time embedded SVG icons. Required by `ui`. Disable with `default-features = false` to save binary size. |
 | `ui` | off | Application-level UI: drawing toolbar, top toolbar, timeframe bar, replay controls, sidebars, dialogs, and the `ui_kit` widget library. |
 | `backtest` | off | Strategy backtesting on historical data. |
 | `scripting` | off | Embedded scripting for user-defined indicators and strategies. |
 
 ```toml
 # Core chart only (default)
-egui-charts = "0.1"
+egui-charts = "0.2"
 
 # Full trading terminal UI
-egui-charts = { version = "0.1", features = ["ui"] }
+egui-charts = { version = "0.2", features = ["ui"] }
 
 # Everything
-egui-charts = { version = "0.1", features = ["ui", "backtest", "scripting"] }
+egui-charts = { version = "0.2", features = ["ui", "backtest", "scripting"] }
 ```
 
 ---
 
 ## Chart Types
 
-18 chart types across 6 categories. 17 are fully wired into the render pipeline; the Advanced TPO type is in progress:
+Chart types in six categories:
 
 | Category | Types |
 |---|---|
@@ -185,37 +192,37 @@ egui-charts = { version = "0.1", features = ["ui", "backtest", "scripting"] }
 | **Area** | Area · HLC Area · Baseline |
 | **Japanese** | Heikin-Ashi · Renko · Kagi · Line Break · Point & Figure |
 | **Range** | High-Low · Range Bars |
-| **Advanced** *(in progress)* | TPO / Market Profile |
+| **Advanced** | TPO / Market Profile |
 
 ---
 
 ## Drawing Tools
 
-95 tools organized into 8 toolbar categories:
+`DrawingToolType` defines 95 drawing tool types, counting four cursor modes. Paintbrush draws the same as Brush, and the Font Icon tool is not reachable from the toolbar yet. The drawing toolbar groups the tools into eight categories:
 
-| Category | Examples | Count |
-|---|---|:---:|
-| **Cursors** | Cross, Dot, Arrow, Eraser | 4 |
-| **Lines** | Trend Line, Ray, Horizontal/Vertical, Channels, Pitchforks | 17 |
-| **Fibonacci** | Retracement, Extension, Channel, Time Zones, Circles, Spiral, Wedge | 15 |
-| **Patterns** | XABCD, Cypher, Head & Shoulders, Elliott Waves, Cycles | 14 |
-| **Projection** | Long/Short Position, Forecast, Anchored VWAP, Volume Profile | 12 |
-| **Shapes** | Brush, Highlighter, Rectangle, Circle, Ellipse, Polyline, Arc | 16 |
-| **Annotations** | Text, Note, Callout, Comment, Price Label, Signpost, Table, Image | 14 |
-| **Icons** | Font Icon / Emoji | 1 |
+| Category | Examples |
+|---|---|
+| **Cursors** | Cross, Dot, Arrow, Eraser |
+| **Lines** | Trend Line, Ray, Horizontal/Vertical, Channels, Pitchforks |
+| **Fibonacci** | Retracement, Extension, Channel, Time Zones, Circles, Spiral, Wedge |
+| **Patterns** | XABCD, Cypher, Head & Shoulders, Elliott Waves, Cycles |
+| **Projection** | Long/Short Position, Forecast, Anchored VWAP, Volume Profile |
+| **Shapes** | Brush, Highlighter, Rectangle, Circle, Ellipse, Polyline, Arc |
+| **Annotations** | Text, Note, Callout, Comment, Price Label, Signpost, Table, Image |
+| **Icons** | Font Icon / Emoji |
 
-All drawings persist in chart coordinates (bar index + price) and survive pan/zoom. Undo/redo, multi-select, magnet snapping, and JSON serialization are built in.
+Drawings are anchored in chart coordinates (bar index and price), so they stay in place through pan and zoom. Undo/redo is built in. Some tools are placeholders or approximations; [ROADMAP.md](ROADMAP.md) lists the status of each. Magnet snapping is not applied yet, and drawings cannot yet be saved and restored: the serializable types in `drawings::persistence` do not restore chart coordinates.
 
 ---
 
 ## Technical Indicators
 
-130+ built-in indicators implementing a uniform `Indicator` trait.
+`IndicatorFactory` registers 131 indicator names, each creating a type that implements the `Indicator` trait. Six of them compute the same values as another name under their default settings (for example HL2 and Median Price), which leaves 125 distinct calculations. The indicator dialog in the `ui` feature offers a fixed subset.
 
 | Category | Indicators |
 |---|---|
 | **Moving Averages** | SMA, EMA, WMA, DEMA, TEMA, HMA, ALMA, VWMA, LSMA, SWMA, KAMA, VIDYA, McGinley Dynamic, and more |
-| **Momentum** | RSI, MACD, Stochastic, Williams %R, CCI, ROC, Aroon, Awesome Oscillator, Ultimate Oscillator, Connors RSI, TRIX, KDJ |
+| **Momentum** | RSI, MACD, Stochastic, Williams %R, CCI, ROC, Momentum, Aroon, Awesome Oscillator, Ultimate Oscillator, Connors RSI, TRIX, KDJ |
 | **Trend** | ADX, SuperTrend, Ichimoku Cloud, Parabolic SAR, Directional Movement, Vortex, Squeeze Momentum |
 | **Volatility** | Bollinger Bands, ATR, Keltner Channels, Donchian Channels, Historical Volatility, Chandelier Exit |
 | **Volume** | OBV, VWAP, MFI, A/D, CMF, Volume ROC, Klinger Oscillator, CVD, Volume Profile |
@@ -226,6 +233,7 @@ All drawings persist in chart coordinates (bar index + price) and survive pan/zo
 use egui_charts::studies::{Indicator, IndicatorRegistry, SMA, RSI, BollingerBands};
 
 let mut registry = IndicatorRegistry::new();
+# let bars: Vec<egui_charts::model::Bar> = Vec::new();
 registry.add(Box::new(SMA::new(20)));
 registry.add(Box::new(RSI::new(14)));
 registry.add(Box::new(BollingerBands::new(20, 2.0)));
@@ -242,21 +250,46 @@ Implement `DataSource` to connect any market data provider:
 use egui_charts::data::{DataSource, DataSourceError, DataUpdate, HistoricalDataRequest};
 use egui_charts::model::{Bar, Timeframe};
 
-struct MyBrokerData { /* ... */ }
+struct MyBrokerData {
+    subscriptions: Vec<(String, Timeframe)>,
+}
 
 impl DataSource for MyBrokerData {
-    fn fetch_historical(&self, req: &HistoricalDataRequest)
-        -> Result<Vec<Bar>, DataSourceError>
-    {
-        // Fetch from your API, database, CSV, etc.
-        todo!()
+    fn symbols(&self) -> Vec<String> {
+        vec!["BTCUSDT".to_string()]
     }
 
-    fn subscribe(&mut self, symbol: &str, timeframe: Timeframe) { /* ... */ }
-    fn unsubscribe(&mut self, symbol: &str) { /* ... */ }
-    fn poll(&mut self) -> Option<DataUpdate> { /* ... */ }
+    fn subscribe(&mut self, symbol: String, timeframe: Timeframe) -> Result<(), DataSourceError> {
+        self.subscriptions.push((symbol, timeframe));
+        Ok(())
+    }
+
+    fn unsubscribe(&mut self, symbol: String) -> Result<(), DataSourceError> {
+        self.subscriptions.retain(|(s, _)| *s != symbol);
+        Ok(())
+    }
+
+    fn poll(&mut self) -> Vec<DataUpdate> {
+        // Return the updates your feed delivered since the last call.
+        Vec::new()
+    }
+
+    fn fetch_historical(
+        &mut self,
+        request: HistoricalDataRequest,
+    ) -> Result<Vec<Bar>, DataSourceError> {
+        // Load up to `request.limit` bars before `request.end_ts_millis`
+        // from your API, database or files.
+        Ok(Vec::new())
+    }
+
+    fn get_timeframe(&self, symbol: &str) -> Option<Timeframe> {
+        self.subscriptions.iter().find(|(s, _)| s == symbol).map(|(_, tf)| *tf)
+    }
 }
 ```
+
+`TradingChart` calls `poll` and `fetch_historical` on the UI thread, so both should return quickly. Run network I/O on another thread and hand the results to the data source through a channel.
 
 ---
 
@@ -277,6 +310,7 @@ Five built-in presets backed by a RON-based design-token pipeline:
 ```rust
 use egui_charts::theme::{Theme, ThemePreset, apply_to_egui};
 
+# let ctx = &egui::Context::default();
 let theme = Theme::from_preset(ThemePreset::Midnight);
 apply_to_egui(ctx, &theme);
 
@@ -295,24 +329,29 @@ Access chart colors anywhere via the `HasDesignTokens` extension trait on `egui:
 
 ```toml
 [dependencies]
-egui-charts = { version = "0.1", features = ["ui"] }
+egui-charts = { version = "0.2", features = ["ui"] }
 ```
 
 ```rust
-fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-    let theme = Theme::dark();
-    apply_to_egui(ctx, &theme);
+# struct App { chart: egui_charts::TradingChart }
+use egui_charts::theme::{Theme, apply_to_egui};
 
-    egui::CentralPanel::default().show(ctx, |ui| {
-        self.chart.update();
-        self.chart.show(ui);
-    });
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let theme = Theme::dark();
+        apply_to_egui(ctx, &theme);
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.chart.update();
+            self.chart.show(ui);
+        });
+    }
 }
 ```
 
 1. **Add the dependency** with the `ui` feature for toolbar and panel support.
 2. **Implement `DataSource`** to bridge your Tauri backend (IPC or WebSocket) to the chart's data layer.
-3. **Create a `ChartBuilder`** in your `eframe::App::update` and call `chart.show(ui)`.
+3. **Build the chart once** with `ChartBuilder`, then call `update()` and `show(ui)` in `eframe::App::update`.
 4. **Apply a theme** at startup with `apply_to_egui()` to propagate design tokens.
 
 ---
@@ -323,11 +362,11 @@ fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 |---|---|
 | Click + drag | Pan the chart |
 | Scroll wheel / pinch | Zoom in and out |
-| Shift + drag | Box zoom |
-| Crosshair | Syncs across multiple panes |
+| Zoom mode (`Chart::set_zoom_mode`) + drag | Box zoom |
+| Crosshair | Can follow another chart via `Chart::set_synced_crosshair_bar_idx` |
 | Keyboard | Configurable via `KeyboardOptions` |
 
-Kinetic scrolling with momentum-based panning and elastic bounce at edges. Real-time streaming via `chart.update_data()` with auto-scroll.
+Kinetic scrolling with momentum-based panning. Real-time streaming via `chart.update_data()` with auto-scroll.
 
 ---
 
@@ -338,7 +377,7 @@ Kinetic scrolling with momentum-based panning and elastic bounce at edges. Real-
 | Linux (x86_64, aarch64) | Supported |
 | macOS (x86_64, aarch64) | Supported |
 | Windows (x86_64) | Supported |
-| WebAssembly (wasm32) | Supported — `wasm-bindgen` + `web-sys` |
+| WebAssembly (wasm32) | Supported (`wasm-bindgen` + `web-sys`) |
 
 ---
 
@@ -361,7 +400,7 @@ Some interface icons under `assets/icons/` come from Lucide and are licensed und
 
 ## Contributing
 
-Contributions are welcome and the project is actively evolving — bug fixes, docs, examples, and creative additions like new indicators, drawing tools, chart types, and themes are all encouraged. Start with [CONTRIBUTING.md](CONTRIBUTING.md), which covers the dev setup, the project layout, where each kind of addition lives, and the local checks that mirror CI.
+Contributions are welcome and the project is actively evolving: bug fixes, docs, examples, and creative additions like new indicators, drawing tools, chart types, and themes are all encouraged. Start with [CONTRIBUTING.md](CONTRIBUTING.md), which covers the dev setup, the project layout, where each kind of addition lives, and the local checks that mirror CI.
 
 Please also read the [Code of Conduct](CODE_OF_CONDUCT.md), and report security issues privately per the [Security Policy](SECURITY.md). Questions and ideas are welcome in [Discussions](https://github.com/userFRM/egui-charts/discussions).
 

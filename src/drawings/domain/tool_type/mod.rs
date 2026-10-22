@@ -1,7 +1,7 @@
 //! Drawing tool type enumeration and associated behavior.
 //!
-//! This module defines the [`DrawingToolType`] enum covering all 97 drawing
-//! tools, organized into 18 categories. Each variant carries metadata about its
+//! This module defines the [`DrawingToolType`] enum covering every drawing
+//! tool, organized into 18 categories. Each variant carries metadata about its
 //! interaction mode, required point count, display name, icon path, and
 //! toolbar-compatible data-name identifier.
 //!
@@ -23,7 +23,7 @@ mod interaction_mode;
 
 pub use interaction_mode::DrawingInteractionMode;
 
-/// Enumeration of all 97 drawing tool types available in the charting engine.
+/// Enumeration of all drawing tool types available in the charting engine.
 ///
 /// This is the central type that identifies *what* a drawing is. It determines
 /// rendering behavior, interaction mode, required point count, and toolbar

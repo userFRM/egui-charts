@@ -203,9 +203,10 @@ impl OrderBook {
 
 /// Provider of real-time Level 1 (best bid/ask) quotes.
 ///
-/// Implement this trait to feed top-of-book data into the chart.
-/// The runtime polls [`poll_quotes`](Self::poll_quotes) each frame to
-/// drain any newly arrived quotes.
+/// Implement this trait to supply top-of-book quotes. The chart does not
+/// consume quote sources yet: the host application calls
+/// [`poll_quotes`](Self::poll_quotes) to drain newly arrived quotes and
+/// displays them itself.
 pub trait QuoteSource: Send + Sync {
     /// Subscribe to Level 1 quotes for a symbol
     fn subscribe_quotes(&mut self, symbol: String) -> Result<(), QuoteSourceError>;
@@ -222,9 +223,9 @@ pub trait QuoteSource: Send + Sync {
 
 /// Provider of Level 2 depth-of-market order book snapshots.
 ///
-/// Implement this trait to feed full order-book data into the chart.
-/// Each snapshot contains all visible bid and ask levels up to the
-/// requested `depth`.
+/// Implement this trait to supply full order-book data; the chart does not
+/// consume order-book sources yet. Each snapshot contains all visible bid
+/// and ask levels up to the requested `depth`.
 pub trait OrderBookSource: Send + Sync {
     /// Subscribe to order book for a symbol
     fn subscribe_order_book(

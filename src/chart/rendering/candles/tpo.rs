@@ -34,8 +34,8 @@ const TARGET_ROWS: usize = 40;
 /// right of each session's anchor; this is the per-period horizontal step.
 const PERIOD_COLUMN_PX: f32 = 9.0;
 
-/// Below this column width letters become unreadable, so we switch to blocks —
-/// mirroring how TradingView shows blocks when zoomed out and letters when
+/// Below this column width letters become unreadable, so we switch to blocks,
+/// following the common convention of blocks when zoomed out and letters when
 /// zoomed in.
 const LETTER_MIN_COLUMN_PX: f32 = 7.0;
 

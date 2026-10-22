@@ -2,7 +2,6 @@
 //!
 //! Pure mapping functions that translate DrawingToolType to SVG icons.
 //! No state, no dependencies - just mappings.
-//! Full parity - 97 tools.
 
 use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons};
@@ -38,7 +37,7 @@ pub fn category_icon(category: &str) -> &'static Icon {
 
 /// Get icon for a specific tool
 ///
-/// Maps all 97 tools to appropriate icons.
+/// Maps every tool to an icon.
 pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
     match tool {
         // ============ CURSORS (4 tools) ============

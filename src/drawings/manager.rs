@@ -274,10 +274,11 @@ impl DrawingManager {
 
     /// Applies snap behavior to a screen point, returning the snapped position.
     ///
-    /// Snaps to price levels, time markers, and existing drawing anchor points
-    /// depending on the current snap/magnet configuration. Magnet targets are
-    /// borrowed directly from `drawings`, so no per-pointer-move allocation of
-    /// the flattened point set occurs during a drag.
+    /// Snaps to the anchor points of `drawings` when magnet mode is on. Price
+    /// and time targets are not supplied yet, and the only caller (handle
+    /// dragging) passes no drawings, so no snapping happens today. Magnet
+    /// targets are borrowed directly from `drawings`, so no per-pointer-move
+    /// allocation of the flattened point set occurs during a drag.
     pub fn snap_point(&self, point: Pos2, drawings: &[Drawing]) -> Pos2 {
         // Prices/times would be populated from the chart; magnet points are
         // borrowed from the live drawings without cloning.

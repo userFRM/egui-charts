@@ -1,11 +1,11 @@
 //! # egui-charts
 //!
-//! High-performance financial charting engine for
-//! [egui](https://docs.rs/egui). Render interactive, TradingView-quality
-//! charts — candlesticks, OHLC bars, line, area, Renko, Kagi, Point & Figure,
-//! Market Profile (TPO) — with 95 drawing tools, 130+ technical indicators,
-//! and a full design-token theme system. Built to be embedded in
-//! [Tauri](https://tauri.app) desktop apps or any egui host.
+//! Financial charting engine for
+//! [egui](https://docs.rs/egui). Render interactive charts (candlesticks, OHLC
+//! bars, line, area, Renko, Kagi, Point & Figure, Market Profile (TPO)) with
+//! drawing tools, technical indicators and a design-token theme system.
+//! Built to be embedded in [Tauri](https://tauri.app) desktop apps or any egui
+//! host.
 //!
 //! ## Quick start
 //!
@@ -46,15 +46,15 @@
 //! | **Domain model** | [`model`] | `Bar`, `BarData`, `Symbol`, `Timeframe`, `ChartType`, Renko/Kagi/P&F transforms |
 //! | **Data** | [`data`] | `DataSource` trait, `DataUpdate`, historical/live data abstractions |
 //! | **Chart engine** | [`chart`] | Pan/zoom, hit-testing, coordinate mapping, series rendering, interaction |
-//! | **Drawing tools** | [`drawings`] | 95 tools (trend lines, Fibonacci, patterns, etc.), undo/redo, snapping |
-//! | **Indicators** | [`studies`] | 130+ built-in indicators, `Indicator` trait, `IndicatorRegistry` |
+//! | **Drawing tools** | [`drawings`] | 95 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
+//! | **Indicators** | [`studies`] | 131 indicator names in `IndicatorFactory`, `Indicator` trait, `IndicatorRegistry` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Validation** | [`validation`] | OHLC integrity checks, timestamp ordering, data quality |
 //! | **Theme system** | [`theme`], [`tokens`], [`styles`], [`theming`] | Design tokens (RON), semantic colors, presets (Classic, Dark, Light, Midnight, High Contrast) |
 //! | **Widget** | [`widget`] | `Chart` egui widget, `ChartBuilder`, `TradingChart` |
 //! | **Extensions** | [`ext`] | `UiExt`, `ContextExt`, `ResponseExt`, `HasDesignTokens` |
-//! | **Icons** | [`icons`] | 160+ compile-time embedded SVG icons |
+//! | **Icons** | [`icons`] | Compile-time embedded SVG icons |
 //! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
 //! | **Backtest** | `backtest` | *(feature `backtest`)* Strategy backtesting on historical data |
 //! | **Scripting** | `scripting` | *(feature `scripting`)* User-defined indicators and strategies |
@@ -66,7 +66,7 @@
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
-//! | `icons` | **on** | 160+ compile-time embedded SVG icons. Required by `ui`. |
+//! | `icons` | **on** | Compile-time embedded SVG icons. Required by `ui`. |
 //! | `ui` | off | Application-level UI: toolbars, panels, sidebars, dialogs, and the reusable `ui_kit` widget library they are built on. Enable this when you are building a full trading-terminal interface around the chart engine. |
 //! | `backtest` | off | Backtesting framework for strategy evaluation on historical data. |
 //! | `scripting` | off | Embedded scripting support for user-defined indicators and strategies. |
@@ -80,14 +80,15 @@
 //!
 //!    ```toml
 //!    [dependencies]
-//!    egui-charts = { version = "0.1", features = ["ui"] }
+//!    egui-charts = { version = "0.2", features = ["ui"] }
 //!    ```
 //!
 //! 2. Implement [`data::DataSource`] to bridge your Tauri backend (IPC /
 //!    WebSocket) to the chart's data layer.
 //!
-//! 3. Create a [`chart::builder::ChartBuilder`] in your `eframe::App::update`
-//!    and call `trading_chart.show(ui)` inside an `egui::CentralPanel`.
+//! 3. Build the chart once with [`chart::builder::ChartBuilder`], then call
+//!    `trading_chart.update()` and `trading_chart.show(ui)` inside an
+//!    `egui::CentralPanel` in `eframe::App::update`.
 //!
 //! 4. Apply a theme at startup with [`theme::apply_to_egui`] to propagate
 //!    design tokens into egui's visual system.
@@ -97,10 +98,10 @@
 //! The most commonly used types are re-exported at the crate root for
 //! convenience:
 //!
-//! - [`ChartBuilder`] / [`TradingChart`] — fluent chart construction
-//! - [`Chart`] — the low-level egui widget
-//! - [`DataSource`] — data provider trait
-//! - [`ChartType`] — candlestick, line, area, bar, etc.
+//! - [`ChartBuilder`] / [`TradingChart`]: fluent chart construction
+//! - [`Chart`]: the low-level egui widget
+//! - [`DataSource`]: data provider trait
+//! - [`ChartType`]: candlestick, line, area, bar, etc.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
 #![allow(clippy::too_many_arguments)]
@@ -165,3 +166,63 @@ pub use chart::builder::{ChartBuilder, TradingChart};
 pub use data::DataSource;
 pub use model::ChartType;
 pub use widget::{Chart, RightClickTarget};
+
+// Compiles and runs the README's Rust snippets as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
+#[cfg(test)]
+mod tests {
+    use crate::drawings::DrawingToolType;
+    use crate::studies::IndicatorFactory;
+
+    /// Every number followed, directly or after one or two words, by "drawing tool..." or
+    /// "indicator..." (ignoring surrounding punctuation) in the README, the package description
+    /// and the crate docs must match the code.
+    #[test]
+    fn stated_counts_match_code() {
+        let docs = [
+            include_str!("../README.md"),
+            include_str!("../Cargo.toml"),
+            include_str!("lib.rs"),
+        ];
+        let counts: [(&[&str], usize); 2] = [
+            (&["drawing", "tool"], DrawingToolType::all().len()),
+            (&["indicator"], IndicatorFactory::new().count()),
+        ];
+        for (noun, count) in counts {
+            let mut stated = 0;
+            for doc in docs {
+                let words: Vec<&str> = doc
+                    .split(|c: char| c.is_whitespace() || c == '>')
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                fn bare(w: &str) -> &str {
+                    w.trim_start_matches(['*', '_', '(', '['])
+                }
+                for (i, word) in words.iter().enumerate() {
+                    // Markdown emphasis and brackets around a number are not part of it,
+                    // but a trailing "+" is, so "130+" still fails.
+                    let number =
+                        bare(word).trim_end_matches(['*', '_', ',', '.', ':', ';', ')', ']']);
+                    if !number.starts_with(|c: char| c.is_ascii_digit())
+                        || !number.chars().all(|c| c.is_ascii_digit() || c == '+')
+                    {
+                        continue;
+                    }
+                    let names_noun = (i + 1..=i + 3).any(|k| {
+                        noun.iter()
+                            .enumerate()
+                            .all(|(j, n)| words.get(k + j).is_some_and(|w| bare(w).starts_with(n)))
+                    });
+                    if names_noun {
+                        assert_eq!(number, count.to_string(), "stated count of {noun:?}");
+                        stated += 1;
+                    }
+                }
+            }
+            assert!(stated > 0, "no stated count of {noun:?} found");
+        }
+    }
+}

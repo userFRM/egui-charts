@@ -38,7 +38,7 @@ pub enum IndicatorValue {
 ///
 /// # Implementors
 ///
-/// All 150+ built-in indicators implement this trait (e.g. [`SMA`](super::SMA),
+/// All built-in indicators implement this trait (e.g. [`SMA`](super::SMA),
 /// [`RSI`](super::RSI), [`MACD`](super::MACD)), and users can implement it
 /// for their own indicators or use [`CustomIndicator`](super::CustomIndicator)
 /// to define one at runtime via a closure.

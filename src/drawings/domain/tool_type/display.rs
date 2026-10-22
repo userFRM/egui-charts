@@ -332,10 +332,10 @@ impl DrawingToolType {
         }
     }
 
-    /// Returns the TradingView-compatible data-name identifier for the tool.
+    /// Returns the data-name identifier for the tool.
     ///
     /// These identifiers (e.g., `"LineToolTrendLine"`, `"LineToolFibRetracement"`)
-    /// match the naming convention used by TradingView's charting library and are
+    /// follow the common `LineTool*` naming convention for drawing tools and are
     /// used for serialization/protocol compatibility.
     pub fn data_name(&self) -> &str {
         match self {

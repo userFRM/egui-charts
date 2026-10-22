@@ -19,7 +19,7 @@ Please report security issues privately rather than opening a public issue or pu
 
 Use GitHub's private vulnerability reporting: go to the [Security tab](https://github.com/userFRM/egui-charts/security) of this repository and click **Report a vulnerability** to open a private security advisory. This keeps the report visible only to the maintainers until a fix is ready.
 
-If you are unsure whether something qualifies as a security issue, err on the side of reporting it privately — we would rather take a look than miss a real problem.
+If you are unsure whether something qualifies as a security issue, err on the side of reporting it privately; we would rather take a look than miss a real problem.
 
 ## What to include
 
@@ -44,7 +44,7 @@ If a report turns out to be a bug without security impact, we may ask you to ref
 
 ## Scope and threat model
 
-egui-charts is a client-side charting library: it renders charts inside an egui application and does not run a server, open network listeners, or manage credentials on its own. In practice the most relevant security surface is the parsing and handling of untrusted input — for example CSV data loaded into a chart, or user-supplied scripts when the `scripting` feature is enabled. Reports about crashes, panics, or unexpected behavior triggered by malformed or hostile input of this kind are in scope and welcome.
+egui-charts is a client-side charting library: it renders charts inside an egui application and does not run a server, open network listeners, or manage credentials on its own. In practice the most relevant security surface is the parsing and handling of untrusted input, for example CSV data loaded into a chart, or user-supplied scripts when the `scripting` feature is enabled. Reports about crashes, panics, or unexpected behavior triggered by malformed or hostile input of this kind are in scope and welcome.
 
 Dependency vulnerabilities are also relevant. The CI pipeline runs a `cargo audit` job against the [RustSec advisory database](https://rustsec.org/) on every push and pull request, so advisories affecting our dependency tree are surfaced automatically; if you spot one that we have missed, please let us know.
 

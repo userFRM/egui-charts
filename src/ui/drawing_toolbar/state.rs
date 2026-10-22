@@ -33,7 +33,7 @@ pub struct ToolbarState {
     pub favorites: Vec<DrawingToolType>,
     /// Recently used tools (max 5)
     pub recent: VecDeque<DrawingToolType>,
-    /// Magnet mode enabled (snaps to price/time)
+    /// Magnet mode toggle (snapping is not applied yet)
     pub magnet_mode: bool,
     /// Type of magnet snapping when magnet mode is enabled
     pub magnet_type: MagnetType,

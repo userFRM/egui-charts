@@ -22,6 +22,14 @@
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
 //! includes a version number for forward-compatible migration, metadata, and an
 //! optional timeframe filter.
+//!
+//! # Limitations
+//!
+//! Saving and restoring drawings does not work end to end yet:
+//! `stored_to_drawing()` fills the screen `points` but not `chart_points`, so a
+//! restored drawing is cleared on the next frame; tool types are stored by
+//! display name and some names do not parse back; and nothing in the crate
+//! calls either conversion.
 
 use crate::drawings::{Drawing, DrawingToolType};
 use egui::Color32;

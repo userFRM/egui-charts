@@ -395,7 +395,7 @@ impl IndicatorPane {
     ///
     /// The returned [`PaneInteraction`] also carries the [`Response`] for the
     /// legend's close "x" (when the pane shows a legend), so the host can offer
-    /// TradingView-style one-click pane removal.
+    /// one-click pane removal.
     pub fn show_aligned_interactive(
         &mut self,
         ui: &mut Ui,
@@ -931,7 +931,7 @@ impl IndicatorPane {
     }
 
     /// Draws the indicator legend (name + current value) at the pane's
-    /// top-left, plus a subtle TradingView-style close "x" inside
+    /// top-left, plus a subtle close "x" inside
     /// `close_rect` when one was reserved by [`Self::legend_close_rect`]. The
     /// glyph dims at rest and brightens to the text color when `close_hovered`,
     /// so it reads as clickable without competing with the indicator readout.

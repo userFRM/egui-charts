@@ -1,7 +1,7 @@
 //! Category groupings and enumeration methods for [`DrawingToolType`].
 //!
 //! Provides methods to query tools by category name, list all available
-//! categories, enumerate all 97 tools, and look up SVG icon paths.
+//! categories, enumerate all tools, and look up SVG icon paths.
 
 use super::DrawingToolType;
 
@@ -161,7 +161,7 @@ impl DrawingToolType {
         ]
     }
 
-    /// Returns a static slice of all 97 tool types in canonical order.
+    /// Returns a static slice of all tool types in canonical order.
     ///
     /// The order matches the category groupings: cursors, lines, channels,
     /// pitchforks, fibonacci, gann, patterns, elliott, cycles, projection,

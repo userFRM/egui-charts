@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        We welcome creative contributions. Describe the problem first — the strongest proposals start from a concrete need rather than a chosen solution.
+        We welcome creative contributions. Describe the problem first: the strongest proposals start from a concrete need rather than a chosen solution.
   - type: textarea
     id: problem
     attributes:

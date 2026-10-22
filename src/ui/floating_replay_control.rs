@@ -1,6 +1,6 @@
 //! Floating Replay Control
 //!
-//! A floating toolbar for controlling tick replay.
+//! A floating toolbar for controlling bar replay.
 //! Displays play/pause, step controls, and speed selector.
 
 use crate::icons::icons;

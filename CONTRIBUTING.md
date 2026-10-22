@@ -1,6 +1,6 @@
 # Contributing to egui-charts
 
-Thanks for your interest in `egui-charts` — a high-performance financial charting engine for [egui](https://docs.rs/egui), with candlesticks, drawing tools, technical indicators, and a full design-token theme system.
+Thanks for your interest in `egui-charts`, a financial charting engine for [egui](https://docs.rs/egui) with candlesticks, drawing tools, technical indicators, and a design-token theme system.
 
 This project is actively evolving and genuinely open to pull requests. Whether you are fixing a one-line bug or adding a brand-new chart type, your contribution is welcome. We especially love creative additions: new indicators, drawing tools, chart types, and themes are exactly the kind of thing this engine is built to grow. If you have an idea that makes charts more useful or more beautiful, open an issue and let's talk about it.
 
@@ -14,11 +14,11 @@ All of these are valued, and none is too small:
 - **Features.** Propose an enhancement to the engine, the widget API, or the demo. Open an issue first so we can agree on the shape before you write code.
 - **Documentation.** Doc comments, README clarifications, examples, and rustdoc fixes are all real contributions.
 - **Examples.** New entries under `examples/` that show off a workflow help everyone learn the API faster.
-- **Creative additions.** This is where the project most wants your imagination — new indicators, drawing tools, chart types, and themes. See below for exactly where each lives and how to add one.
+- **Creative additions.** This is where the project most wants your imagination: new indicators, drawing tools, chart types, and themes. See below for exactly where each lives and how to add one.
 
 ## Creative additions: where things live and how to add one
 
-The engine is designed so that each kind of creative addition has one clear home and one clear extension point. Read a couple of existing siblings before you start — they are the best possible template.
+The engine is designed so that each kind of creative addition has one clear home and one clear extension point. Read a couple of existing siblings before you start; they are the best template.
 
 ### A new indicator (study)
 
@@ -34,13 +34,13 @@ To add one: add a variant to `DrawingToolType`, slot it into the right category 
 
 ### A new chart type
 
-Chart types are defined by the `ChartType` enum in [`src/model/chart_type.rs`](src/model/chart_type.rs). Price-transform chart types (Renko, Kagi, Point & Figure, Line Break, range bars, TPO) have their model logic alongside it in [`src/model/`](src/model) (for example `renko.rs`, `kagi.rs`, `point_figure.rs`, `line_break.rs`, `range_bar.rs`, `tpo.rs`). Rendering and series dispatch live under [`src/chart/series/`](src/chart/series) and [`src/chart/rendering/`](src/chart/rendering).
+Chart types are defined by the `ChartType` enum in [`src/model/chart_type.rs`](src/model/chart_type.rs). Price-transform chart types (Renko, Kagi, Point & Figure, Line Break, range bars, TPO) have their model logic alongside it in [`src/model/`](src/model) (for example `renko.rs`, `kagi.rs`, `point_figure.rs`, `line_break.rs`, `range_bar.rs`, `tpo.rs`). Rendering lives under [`src/chart/rendering/`](src/chart/rendering): the per-type candle, bar, line, area and price-transform renderers are in `src/chart/rendering/candles/`, dispatched by `ChartType` in its `mod.rs`.
 
-To add one: add a `ChartType` variant with its metadata, add any price transform under `src/model/`, then wire the variant into the series/rendering dispatch so it draws.
+To add one: add a `ChartType` variant with its metadata, add any price transform under `src/model/`, then wire the variant into the rendering dispatch in `src/chart/rendering/candles/mod.rs` so it draws.
 
 ### A new theme
 
-Themes are built from design tokens. The token layer is in [`src/tokens/`](src/tokens) (raw and semantic tokens, plus `design_tokens.ron`), and theme presets live in [`src/theme/`](src/theme) — the `ThemePreset` enum in [`src/theme/presets.rs`](src/theme/presets.rs) selects which light/dark variants to use.
+Themes are built from design tokens. The token layer is in [`src/tokens/`](src/tokens) (raw and semantic tokens, plus `design_tokens.ron`), and theme presets live in [`src/theme/`](src/theme). The `ThemePreset` enum in [`src/theme/presets.rs`](src/theme/presets.rs) selects which light/dark variants to use.
 
 To add one: add a `ThemePreset` variant, include it in `ThemePreset::all()`, and map it to the token variants it should resolve. If you need new colors, add them to the token layer rather than hard-coding values in the preset.
 
@@ -83,27 +83,27 @@ The bundled library examples can be run with the usual cargo invocation, for exa
 
 A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/lib.rs) for the full table):
 
-- [`model`](src/model) — domain model: `Bar`, `Symbol`, `Timeframe`, `ChartType`, and the Renko/Kagi/P&F transforms.
-- [`data`](src/data.rs) — the `DataSource` trait and data-update abstractions.
-- [`chart`](src/chart) — the chart engine: pan/zoom, hit-testing, coordinate mapping, series rendering, interaction.
-- [`drawings`](src/drawings) — drawing tools, undo/redo, snapping.
-- [`studies`](src/studies) — technical indicators, the `Indicator` trait, and `IndicatorRegistry`.
-- [`scales`](src/scales) — price and time scales, tick generators, formatters.
-- [`config`](src/config) — chart configuration and options.
-- [`validation`](src/validation) — OHLC integrity and data-quality checks.
-- [`theme`](src/theme) / [`tokens`](src/tokens) / [`styles`](src/styles) — the design-token theme system.
-- [`widget`](src/widget) — the `Chart` egui widget, `ChartBuilder`, and `TradingChart`.
-- [`ext`](src/ext) — extension traits (`UiExt`, `ContextExt`, `HasDesignTokens`).
-- [`icons`](src/icons) — compile-time embedded SVG icons.
+- [`model`](src/model): domain types (`Bar`, `Symbol`, `Timeframe`, `ChartType`) and the Renko/Kagi/P&F transforms.
+- [`data`](src/data.rs): the `DataSource` trait and data-update abstractions.
+- [`chart`](src/chart): the chart engine (pan/zoom, hit-testing, coordinate mapping, series rendering, interaction).
+- [`drawings`](src/drawings): drawing tools, selection, handles, undo/redo.
+- [`studies`](src/studies): technical indicators, the `Indicator` trait, and `IndicatorRegistry`.
+- [`scales`](src/scales): price and time scales, tick generators, formatters.
+- [`config`](src/config): chart configuration and options.
+- [`validation`](src/validation): OHLC integrity and data-quality checks.
+- [`theme`](src/theme) / [`tokens`](src/tokens) / [`styles`](src/styles): the design-token theme system.
+- [`widget`](src/widget): the `Chart` egui widget, `ChartBuilder`, and `TradingChart`.
+- [`ext`](src/ext): extension traits (`UiExt`, `ContextExt`, `HasDesignTokens`).
+- [`icons`](src/icons): compile-time embedded SVG icons.
 
 ### Feature flags
 
 The default build is the core engine, theme system, chart widget, and compile-time icons.
 
-- `icons` (**default on**) — compile-time embedded SVG icons. Required by `ui`.
-- `ui` (off) — application-level UI: toolbars, panels, sidebars, dialogs, and the `ui_kit` widget library they are built on. Enable this when building a full trading-terminal interface around the engine.
-- `backtest` (off) — backtesting framework for strategy evaluation on historical data.
-- `scripting` (off) — embedded scripting support for user-defined indicators and strategies.
+- `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
+- `ui` (off): application-level UI (toolbars, panels, sidebars, dialogs) and the `ui_kit` widget library it is built on. Enable this when building a full trading-terminal interface around the engine.
+- `backtest` (off): backtesting framework for strategy evaluation on historical data.
+- `scripting` (off): embedded scripting support for user-defined indicators and strategies.
 
 ## Contribution workflow
 
@@ -148,7 +148,7 @@ CI runs clippy with warnings denied. Its `stable` toolchain is current stable, w
 
 ## Project links
 
-- **Issues:** open one before you start — <https://github.com/userFRM/egui-charts/issues>
+- **Issues:** open one before you start: <https://github.com/userFRM/egui-charts/issues>
 - **License:** dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), your choice. Contributions are accepted under the same dual license.
 - **Live demo:** <https://userfrm.github.io/egui-charts/>
 - **API docs:** <https://docs.rs/egui-charts>

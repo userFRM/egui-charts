@@ -1,10 +1,10 @@
 //! Chart drawing tools -- the annotation layer for financial charts.
 //!
-//! This module implements a full TradingView-compatible drawing system with **97
-//! drawing tools** spanning trend lines, Fibonacci studies, harmonic patterns,
-//! Elliott Wave counts, Gann tools, and more. Drawings live in a persistent
-//! coordinate system ([`ChartPoint`]) so they survive pan/zoom operations, and
-//! are rendered each frame by converting chart coordinates back to screen space.
+//! This module implements the drawing system: trend lines, Fibonacci tools,
+//! harmonic patterns, Elliott Wave counts, Gann tools, and more. Drawings are
+//! anchored in chart coordinates ([`ChartPoint`]) so they stay in place through
+//! pan/zoom, and are rendered each frame by converting chart coordinates back
+//! to screen space.
 //!
 //! # Architecture
 //!
@@ -13,22 +13,22 @@
 //! ```text
 //! src/drawings/
 //! ├── domain/          # Pure types, zero external dependencies
-//! │   ├── tool_type/   # DrawingToolType enum (97 tools), interaction modes
+//! │   ├── tool_type/   # DrawingToolType enum, interaction modes
 //! │   ├── drawing      # Drawing struct with ChartPoint
 //! │   ├── coordinates  # ChartPoint, coordinate conversions
 //! │   └── options      # LineStyle, ArrowStyle, FibConfig
 //! ├── services/        # Business logic services
 //! │   ├── selection    # SelectionService (single + multi-select)
 //! │   ├── history      # HistoryService (undo/redo via command pattern)
-//! │   ├── snap         # SnapService (magnet mode, price/time snapping)
+//! │   ├── snap         # SnapService (snapping helpers, not yet applied)
 //! │   ├── handle       # HandleService (selection handle rendering & hit testing)
 //! │   ├── interaction  # DrawingInteraction (comprehensive hit testing)
 //! │   └── z_order      # ZOrderService (render layer ordering)
 //! ├── rendering/       # Consolidated rendering dispatch
 //! │   ├── traits       # DrawingRenderer trait, RenderContext, helpers
 //! │   └── *            # Category-specific renderers (lines, fibonacci, etc.)
-//! ├── categories.rs    # Static toolbar category definitions (97 tools, 8 groups)
-//! ├── persistence.rs   # JSON serialization via StoredDrawing / DrawingStorage
+//! ├── categories.rs    # Static toolbar category definitions (8 groups)
+//! ├── persistence.rs   # Serializable StoredDrawing / DrawingStorage types
 //! ├── repositories.rs  # Repository pattern for tool data access
 //! └── manager.rs       # DrawingManager -- thin coordinator over services
 //! ```
@@ -107,7 +107,7 @@
 //! selection.select(drawing.id);
 //! ```
 
-/// Static category and toolbar grouping definitions for all 97 drawing tools.
+/// Static category and toolbar grouping definitions for the drawing tools.
 pub mod categories;
 /// Pure domain types with minimal dependencies: `Drawing`, `ChartPoint`,
 /// `DrawingToolType`, and styling/configuration options.

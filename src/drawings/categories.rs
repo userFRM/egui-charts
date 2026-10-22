@@ -2,7 +2,6 @@
 //!
 //! This module contains all category definitions, tool groupings, and
 //! data lookup functions. Pure data with no UI coupling.
-//! Full parity - 97 tools.
 
 use crate::drawings::DrawingToolType;
 
@@ -47,7 +46,6 @@ pub fn get_tool_category(tool: DrawingToolType) -> Option<&'static str> {
 /// Get sections and tools for a category
 ///
 /// Returns a vector of (section_name, tools) tuples for the given category.
-/// All 97 tools included.
 pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingToolType>)> {
     match category {
         "Cursors" => vec![(
@@ -261,7 +259,7 @@ pub fn get_all_tools() -> Vec<DrawingToolType> {
     DrawingToolType::all().to_vec()
 }
 
-/// Count of all tools (should be 97 for full parity)
+/// Count of all tools
 pub fn tool_cnt() -> usize {
     DrawingToolType::all().len()
 }

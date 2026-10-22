@@ -1,7 +1,7 @@
 //! Built-in technical indicators.
 //!
-//! This module contains 150+ technical indicators covering every major
-//! category of technical analysis. All indicators implement the
+//! This module contains the built-in technical indicators, grouped by
+//! category below. All indicators implement the
 //! [`Indicator`](super::Indicator) trait for a uniform API.
 //!
 //! # Indicator categories
@@ -161,7 +161,7 @@ mod williams_ad;
 // Sixth batch - Price calculations
 mod average_price;
 
-// Seventh batch - DeepCharts/Volumetrica-style indicators
+// Seventh batch - order-flow indicators
 mod cvd;
 mod iceberg;
 mod liquidity_tracker;
@@ -325,7 +325,7 @@ pub use williams_ad::WilliamsAD;
 // Re-exports - Sixth batch (Price calculations)
 pub use average_price::{HL2, HLC3, OHLC4, TrueRange};
 
-// Re-exports - Seventh batch (DeepCharts/Volumetrica indicators)
+// Re-exports - Seventh batch (order-flow indicators)
 pub use cvd::{CVD, CVDMode};
 pub use iceberg::{IcebergDetection, IcebergDetector};
 pub use liquidity_tracker::{
@@ -509,7 +509,7 @@ pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
         ("HLC3", "HLC3 - (High + Low + Close) / 3"),
         ("HL2", "HL2 - (High + Low) / 2 - Midpoint"),
         ("TR", "True Range - Max price movement"),
-        // Seventh batch - DeepCharts/Volumetrica indicators
+        // Seventh batch - order-flow indicators
         ("CVD", "Cumulative Volume Delta - Order flow analysis"),
         ("Iceberg", "Iceberg Detector - Hidden large orders"),
         ("Stop Run", "Stop Run Indicator - Stop hunt patterns"),

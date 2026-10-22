@@ -411,7 +411,7 @@ fn calculate_profile_stats(profile: &mut TPOProfile, config: &TPOConfig) {
     // the current high, or the two rows immediately below the current low)
     // holds more TPOs. Counts are accumulated until the running total reaches
     // `value_area_pct` of all TPOs. The result is guaranteed contiguous and
-    // centered on the POC, matching how CQG/Bloomberg/TradingView draw it.
+    // centered on the POC, the usual market-profile convention.
     let target_tpos = (total_tpos as f64 * config.value_area_pct).ceil() as usize;
     let count_at = |key: i64| -> usize { *profile.price_tpo_count.get(&key).unwrap_or(&0) };
 

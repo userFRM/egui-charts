@@ -141,7 +141,7 @@ impl SessionConfig {
 /// axis visibility, volume panel sizing, session break rendering, watermark
 /// overlay, and the real-time navigation button.
 ///
-/// Defaults follow a dark-theme TradingView-style palette.
+/// Defaults follow a common dark-theme charting palette.
 #[derive(Debug, Clone)]
 pub struct ChartConfig {
     /// Color for bullish (up) bars/candles body

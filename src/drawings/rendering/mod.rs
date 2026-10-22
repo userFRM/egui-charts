@@ -140,7 +140,7 @@ impl<T> SpanCache<T> {
 impl Drawing {
     /// Main rendering dispatcher - routes to category-specific render methods
     ///
-    /// This method handles rendering for all 97 drawing tool types,
+    /// This method handles rendering for every drawing tool type,
     /// delegating to the appropriate category-specific implementation.
     pub fn render_original(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
         if self.points.is_empty() {

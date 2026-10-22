@@ -5,4 +5,4 @@ contact_links:
     about: Ask questions, share ideas, and discuss usage with the community.
   - name: Live WebAssembly demo
     url: https://userfrm.github.io/egui-charts/
-    about: Try egui-charts in your browser before filing — it may help clarify the issue.
+    about: Try egui-charts in your browser before filing; it may help clarify the issue.

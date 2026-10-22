@@ -266,8 +266,7 @@ pub struct Chart {
 /// Captured during [`Chart::show`]/[`Chart::show_with_indicators`] when the user
 /// right-clicks inside the chart area. Drain it once per frame with
 /// [`Chart::take_right_click`]. Right-clicking also selects the hit object (the
-/// same as a left click) so selection handles and the menu stay consistent, the
-/// way TradingView behaves.
+/// same as a left click) so selection handles and the menu stay consistent.
 ///
 /// This type intentionally carries no `ui`-feature types, so the core chart can
 /// surface right-clicks even when built with `--no-default-features`; the host
@@ -1359,7 +1358,7 @@ impl Chart {
         // Resolve a right-click into a context-menu target. Mirrors the
         // left-click priority (drawing > overlay indicator > series), and
         // right-clicking an object also selects it so the menu and the
-        // selection handles agree, matching TradingView. The captured target is
+        // selection handles agree. The captured target is
         // drained by the host via `take_right_click`, or consumed by the
         // turnkey menu in `TradingChart`.
         if response.secondary_clicked()
@@ -1376,7 +1375,7 @@ impl Chart {
                 .and_then(|dm| dm.hit_test(click_pos));
 
             self.right_click = Some(if let Some(drawing_id) = drawing_hit {
-                // Right-clicking a drawing selects it (TradingView parity) and
+                // Right-clicking a drawing selects it and
                 // clears any series/indicator selection so handles don't show
                 // on two objects at once.
                 self.selection.deselect();

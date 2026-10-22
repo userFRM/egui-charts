@@ -305,9 +305,10 @@ pub trait DataSource: Send {
 
     /// Fetch historical bars older than the data already loaded.
     ///
-    /// Called when the user scrolls left beyond the currently loaded range.
-    /// The implementation may block or use internal async machinery -- the chart
-    /// engine will not call this from the UI thread if it would block.
+    /// Called when the user scrolls left beyond the currently loaded range, and
+    /// when the chart is built or its symbol or timeframe changes. The chart
+    /// calls it synchronously on the UI thread, so a slow implementation stalls
+    /// rendering; fetch in the background and return what is already loaded.
     fn fetch_historical(
         &mut self,
         request: HistoricalDataRequest,

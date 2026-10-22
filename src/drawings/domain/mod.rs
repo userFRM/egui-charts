@@ -6,7 +6,7 @@
 //!   with dual coordinates (screen + chart), styling, and tool-specific config.
 //! - [`ChartPoint`] -- persistent `(bar_idx, price)` coordinate that survives
 //!   pan/zoom operations.
-//! - [`DrawingToolType`] -- enum of all 97 drawing tool types with interaction
+//! - [`DrawingToolType`] -- enum of all drawing tool types with interaction
 //!   mode, display name, and serialization support.
 //! - [`DrawingInteractionMode`] -- how mouse input maps to point capture.
 //! - Options types: [`LineStyle`], [`ArrowStyle`], [`FontWeight`],

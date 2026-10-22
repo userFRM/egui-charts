@@ -89,7 +89,7 @@ impl Indicator for OHLC4 {
 
 /// HLC3 - Avg of High, Low, Close
 /// Note: Same formula as [`TypicalPrice`](super::TypicalPrice); this variant
-/// uses the standard TradingView naming convention.
+/// uses the common HLC3 name.
 #[derive(Clone)]
 pub struct HLC3 {
     values: Vec<IndicatorValue>,
@@ -173,7 +173,7 @@ impl Indicator for HLC3 {
 
 /// HL2 - Avg of High and Low (Midpoint)
 /// Note: Same formula as [`MedianPrice`](super::MedianPrice); this variant
-/// uses the standard TradingView naming convention.
+/// uses the common HL2 name.
 #[derive(Clone)]
 pub struct HL2 {
     values: Vec<IndicatorValue>,

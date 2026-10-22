@@ -3,7 +3,7 @@
 //!
 //! Intraday charts (1-minute, hourly, …) show a thin vertical divider wherever
 //! the calendar day — or the configured trading session — changes between two
-//! consecutive bars, mirroring the day separators on TradingView intraday
+//! consecutive bars, following the common day-separator convention on intraday
 //! charts. On daily-and-higher charts the same machinery draws the next coarser
 //! boundary (week, then month) so the dividers stay meaningful rather than
 //! landing on every bar.

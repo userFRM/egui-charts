@@ -1,4 +1,4 @@
-//! egui-charts demo — a complete TradingView-style application.
+//! egui-charts demo: a complete charting application.
 //!
 //! Every toolbar button, menu item, dialog, side panel, right-click action, and
 //! the bar-replay engine is wired to real chart behavior in [`controller`].

@@ -1,6 +1,6 @@
 //! Technical analysis indicators (studies) module.
 //!
-//! This module provides 150+ technical indicators commonly used in financial
+//! This module provides technical indicators commonly used in financial
 //! charting applications, covering moving averages, momentum oscillators,
 //! volatility measures, volume analysis, trend detection, and more.
 //!

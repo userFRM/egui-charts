@@ -1,7 +1,7 @@
-//! Core chart engine for high-performance financial charting.
+//! Core chart engine for financial charting.
 //!
-//! This module is the heart of the `egui-charts` crate, providing a TradingView-like
-//! charting engine built on [`egui`]. It is organized into several sub-modules that
+//! This module is the heart of the `egui-charts` crate, providing the interactive
+//! financial charting engine built on [`egui`]. It is organized into several sub-modules that
 //! separate concerns cleanly:
 //!
 //! # Architecture

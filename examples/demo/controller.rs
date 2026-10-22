@@ -705,8 +705,8 @@ impl DemoApp {
             TopToolbarAction::Save => self.export_dialog.open(),
             // Light/dark toggle is a real, cheap visual change.
             TopToolbarAction::ThemeToggle => self.toggle_theme(),
-            // The burger menu and layout-setup button open the same chart-object
-            // panel TradingView puts behind them in this single-chart context.
+            // The burger menu and layout-setup button both open the chart-object
+            // panel in this single-chart context.
             TopToolbarAction::OpenMenu | TopToolbarAction::Layout(_) => {
                 self.open_panel = Some(SidePanel::ObjectTree);
             }

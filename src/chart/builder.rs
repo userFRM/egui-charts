@@ -404,15 +404,15 @@ impl ChartBuilder {
 
     /// Configure the left price scale
     ///
-    /// The left price scale is typically used for indicators or secondary series.
-    /// By default, it is hidden. Call this method to enable and configure it.
+    /// Stores the visibility and mode in the chart configuration. The chart
+    /// does not draw a left price scale yet, so neither setting changes what is
+    /// rendered.
     ///
     /// # Examples
     /// ```
     /// use egui_charts::ChartBuilder;
     /// use egui_charts::scales::PriceScaleMode;
     ///
-    /// // Enable left scale with percentage mode (good for indicators like RSI)
     /// let chart = ChartBuilder::new()
     ///     .with_left_price_scale(true, PriceScaleMode::Percentage)
     ///     .build();
@@ -430,14 +430,15 @@ impl ChartBuilder {
 
     /// Configure the right price scale
     ///
-    /// The right price scale is the primary scale, shown by default.
+    /// The right price scale is the primary scale, shown by default. The
+    /// visibility flag is applied; the mode is stored, but the chart currently
+    /// renders the right scale in normal (linear) mode whatever mode is set.
     ///
     /// # Examples
     /// ```
     /// use egui_charts::ChartBuilder;
     /// use egui_charts::scales::PriceScaleMode;
     ///
-    /// // Use logarithmic scale for long-term price charts
     /// let chart = ChartBuilder::new()
     ///     .with_right_price_scale(true, PriceScaleMode::Logarithmic)
     ///     .build();
@@ -598,7 +599,7 @@ impl Default for ChartBuilder {
 ///
 /// - **Live data polling** via the [`DataSource`] trait
 /// - **Progressive historical loading** — automatically prefetches older bars as the
-///   user scrolls left, similar to TradingView's infinite scroll
+///   user scrolls left, so history appears to scroll without end
 /// - **Indicator calculation** — recalculates all registered studies when data changes
 /// - **Drawing tool management** — optional [`DrawingManager`] for annotations
 ///
@@ -922,7 +923,7 @@ impl TradingChart {
         use crate::chart::selection::ChartElementId;
 
         // The series menu fronts both the price series and indicator lines: it
-        // is the object-level menu (settings, hide, etc.) in TradingView.
+        // is the object-level menu (settings, hide, etc.).
         let label = match id {
             ChartElementId::Series(_) => self.symbol.clone(),
             ChartElementId::OverlayIndicator(idx) | ChartElementId::PaneIndicator(idx) => self
