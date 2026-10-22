@@ -15,10 +15,14 @@ pub(crate) fn draw_dashed_line(
     dash_len: f32,
     gap_len: f32,
 ) {
-    // A painter may carry an unbounded clip (Rect::EVERYTHING); the viewport keeps the dash count finite.
-    let clip = painter.clip_rect().intersect(painter.ctx().viewport_rect());
+    // The clip is layer-local and may lie outside the viewport (egui::Scene), so the viewport
+    // only bounds an unbounded clip such as Rect::EVERYTHING, keeping the dash count finite.
+    let mut clip = painter.clip_rect();
     if !clip.is_finite() {
-        return;
+        clip = clip.intersect(painter.ctx().viewport_rect());
+        if !clip.is_finite() {
+            return;
+        }
     }
     let (x0, y0) = (f64::from(start.x), f64::from(start.y));
     let (dx, dy) = (f64::from(end.x) - x0, f64::from(end.y) - y0);
@@ -75,21 +79,28 @@ pub(crate) fn draw_dashed_line(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Color32, Context, LayerId, Painter, RawInput, Rect};
+    use egui::{Color32, Context, LayerId, Painter, RawInput, Rect, emath::TSTransform};
 
     /// An endpoint far off screen (a drawing anchored outside a collapsed
     /// price range) must not make the dash loop walk its full length, even
-    /// when the painter's clip rect is unbounded.
+    /// when the painter's clip rect is unbounded, and must still draw when the
+    /// clip lies outside the viewport in a transformed layer (an `egui::Scene`).
     #[test]
     fn dashes_only_the_visible_part_of_a_huge_segment() {
         let (dash, gap) = (6.0, 4.0);
         let viewport = Rect::from_min_size(Pos2::ZERO, egui::vec2(2000.0, 1000.0));
-        for (clip, visible_width) in [
+        for (clip, layer_offset, visible_width) in [
             (
                 Rect::from_min_size(Pos2::ZERO, egui::vec2(1000.0, 1000.0)),
+                0.0,
                 1000.0,
             ),
-            (Rect::EVERYTHING, 2000.0),
+            (Rect::EVERYTHING, 0.0, 2000.0),
+            (
+                Rect::from_min_size(Pos2::new(3000.0, 0.0), egui::vec2(1000.0, 1000.0)),
+                -3000.0,
+                1000.0,
+            ),
         ] {
             let ctx = Context::default();
             let input = RawInput {
@@ -97,7 +108,10 @@ mod tests {
                 ..Default::default()
             };
             let output = ctx.run(input, |ctx| {
-                let painter = Painter::new(ctx.clone(), LayerId::background(), clip);
+                let layer = LayerId::background();
+                let offset = TSTransform::from_translation(egui::vec2(layer_offset, 0.0));
+                ctx.set_transform_layer(layer, offset);
+                let painter = Painter::new(ctx.clone(), layer, clip);
                 draw_dashed_line(
                     &painter,
                     Pos2::new(0.0, 500.0),

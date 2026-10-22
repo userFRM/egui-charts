@@ -105,7 +105,7 @@ impl Default for PriceScaleMargins {
     }
 }
 
-/// Span to auto-scale data covering `[min, max]` to.
+/// Base span that auto-scale margins are computed from, for data covering `[min, max]`.
 ///
 /// Flat data (no movement beyond float noise) gets 1% of the price level, or 1.0 at
 /// zero, so other prices such as drawing anchors stay within a sane pixel distance.
