@@ -148,7 +148,7 @@ Each item is marked as complete, partial, or missing.
 - [x] Sine Line — Full sine wave with amplitude guides
 
 ### Projection / Trading (6/6)
-- [x] Long Position: entry, target and independent stop zones; P&L and risk/reward from the bars after the entry
+- [x] Long Position: entry, target and independent stop zones; risk/reward from the levels, P&L from the bars after the entry
 - [x] Short Position
 - [x] Forecast: price change over the bar span, resolved against the bars up to the target bar
 - [x] Ghost Feed — Projected future bars

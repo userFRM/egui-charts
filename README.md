@@ -24,7 +24,7 @@
 
 ## When This Is Useful
 
-- **You need TradingView-quality charts inside an egui application**: candlesticks, OHLC, Heikin-Ashi, Renko, Kagi, Market Profile, and 12 more chart types out of the box.
+- **You need full-featured trading charts inside an egui application**: candlesticks, OHLC, Heikin-Ashi, Renko, Kagi, Market Profile, and 12 more chart types out of the box.
 - **You're building a Tauri desktop trading terminal** — designed as a drop-in rendering engine with toolbar, panel, and dialog UI behind a feature flag.
 - **You want interactive drawings and indicators** — 95 drawing tools with undo/redo, magnet snapping, and persistence; 130+ indicators with a uniform trait interface.
 - **You need a themeable, token-driven design system** — five presets (Classic, Dark, Light, Midnight, High Contrast) backed by a RON-based token pipeline.

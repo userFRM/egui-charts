@@ -246,8 +246,8 @@ pub trait OrderBookSource: Send + Sync {
 /// Provider of tick-by-tick trade data (time & sales).
 ///
 /// Implement this trait to stream individual trade executions into the
-/// chart. Tick data enables footprint charts, volume-at-price analysis,
-/// and cumulative delta overlays.
+/// chart. Tick data enables volume-at-price analysis and cumulative delta
+/// overlays.
 pub trait TickSource: Send + Sync {
     /// Subscribe to tick data for a symbol
     fn subscribe_ticks(&mut self, symbol: String) -> Result<(), QuoteSourceError>;

@@ -25,7 +25,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Removed
 
-- The Volume Footprint and Session Volume chart types, which approximated per-price volume from bar totals, and the unused `model::footprint` module.
+- The Volume Footprint and Session Volume chart types, which approximated per-price volume from bar totals, with their `icons::icons::CHART_VOLUME_FOOTPRINT` and `icons::icons::CHART_SESSION_VOLUME` icons, and the unused `model::footprint` module.
 - The `chart::series_api` module (`ISeriesApi`, `IPriceScaleApi`, `ITimeScaleApi`, `IStudyApi`, their implementations and option types), which nothing constructed.
 - `TradingChart::toggle_main_series_visibility` and the series context menu "Hide" entry (`SeriesContextMenuAction::Hide`), which had no effect.
 - `DrawingManager::update_pos_prices`, `Drawing::format_timestamp`, and the `Drawing` fields `is_closed`, `curr_price`, `forecast_start_price`, `forecast_target_price`, `forecast_start_time`, and `forecast_target_time`; position and forecast results come from the chart's bars.
