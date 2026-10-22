@@ -1,9 +1,9 @@
 use super::clamp_param;
 use crate::model::Bar;
 /// Chandelier Exit
-/// Trailing stop-loss indicator based on ATR
+/// Trailing stop-loss indicator based on Wilder's ATR
 /// Developed by Chuck LeBeau
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{ATR, Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -58,55 +58,29 @@ impl Indicator for ChandelierExit {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
+        let mut atr = ATR::new(self.period);
+        atr.calculate(data);
 
-        // Calculate True Range
-        let mut tr = Vec::with_capacity(data.len());
-        tr.push(data[0].high - data[0].low);
+        for (i, value) in atr.values().iter().enumerate() {
+            match *value {
+                IndicatorValue::Single(atr) if !atr.is_nan() => {
+                    // Find highest high and lowest low in period
+                    let window = &data[i + 1 - self.period..=i];
+                    let highest = window
+                        .iter()
+                        .map(|b| b.high)
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
 
-        for i in 1..data.len() {
-            let high_low = data[i].high - data[i].low;
-            let high_close = (data[i].high - data[i - 1].close).abs();
-            let low_close = (data[i].low - data[i - 1].close).abs();
-            tr.push(high_low.max(high_close).max(low_close));
-        }
+                    // Long exit = Highest High - ATR * multiplier
+                    let long_exit = highest - atr * self.multiplier;
+                    // Short exit = Lowest Low + ATR * multiplier
+                    let short_exit = lowest + atr * self.multiplier;
 
-        // Calculate ATR using SMA
-        let mut atr = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                atr.push(f64::NAN);
-            } else {
-                let sum: f64 = tr[i + 1 - self.period..=i].iter().sum();
-                atr.push(sum / self.period as f64);
-            }
-        }
-
-        // Calculate Chandelier Exit
-        for i in 0..data.len() {
-            if i < self.period - 1 || atr[i].is_nan() {
-                self.values.push(IndicatorValue::None);
-            } else {
-                // Find highest high and lowest low in period
-                let window = &data[i + 1 - self.period..=i];
-                let highest = window
-                    .iter()
-                    .map(|b| b.high)
-                    .fold(f64::NEG_INFINITY, f64::max);
-                let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
-
-                // Long exit = Highest High - ATR * multiplier
-                let long_exit = highest - atr[i] * self.multiplier;
-                // Short exit = Lowest Low + ATR * multiplier
-                let short_exit = lowest + atr[i] * self.multiplier;
-
-                self.values
-                    .push(IndicatorValue::Multiple(vec![long_exit, short_exit]));
+                    self.values
+                        .push(IndicatorValue::Multiple(vec![long_exit, short_exit]));
+                }
+                _ => self.values.push(IndicatorValue::None),
             }
         }
     }
@@ -141,6 +115,10 @@ impl Indicator for ChandelierExit {
         Box::new(self.clone())
     }
 
+    fn line_cnt(&self) -> usize {
+        2
+    }
+
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("Long Exit({},{})", self.period, self.multiplier),
@@ -165,30 +143,67 @@ mod tests {
         }
     }
 
+    /// Reference values from LeBeau's definition over Wilder's ATR, computed
+    /// independently: highest high or lowest low of the last `period` bars,
+    /// minus or plus `multiplier` times ATR(`period`). The gap on bar 4 makes
+    /// Wilder's smoothing differ from a simple average of true range.
     #[test]
-    fn test_chandelier_calculation() {
-        let mut ce = ChandelierExit::new(5, 2.0);
-
-        let data = vec![
-            make_bar(102.0, 98.0, 100.0),
-            make_bar(104.0, 99.0, 103.0),
-            make_bar(106.0, 101.0, 105.0),
-            make_bar(108.0, 103.0, 107.0),
-            make_bar(110.0, 105.0, 109.0),
-            make_bar(112.0, 107.0, 111.0),
+    fn matches_reference_values() {
+        let trend = [
+            (102.0, 98.0, 100.0),
+            (104.0, 99.0, 103.0),
+            (106.0, 101.0, 105.0),
+            (108.0, 103.0, 107.0),
+            (118.0, 112.0, 116.0),
+            (117.0, 113.0, 114.0),
+            (115.0, 109.0, 110.0),
+            (112.0, 108.0, 111.0),
+        ];
+        let trend_expected = [
+            (96.66666666666667, 107.33333333333333),
+            (98.44444444444444, 108.55555555555556),
+            (104.29629629629629, 114.70370370370371),
+            (106.19753086419753, 114.80246913580247),
+            (106.13168724279835, 120.86831275720165),
+            (106.42112482853224, 118.57887517146776),
+        ];
+        let flat = [(101.0, 99.0, 100.0); 5];
+        let flat_expected = [(97.0, 103.0); 3];
+        let cases = [
+            ("trend with gap", &trend[..], &trend_expected[..]),
+            ("flat", &flat[..], &flat_expected[..]),
         ];
 
-        ce.calculate(&data);
-
-        assert_eq!(ce.values.len(), 6);
-
-        // Should have long and short exit values
-        if let IndicatorValue::Multiple(v) = ce.values.last().unwrap() {
-            assert_eq!(v.len(), 2);
-            // Long exit should be below highest high
-            assert!(v[0] < 112.0);
-            // Short exit should be above lowest low
-            assert!(v[1] > 98.0);
+        let mut failures = Vec::new();
+        if ChandelierExit::new(3, 2.0).line_cnt() != 2 {
+            failures.push("short exit line is not drawn".to_string());
         }
+        for (label, bars, expected) in cases {
+            let data: Vec<Bar> = bars.iter().map(|&(h, l, c)| make_bar(h, l, c)).collect();
+            let mut ce = ChandelierExit::new(3, 2.0);
+            ce.calculate(&data);
+
+            let got = ce.values();
+            let warm_up = got
+                .iter()
+                .take(2)
+                .all(|v| matches!(v, IndicatorValue::None));
+            if got.len() != data.len() || !warm_up {
+                failures.push(format!("{label}: warm-up or length wrong: {got:?}"));
+                continue;
+            }
+            for (i, &(long, short)) in expected.iter().enumerate() {
+                let ok = matches!(&got[i + 2], IndicatorValue::Multiple(v)
+                    if (v[0] - long).abs() < 1e-9 && (v[1] - short).abs() < 1e-9);
+                if !ok {
+                    failures.push(format!(
+                        "{label}: bar {} is {:?}, expected [{long}, {short}]",
+                        i + 2,
+                        got[i + 2]
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

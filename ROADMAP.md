@@ -292,7 +292,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Donchian Channels: N-bar high/low
 - [x] Standard Deviation
 - [x] Bollinger Band Width (BBW), %B
-- [x] Chandelier Exit: trailing stop from a simple average of true range; only the long exit is drawn
+- [x] Chandelier Exit: N-bar high minus and N-bar low plus ATR*multiplier (long and short exits)
 - [x] Squeeze Momentum: momentum line drawn; BB-inside-KC flag computed but not shown
 - [x] Price Channel (same values as Donchian; only the upper line is drawn)
 - [x] Historical Volatility: Annualized log-return std dev
