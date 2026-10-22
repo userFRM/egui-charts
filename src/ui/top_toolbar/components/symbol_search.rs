@@ -357,19 +357,29 @@ impl SymbolSearchDialog {
         frame
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                if is_sel {
-                    ui.visuals_mut().override_text_color =
-                        Some(ui.visuals().selection.stroke.color);
-                }
+                // Strong and weak text ignore `override_text_color`, so a selected row sets both colours.
+                let (name_color, desc_color) = if is_sel {
+                    let on_selected = ui.visuals().selection.stroke.color;
+                    (on_selected, on_selected)
+                } else {
+                    (
+                        ui.visuals().strong_text_color(),
+                        ui.visuals().weak_text_color(),
+                    )
+                };
 
                 ui.horizontal(|ui| {
                     // Symbol name (bold)
-                    ui.label(egui::RichText::new(&symbol.name).strong());
+                    ui.label(egui::RichText::new(&symbol.name).strong().color(name_color));
                 });
 
                 // Description
                 if self.config.show_description && !symbol.display_name.is_empty() {
-                    ui.hint_label(&symbol.display_name);
+                    ui.label(
+                        egui::RichText::new(&symbol.display_name)
+                            .small()
+                            .color(desc_color),
+                    );
                 }
             })
             .response
