@@ -1,11 +1,16 @@
 use crate::model::Bar;
-/// KDJ Indicator
-/// Popular in Chinese stock markets, derived from Stochastic
-/// K%, D%, and J% lines with J being more volatile
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// KDJ, the stochastic oscillator as used in Chinese securities analysis.
+///
+/// The raw stochastic value of each bar is `RSV = (close - lowest low) / (highest high - lowest low) * 100`
+/// over the last `period` bars, or 50 when that window has no range. K and D are smoothed recursively,
+/// both starting from 50: `K = ((k_smooth - 1) * K[-1] + RSV) / k_smooth` and
+/// `D = ((d_smooth - 1) * D[-1] + K) / d_smooth`, so the default lengths of 3 weight the new value by a
+/// third. `J = 3K - 2D`. The first value is on bar `period - 1`; earlier bars are `None`.
+/// A bar with a non-finite close or window range has no value, and K and D carry over it unchanged.
 #[derive(Clone)]
 pub struct KDJ {
     /// Period for %K calculation (typically 9)
@@ -40,21 +45,6 @@ impl KDJ {
         self.colors = colors;
         self
     }
-
-    fn calculate_sma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                result.push(f64::NAN);
-            } else {
-                let sum: f64 = data[i + 1 - period..=i].iter().sum();
-                result.push(sum / period as f64);
-            }
-        }
-
-        result
-    }
 }
 
 impl Default for KDJ {
@@ -74,54 +64,37 @@ impl Indicator for KDJ {
 
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // Calculate raw stochastic %K (RSV)
-        let mut rsv = Vec::with_capacity(data.len());
+        let k_len = self.k_smooth as f64;
+        let d_len = self.d_smooth as f64;
+        let (mut k, mut d) = (50.0, 50.0);
 
         for i in 0..data.len() {
-            if i < self.period - 1 {
-                rsv.push(f64::NAN);
-            } else {
-                let window = &data[i + 1 - self.period..=i];
-                let highest = window
-                    .iter()
-                    .map(|b| b.high)
-                    .fold(f64::NEG_INFINITY, f64::max);
-                let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
-
-                let range = highest - lowest;
-                if range == 0.0 {
-                    rsv.push(50.0);
-                } else {
-                    let value = (data[i].close - lowest) / range * 100.0;
-                    rsv.push(value);
-                }
-            }
-        }
-
-        // Smooth RSV to get %K
-        let k_line = Self::calculate_sma(&rsv, self.k_smooth);
-
-        // Smooth %K to get %D
-        let d_line = Self::calculate_sma(&k_line, self.d_smooth);
-
-        // Calculate J = 3*K - 2*D
-        for i in 0..data.len() {
-            if k_line[i].is_nan() || d_line[i].is_nan() {
+            if i + 1 < self.period {
                 self.values.push(IndicatorValue::None);
-            } else {
-                let k = k_line[i];
-                let d = d_line[i];
-                let j = 3.0 * k - 2.0 * d;
-                self.values.push(IndicatorValue::Multiple(vec![k, d, j]));
+                continue;
             }
+            let window = &data[i + 1 - self.period..=i];
+            let highest = window
+                .iter()
+                .map(|b| b.high)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
+            let range = highest - lowest;
+            if !(range.is_finite() && data[i].close.is_finite()) {
+                // No value for a window with a non-finite price; K and D carry over it unchanged.
+                self.values.push(IndicatorValue::None);
+                continue;
+            }
+            let rsv = if range == 0.0 {
+                50.0
+            } else {
+                (data[i].close - lowest) / range * 100.0
+            };
+
+            k = ((k_len - 1.0) * k + rsv) / k_len;
+            d = ((d_len - 1.0) * d + k) / d_len;
+            self.values
+                .push(IndicatorValue::Multiple(vec![k, d, 3.0 * k - 2.0 * d]));
         }
     }
 
@@ -155,6 +128,10 @@ impl Indicator for KDJ {
         Box::new(self.clone())
     }
 
+    fn line_cnt(&self) -> usize {
+        3
+    }
+
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("K({})", self.period),
@@ -180,29 +157,87 @@ mod tests {
         }
     }
 
+    /// Reference values from the published KDJ formula, computed in exact rational arithmetic:
+    /// `RSV = (C - LLV(L, N)) / (HHV(H, N) - LLV(L, N)) * 100`, `K = ((M1 - 1) * K[-1] + RSV) / M1`,
+    /// `D = ((M2 - 1) * D[-1] + K) / M2`, both 50 before the first value, and `J = 3K - 2D`.
     #[test]
-    fn test_kdj_calculation() {
-        let mut kdj = KDJ::new(5, 2, 2);
-
-        let data = vec![
-            make_bar(102.0, 98.0, 100.0),
-            make_bar(104.0, 99.0, 103.0),
-            make_bar(106.0, 101.0, 105.0),
-            make_bar(108.0, 103.0, 107.0),
-            make_bar(110.0, 105.0, 109.0),
-            make_bar(112.0, 107.0, 111.0),
-            make_bar(114.0, 109.0, 113.0),
+    fn kdj_matches_published_recursion() {
+        let data: Vec<Bar> = [
+            (102.0, 98.0, 100.0),
+            (104.0, 99.0, 103.0),
+            (106.0, 101.0, 104.0),
+            (105.0, 100.0, 101.0),
+            (103.0, 97.0, 98.0),
+            (104.0, 99.0, 103.0),
+            (101.0, 101.0, 101.0),
+            (101.0, 101.0, 101.0),
+            (101.0, 101.0, 101.0),
+            (108.0, 100.0, 107.0),
+            (110.0, 104.0, 105.0),
+            (109.0, 103.0, 104.0),
+            (107.0, 102.0, 106.0),
+            (112.0, 105.0, 111.0),
+            (111.0, 106.0, 107.0),
+        ]
+        .iter()
+        .map(|&(h, l, c)| make_bar(h, l, c))
+        .collect();
+        // Bar 2: RSV = (104 - 98) / (106 - 98) * 100 = 75, K = 50 * 2/3 + 75 / 3, D = 50 / 2 + K / 2.
+        // Bar 8 closes a window with no range, where RSV is 50.
+        let expected: [Option<[f64; 3]>; 15] = [
+            None,
+            None,
+            Some([58.333333333333336, 54.166666666666664, 66.66666666666667]),
+            Some([48.41269841269841, 51.28968253968254, 42.65873015873016]),
+            Some([35.97883597883598, 43.63425925925926, 20.667989417989418]),
+            Some([48.985890652557316, 46.31007495590829, 54.33752204585538]),
+            Some([51.70487948265726, 49.00747721928278, 57.09968400940623]),
+            Some([47.803252988438174, 48.405365103860476, 46.59902875759357]),
+            Some([48.53550199229212, 48.470433548076294, 48.665638880723755]),
+            Some([61.52366799486141, 54.99705077146885, 74.57690244164652]),
+            Some([57.68244532990761, 56.33974805068823, 60.36783988834636]),
+            Some([51.788296886605075, 54.06402246864665, 47.23684572252191]),
+            Some([51.19219792440338, 52.628110196525014, 48.32037338016011]),
+            Some([64.12813194960225, 58.37812107306363, 75.6281537026795]),
+            Some([59.41875463306817, 58.8984378530659, 60.459388193072705]),
         ];
 
-        kdj.calculate(&data);
+        // The same bars with a NaN close on bar 9 and an infinite high on bar 13: bar 9 and the windows
+        // holding bar 13 have no value, and K and D carry over them unchanged.
+        let mut hostile = data.clone();
+        hostile[9].close = f64::NAN;
+        hostile[13].high = f64::INFINITY;
+        let mut hostile_expected = expected;
+        hostile_expected[9] = None;
+        hostile_expected[10] = Some([49.02366799486141, 48.74705077146885, 49.576902441646524]);
+        hostile_expected[11] = Some([46.01577866324094, 47.38141471735489, 43.28450655501303]);
+        hostile_expected[12] = Some([47.343852442160625, 47.36263357975776, 47.306290166966356]);
+        hostile_expected[13] = None;
+        hostile_expected[14] = None;
 
-        assert_eq!(kdj.values.len(), 7);
-
-        // Should have K, D, J values
-        if let IndicatorValue::Multiple(v) = kdj.values.last().unwrap() {
-            assert_eq!(v.len(), 3);
-            // In uptrend, K should be high
-            assert!(v[0] > 50.0, "K should be > 50 in uptrend");
+        // Distinct K and D lengths so that swapping their weights fails.
+        let mut kdj = KDJ::new(3, 3, 2);
+        for (case, data, expected) in [
+            ("finite", &data, expected),
+            ("non-finite", &hostile, hostile_expected),
+        ] {
+            kdj.calculate(data);
+            assert_eq!(kdj.values().len(), expected.len(), "{case}");
+            for (i, (value, want)) in kdj.values().iter().zip(expected).enumerate() {
+                match (value, want) {
+                    (IndicatorValue::None, None) => {}
+                    (IndicatorValue::Multiple(got), Some(want)) => {
+                        assert_eq!(got.len(), kdj.line_cnt(), "{case} bar {i}");
+                        for (g, w) in got.iter().zip(want) {
+                            assert!(
+                                (g - w).abs() < 1e-12,
+                                "{case} bar {i}: got {got:?}, want {want:?}"
+                            );
+                        }
+                    }
+                    _ => panic!("{case} bar {i}: got {value:?}, want {want:?}"),
+                }
+            }
         }
     }
 }
