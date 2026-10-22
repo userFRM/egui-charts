@@ -304,7 +304,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 
 ### Volume (21/23)
 - [x] OBV, VWAP (optional reset on UTC date change; the indicator dialog builds it without reset, so it is cumulative), Anchored VWAP
-- [x] MFI, A/D Line, CMF, Klinger Oscillator (signal not drawn)
+- [x] MFI, A/D Line, CMF, Klinger Oscillator
 - [x] Ease of Movement, Net Volume, Volume ROC, Volume Oscillator
 - [x] CVD: Cumulative Volume Delta, each bar's delta estimated from its close position, body ratio or direction, in its own pane
 - [ ] Volume Profile Visible Range, Volume Profile Fixed Range: bin volume over the whole history; bin 0 is plotted on the price scale, so nothing visible draws
