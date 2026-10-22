@@ -36,6 +36,8 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Clippy (all features)
         run: cargo clippy --all-features --all-targets -- -D warnings
+      - name: Clippy (headless engine)
+        run: cargo clippy --no-default-features --features backtest,scripting --all-targets -- -D warnings
 
   test:
     name: Test
@@ -78,16 +80,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       # The library loads only its embedded SVG icons, and the engine without
-      # default features must not pull in egui_extras at all.
+      # default features must not depend on egui or a windowing backend.
       - name: Check dependency tree
         run: |
           default=$(cargo tree --locked -e normal --prefix none)
           headless=$(cargo tree --locked -e normal --no-default-features --prefix none)
           banned=$(grep -E '^(rustls|ureq|ehttp|image) v' <<< "$default" | sort -u || true)
           if [ -n "$banned" ]; then echo "::error::default features depend on: $banned"; exit 1; fi
-          if grep -q '^egui_extras v' <<< "$headless"; then
-            echo "::error::--no-default-features depends on egui_extras"; exit 1
-          fi
+          banned=$(grep -E '^(egui|egui_extras|epaint|winit) v' <<< "$headless" | sort -u || true)
+          if [ -n "$banned" ]; then echo "::error::--no-default-features depends on: $banned"; exit 1; fi
           # The deployed demo must build the versions its committed lockfile pins.
           (cd examples/demo && cargo tree --locked > /dev/null)
       - name: Install cargo-audit

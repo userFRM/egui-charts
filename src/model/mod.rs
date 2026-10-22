@@ -34,6 +34,7 @@ mod timescale;
 pub mod tpo;
 
 pub use annotations::{Annotation, MarkerType};
+#[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarData};
 pub use chart_type::{ChartType, ChartTypeCategory, ChartTypeParams};

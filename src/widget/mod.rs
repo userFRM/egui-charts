@@ -288,7 +288,7 @@ pub struct Chart {
 /// same as a left click) so selection handles and the menu stay consistent.
 ///
 /// This type intentionally carries no `ui`-feature types, so the core chart can
-/// surface right-clicks even when built with `--no-default-features`; the host
+/// surface right-clicks even when built without the `ui` feature; the host
 /// (or the `ui`-gated turnkey menu in `TradingChart`) maps it to a concrete
 /// menu.
 #[derive(Clone, Copy, Debug, PartialEq)]

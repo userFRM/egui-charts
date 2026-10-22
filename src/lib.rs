@@ -10,6 +10,7 @@
 //! ## Quick start
 //!
 //! ```rust,no_run
+//! # #[cfg(feature = "widget")] {
 //! use egui_charts::{ChartBuilder, Chart};
 //! use egui_charts::model::{Bar, BarData, Timeframe};
 //! use egui_charts::theme::Theme;
@@ -25,16 +26,19 @@
 //! // In your egui update loop:
 //! // trading_chart.update();           // poll data source, progressive loading
 //! // trading_chart.show(&mut ui);      // render into an egui::Ui
+//! # }
 //! ```
 //!
 //! For a minimal price ticker (no grid, no crosshair, no tools):
 //!
 //! ```rust,no_run
+//! # #[cfg(feature = "widget")] {
 //! # use egui_charts::ChartBuilder;
 //! let mini = ChartBuilder::price_chart()
 //!     .with_symbol("ETHUSDT")
 //!     .with_visible_candles(30)
 //!     .build();
+//! # }
 //! ```
 //!
 //! ## Architecture
@@ -62,10 +66,13 @@
 //! ## Feature flags
 //!
 //! The default build includes the core engine, theme system, chart widget, and
-//! compile-time icons. Application-level UI is opt-in.
+//! compile-time icons. Application-level UI is opt-in. With
+//! `default-features = false` the crate is the headless engine, which does not
+//! depend on egui.
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
+//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `theming`, `styles`, `ext` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`studies`], [`tokens`], [`validation`], and `backtest` and `scripting` when enabled. Required by `icons` and `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
 //! | `ui` | off | Application-level UI: toolbars, panels, sidebars, dialogs, and the reusable `ui_kit` widget library they are built on. Enable this when you are building a full trading-terminal interface around the chart engine. |
 //! | `backtest` | off | Backtesting framework for strategy evaluation on historical data. |
@@ -108,9 +115,16 @@
 #![allow(clippy::module_inception)]
 #![allow(clippy::needless_range_loop)]
 
+// Engine code names colours as `egui::Color32`; without the widget that path
+// resolves to `ecolor`, the crate egui re-exports them from.
+#[cfg(not(feature = "widget"))]
+extern crate ecolor as egui;
+
 // ─── Core engine modules ─────────────────────────────────────────────────────
 
+#[cfg(feature = "widget")]
 pub mod chart;
+#[cfg(feature = "widget")]
 pub mod drawings;
 pub mod model;
 pub mod scales;
@@ -118,22 +132,28 @@ pub mod studies;
 
 // ─── Configuration & data ────────────────────────────────────────────────────
 
+#[cfg(feature = "widget")]
 pub mod config;
 pub mod data;
 pub mod validation;
 
 // ─── Theme & design system ───────────────────────────────────────────────────
 
+#[cfg(feature = "widget")]
 pub mod ext;
 #[cfg(feature = "icons")]
 pub mod icons;
+#[cfg(feature = "widget")]
 pub mod styles;
+#[cfg(feature = "widget")]
 pub mod theme;
+#[cfg(feature = "widget")]
 pub mod theming;
 pub mod tokens;
 
 // ─── Widget layer ────────────────────────────────────────────────────────────
 
+#[cfg(feature = "widget")]
 pub mod widget;
 
 // ─── Application-level UI (feature-gated) ────────────────────────────────────
@@ -162,17 +182,19 @@ pub mod scripting;
 
 // ─── Convenience re-exports ──────────────────────────────────────────────────
 
+#[cfg(feature = "widget")]
 pub use chart::builder::{ChartBuilder, TradingChart};
 pub use data::DataSource;
 pub use model::ChartType;
+#[cfg(feature = "widget")]
 pub use widget::{Chart, RightClickTarget};
 
 // Compiles and runs the README's Rust snippets as doctests.
-#[cfg(doctest)]
+#[cfg(all(doctest, feature = "widget"))]
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "widget"))]
 mod tests {
     use crate::drawings::DrawingToolType;
     use crate::studies::IndicatorFactory;

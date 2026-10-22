@@ -34,25 +34,35 @@ path = "src/lib.rs"
 [[example]]
 name = "basic_chart"
 path = "examples/basic_chart.rs"
+required-features = ["widget"]
 
 [[example]]
 name = "with_indicators"
 path = "examples/with_indicators.rs"
+required-features = ["widget"]
 
 [[example]]
 name = "drawing_tools"
 path = "examples/drawing_tools.rs"
+required-features = ["widget"]
 
 [[example]]
 name = "tauri_integration"
 path = "examples/tauri_integration.rs"
+required-features = ["widget"]
 
 [features]
-default = ["icons"]
+default = ["widget", "icons"]
+## The egui chart widget and everything built on it: `Chart`, `ChartBuilder`,
+## drawings, configuration, theme and extension traits.  Without it the crate
+## is the headless engine (`model`, `scales`, `data`, `studies`, `tokens`,
+## `validation`, plus `backtest` and `scripting` when enabled) and does not
+## depend on egui.
+widget = ["dep:egui", "dep:web-time"]
 ## Compile-time embedded SVG icons.  Required by the `ui` feature and
 ## by any code that uses `icons::Icon` or the icon helpers on `UiExt`.
 ## The chart installs egui_extras' SVG image loader so the icons render.
-icons = ["dep:egui_extras", "egui_extras/svg"]
+icons = ["widget", "dep:egui_extras", "egui_extras/svg"]
 ## Application-level UI components: toolbars, panels, sidebars, dialogs, and
 ## the reusable `ui_kit` widget library they are built on.  Enable this when
 ## you are building a full trading-terminal interface around the chart engine.
@@ -76,13 +86,16 @@ rand = "0.10.0"
 
 [dependencies]
 # Fonts are the application's choice: eframe enables egui's `default_fonts`.
-egui = { version = "0.33.3", default-features = false, features = ["serde"] }
+egui = { version = "0.33.3", default-features = false, features = ["serde"], optional = true }
+# The engine names colours as `egui::Color32`; without `widget` that path
+# resolves to this crate, which egui re-exports.
+ecolor = { version = "0.33.3", features = ["serde"] }
 egui_extras = { version = "0.33.3", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }
 chrono-tz = "0.10.4"
-web-time = "1.1.0"
+web-time = { version = "1.1.0", optional = true }
 csv = "1.4.0"
 thiserror = { version = "2.0.18", optional = true }
 log = "0.4.29"

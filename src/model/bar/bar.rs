@@ -5,6 +5,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+#[cfg(feature = "widget")]
 use std::rc::Rc;
 
 /// Represents a single OHLCV (Open, High, Low, Close, Volume) bar
@@ -205,6 +206,7 @@ impl Bar {
 /// which changes when any bar before the series' last one changes. So it
 /// changes when bars are appended or removed, the endpoints move, the forming
 /// last bar updates, or a bar inside the span is corrected.
+#[cfg(feature = "widget")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SpanFingerprint {
     first: usize,
@@ -216,6 +218,7 @@ struct SpanFingerprint {
     revision: u64,
 }
 
+#[cfg(feature = "widget")]
 impl SpanFingerprint {
     fn of(first: usize, bars: &[Bar], revision: u64) -> Self {
         let (first_bar, last_bar) = match (bars.first(), bars.last()) {
@@ -245,11 +248,13 @@ impl SpanFingerprint {
 /// steady frame does no work proportional to a span. An entry is keyed by a
 /// parameter of the computation and the span's [`SpanFingerprint`]; the least
 /// recently used entry is evicted first.
+#[cfg(feature = "widget")]
 pub(crate) struct SpanCache<T, P = ()> {
     entries: Vec<((P, SpanFingerprint), Rc<T>)>,
     capacity: usize,
 }
 
+#[cfg(feature = "widget")]
 impl<T, P: Copy + PartialEq> SpanCache<T, P> {
     /// A cache that keeps up to `capacity` results.
     pub(crate) const fn new(capacity: usize) -> Self {
@@ -404,6 +409,7 @@ mod tests {
     /// the forming bar at an unchanged price, another anchor, or a corrected
     /// bar strictly inside the span recomputes it. Updating the last bar or
     /// appending one keeps the revision, so a streaming span can be extended.
+    #[cfg(feature = "widget")]
     #[test]
     fn span_cache_recomputes_when_bars_change() {
         use crate::model::{BarData, ChartState};

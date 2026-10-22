@@ -123,6 +123,7 @@ CI mirrors these checks exactly. Run them from the repository root and make sure
 cargo fmt --all -- --check
 cargo clippy --all-features -- -D warnings
 cargo clippy -- -D warnings
+cargo clippy --no-default-features --features backtest,scripting --all-targets -- -D warnings
 cargo test --all-features --lib
 cargo test --doc
 cargo build --all-features

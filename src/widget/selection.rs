@@ -56,8 +56,8 @@ impl Chart {
     /// the appropriate menu at [`RightClickTarget`]`::pos`. The turnkey menu in
     /// [`TradingChart`](crate::TradingChart) consumes it for you.
     ///
-    /// Carries no `ui`-feature types, so it is available with
-    /// `--no-default-features`.
+    /// Carries no `ui`-feature types, so it is available without the `ui`
+    /// feature.
     pub fn take_right_click(&mut self) -> Option<RightClickTarget> {
         self.right_click.take()
     }
@@ -71,8 +71,8 @@ impl Chart {
     /// [`IndicatorRegistry::remove_indicator`](crate::studies::IndicatorRegistry::remove_indicator)
     /// followed by a recompute); the pane layout reflows on the next frame.
     ///
-    /// Carries no `ui`-feature types, so it is available with
-    /// `--no-default-features`.
+    /// Carries no `ui`-feature types, so it is available without the `ui`
+    /// feature.
     pub fn take_indicator_remove(&mut self) -> Option<usize> {
         self.indicator_remove.take()
     }

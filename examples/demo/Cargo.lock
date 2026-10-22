@@ -628,6 +628,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "csv",
+ "ecolor",
  "egui",
  "egui_extras",
  "log",
