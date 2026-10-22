@@ -30,6 +30,10 @@ jobs:
         run: cargo build
       - name: Build (no default features)
         run: cargo build --no-default-features
+      - name: Build (widget only)
+        run: cargo build --no-default-features --features widget
+      - name: Build (studies only)
+        run: cargo build --no-default-features --features studies
       - name: Build (all features)
         run: cargo build --all-features
       - name: Clippy (default)
@@ -38,6 +42,10 @@ jobs:
         run: cargo clippy --all-features --all-targets -- -D warnings
       - name: Clippy (headless engine)
         run: cargo clippy --no-default-features --all-targets -- -D warnings
+      - name: Clippy (widget only)
+        run: cargo clippy --no-default-features --features widget --all-targets -- -D warnings
+      - name: Clippy (studies only)
+        run: cargo clippy --no-default-features --features studies --all-targets -- -D warnings
 
   test:
     name: Test
@@ -79,16 +87,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # The library loads only its embedded SVG icons, and the engine without
-      # default features must not depend on egui or a windowing backend.
+      # The library loads only its embedded SVG icons, the engine without
+      # default features must not depend on egui or a windowing backend, and
+      # the bare chart must not depend on the icon loader or the UI's error
+      # types itself (egui may use thiserror internally).
       - name: Check dependency tree
         run: |
           default=$(cargo tree --locked -e normal --prefix none)
           headless=$(cargo tree --locked -e normal --no-default-features --prefix none)
+          widget=$(cargo tree --locked -e normal --no-default-features --features widget --depth 1 --prefix none)
+          studies=$(cargo tree --locked -e normal --no-default-features --features studies --prefix none)
           banned=$(grep -E '^(rustls|ureq|ehttp|image) v' <<< "$default" | sort -u || true)
           if [ -n "$banned" ]; then echo "::error::default features depend on: $banned"; exit 1; fi
           banned=$(grep -E '^(egui|egui_extras|epaint|winit) v' <<< "$headless" | sort -u || true)
           if [ -n "$banned" ]; then echo "::error::--no-default-features depends on: $banned"; exit 1; fi
+          banned=$(grep -E '^(egui_extras|thiserror) v' <<< "$widget" | sort -u || true)
+          if [ -n "$banned" ]; then echo "::error::--features widget depends on: $banned"; exit 1; fi
+          banned=$(grep -E '^(egui|epaint|winit) v' <<< "$studies" | sort -u || true)
+          if [ -n "$banned" ]; then echo "::error::--features studies depends on: $banned"; exit 1; fi
           # The deployed demo must build the versions its committed lockfile pins.
           (cd examples/demo && cargo tree --locked > /dev/null)
       - name: Install cargo-audit

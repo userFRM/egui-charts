@@ -52,28 +52,31 @@
 //! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
 //! | **Chart engine** | [`chart`] | Pan/zoom, hit-testing, coordinate mapping, series rendering, interaction |
 //! | **Drawing tools** | [`drawings`] | 95 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
-//! | **Indicators** | [`studies`] | 128 indicator names in `IndicatorFactory`, `Indicator` trait, `IndicatorRegistry` |
+//! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 128 indicator names in `IndicatorFactory` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Validation** | [`validation`] | OHLC integrity checks, timestamp ordering, data quality |
 //! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
 //! | **Widget** | [`widget`] | `Chart` egui widget, `ChartBuilder`, `TradingChart` |
-//! | **Extensions** | [`ext`] | `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt` |
+//! | **Extensions** | `ext` | *(feature `ui`)* `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt`, `RoundingExt` |
 //! | **Icons** | [`icons`] | Compile-time embedded SVG icons |
 //! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
 //!
 //! ## Feature flags
 //!
-//! The default build includes the core engine, theme system, chart widget, and
-//! compile-time icons. Application-level UI is opt-in. With
-//! `default-features = false` the crate is the headless engine, which does not
-//! depend on egui.
+//! The default build includes the chart widget, the icons, the built-in
+//! studies and the application-level UI components. An application that only
+//! shows charts uses `default-features = false, features = ["widget"]`. With
+//! `default-features = false` alone the crate is the headless engine, which
+//! does not depend on egui.
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
-//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`services`], [`studies`], [`tokens`], [`validation`]. Required by `icons` and `ui`. |
+//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`services`], [`tokens`], [`validation`] and the `Indicator` trait layer of [`studies`]. Required by `icons` and `ui`. |
+//! | `studies` | **on** | The built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. `Indicator`, `IndicatorValue`, `IndicatorRegistry` and `CustomIndicator` are in every build. Required by `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
-//! | `ui` | off | Application-level UI: toolbars, panels, sidebars, dialogs, and the reusable `ui_kit` widget library they are built on. Enable this when you are building a full trading-terminal interface around the chart engine. |
+//! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons` and `studies`. |
+//! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
 //!
 //! ## Integrating with Tauri
 //!
@@ -84,7 +87,7 @@
 //!
 //!    ```toml
 //!    [dependencies]
-//!    egui-charts = { version = "0.2", features = ["ui"] }
+//!    egui-charts = "0.2"
 //!    ```
 //!
 //! 2. Implement [`data::DataSource`] to bridge your Tauri backend (IPC /
@@ -137,7 +140,7 @@ pub mod validation;
 
 // ─── Theme & design system ───────────────────────────────────────────────────
 
-#[cfg(feature = "widget")]
+#[cfg(feature = "ui")]
 pub mod ext;
 #[cfg(feature = "icons")]
 pub mod icons;
@@ -179,11 +182,11 @@ pub use model::ChartType;
 pub use widget::{Chart, RightClickTarget};
 
 // Compiles and runs the README's Rust snippets as doctests.
-#[cfg(all(doctest, feature = "widget"))]
+#[cfg(all(doctest, feature = "ui"))]
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
-#[cfg(all(test, feature = "widget"))]
+#[cfg(all(test, feature = "ui"))]
 mod tests {
     use crate::drawings::DrawingToolType;
     use crate::studies::IndicatorFactory;

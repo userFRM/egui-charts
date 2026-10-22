@@ -23,7 +23,7 @@
 //! // Use a pre-defined icon directly
 //! ui.add(icons::SETTINGS.as_image(Vec2::splat(20.0)));
 //!
-//! // Or through the UiExt helpers
+//! // Or, with the `ui` feature, through the UiExt helpers
 //! ui.medium_icon(&icons::SETTINGS);
 //! # });
 //! ```

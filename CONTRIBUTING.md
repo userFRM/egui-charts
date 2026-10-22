@@ -122,6 +122,8 @@ cargo fmt --all -- --check
 cargo clippy --all-features -- -D warnings
 cargo clippy -- -D warnings
 cargo clippy --no-default-features --all-targets -- -D warnings
+cargo clippy --no-default-features --features widget --all-targets -- -D warnings
+cargo clippy --no-default-features --features studies --all-targets -- -D warnings
 cargo test --all-features --lib
 cargo test --doc
 cargo build --all-features

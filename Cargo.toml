@@ -39,7 +39,7 @@ required-features = ["widget"]
 [[example]]
 name = "with_indicators"
 path = "examples/with_indicators.rs"
-required-features = ["widget"]
+required-features = ["widget", "studies"]
 
 [[example]]
 name = "drawing_tools"
@@ -52,20 +52,22 @@ path = "examples/tauri_integration.rs"
 required-features = ["widget"]
 
 [features]
-default = ["widget", "icons"]
-## The egui chart widget and everything built on it: `Chart`, `ChartBuilder`,
-## drawings, configuration, theme and extension traits.  Without it the crate
-## is the headless engine (`model`, `scales`, `data`, `studies`, `tokens`,
-## `validation`) and does not depend on egui.
+default = ["ui"]
+## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,
+## theme and the `Indicator` extension point.  Without it the crate is the
+## headless engine (`model`, `scales`, `data`, `tokens`, `validation` and the
+## `Indicator` trait layer of `studies`) and does not depend on egui.
 widget = ["dep:egui", "dep:web-time"]
-## Compile-time embedded SVG icons.  Required by the `ui` feature and
-## by any code that uses `icons::Icon` or the icon helpers on `UiExt`.
+## The built-in studies and `IndicatorFactory`.  Needs no egui, so a headless
+## build can compute the same studies.
+studies = []
+## Compile-time embedded SVG icons (`icons::Icon`).  Required by `ui`.
 ## The chart installs egui_extras' SVG image loader so the icons render.
 icons = ["widget", "dep:egui_extras", "egui_extras/svg"]
-## Application-level UI components: toolbars, panels, sidebars, dialogs, and
-## the reusable `ui_kit` widget library they are built on.  Enable this when
-## you are building a full trading-terminal interface around the chart engine.
-ui = ["icons", "dep:thiserror"]
+## Application-level UI components: toolbars, panels, sidebars, dialogs, the
+## reusable `ui_kit` widget library they are built on, the `ext` helpers, and
+## the built-in studies they offer.
+ui = ["icons", "studies", "dep:thiserror"]
 ## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
 serde = []
 

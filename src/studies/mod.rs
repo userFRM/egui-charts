@@ -27,10 +27,9 @@
 //!
 //! | Sub-module | Purpose |
 //! |---|---|
-//! | `builtin` | All built-in indicators ([`SMA`], [`EMA`], [`RSI`], [`MACD`], [`BollingerBands`], ...) |
-//! | [`factory`] | [`IndicatorFactory`] -- dynamic creation of indicators by name |
+//! | `builtin` | *(feature `studies`)* All built-in indicators ([`SMA`], [`EMA`], [`RSI`], [`MACD`], [`BollingerBands`], ...) |
+//! | [`factory`] | *(feature `studies`)* [`IndicatorFactory`] -- dynamic creation of indicators by name |
 //! | `indicator_trait` | The core [`Indicator`] trait and [`IndicatorValue`] enum |
-//! | `palette` | [`IndicatorPalette`], [`IndicatorColorSchemes`], [`ColorCategory`] |
 //! | `custom` | [`CustomIndicator`] -- define indicators at runtime with closures |
 //!
 //! # Quick start
@@ -56,20 +55,23 @@
 //! registry.calculate_all(&bars);
 //! ```
 
+#[cfg(feature = "studies")]
 mod builtin;
 mod custom;
+#[cfg(feature = "studies")]
 pub mod factory;
 mod indicator_trait;
-mod palette;
-#[cfg(test)]
+#[cfg(all(test, feature = "studies"))]
 mod reference;
+#[cfg(feature = "studies")]
 mod stepper;
 
+#[cfg(feature = "studies")]
 pub use builtin::*;
 pub use custom::CustomIndicator;
+#[cfg(feature = "studies")]
 pub use factory::IndicatorFactory;
 pub use indicator_trait::{Indicator, IndicatorValue};
-pub use palette::{ColorCategory, IndicatorColorSchemes, IndicatorPalette};
 
 use crate::model::Bar;
 

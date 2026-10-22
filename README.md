@@ -25,7 +25,7 @@ Candlestick, bar, line, area, Japanese and range chart types, drawing tools, tec
 ## When This Is Useful
 
 - **You need financial charts inside an egui application:** candlesticks, OHLC bars, Heikin-Ashi, Renko, Kagi, Market Profile (TPO) and other chart types.
-- **You're building a Tauri desktop trading terminal:** the chart is an egui widget, with optional toolbar, panel and dialog UI behind the `ui` feature.
+- **You're building a Tauri desktop trading terminal:** the chart is an egui widget, and the default `ui` feature adds the toolbars, panels and dialogs.
 - **You want interactive drawings and indicators:** drawing tools with undo/redo, and indicators behind one `Indicator` trait.
 - **You need a themeable design system:** one `Theme` value with dark, light and high-contrast presets and public fields to override.
 - **You want one codebase for desktop and web:** the same `Chart` widget renders natively on Linux/macOS/Windows and in the browser via WebAssembly.
@@ -72,8 +72,8 @@ egui-charts/src/
 │   ├── rendering/             Category-specific renderers (lines, fibonacci, patterns…)
 │   └── persistence.rs         Serializable drawing types (not yet wired to save/load)
 ├── studies/                   Technical indicators
-│   ├── builtin/               All indicator implementations
-│   ├── factory.rs             IndicatorFactory: dynamic creation by name
+│   ├── builtin/               All indicator implementations (feature `studies`)
+│   ├── factory.rs             IndicatorFactory: dynamic creation by name (feature `studies`)
 │   ├── indicator_trait.rs     Core Indicator trait and IndicatorValue enum
 │   └── custom.rs              Runtime indicator creation with closures
 ├── model/                     Domain types: Bar, BarData, Symbol, Timeframe, ChartType
@@ -86,7 +86,7 @@ egui-charts/src/
 ├── styles/                    Focus ring, sizing, typography and icon constants
 ├── widget/                    Chart egui widget, indicator panes
 ├── icons/                     Compile-time embedded SVG icons
-├── ext/                       UiExt, ResponseExt, widget builder extensions
+├── ext/                       UiExt, ResponseExt, widget builder extensions (feature `ui`)
 ├── ui/          [feature: ui] Toolbars, panels, dialogs, replay controls
 └── ui_kit/      [feature: ui] Reusable widget library: buttons, forms, color pickers
 ```
@@ -161,19 +161,24 @@ let mini = ChartBuilder::price_chart()
 
 | Feature | Default | Description |
 |---|:---:|---|
-| `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles`, `ext` and `widget`. Without it the crate is the headless engine (`model`, `scales`, `data`, `studies`, `tokens`, `validation`), which does not depend on egui. Required by `icons` and `ui`. |
-| `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. Use `default-features = false, features = ["widget"]` to drop egui_extras and save binary size. |
-| `ui` | off | Application-level UI: drawing toolbar, top toolbar, timeframe bar, replay controls, sidebars, dialogs, and the `ui_kit` widget library. |
+| `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles` and `widget`. Without it the crate is the headless engine (`model`, `scales`, `data`, `services`, `tokens`, `validation` and the `Indicator` trait layer of `studies`), which does not depend on egui. Required by `icons` and `ui`. |
+| `studies` | **on** | The built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. `Indicator`, `IndicatorValue`, `IndicatorRegistry` and `CustomIndicator` are in every build, so custom studies work without it. Required by `ui`. |
+| `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
+| `ui` | **on** | Application-level UI: drawing toolbar, top toolbar, timeframe bar, replay controls, sidebars, dialogs, the `ui_kit` widget library and the `ext` helpers. Enables `icons` and `studies`. |
+| `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
 
 ```toml
-# Core chart only (default)
+# Chart with toolbars, panels, dialogs, icons and built-in studies (default)
 egui-charts = "0.2"
 
-# Full trading terminal UI
-egui-charts = { version = "0.2", features = ["ui"] }
+# Chart only: no toolbars, built-in studies, egui_extras or icons
+egui-charts = { version = "0.2", default-features = false, features = ["widget"] }
 
-# Headless engine: bars and studies without egui
-egui-charts = { version = "0.2", default-features = false }
+# Chart with the built-in studies
+egui-charts = { version = "0.2", default-features = false, features = ["widget", "studies"] }
+
+# Headless engine with the built-in studies, without egui
+egui-charts = { version = "0.2", default-features = false, features = ["studies"] }
 ```
 
 egui-charts does not enable egui's default features, so fonts are the application's choice (eframe enables egui's `default_fonts` by default). Since egui 0.37 those fonts have no emoji, which need egui's `monochrome_emoji_fonts` feature or fonts the application installs. The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.
@@ -331,7 +336,7 @@ Inside a widget, `ui.active_theme()` (trait `theme::ThemeExt`) returns the theme
 
 ```toml
 [dependencies]
-egui-charts = { version = "0.2", features = ["ui"] }
+egui-charts = "0.2"
 ```
 
 ```rust
@@ -353,7 +358,7 @@ impl eframe::App for App {
 }
 ```
 
-1. **Add the dependency** with the `ui` feature for toolbar and panel support.
+1. **Add the dependency**; its default `ui` feature includes the toolbars and panels.
 2. **Implement `DataSource`** to bridge your Tauri backend (IPC or WebSocket) to the chart's data layer.
 3. **Build the chart once** with `ChartBuilder`, then call `update()` and `show(ui)` in `eframe::App::ui`.
 4. **Apply a theme** at startup with `apply_to_egui()` to propagate design tokens.
