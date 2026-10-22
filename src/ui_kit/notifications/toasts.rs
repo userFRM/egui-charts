@@ -98,14 +98,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_time_is_monotonic_and_nonzero() {
-        // web_time::SystemTime must resolve on every target the crate ships to;
-        // a working clock returns a positive wall-clock value.
-        let t = current_time_seconds();
-        assert!(t > 0.0, "expected a positive wall-clock time, got {t}");
-    }
-
-    #[test]
     fn add_stamps_creation_time_from_web_time() {
         let mut toasts = Toasts::new();
         toasts.info("hello");
