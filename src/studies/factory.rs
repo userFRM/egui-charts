@@ -103,6 +103,7 @@ impl IndicatorFactory {
             StochasticRSI,
             WilliamsR,
             CCI,
+            Momentum,
             RateOfChange,
             Aroon,
             AwesomeOscillator,
@@ -328,7 +329,7 @@ mod tests {
         let factory = IndicatorFactory::new();
         assert_eq!(
             factory.count(),
-            130,
+            131,
             "expected every built-in indicator to be registered exactly once",
         );
     }

@@ -14,7 +14,7 @@
 //!
 //! ## Momentum / oscillators
 //! [`RSI`], [`MACD`], [`Stochastic`], [`StochasticRSI`], [`WilliamsR`],
-//! [`CCI`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`],
+//! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`],
 //! [`UltimateOscillator`], [`ConnorsRSI`], [`CoppockCurve`], [`TRIX`],
 //! [`ElderRay`], [`FisherTransform`], [`ForceIndex`], [`MassIndex`],
 //! [`DetrendedPriceOscillator`], [`KDJ`], [`PrettyGoodOscillator`],
@@ -66,6 +66,7 @@ mod aroon;
 mod atr;
 mod awesome_oscillator;
 mod cci;
+mod momentum;
 mod parabolic_sar;
 mod roc;
 mod stochastic;
@@ -229,6 +230,7 @@ pub use aroon::Aroon;
 pub use atr::ATR;
 pub use awesome_oscillator::AwesomeOscillator;
 pub use cci::CCI;
+pub use momentum::Momentum;
 pub use parabolic_sar::ParabolicSAR;
 pub use roc::RateOfChange;
 pub use stochastic::Stochastic;
@@ -406,6 +408,7 @@ pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
         ("Williams %R", "Williams Percent Range"),
         ("CCI", "Commodity Channel Index"),
         ("ROC", "Rate of Change"),
+        ("Momentum", "Momentum"),
         ("Aroon", "Aroon Indicator"),
         ("Awesome Oscillator", "Awesome Oscillator"),
         ("Ultimate Oscillator", "Ultimate Oscillator"),

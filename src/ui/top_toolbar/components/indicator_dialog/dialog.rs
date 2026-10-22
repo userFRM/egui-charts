@@ -657,7 +657,7 @@ impl IndicatorDialog {
             IndicatorType::DonchianChannels => Box::new(DonchianChannels::new(self.params.period)),
             IndicatorType::WilliamsR => Box::new(WilliamsR::new(self.params.period)),
             IndicatorType::ROC => Box::new(RateOfChange::new(self.params.period)),
-            IndicatorType::Momentum => Box::new(RateOfChange::new(self.params.period)), // Momentum is similar to ROC
+            IndicatorType::Momentum => Box::new(Momentum::new(self.params.period)),
             IndicatorType::Aroon => Box::new(Aroon::new(self.params.period)),
             IndicatorType::ChaikinMoneyFlow => Box::new(ChaikinMoneyFlow::new(self.params.period)),
             IndicatorType::VWMA => Box::new(VWMA::new(self.params.period)),
@@ -677,5 +677,16 @@ impl IndicatorDialog {
     /// Get mutable params
     pub fn params_mut(&mut self) -> &mut IndicatorParams {
         &mut self.params
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn momentum_entry_creates_the_momentum_study() {
+        let indicator = IndicatorDialog::new().create_indicator(IndicatorType::Momentum);
+        assert_eq!(indicator.name(), "Momentum");
     }
 }
