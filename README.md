@@ -163,7 +163,7 @@ let mini = ChartBuilder::price_chart()
 
 | Feature | Default | Description |
 |---|:---:|---|
-| `icons` | **on** | Compile-time embedded SVG icons. Required by `ui`. Disable with `default-features = false` to save binary size. |
+| `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. Disable with `default-features = false` to drop egui_extras and save binary size. |
 | `ui` | off | Application-level UI: drawing toolbar, top toolbar, timeframe bar, replay controls, sidebars, dialogs, and the `ui_kit` widget library. |
 | `backtest` | off | Strategy backtesting on historical data. |
 | `scripting` | off | Embedded scripting for user-defined indicators and strategies. |
@@ -178,6 +178,8 @@ egui-charts = { version = "0.2", features = ["ui"] }
 # Everything
 egui-charts = { version = "0.2", features = ["ui", "backtest", "scripting"] }
 ```
+
+egui-charts does not enable egui's default features, so fonts are the application's choice (eframe enables egui's `default_fonts` by default). The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.
 
 ---
 

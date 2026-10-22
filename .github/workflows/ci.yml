@@ -77,6 +77,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # The library loads only its embedded SVG icons, and the engine without
+      # default features must not pull in egui_extras at all.
+      - name: Check dependency tree
+        run: |
+          default=$(cargo tree --locked -e normal --prefix none)
+          headless=$(cargo tree --locked -e normal --no-default-features --prefix none)
+          banned=$(grep -E '^(rustls|ureq|ehttp|image) v' <<< "$default" | sort -u || true)
+          if [ -n "$banned" ]; then echo "::error::default features depend on: $banned"; exit 1; fi
+          if grep -q '^egui_extras v' <<< "$headless"; then
+            echo "::error::--no-default-features depends on egui_extras"; exit 1
+          fi
+          # The deployed demo must build the versions its committed lockfile pins.
+          (cd examples/demo && cargo tree --locked > /dev/null)
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Audit dependencies

@@ -208,14 +208,17 @@ impl Chart {
         mut drawing_manager: Option<&mut DrawingManager>,
         indicators: Option<&IndicatorRegistry>,
     ) -> Response {
-        // Register egui's image loaders once per context so the embedded SVG
+        // Register the SVG image loader once per context so the embedded
         // icons used by the toolbars and panels decode without the host app
         // having to wire egui_extras itself.
-        let ctx = ui.ctx().clone();
-        let loaders_installed = egui::Id::new("egui_charts::image_loaders_installed");
-        if !ctx.data(|d| d.get_temp::<bool>(loaders_installed).unwrap_or(false)) {
-            egui_extras::install_image_loaders(&ctx);
-            ctx.data_mut(|d| d.insert_temp(loaders_installed, true));
+        #[cfg(feature = "icons")]
+        {
+            let ctx = ui.ctx().clone();
+            let loaders_installed = egui::Id::new("egui_charts::image_loaders_installed");
+            if !ctx.data(|d| d.get_temp::<bool>(loaders_installed).unwrap_or(false)) {
+                egui_extras::install_image_loaders(&ctx);
+                ctx.data_mut(|d| d.insert_temp(loaders_installed, true));
+            }
         }
 
         // Reset zoom_just_applied flag at the start of each frame

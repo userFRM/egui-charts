@@ -66,7 +66,7 @@
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
-//! | `icons` | **on** | Compile-time embedded SVG icons. Required by `ui`. |
+//! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
 //! | `ui` | off | Application-level UI: toolbars, panels, sidebars, dialogs, and the reusable `ui_kit` widget library they are built on. Enable this when you are building a full trading-terminal interface around the chart engine. |
 //! | `backtest` | off | Backtesting framework for strategy evaluation on historical data. |
 //! | `scripting` | off | Embedded scripting support for user-defined indicators and strategies. |
