@@ -48,7 +48,7 @@ use crate::model::Symbol;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
-use crate::ui_kit::dialog::centred_title;
+use crate::ui_kit::dialog::{centred_title, titled_window_size};
 use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2, Window};
 
 // =============================================================================
@@ -236,7 +236,6 @@ impl SymbolSearchDialog {
         let mut sel_symbol = None;
         let mut should_close = false;
 
-        // egui sizes a window from outside its frame, so add the frame to the content width.
         let frame = egui::Frame::window(&ctx.global_style());
         // Centred horizontally like the crate's other dialogs, but movable. The top edge is the
         // pivot, so the window grows downwards as its content changes instead of around its centre.
@@ -244,7 +243,8 @@ impl SymbolSearchDialog {
         egui::Window::new("Symbol Search")
             .collapsible(false)
             .resizable(false)
-            .default_width(400.0 + frame.total_margin().sum().x)
+            // The content size it had before egui 0.35: 400 px wide and egui's default height.
+            .default_size(titled_window_size(ctx, &frame, Vec2::new(400.0, 420.0)))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(egui::pos2(r.center().x, r.top() + r.height() * 0.2))
             .show(ctx, |ui| {
@@ -617,8 +617,11 @@ impl CompareSymbolsDialog {
             .resizable(false)
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            // egui sizes a window from outside its frame, so add the frame to keep the content width.
-            .fixed_size(Vec2::new(config.width, config.height) + frame.total_margin().sum())
+            .fixed_size(titled_window_size(
+                ctx,
+                &frame,
+                Vec2::new(config.width, config.height),
+            ))
             .frame(frame)
             .show(ctx, |ui| {
                 action = self.draw_content(ui, symbols, &config);

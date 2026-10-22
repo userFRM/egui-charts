@@ -30,6 +30,7 @@
 //! ```
 
 use crate::ext::UiExt;
+use crate::ui_kit::dialog::titled_window_size;
 use egui::Context;
 use std::path::PathBuf;
 
@@ -285,9 +286,12 @@ impl ExportDialog {
         // Centred horizontally like the crate's other dialogs, but movable. The top edge is the
         // pivot, so the window grows downwards as its content changes instead of around its centre.
         let r = ctx.content_rect();
+        let frame = egui::Frame::window(&ctx.global_style());
         egui::Window::new("Export Chart")
             .collapsible(false)
             .resizable(false)
+            // egui's default content size from before 0.35, frame and title bar excluded.
+            .default_size(titled_window_size(ctx, &frame, egui::vec2(340.0, 420.0)))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(egui::pos2(r.center().x, r.top() + r.height() * 0.2))
             .show(ctx, |ui| {

@@ -11,7 +11,7 @@ use crate::studies::*;
 use crate::styles::typography;
 use crate::theme::Theme;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::dialog::centred_title;
+use crate::ui_kit::dialog::{centred_title, titled_window_size};
 use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Ui, Vec2, Window};
 use std::collections::HashSet;
 
@@ -144,8 +144,11 @@ impl IndicatorDialog {
             .collapsible(false)
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            // egui sizes a window from outside its frame, so add the frame to keep the content width.
-            .fixed_size(Vec2::new(dialog_width, dialog_height) + frame.total_margin().sum())
+            .fixed_size(titled_window_size(
+                ctx,
+                &frame,
+                Vec2::new(dialog_width, dialog_height),
+            ))
             .frame(frame)
             .show(ctx, |ui| {
                 action = self.draw_content(ui);
