@@ -150,7 +150,7 @@ pub fn draw_icon_button_padded(
 /// - Outer rect: 52×38px
 /// - Inner hover rect: 9px horizontal margin, 2px vertical margin
 /// - Inner rounding: 6px
-/// - Icon: 28×28 centered in outer rect
+/// - Icon: 24×24 centered in outer rect
 ///
 /// # Arguments
 ///

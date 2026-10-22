@@ -10,7 +10,7 @@ use crate::icons::{Icon, icons};
 /// Get icon for a category
 pub fn category_icon(category: &str) -> &'static Icon {
     match category {
-        "Cursors" => &icons::ERASER,
+        "Cursors" => &icons::CROSSHAIR,
         "Lines" => &icons::TREND_LINE,
         "Fibonacci" => &icons::FIB_RETRACEMENT,
         "Patterns" => &icons::XABCD_PATTERN,
@@ -42,7 +42,7 @@ pub fn category_icon(category: &str) -> &'static Icon {
 pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
     match tool {
         // ============ CURSORS (4 tools) ============
-        DrawingToolType::CrossCursor => &icons::ERASER,
+        DrawingToolType::CrossCursor => &icons::CROSSHAIR,
         DrawingToolType::DotCursor => &icons::DOT,
         DrawingToolType::ArrowCursor => &icons::ARROW,
         DrawingToolType::Eraser => &icons::ERASER,
@@ -124,7 +124,7 @@ pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
 
         // ============ MEASURERS (4 tools) ============
         DrawingToolType::Measure => &icons::MEASURE,
-        DrawingToolType::PriceRange => &icons::MEASURE,
+        DrawingToolType::PriceRange => &icons::PRICE_RANGE,
         DrawingToolType::DateRange => &icons::DATE_RANGE,
         DrawingToolType::DateAndPriceRange => &icons::DATE_AND_PRICE_RANGE,
 
@@ -135,7 +135,7 @@ pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
 
         // ============ ARROWS (4 tools) ============
         DrawingToolType::ArrowMarker => &icons::ARROW_MARKER,
-        DrawingToolType::Arrow => &icons::ARROW_MARKER,
+        DrawingToolType::Arrow => &icons::ARROW_LINE,
         DrawingToolType::ArrowMarkUp => &icons::ARROW_MARK_UP,
         DrawingToolType::ArrowMarkDown => &icons::ARROW_MARK_DOWN,
 
@@ -154,19 +154,19 @@ pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
         // ============ ANNOTATIONS (11 tools) ============
         DrawingToolType::TextLabel => &icons::TEXT,
         DrawingToolType::AnchoredText => &icons::ANCHORED_TEXT,
-        DrawingToolType::Note => &icons::TEXT,
-        DrawingToolType::PriceNote => &icons::TEXT, // Uses Note as fallback
-        DrawingToolType::AnchoredNote => &icons::TEXT, // Uses Note as fallback
-        DrawingToolType::Table => &icons::TEXT,     // Uses Note as fallback
-        DrawingToolType::Callout => &icons::TEXT,   // Uses Note as fallback
-        DrawingToolType::Comment => &icons::TEXT,   // Uses Note as fallback
-        DrawingToolType::PriceLabel => &icons::TEXT, // Uses Text as fallback
-        DrawingToolType::Signpost => &icons::TEXT,  // Uses Note as fallback
-        DrawingToolType::FlagNote => &icons::TEXT,
+        DrawingToolType::Note => &icons::NOTE,
+        DrawingToolType::PriceNote => &icons::PRICE_NOTE,
+        DrawingToolType::AnchoredNote => &icons::ANCHORED_NOTE,
+        DrawingToolType::Table => &icons::TABLE,
+        DrawingToolType::Callout => &icons::CALLOUT,
+        DrawingToolType::Comment => &icons::COMMENT,
+        DrawingToolType::PriceLabel => &icons::PRICE_LABEL,
+        DrawingToolType::Signpost => &icons::SIGNPOST,
+        DrawingToolType::FlagNote => &icons::FLAG_MARK,
 
         // ============ CONTENT (3 tools) ============
-        DrawingToolType::Image => &icons::TEXT, // Uses Note as fallback
-        DrawingToolType::Tweet => &icons::TEXT, // Uses Note as fallback
+        DrawingToolType::Image => &icons::IMAGE,
+        DrawingToolType::Tweet => &icons::POST,
         DrawingToolType::Idea => &icons::IDEAS,
 
         // ============ ICONS (1 tool) ============

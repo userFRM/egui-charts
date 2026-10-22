@@ -186,7 +186,7 @@ impl<'a> PairButton<'a> {
     /// - Outer rect: 52×38px
     /// - Inner hover rect: 9px horizontal margin, 2px vertical margin
     /// - Inner rounding: 6px
-    /// - Icon: 28×28 centered
+    /// - Icon: 24×24 centered
     pub fn show_styled(&self, ui: &mut Ui) -> PairButtonResponse {
         let tokens = &DESIGN_TOKENS.sizing.toolbar;
         let btn_width = tokens.button_width;

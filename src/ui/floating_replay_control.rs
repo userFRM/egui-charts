@@ -398,7 +398,7 @@ impl FloatingReplayControl {
 
                     // [▶|] Next bar (Right Arrow) - using chevron right
                     let next_bar = ui.add(
-                        icons::ARROW
+                        icons::UI_ARROW_FORWARD
                             .as_button(Vec2::splat(icon_size))
                             .min_size(btn_size),
                     );

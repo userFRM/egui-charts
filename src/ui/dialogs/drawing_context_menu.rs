@@ -191,7 +191,7 @@ impl DrawingContextMenu {
                 .with_icon(if self.is_visible {
                     &embedded_icons::EYE_HIDE
                 } else {
-                    &embedded_icons::HIDE
+                    &embedded_icons::EYE
                 })
                 .toggle(!self.is_visible),
             ),

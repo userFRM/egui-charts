@@ -247,7 +247,7 @@ fn render_row_content(
     // Visibility toggle
     let vis_rect = Rect::from_center_size(egui::pos2(x + 8.0, center_y), vec2(16.0, 16.0));
     let vis_icon: &Icon = if item.visible {
-        &embedded_icons::HIDE
+        &embedded_icons::EYE
     } else {
         &embedded_icons::EYE_HIDE
     };

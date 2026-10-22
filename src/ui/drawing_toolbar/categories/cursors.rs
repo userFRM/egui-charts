@@ -45,7 +45,7 @@ impl CursorType {
 
     pub fn icon(&self) -> &'static Icon {
         match self {
-            CursorType::Cross => &icons::ERASER,
+            CursorType::Cross => &icons::CROSSHAIR,
             CursorType::Dot => &icons::DOT,
             CursorType::Arrow => &icons::ARROW,
             CursorType::Eraser => &icons::ERASER,
@@ -75,12 +75,12 @@ impl ToolCategory for CursorsCategory {
     }
 
     fn icon(&self) -> &'static Icon {
-        &icons::ERASER
+        &icons::CROSSHAIR
     }
 
     fn curr_tool_icon(&self, _sel: Option<DrawingToolType>) -> &'static Icon {
         // Cursors don't have drawing tools, always show Cross
-        &icons::ERASER
+        &icons::CROSSHAIR
     }
 
     fn all_tools(&self) -> Vec<DrawingToolType> {

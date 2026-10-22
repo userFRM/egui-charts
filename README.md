@@ -85,7 +85,7 @@ egui-charts/src/
 ├── tokens/                    RON-based design tokens (colors, spacing, typography)
 ├── styles/                    Style computation from semantic tokens
 ├── widget/                    Chart egui widget, indicator panes
-├── icons/                     160+ compile-time embedded SVG icons
+├── icons/                     Compile-time embedded SVG icons
 ├── ext/                       UiExt, ContextExt, ResponseExt, HasDesignTokens
 ├── ui/          [feature: ui] Toolbars, panels, dialogs, replay controls
 ├── ui_kit/      [feature: ui] Reusable widget library: buttons, forms, color pickers
@@ -356,6 +356,8 @@ Licensed under either of
 - [MIT License](LICENSE-MIT)
 
 at your option.
+
+Some interface icons under `assets/icons/` come from Lucide and are licensed under the ISC License (with a Feather-derived subset under the MIT License); see the [third-party notices](THIRD-PARTY-NOTICES.md) and the [Lucide licence](assets/icons/LICENSE-lucide.txt).
 
 ## Contributing
 

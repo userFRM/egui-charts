@@ -49,7 +49,7 @@ path = "examples/tauri_integration.rs"
 
 [features]
 default = ["icons"]
-## Compile-time embedded SVG icons (280+).  Required by the `ui` feature and
+## Compile-time embedded SVG icons.  Required by the `ui` feature and
 ## by any code that uses `icons::Icon` or the icon helpers on `UiExt`.
 icons = []
 ## Application-level UI components: toolbars, panels, sidebars, dialogs, and

@@ -20,6 +20,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Replaced the bundled icon set with original artwork drawn on a 24 px grid. Toolbar, chart-type and widget-bar icons now render at 24 px, and close buttons, the cross cursor, alert and toast states, move to pane, add to watchlist, the replay next-bar button, the price range tool, the arrow tool and the note, callout, comment, table, image and other annotation tools show their own icons.
 - `Drawing::render`, `Drawing::render_original`, and `DrawingManager::render_all` take a `drawings::rendering::ChartView` holding the chart's bars and coordinate mapping. Migration: build `ChartView { bars, bar_to_x, price_to_y }` from the series and the closures passed to `update_all_screen_coords`, and pass it as the last argument.
 - `Chart::handle_drawings` no longer takes the last close price.
 
@@ -30,6 +31,7 @@ All notable changes to this project are documented in this file. The format is b
 - `TradingChart::toggle_main_series_visibility` and the series context menu "Hide" entry (`SeriesContextMenuAction::Hide`), which had no effect.
 - `DrawingManager::update_pos_prices`, `Drawing::format_timestamp`, and the `Drawing` fields `is_closed`, `curr_price`, `forecast_start_price`, `forecast_target_price`, `forecast_start_time`, and `forecast_target_time`; position and forecast results come from the chart's bars.
 - Bar replay no longer panics when a frame is due more bars than remain, and `ReplayState::update` returns the number of bars actually advanced.
+- Unused icon constants `AREA_CHART`, `LINE_CHART`, `ORDER_BOOK`, `TIME_AND_SALES`, `HIDE`, `RISK_REWARD_SHORT`, `TREND_BASED_FIB_EXTENSION`, `ZOOM_TOGGLE`, `EMOJI_EAGLE`, `EMOJI_ORNAMENT`, `WIDGET_BAR_NOTIFICATIONS`, `WATCHLIST_44`, `SCREENER_44`, `PINE_SCRIPT_44`, `COMMUNITY_44` and `PRODUCTS_44`. Migration: use `CHART_AREA`, `CHART_LINE`, `WATCHLIST`, `EYE_HIDE` (or `EYE` for the visible state), `SHORT_POSITION` and `FIB_EXTENSION`; the others have no replacement.
 
 ## [0.2.0] - 2026-06-04
 

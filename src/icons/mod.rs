@@ -5,19 +5,12 @@
 //! - `icon_from_path!` macro for embedding icons at compile time
 //! - Pre-defined icon constants for all icons
 //!
-//! # Design Decision
+//! # Icon files
 //!
-//! This file is intentionally large (~1500 lines) as it defines all icon constants
-//! in one place. This is acceptable because:
-//! - **Single responsibility**: Pure data (compile-time constants)
-//! - **No logic**: No rendering code, no business logic
-//! - **Well-organized**: Clear section headers by category
-//! - **Stable**: Rarely modified except when adding new icons
-//!
-//! Splitting 280+ icon constants across multiple files would:
-//! - Fragment discoverability (harder to find icons)
-//! - Add unnecessary import complexity
-//! - Provide no architectural benefit since there's no logic to isolate
+//! Every icon is drawn on a 24 px grid with a 1.5 px round stroke in `currentColor`, and the
+//! root element sets `color="#fff"`. The SVG loader resolves `currentColor` against that white,
+//! so the tint passed to `as_image_tinted` (or a button's text colour) gives the final colour in
+//! every theme. Icons are crispest at 24 px and its multiples.
 //!
 //! # Usage
 //!
@@ -43,9 +36,8 @@ pub use icon::Icon;
 /// # Example
 ///
 /// ```ignore
-/// const MY_ICON: Icon = icon_from_path!("toolbar/settings.svg");
+/// const MY_ICON: Icon = icon_from_path!("custom/my-icon.svg");
 /// ```
-/// Macro to embed an SVG icon at compile time (re-exported from crate root).
 #[macro_export]
 macro_rules! icon_from_path {
     ($path:literal) => {
@@ -60,1543 +52,278 @@ macro_rules! icon_from_path {
 pub mod icons {
     use super::Icon;
 
-    // =========================================================================
-    // CURSOR ICONS
-    // =========================================================================
-
-    pub const ARROW: Icon = Icon::new(
-        "drawing_toolbar/cursors/arrow.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/cursors/arrow.svg"
-        )),
-    );
-
-    pub const DOT: Icon = Icon::new(
-        "drawing_toolbar/cursors/dot.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/cursors/dot.svg"
-        )),
-    );
-
-    pub const ERASER: Icon = Icon::new(
-        "drawing_toolbar/cursors/eraser.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/cursors/eraser.svg"
-        )),
-    );
-
-    // =========================================================================
-    // LINES & TRENDS
-    // =========================================================================
-
-    pub const TREND_LINE: Icon = Icon::new(
-        "drawing_toolbar/lines/trend-line.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/trend-line.svg"
-        )),
-    );
-
-    pub const TREND_ANGLE: Icon = Icon::new(
-        "drawing_toolbar/lines/trend-angle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/trend-angle.svg"
-        )),
-    );
-
-    pub const RAY: Icon = Icon::new(
-        "drawing_toolbar/lines/ray.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/ray.svg"
-        )),
-    );
-
-    pub const HORIZONTAL_LINE: Icon = Icon::new(
-        "drawing_toolbar/lines/horz-line.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/horz-line.svg"
-        )),
-    );
-
-    pub const HORIZONTAL_RAY: Icon = Icon::new(
-        "drawing_toolbar/lines/horz-ray.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/horz-ray.svg"
-        )),
-    );
-
-    pub const VERTICAL_LINE: Icon = Icon::new(
-        "drawing_toolbar/lines/vert-line.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/vert-line.svg"
-        )),
-    );
-
-    pub const INFO_LINE: Icon = Icon::new(
-        "drawing_toolbar/lines/info-line.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/info-line.svg"
-        )),
-    );
-
-    pub const CROSS_LINE: Icon = Icon::new(
-        "drawing_toolbar/lines/cross-line.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/cross-line.svg"
-        )),
-    );
-
-    pub const PARALLEL_CHANNEL: Icon = Icon::new(
-        "drawing_toolbar/lines/parallel-channel.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/parallel-channel.svg"
-        )),
-    );
-
-    pub const DISJOINT_ANGLE: Icon = Icon::new(
-        "drawing_toolbar/lines/disjoint-angle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/lines/disjoint-angle.svg"
-        )),
-    );
-
-    // =========================================================================
-    // PITCHFORKS
-    // =========================================================================
-
-    pub const PITCHFORK: Icon = Icon::new(
-        "drawing_toolbar/pitchforks/pitchfork.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/pitchforks/pitchfork.svg"
-        )),
-    );
-
-    pub const INSIDE_PITCHFORK: Icon = Icon::new(
-        "drawing_toolbar/pitchforks/inside-pitchfork.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/pitchforks/inside-pitchfork.svg"
-        )),
-    );
-
-    pub const SCHIFF_PITCHFORK: Icon = Icon::new(
-        "drawing_toolbar/pitchforks/schiff-pitchfork.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/pitchforks/schiff-pitchfork.svg"
-        )),
-    );
-
-    pub const SCHIFF_PITCHFORK2: Icon = Icon::new(
-        "drawing_toolbar/pitchforks/schiff-pitchfork2.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/pitchforks/schiff-pitchfork2.svg"
-        )),
-    );
-
-    pub const PITCHFAN: Icon = Icon::new(
-        "drawing_toolbar/pitchforks/pitchfan.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/pitchforks/pitchfan.svg"
-        )),
-    );
-
-    // =========================================================================
-    // FIBONACCI
-    // =========================================================================
-
-    pub const FIB_RETRACEMENT: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/fib-retracement.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/fib-retracement.svg"
-        )),
-    );
-
-    pub const FIB_EXTENSION: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/fib-extension.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/fib-extension.svg"
-        )),
-    );
-
-    pub const FIB_CHANNEL: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/fib-channel.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/fib-channel.svg"
-        )),
-    );
-
-    pub const FIB_CIRCLES: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/fib-circles.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/fib-circles.svg"
-        )),
-    );
-
-    pub const FIB_SPIRAL: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/fib-spiral.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/fib-spiral.svg"
-        )),
-    );
-
-    pub const FIB_TIME_ZONE: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/fib-time-zone.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/fib-time-zone.svg"
-        )),
-    );
-
-    pub const FIB_WEDGE: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/fib-wedge.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/fib-wedge.svg"
-        )),
-    );
-
-    pub const FIB_SPEED_RESISTANCE_ARCS: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/fib-speed-resistance-arcs.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/fib-speed-resistance-arcs.svg"
-        )),
-    );
-
-    pub const FIB_SPEED_RESISTANCE_FAN: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/fib-speed-resistance-fan.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/fib-speed-resistance-fan.svg"
-        )),
-    );
-
-    pub const TREND_BASED_FIB_EXTENSION: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/trend-based-fib-extension.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/trend-based-fib-extension.svg"
-        )),
-    );
-
-    pub const TREND_BASED_FIB_TIME: Icon = Icon::new(
-        "drawing_toolbar/fibonacci/trend-based-fib-time.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/fibonacci/trend-based-fib-time.svg"
-        )),
-    );
-
-    // =========================================================================
-    // GANN
-    // =========================================================================
-
-    pub const GANN_FAN: Icon = Icon::new(
-        "drawing_toolbar/gann/gann-fan.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/gann/gann-fan.svg"
-        )),
-    );
-
-    pub const GANN_SQUARE: Icon = Icon::new(
-        "drawing_toolbar/gann/gann-square.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/gann/gann-square.svg"
-        )),
-    );
-
-    pub const GANN_FIXED: Icon = Icon::new(
-        "drawing_toolbar/gann/gann-fixed.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/gann/gann-fixed.svg"
-        )),
-    );
-
-    pub const GANN_COMPLEX: Icon = Icon::new(
-        "drawing_toolbar/gann/gann-complex.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/gann/gann-complex.svg"
-        )),
-    );
-
-    // =========================================================================
-    // ELLIOTT WAVE
-    // =========================================================================
-
-    pub const ELLIOTT_IMPULSE: Icon = Icon::new(
-        "drawing_toolbar/elliott/elliott-impulse.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/elliott/elliott-impulse.svg"
-        )),
-    );
-
-    pub const ELLIOTT_CORRECTION: Icon = Icon::new(
-        "drawing_toolbar/elliott/elliott-correction.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/elliott/elliott-correction.svg"
-        )),
-    );
-
-    pub const ELLIOTT_TRIANGLE: Icon = Icon::new(
-        "drawing_toolbar/elliott/elliott-triangle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/elliott/elliott-triangle.svg"
-        )),
-    );
-
-    pub const ELLIOTT_DOUBLE_COMBO: Icon = Icon::new(
-        "drawing_toolbar/elliott/elliott-double-combo.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/elliott/elliott-double-combo.svg"
-        )),
-    );
-
-    pub const ELLIOTT_TRIPLE_COMBO: Icon = Icon::new(
-        "drawing_toolbar/elliott/elliott-triple-combo.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/elliott/elliott-triple-combo.svg"
-        )),
-    );
-
-    // =========================================================================
-    // PATTERNS
-    // =========================================================================
-
-    pub const ABCD: Icon = Icon::new(
-        "drawing_toolbar/patterns/abcd.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/patterns/abcd.svg"
-        )),
-    );
-
-    pub const XABCD_PATTERN: Icon = Icon::new(
-        "drawing_toolbar/patterns/xabcd-pattern.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/patterns/xabcd-pattern.svg"
-        )),
-    );
-
-    pub const CYPHER_PATTERN: Icon = Icon::new(
-        "drawing_toolbar/patterns/cypher-pattern.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/patterns/cypher-pattern.svg"
-        )),
-    );
-
-    pub const HEAD_AND_SHOULDERS: Icon = Icon::new(
-        "drawing_toolbar/patterns/head-and-shoulders.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/patterns/head-and-shoulders.svg"
-        )),
-    );
-
-    pub const TRIANGLE_PATTERN: Icon = Icon::new(
-        "drawing_toolbar/patterns/triangle-pattern.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/patterns/triangle-pattern.svg"
-        )),
-    );
-
-    pub const BARS_PATTERN: Icon = Icon::new(
-        "drawing_toolbar/patterns/bars-pattern.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/patterns/bars-pattern.svg"
-        )),
-    );
-
-    pub const THREE_DRIVERS: Icon = Icon::new(
-        "drawing_toolbar/patterns/three-drivers.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/patterns/three-drivers.svg"
-        )),
-    );
-
-    // =========================================================================
-    // PROJECTIONS & ANALYSIS
-    // =========================================================================
-
-    pub const LONG_POSITION: Icon = Icon::new(
-        "drawing_toolbar/projections/long-position.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/projections/long-position.svg"
-        )),
-    );
-
-    pub const SHORT_POSITION: Icon = Icon::new(
-        "drawing_toolbar/projections/short-position.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/projections/short-position.svg"
-        )),
-    );
-
-    pub const RISK_REWARD_SHORT: Icon = Icon::new(
-        "drawing_toolbar/projections/risk-reward-short.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/projections/risk-reward-short.svg"
-        )),
-    );
-
-    pub const PREDICTION: Icon = Icon::new(
-        "drawing_toolbar/projections/prediction.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/projections/prediction.svg"
-        )),
-    );
-
-    pub const PROJECTION: Icon = Icon::new(
-        "drawing_toolbar/projections/projection.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/projections/projection.svg"
-        )),
-    );
-
-    pub const REGRESSION_TREND: Icon = Icon::new(
-        "drawing_toolbar/projections/regression-trend.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/projections/regression-trend.svg"
-        )),
-    );
-
-    // =========================================================================
-    // VOLUME TOOLS
-    // =========================================================================
-
-    pub const ANCHORED_VWAP: Icon = Icon::new(
-        "drawing_toolbar/volume/anchored-vwap.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/volume/anchored-vwap.svg"
-        )),
-    );
-
-    pub const ANCHORED_VOLUME_PROFILE: Icon = Icon::new(
-        "drawing_toolbar/volume/anchored-volume-profile.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/volume/anchored-volume-profile.svg"
-        )),
-    );
-
-    pub const FIXED_RANGE_VOLUME_PROFILE: Icon = Icon::new(
-        "drawing_toolbar/volume/fixed-range-volume-profile.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/volume/fixed-range-volume-profile.svg"
-        )),
-    );
-
-    // =========================================================================
-    // SHAPES
-    // =========================================================================
-
-    pub const BRUSH: Icon = Icon::new(
-        "drawing_toolbar/shapes/brush.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/brush.svg"
-        )),
-    );
-
-    pub const HIGHLIGHTER: Icon = Icon::new(
-        "drawing_toolbar/shapes/highlighter.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/highlighter.svg"
-        )),
-    );
-
-    pub const PAINTBRUSH: Icon = Icon::new(
-        "drawing_toolbar/shapes/paintbrush.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/paintbrush.svg"
-        )),
-    );
-
-    pub const RECT: Icon = Icon::new(
-        "drawing_toolbar/shapes/rectangle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/rectangle.svg"
-        )),
-    );
-
-    pub const ROTATED_RECT: Icon = Icon::new(
-        "drawing_toolbar/shapes/rotated-rectangle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/rotated-rectangle.svg"
-        )),
-    );
-
-    pub const CIRCLE: Icon = Icon::new(
-        "drawing_toolbar/shapes/circle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/circle.svg"
-        )),
-    );
-
-    pub const CIRCLE_LINES: Icon = Icon::new(
-        "drawing_toolbar/shapes/circle-lines.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/circle-lines.svg"
-        )),
-    );
-
-    pub const ELLIPSE: Icon = Icon::new(
-        "drawing_toolbar/shapes/ellipse.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/ellipse.svg"
-        )),
-    );
-
-    pub const TRIANGLE: Icon = Icon::new(
-        "drawing_toolbar/shapes/triangle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/triangle.svg"
-        )),
-    );
-
-    pub const ARC: Icon = Icon::new(
-        "drawing_toolbar/shapes/arc.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/arc.svg"
-        )),
-    );
-
-    pub const POLYLINE: Icon = Icon::new(
-        "drawing_toolbar/shapes/polyline.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/polyline.svg"
-        )),
-    );
-
-    pub const PATH: Icon = Icon::new(
-        "drawing_toolbar/shapes/path.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/path.svg"
-        )),
-    );
-
-    pub const BEZIER_CUBIC: Icon = Icon::new(
-        "drawing_toolbar/shapes/bezier-cubic.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/bezier-cubic.svg"
-        )),
-    );
-
-    pub const BEZIER_QUADRO: Icon = Icon::new(
-        "drawing_toolbar/shapes/bezier-quadro.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/shapes/bezier-quadro.svg"
-        )),
-    );
-
-    // =========================================================================
-    // ANNOTATIONS & MARKERS
-    // =========================================================================
-
-    pub const ARROW_MARKER: Icon = Icon::new(
-        "drawing_toolbar/annotations/arrow-marker.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/annotations/arrow-marker.svg"
-        )),
-    );
-
-    pub const ARROW_MARK_UP: Icon = Icon::new(
-        "drawing_toolbar/annotations/arrow-mark-up.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/annotations/arrow-mark-up.svg"
-        )),
-    );
-
-    pub const ARROW_MARK_DOWN: Icon = Icon::new(
-        "drawing_toolbar/annotations/arrow-mark-down.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/annotations/arrow-mark-down.svg"
-        )),
-    );
-
-    pub const TEXT: Icon = Icon::new(
-        "drawing_toolbar/annotations/text.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/annotations/text.svg"
-        )),
-    );
-
-    pub const ANCHORED_TEXT: Icon = Icon::new(
-        "drawing_toolbar/annotations/anchored-text.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/annotations/anchored-text.svg"
-        )),
-    );
-
-    // =========================================================================
-    // MEASURERS & RANGES
-    // =========================================================================
-
-    pub const DATE_AND_PRICE_RANGE: Icon = Icon::new(
-        "drawing_toolbar/measurers/date-and-price-range.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/measurers/date-and-price-range.svg"
-        )),
-    );
-
-    pub const DATE_RANGE: Icon = Icon::new(
-        "drawing_toolbar/measurers/date-range.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/measurers/date-range.svg"
-        )),
-    );
-
-    pub const TIME_CYCLES: Icon = Icon::new(
-        "drawing_toolbar/measurers/time-cycles.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/measurers/time-cycles.svg"
-        )),
-    );
-
-    pub const SINE_LINE: Icon = Icon::new(
-        "drawing_toolbar/measurers/sine-line.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/measurers/sine-line.svg"
-        )),
-    );
-
-    pub const EXTENDED: Icon = Icon::new(
-        "drawing_toolbar/measurers/extended.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/measurers/extended.svg"
-        )),
-    );
-
-    pub const FLAT_BOTTOM: Icon = Icon::new(
-        "drawing_toolbar/measurers/flat-bottom.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/measurers/flat-bottom.svg"
-        )),
-    );
-
-    pub const GHOST_FEED: Icon = Icon::new(
-        "drawing_toolbar/measurers/ghost-feed.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/measurers/ghost-feed.svg"
-        )),
-    );
-
-    pub const MEASURE: Icon = Icon::new(
-        "drawing_toolbar/measurers/measure.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/measurers/measure.svg"
-        )),
-    );
-
-    pub const ZOOM_IN: Icon = Icon::new(
-        "drawing_toolbar/measurers/zoom.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/measurers/zoom.svg"
-        )),
-    );
-
-    // =========================================================================
-    // TOP TOOLBAR
-    // =========================================================================
-
-    pub const MENU: Icon = Icon::new(
-        "top_toolbar/menu.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/menu.svg"
-        )),
-    );
-
-    pub const SETTINGS: Icon = Icon::new(
-        "top_toolbar/settings.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/settings.svg"
-        )),
-    );
-
-    pub const CAMERA: Icon = Icon::new(
-        "top_toolbar/take-a-snapshot.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/take-a-snapshot.svg"
-        )),
-    );
-
-    pub const PLUS: Icon = Icon::new(
-        "top_toolbar/compare-or-add-symbol.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/compare-or-add-symbol.svg"
-        )),
-    );
-
-    pub const INDICATORS: Icon = Icon::new(
-        "top_toolbar/indicators-metrics-and-strategies.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/indicators-metrics-and-strategies.svg"
-        )),
-    );
-
-    pub const ALERTS: Icon = Icon::new(
-        "settings_dialog/alerts.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/settings_dialog/alerts.svg"
-        )),
-    );
-
-    pub const REPLAY: Icon = Icon::new(
-        "top_toolbar/bar-replay.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/bar-replay.svg"
-        )),
-    );
-
-    pub const UNDO: Icon = Icon::new(
-        "top_toolbar/undo.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/undo.svg"
-        )),
-    );
-
-    pub const REDO: Icon = Icon::new(
-        "top_toolbar/redo.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/redo.svg"
-        )),
-    );
-
-    pub const CHEVRON_DOWN: Icon = Icon::new(
-        "top_toolbar/chevron-down.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/chevron-down.svg"
-        )),
-    );
-
-    pub const FULLSCREEN: Icon = Icon::new(
-        "top_toolbar/header-toolbar-fullscreen.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/header-toolbar-fullscreen.svg"
-        )),
-    );
-
-    pub const QUICK_SEARCH: Icon = Icon::new(
-        "top_toolbar/header-toolbar-quick-search.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/header-toolbar-quick-search.svg"
-        )),
-    );
-
-    // =========================================================================
-    // TIMEFRAME TOOLBAR
-    // =========================================================================
-
-    pub const GO_TO_DATE: Icon = Icon::new(
-        "timeframe_toolbar/go-to-date.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/timeframe_toolbar/go-to-date.svg"
-        )),
-    );
-
-    // =========================================================================
-    // WIDGET BAR
-    // =========================================================================
-
-    pub const WIDGET_BAR_ALERTS: Icon = Icon::new(
-        "widget_bar/alerts.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/alerts.svg"
-        )),
-    );
-
-    pub const WIDGET_BAR_CALENDAR: Icon = Icon::new(
-        "widget_bar/calendar.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/calendar.svg"
-        )),
-    );
-
-    pub const WIDGET_BAR_NOTIFICATIONS: Icon = Icon::new(
-        "widget_bar/notifications.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/notifications.svg"
-        )),
-    );
-
-    pub const WIDGET_BAR_HELP: Icon = Icon::new(
-        "widget_bar/help.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/help.svg"
-        )),
-    );
-
-    pub const IDEAS: Icon = Icon::new(
-        "widget_bar/ideas.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/ideas.svg"
-        )),
-    );
-
-    pub const OBJECT_TREE: Icon = Icon::new(
-        "widget_bar/object-tree.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/object-tree.svg"
-        )),
-    );
-
-    // =========================================================================
-    // COMMON ICONS
-    // =========================================================================
-
-    /// Eye with slash - Hide all drawings
-    pub const EYE_HIDE: Icon = Icon::new(
-        "common/eye-hide.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/common/eye-hide.svg"
-        )),
-    );
-
-    pub const UNLOCK: Icon = Icon::new(
-        "common/unlock.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/common/unlock.svg"
-        )),
-    );
-
-    pub const ZOOM_OUT: Icon = Icon::new(
-        "common/zoom-out.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/common/zoom-out.svg"
-        )),
-    );
-
-    pub const MAGNET: Icon = Icon::new(
-        "common/magnet.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/common/magnet.svg"
-        )),
-    );
-
-    pub const LOCK: Icon = Icon::new(
-        "common/lock.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/common/lock.svg"
-        )),
-    );
-
-    pub const TRASH: Icon = Icon::new(
-        "common/trash.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/common/trash.svg"
-        )),
-    );
-
-    // =========================================================================
-    // CHART TYPES
-    // =========================================================================
-
-    pub const CHART_BARS: Icon = Icon::new(
-        "chart_types/chart-bars.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-bars.svg"
-        )),
-    );
-
-    pub const CHART_CANDLES: Icon = Icon::new(
-        "chart_types/chart-candles.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-candles.svg"
-        )),
-    );
-
-    pub const CHART_HOLLOW_CANDLES: Icon = Icon::new(
-        "chart_types/chart-hollow-candles.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-hollow-candles.svg"
-        )),
-    );
-
-    pub const CHART_VOLUME_CANDLES: Icon = Icon::new(
-        "chart_types/chart-volume-candles.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-volume-candles.svg"
-        )),
-    );
-
-    pub const CHART_LINE: Icon = Icon::new(
-        "chart_types/chart-line.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-line.svg"
-        )),
-    );
-
-    pub const CHART_LINE_MARKERS: Icon = Icon::new(
-        "chart_types/chart-line-markers.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-line-markers.svg"
-        )),
-    );
-
-    pub const CHART_STEP_LINE: Icon = Icon::new(
-        "chart_types/chart-step-line.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-step-line.svg"
-        )),
-    );
-
-    pub const CHART_AREA: Icon = Icon::new(
-        "chart_types/chart-area.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-area.svg"
-        )),
-    );
-
-    pub const CHART_HLC_AREA: Icon = Icon::new(
-        "chart_types/chart-hlc-area.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-hlc-area.svg"
-        )),
-    );
-
-    pub const CHART_BASELINE: Icon = Icon::new(
-        "chart_types/chart-baseline.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-baseline.svg"
-        )),
-    );
-
-    pub const CHART_HIGH_LOW: Icon = Icon::new(
-        "chart_types/chart-high-low.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-high-low.svg"
-        )),
-    );
-
-    pub const CHART_TPO: Icon = Icon::new(
-        "chart_types/chart-tpo.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-tpo.svg"
-        )),
-    );
-
-    pub const CHART_LINE_BREAK: Icon = Icon::new(
-        "chart_types/chart-line-break.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-line-break.svg"
-        )),
-    );
-
-    pub const CHART_KAGI: Icon = Icon::new(
-        "chart_types/chart-kagi.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-kagi.svg"
-        )),
-    );
-
-    pub const CHART_RANGE: Icon = Icon::new(
-        "chart_types/chart-range.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-range.svg"
-        )),
-    );
-
-    pub const CHART_POINT_FIGURE: Icon = Icon::new(
-        "chart_types/chart-point-figure.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-point-figure.svg"
-        )),
-    );
-
-    pub const CHART_RENKO: Icon = Icon::new(
-        "chart_types/chart-renko.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-renko.svg"
-        )),
-    );
-
-    pub const CHART_HEIKIN_ASHI: Icon = Icon::new(
-        "chart_types/chart-heikin-ashi.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/chart_types/chart-heikin-ashi.svg"
-        )),
-    );
-
-    // =========================================================================
-    // SETTINGS DIALOG
-    // =========================================================================
-
-    pub const SETTINGS_SYMBOL: Icon = Icon::new(
-        "settings_dialog/symbol.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/settings_dialog/symbol.svg"
-        )),
-    );
-
-    pub const SETTINGS_STATUS_LINE: Icon = Icon::new(
-        "settings_dialog/status-line.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/settings_dialog/status-line.svg"
-        )),
-    );
-
-    pub const SETTINGS_SCALES_LINES: Icon = Icon::new(
-        "settings_dialog/scales-lines.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/settings_dialog/scales-lines.svg"
-        )),
-    );
-
-    pub const SETTINGS_CANVAS: Icon = Icon::new(
-        "settings_dialog/canvas.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/settings_dialog/canvas.svg"
-        )),
-    );
-
-    pub const SETTINGS_EVENTS: Icon = Icon::new(
-        "settings_dialog/events.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/settings_dialog/events.svg"
-        )),
-    );
-
-    // =========================================================================
-    // EMOJIS
-    // =========================================================================
-
-    // Faces
-
-    // Hands
-
-    // Trading/Finance
-
-    // Symbols
-
-    // Animals
-    pub const EMOJI_EAGLE: Icon = Icon::new(
-        "emojis/eagle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/emojis/eagle.svg"
-        )),
-    );
-
-    // Holiday emojis
-    pub const EMOJI_ORNAMENT: Icon = Icon::new(
-        "emojis/ornament.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/emojis/ornament.svg"
-        )),
-    );
-
-    // =========================================================================
-    // STATUS ICONS (Connection indicators)
-    // =========================================================================
-
-    pub const STATUS_CONNECTED: Icon = Icon::new(
-        "status/connected.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/status/connected.svg"
-        )),
-    );
-
-    pub const STATUS_CONNECTING: Icon = Icon::new(
-        "status/connecting.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/status/connecting.svg"
-        )),
-    );
-
-    pub const STATUS_DISCONNECTED: Icon = Icon::new(
-        "status/disconnected.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/status/disconnected.svg"
-        )),
-    );
-
-    pub const STATUS_ERROR: Icon = Icon::new(
-        "status/error.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/status/error.svg"
-        )),
-    );
-
-    // =========================================================================
-    // MEDIA ICONS (Play/Pause/Stop controls)
-    // =========================================================================
-
-    pub const MEDIA_PLAY: Icon = Icon::new(
-        "media/play.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/media/play.svg"
-        )),
-    );
-
-    pub const MEDIA_PAUSE: Icon = Icon::new(
-        "media/pause.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/media/pause.svg"
-        )),
-    );
-
-    pub const MEDIA_STOP: Icon = Icon::new(
-        "media/stop.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/media/stop.svg"
-        )),
-    );
-
-    pub const MEDIA_SKIP_BACK: Icon = Icon::new(
-        "media/skip-back.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/media/skip-back.svg"
-        )),
-    );
-
-    pub const MEDIA_SKIP_FORWARD: Icon = Icon::new(
-        "media/skip-forward.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/media/skip-forward.svg"
-        )),
-    );
-
-    // =========================================================================
-    // UI ICONS (General interface elements)
-    // =========================================================================
-
-    pub const UI_DRAG_HANDLE: Icon = Icon::new(
-        "ui/drag-handle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/ui/drag-handle.svg"
-        )),
-    );
-
-    pub const UI_MORE_HORIZONTAL: Icon = Icon::new(
-        "ui/more-horizontal.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/ui/more-horizontal.svg"
-        )),
-    );
-
-    pub const UI_ARROW_BACK: Icon = Icon::new(
-        "ui/arrow-back.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/ui/arrow-back.svg"
-        )),
-    );
-
-    pub const UI_BUFFERING: Icon = Icon::new(
-        "ui/buffering.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/ui/buffering.svg"
-        )),
-    );
-
-    // =========================================================================
-    // CATEGORY ICONS (Emoji picker categories)
-    // =========================================================================
-
-    // =========================================================================
-    // CONTEXT MENU ICONS
-    // =========================================================================
-
-    // =========================================================================
-    // ADDITIONAL ICONS
-    // =========================================================================
-
-    /// Layout grid icon (4 boxes)
-    pub const LAYOUT_GRID: Icon = Icon::new(
-        "top_toolbar/layout-grid.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/layout-grid.svg"
-        )),
-    );
-
-    /// Layout setup icon (21x19)
-    pub const LAYOUT_SETUP: Icon = Icon::new(
-        "top_toolbar/layout-setup.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/top_toolbar/layout-setup.svg"
-        )),
-    );
-
-    /// Star empty icon for favorites
-    pub const STAR_EMPTY: Icon = Icon::new(
-        "common/star-empty.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/common/star-empty.svg"
-        )),
-    );
-
-    /// Zoom toggle icon (combined zoom in/out)
-    pub const ZOOM_TOGGLE: Icon = Icon::new(
-        "common/zoom-toggle.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/common/zoom-toggle.svg"
-        )),
-    );
-
-    /// Crosshair cursor icon
-    pub const CROSSHAIR: Icon = Icon::new(
-        "drawing_toolbar/cursors/crosshair.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/cursors/crosshair.svg"
-        )),
-    );
-
-    /// Emoji/icon picker icon
-    pub const EMOJI_ICON: Icon = Icon::new(
-        "drawing_toolbar/annotations/emoji.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/drawing_toolbar/annotations/emoji.svg"
-        )),
-    );
-
-    // =========================================================================
-    // WIDGET BAR 44x44 ICONS - native size
-    // =========================================================================
-
-    /// Watchlist icon - 44x44
-    pub const WATCHLIST_44: Icon = Icon::new(
-        "widget_bar/watchlist-44.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/watchlist-44.svg"
-        )),
-    );
-
-    /// Screener icon - 44x44
-    pub const SCREENER_44: Icon = Icon::new(
-        "widget_bar/screener-44.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/screener-44.svg"
-        )),
-    );
-
-    /// Pine Script icon - 44x44
-    pub const PINE_SCRIPT_44: Icon = Icon::new(
-        "widget_bar/pine-script-44.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/pine-script-44.svg"
-        )),
-    );
-
-    /// Community icon - 44x44
-    pub const COMMUNITY_44: Icon = Icon::new(
-        "widget_bar/community-44.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/community-44.svg"
-        )),
-    );
-
-    /// Products icon - 44x44
-    pub const PRODUCTS_44: Icon = Icon::new(
-        "widget_bar/products-44.svg",
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/icons/widget_bar/products-44.svg"
-        )),
-    );
-
-    // =========================================================================
-    // ALIASES (for backward compatibility with SvgIcon names)
-    // =========================================================================
-
-    /// Alias: Bell -> ALERTS
+    // Cursors
+    pub const CROSSHAIR: Icon = crate::icon_from_path!("lines/cursor-cross.svg");
+    pub const DOT: Icon = crate::icon_from_path!("lines/cursor-dot.svg");
+    pub const ARROW: Icon = crate::icon_from_path!("lines/cursor-arrow.svg");
+    pub const ERASER: Icon = crate::icon_from_path!("lines/eraser.svg");
+
+    // Lines and channels
+    pub const TREND_LINE: Icon = crate::icon_from_path!("lines/trend-line.svg");
+    pub const RAY: Icon = crate::icon_from_path!("lines/ray.svg");
+    pub const INFO_LINE: Icon = crate::icon_from_path!("lines/info-line.svg");
+    pub const EXTENDED: Icon = crate::icon_from_path!("lines/extended-line.svg");
+    pub const TREND_ANGLE: Icon = crate::icon_from_path!("lines/trend-angle.svg");
+    pub const HORIZONTAL_LINE: Icon = crate::icon_from_path!("lines/horizontal-line.svg");
+    pub const HORIZONTAL_RAY: Icon = crate::icon_from_path!("lines/horizontal-ray.svg");
+    pub const VERTICAL_LINE: Icon = crate::icon_from_path!("lines/vertical-line.svg");
+    pub const CROSS_LINE: Icon = crate::icon_from_path!("lines/cross-line.svg");
+    pub const PARALLEL_CHANNEL: Icon = crate::icon_from_path!("lines/parallel-channel.svg");
+    pub const REGRESSION_TREND: Icon = crate::icon_from_path!("lines/regression-trend.svg");
+    pub const FLAT_BOTTOM: Icon = crate::icon_from_path!("lines/flat-top-bottom.svg");
+    pub const DISJOINT_ANGLE: Icon = crate::icon_from_path!("lines/disjoint-channel.svg");
+
+    // Pitchforks and Gann
+    pub const PITCHFORK: Icon = crate::icon_from_path!("pitchforks-gann/pitchfork.svg");
+    pub const SCHIFF_PITCHFORK: Icon =
+        crate::icon_from_path!("pitchforks-gann/schiff-pitchfork.svg");
+    pub const SCHIFF_PITCHFORK2: Icon =
+        crate::icon_from_path!("pitchforks-gann/modified-schiff-pitchfork.svg");
+    pub const INSIDE_PITCHFORK: Icon =
+        crate::icon_from_path!("pitchforks-gann/inside-pitchfork.svg");
+    pub const PITCHFAN: Icon = crate::icon_from_path!("pitchforks-gann/pitchfan.svg");
+    pub const GANN_SQUARE: Icon = crate::icon_from_path!("pitchforks-gann/gann-box.svg");
+    pub const GANN_COMPLEX: Icon = crate::icon_from_path!("pitchforks-gann/gann-square.svg");
+    pub const GANN_FIXED: Icon = crate::icon_from_path!("pitchforks-gann/gann-square-fixed.svg");
+    pub const GANN_FAN: Icon = crate::icon_from_path!("pitchforks-gann/gann-fan.svg");
+
+    // Fibonacci
+    pub const FIB_RETRACEMENT: Icon = crate::icon_from_path!("fibonacci/fib-retracement.svg");
+    pub const FIB_EXTENSION: Icon = crate::icon_from_path!("fibonacci/fib-extension.svg");
+    pub const FIB_CHANNEL: Icon = crate::icon_from_path!("fibonacci/fib-channel.svg");
+    pub const FIB_TIME_ZONE: Icon = crate::icon_from_path!("fibonacci/fib-time-zone.svg");
+    pub const FIB_SPEED_RESISTANCE_FAN: Icon =
+        crate::icon_from_path!("fibonacci/fib-speed-fan.svg");
+    pub const TREND_BASED_FIB_TIME: Icon =
+        crate::icon_from_path!("fibonacci/trend-based-fib-time.svg");
+    pub const FIB_CIRCLES: Icon = crate::icon_from_path!("fibonacci/fib-circles.svg");
+    pub const FIB_SPIRAL: Icon = crate::icon_from_path!("fibonacci/fib-spiral.svg");
+    pub const FIB_SPEED_RESISTANCE_ARCS: Icon =
+        crate::icon_from_path!("fibonacci/fib-speed-arcs.svg");
+    pub const FIB_WEDGE: Icon = crate::icon_from_path!("fibonacci/fib-wedge.svg");
+
+    // Patterns and Elliott waves
+    pub const XABCD_PATTERN: Icon = crate::icon_from_path!("patterns-elliott/xabcd.svg");
+    pub const CYPHER_PATTERN: Icon = crate::icon_from_path!("patterns-elliott/cypher.svg");
+    pub const HEAD_AND_SHOULDERS: Icon =
+        crate::icon_from_path!("patterns-elliott/head-and-shoulders.svg");
+    pub const ABCD: Icon = crate::icon_from_path!("patterns-elliott/abcd.svg");
+    pub const TRIANGLE_PATTERN: Icon =
+        crate::icon_from_path!("patterns-elliott/triangle-pattern.svg");
+    pub const THREE_DRIVERS: Icon = crate::icon_from_path!("patterns-elliott/three-drives.svg");
+    pub const ELLIOTT_IMPULSE: Icon =
+        crate::icon_from_path!("patterns-elliott/elliott-impulse.svg");
+    pub const ELLIOTT_CORRECTION: Icon =
+        crate::icon_from_path!("patterns-elliott/elliott-correction.svg");
+    pub const ELLIOTT_TRIANGLE: Icon =
+        crate::icon_from_path!("patterns-elliott/elliott-triangle.svg");
+    pub const ELLIOTT_DOUBLE_COMBO: Icon =
+        crate::icon_from_path!("patterns-elliott/elliott-double-combo.svg");
+    pub const ELLIOTT_TRIPLE_COMBO: Icon =
+        crate::icon_from_path!("patterns-elliott/elliott-triple-combo.svg");
+
+    // Projection, volume, measurers and cycles
+    pub const LONG_POSITION: Icon =
+        crate::icon_from_path!("projection-volume-measure/long-position.svg");
+    pub const SHORT_POSITION: Icon =
+        crate::icon_from_path!("projection-volume-measure/short-position.svg");
+    pub const PREDICTION: Icon = crate::icon_from_path!("projection-volume-measure/forecast.svg");
+    pub const BARS_PATTERN: Icon =
+        crate::icon_from_path!("projection-volume-measure/bars-pattern.svg");
+    pub const GHOST_FEED: Icon = crate::icon_from_path!("projection-volume-measure/ghost-feed.svg");
+    pub const PROJECTION: Icon = crate::icon_from_path!("projection-volume-measure/projection.svg");
+    pub const ANCHORED_VWAP: Icon =
+        crate::icon_from_path!("projection-volume-measure/anchored-vwap.svg");
+    pub const FIXED_RANGE_VOLUME_PROFILE: Icon =
+        crate::icon_from_path!("projection-volume-measure/fixed-range-volume-profile.svg");
+    pub const ANCHORED_VOLUME_PROFILE: Icon =
+        crate::icon_from_path!("projection-volume-measure/anchored-volume-profile.svg");
+    pub const MEASURE: Icon = crate::icon_from_path!("projection-volume-measure/measure.svg");
+    pub const PRICE_RANGE: Icon =
+        crate::icon_from_path!("projection-volume-measure/price-range.svg");
+    pub const DATE_RANGE: Icon = crate::icon_from_path!("projection-volume-measure/date-range.svg");
+    pub const DATE_AND_PRICE_RANGE: Icon =
+        crate::icon_from_path!("projection-volume-measure/date-price-range.svg");
+    pub const CIRCLE_LINES: Icon =
+        crate::icon_from_path!("projection-volume-measure/cyclic-lines.svg");
+    pub const TIME_CYCLES: Icon =
+        crate::icon_from_path!("projection-volume-measure/time-cycles.svg");
+    pub const SINE_LINE: Icon = crate::icon_from_path!("projection-volume-measure/sine-line.svg");
+
+    // Shapes, brushes and annotations
+    pub const BRUSH: Icon = crate::icon_from_path!("shapes-annotations/brush.svg");
+    pub const HIGHLIGHTER: Icon = crate::icon_from_path!("shapes-annotations/highlighter.svg");
+    pub const PAINTBRUSH: Icon = crate::icon_from_path!("shapes-annotations/paintbrush.svg");
+    pub const ARROW_MARKER: Icon = crate::icon_from_path!("shapes-annotations/arrow-marker.svg");
+    pub const ARROW_LINE: Icon = crate::icon_from_path!("shapes-annotations/arrow.svg");
+    pub const ARROW_MARK_UP: Icon = crate::icon_from_path!("shapes-annotations/arrow-mark-up.svg");
+    pub const ARROW_MARK_DOWN: Icon =
+        crate::icon_from_path!("shapes-annotations/arrow-mark-down.svg");
+    pub const RECT: Icon = crate::icon_from_path!("shapes-annotations/rectangle.svg");
+    pub const ROTATED_RECT: Icon =
+        crate::icon_from_path!("shapes-annotations/rotated-rectangle.svg");
+    pub const PATH: Icon = crate::icon_from_path!("shapes-annotations/path.svg");
+    pub const CIRCLE: Icon = crate::icon_from_path!("shapes-annotations/circle.svg");
+    pub const ELLIPSE: Icon = crate::icon_from_path!("shapes-annotations/ellipse.svg");
+    pub const POLYLINE: Icon = crate::icon_from_path!("shapes-annotations/polyline.svg");
+    pub const TRIANGLE: Icon = crate::icon_from_path!("shapes-annotations/triangle.svg");
+    pub const ARC: Icon = crate::icon_from_path!("shapes-annotations/arc.svg");
+    pub const BEZIER_QUADRO: Icon = crate::icon_from_path!("shapes-annotations/curve.svg");
+    pub const BEZIER_CUBIC: Icon = crate::icon_from_path!("shapes-annotations/double-curve.svg");
+    pub const TEXT: Icon = crate::icon_from_path!("shapes-annotations/text.svg");
+    pub const ANCHORED_TEXT: Icon = crate::icon_from_path!("shapes-annotations/anchored-text.svg");
+    pub const NOTE: Icon = crate::icon_from_path!("shapes-annotations/note.svg");
+    pub const PRICE_NOTE: Icon = crate::icon_from_path!("shapes-annotations/price-note.svg");
+    pub const ANCHORED_NOTE: Icon = crate::icon_from_path!("shapes-annotations/anchored-note.svg");
+    pub const CALLOUT: Icon = crate::icon_from_path!("shapes-annotations/callout.svg");
+    pub const COMMENT: Icon = crate::icon_from_path!("shapes-annotations/comment.svg");
+    pub const PRICE_LABEL: Icon = crate::icon_from_path!("shapes-annotations/price-label.svg");
+    pub const SIGNPOST: Icon = crate::icon_from_path!("shapes-annotations/signpost.svg");
+    pub const FLAG_MARK: Icon = crate::icon_from_path!("shapes-annotations/flag-mark.svg");
+    pub const TABLE: Icon = crate::icon_from_path!("shapes-annotations/table.svg");
+    pub const IMAGE: Icon = crate::icon_from_path!("shapes-annotations/image.svg");
+    pub const POST: Icon = crate::icon_from_path!("shapes-annotations/post.svg");
+    pub const IDEAS: Icon = crate::icon_from_path!("shapes-annotations/idea.svg");
+    pub const EMOJI_ICON: Icon = crate::icon_from_path!("shapes-annotations/emoji.svg");
+
+    // Chart types
+    pub const CHART_BARS: Icon = crate::icon_from_path!("chart-types/chart-bars.svg");
+    pub const CHART_CANDLES: Icon = crate::icon_from_path!("chart-types/chart-candles.svg");
+    pub const CHART_HOLLOW_CANDLES: Icon =
+        crate::icon_from_path!("chart-types/chart-hollow-candles.svg");
+    pub const CHART_VOLUME_CANDLES: Icon =
+        crate::icon_from_path!("chart-types/chart-volume-candles.svg");
+    pub const CHART_LINE: Icon = crate::icon_from_path!("chart-types/chart-line.svg");
+    pub const CHART_LINE_MARKERS: Icon =
+        crate::icon_from_path!("chart-types/chart-line-markers.svg");
+    pub const CHART_STEP_LINE: Icon = crate::icon_from_path!("chart-types/chart-step-line.svg");
+    pub const CHART_AREA: Icon = crate::icon_from_path!("chart-types/chart-area.svg");
+    pub const CHART_HLC_AREA: Icon = crate::icon_from_path!("chart-types/chart-hlc-area.svg");
+    pub const CHART_BASELINE: Icon = crate::icon_from_path!("chart-types/chart-baseline.svg");
+    pub const CHART_HIGH_LOW: Icon = crate::icon_from_path!("chart-types/chart-high-low.svg");
+    pub const CHART_TPO: Icon = crate::icon_from_path!("chart-types/chart-tpo.svg");
+    pub const CHART_LINE_BREAK: Icon = crate::icon_from_path!("chart-types/chart-line-break.svg");
+    pub const CHART_KAGI: Icon = crate::icon_from_path!("chart-types/chart-kagi.svg");
+    pub const CHART_RANGE: Icon = crate::icon_from_path!("chart-types/chart-range.svg");
+    pub const CHART_POINT_FIGURE: Icon =
+        crate::icon_from_path!("chart-types/chart-point-figure.svg");
+    pub const CHART_RENKO: Icon = crate::icon_from_path!("chart-types/chart-renko.svg");
+    pub const CHART_HEIKIN_ASHI: Icon = crate::icon_from_path!("chart-types/chart-heikin-ashi.svg");
+
+    // Interface
+    pub const MENU: Icon = crate::icon_from_path!("ui/menu.svg");
+    pub const SETTINGS: Icon = crate::icon_from_path!("ui/settings.svg");
+    pub const CAMERA: Icon = crate::icon_from_path!("ui/camera.svg");
+    pub const PLUS: Icon = crate::icon_from_path!("ui/plus.svg");
+    pub const INDICATORS: Icon = crate::icon_from_path!("ui/indicators.svg");
+    pub const ALERTS: Icon = crate::icon_from_path!("ui/alert.svg");
+    pub const REPLAY: Icon = crate::icon_from_path!("ui/replay.svg");
+    pub const UNDO: Icon = crate::icon_from_path!("ui/undo.svg");
+    pub const REDO: Icon = crate::icon_from_path!("ui/redo.svg");
+    pub const CHEVRON_DOWN: Icon = crate::icon_from_path!("ui/chevron-down.svg");
+    pub const FULLSCREEN: Icon = crate::icon_from_path!("ui/fullscreen.svg");
+    pub const QUICK_SEARCH: Icon = crate::icon_from_path!("ui/search.svg");
+    pub const WIDGET_BAR_CALENDAR: Icon = crate::icon_from_path!("ui/calendar.svg");
+    pub const GO_TO_DATE: Icon = crate::icon_from_path!("ui/go-to-date.svg");
+    pub const WIDGET_BAR_HELP: Icon = crate::icon_from_path!("ui/help.svg");
+    pub const INFO: Icon = crate::icon_from_path!("ui/info.svg");
+    pub const SUCCESS: Icon = crate::icon_from_path!("ui/success.svg");
+    pub const WARNING: Icon = crate::icon_from_path!("ui/warning.svg");
+    pub const STATUS_ERROR: Icon = crate::icon_from_path!("ui/error.svg");
+    pub const OBJECT_TREE: Icon = crate::icon_from_path!("ui/object-tree.svg");
+    pub const EYE: Icon = crate::icon_from_path!("ui/eye.svg");
+    pub const EYE_HIDE: Icon = crate::icon_from_path!("ui/eye-off.svg");
+    pub const LOCK: Icon = crate::icon_from_path!("ui/lock.svg");
+    pub const UNLOCK: Icon = crate::icon_from_path!("ui/unlock.svg");
+    pub const ZOOM_IN: Icon = crate::icon_from_path!("ui/zoom-in.svg");
+    pub const ZOOM_OUT: Icon = crate::icon_from_path!("ui/zoom-out.svg");
+    pub const MAGNET: Icon = crate::icon_from_path!("ui/magnet.svg");
+    pub const TRASH: Icon = crate::icon_from_path!("ui/trash.svg");
+    pub const STAR_EMPTY: Icon = crate::icon_from_path!("ui/star.svg");
+    pub const LAYOUT_GRID: Icon = crate::icon_from_path!("ui/layout-grid.svg");
+    pub const LAYOUT_SETUP: Icon = crate::icon_from_path!("ui/layout-setup.svg");
+    pub const CLOSE: Icon = crate::icon_from_path!("ui/close.svg");
+    pub const MOVE_PANE: Icon = crate::icon_from_path!("ui/move-pane.svg");
+    pub const WATCHLIST: Icon = crate::icon_from_path!("ui/watchlist.svg");
+    pub const UI_DRAG_HANDLE: Icon = crate::icon_from_path!("ui/drag-handle.svg");
+    pub const UI_MORE_HORIZONTAL: Icon = crate::icon_from_path!("ui/more.svg");
+    pub const UI_BUFFERING: Icon = crate::icon_from_path!("ui/loading.svg");
+
+    // Settings dialog tabs
+    pub const SETTINGS_SYMBOL: Icon = crate::icon_from_path!("ui/symbol.svg");
+    pub const SETTINGS_STATUS_LINE: Icon = crate::icon_from_path!("ui/status-line.svg");
+    pub const SETTINGS_SCALES_LINES: Icon = crate::icon_from_path!("ui/scales-lines.svg");
+    pub const SETTINGS_CANVAS: Icon = crate::icon_from_path!("ui/canvas.svg");
+    pub const SETTINGS_EVENTS: Icon = crate::icon_from_path!("ui/events.svg");
+
+    // Connection status
+    pub const STATUS_CONNECTED: Icon = crate::icon_from_path!("ui/connected.svg");
+    pub const STATUS_CONNECTING: Icon = crate::icon_from_path!("ui/connecting.svg");
+    pub const STATUS_DISCONNECTED: Icon = crate::icon_from_path!("ui/disconnected.svg");
+
+    // Media and replay
+    pub const MEDIA_PLAY: Icon = crate::icon_from_path!("ui/play.svg");
+    pub const MEDIA_PAUSE: Icon = crate::icon_from_path!("ui/pause.svg");
+    pub const MEDIA_STOP: Icon = crate::icon_from_path!("ui/stop.svg");
+    pub const MEDIA_SKIP_BACK: Icon = crate::icon_from_path!("ui/skip-back.svg");
+    pub const MEDIA_SKIP_FORWARD: Icon = crate::icon_from_path!("ui/skip-forward.svg");
+    pub const UI_ARROW_BACK: Icon = crate::icon_from_path!("ui/step-back.svg");
+    pub const UI_ARROW_FORWARD: Icon = crate::icon_from_path!("ui/step-forward.svg");
+
+    // Aliases
     pub const BELL: Icon = ALERTS;
-    /// Alias: Close -> ERASER
-    pub const CLOSE: Icon = ERASER;
-    /// Alias: Candlestick -> CHART_CANDLES
+    pub const WIDGET_BAR_ALERTS: Icon = ALERTS;
     pub const CANDLESTICK: Icon = CHART_CANDLES;
-    /// Alias: SettingsGear -> SETTINGS
     pub const SETTINGS_GEAR: Icon = SETTINGS;
-    /// Alias: BarChart -> CHART_BARS
     pub const BAR_CHART: Icon = CHART_BARS;
-    /// Alias: LineChart -> CHART_LINE
-    pub const LINE_CHART: Icon = CHART_LINE;
-    /// Alias: AreaChart -> CHART_AREA
-    pub const AREA_CHART: Icon = CHART_AREA;
-    /// Alias: Hide -> EYE_HIDE
-    pub const HIDE: Icon = EYE_HIDE;
-    /// Alias: Remove -> TRASH
     pub const REMOVE: Icon = TRASH;
-    /// Alias: MovePane -> ZOOM_OUT
-    pub const MOVE_PANE: Icon = ZOOM_OUT;
-    /// Alias: Watchlist -> WIDGET_BAR_ALERTS
-    pub const WATCHLIST: Icon = WIDGET_BAR_ALERTS;
-    /// Alias: OrderBook -> WIDGET_BAR_ALERTS
-    pub const ORDER_BOOK: Icon = WIDGET_BAR_ALERTS;
-    /// Alias: TimeAndSales -> WIDGET_BAR_ALERTS
-    pub const TIME_AND_SALES: Icon = WIDGET_BAR_ALERTS;
-    /// Alias: Info -> WIDGET_BAR_HELP
-    pub const INFO: Icon = WIDGET_BAR_HELP;
-    /// Alias: LongPos -> LONG_POSITION
     pub const LONG_POS: Icon = LONG_POSITION;
-    /// Alias: ShortPos -> SHORT_POSITION
     pub const SHORT_POS: Icon = SHORT_POSITION;
-
-    // =========================================================================
-    // SEMANTIC ALIASES (for Alert component, etc.)
-    // =========================================================================
 }
 
 #[cfg(test)]
 mod tests {
-    //! The runtime image cache and URI key are derived from an icon's `name`
-    //! alone, while the pixels come from the `include_bytes!` path. If those two
-    //! disagree, a lookup by name resolves to the wrong (or a nonexistent)
-    //! asset. These tests pin the invariant that every embedded icon's `name`
-    //! equals its `include_bytes!` path and that the asset exists on disk.
-
-    use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::path::Path;
 
-    /// Every embedded icon constructor in this file, parsed from source as
-    /// `(line, name, asset-relative-path)`. The constructor token is assembled
-    /// at runtime so this doc and the parser itself are not mistaken for an
-    /// embedded icon.
-    fn embedded_icons() -> Vec<(usize, String, String)> {
-        let src = include_str!("mod.rs");
-        let needle = concat!("Icon", "::new(");
-        let mut out = Vec::new();
-        let bytes = src.as_bytes();
-        let mut search = 0usize;
-        while let Some(rel) = src[search..].find(needle) {
-            let start = search + rel;
-            search = start + needle.len();
+    /// Asset paths of every `icon_from_path!` constant in this file.
+    fn embedded_paths() -> Vec<String> {
+        let needle = concat!("icon_from_path", "!(\"");
+        include_str!("mod.rs")
+            .split(needle)
+            .skip(1)
+            .map(|rest| rest[..rest.find('"').unwrap()].to_string())
+            .collect()
+    }
 
-            // The name is the first string literal between the constructor and the
-            // following `include_bytes!`. The macro definition passes `$path`
-            // (not a string literal) there, so it is skipped.
-            let Some(ib) = src[search..].find("include_bytes!").map(|o| search + o) else {
-                continue;
-            };
-            let Some(name) = next_string_literal(&src[..ib], search) else {
-                continue;
-            };
-            // The asset path is the literal inside `include_bytes!(concat!(...))`
-            // beginning with the asset prefix (the earlier `"CARGO_MANIFEST_DIR"`
-            // literal is skipped by matching on the prefix).
-            let prefix = "/assets/icons/";
-            if let Some(path) = string_literal_with_prefix(src, ib, needle, prefix) {
-                let rel_path = &path[prefix.len()..];
-                let line = bytes[..start].iter().filter(|&&b| b == b'\n').count() + 1;
-                out.push((line, name, rel_path.to_string()));
+    fn svg_files(dir: &Path, out: &mut Vec<String>, root: &Path) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                svg_files(&path, out, root);
+            } else if path.extension().is_some_and(|e| e == "svg") {
+                let rel = path.strip_prefix(root).unwrap();
+                out.push(rel.to_string_lossy().replace('\\', "/"));
             }
         }
-        out
     }
 
-    /// Return the contents of the first `"..."` string literal at or after `from`.
-    fn next_string_literal(src: &str, from: usize) -> Option<String> {
-        let open = from + src[from..].find('"')?;
-        let rest = &src[open + 1..];
-        let close = rest.find('"')?;
-        Some(rest[..close].to_string())
-    }
-
-    /// Return the first `"..."` string literal at or after `from` whose contents
-    /// begin with `prefix`, stopping at the next constructor (`needle`) boundary.
-    fn string_literal_with_prefix(
-        src: &str,
-        from: usize,
-        needle: &str,
-        prefix: &str,
-    ) -> Option<String> {
-        let stop = src[from..]
-            .find(needle)
-            .map(|o| from + o)
-            .unwrap_or(src.len());
-        let mut cursor = from;
-        while cursor < stop {
-            let open = cursor + src[cursor..stop].find('"')?;
-            let rest = &src[open + 1..stop];
-            let close = rest.find('"')?;
-            let literal = &rest[..close];
-            if literal.starts_with(prefix) {
-                return Some(literal.to_string());
-            }
-            cursor = open + 1 + close + 1;
-        }
-        None
-    }
-
+    /// The SVG loader resolves `currentColor` to black unless the root sets a colour, and egui's
+    /// tint multiplies the texture, so an icon without a white root stays black in every theme.
     #[test]
-    fn every_icon_name_matches_its_embedded_asset_path() {
-        let icons = embedded_icons();
-        assert!(
-            icons.len() > 100,
-            "parser regressed: only found {} embedded icons",
-            icons.len()
-        );
-        for (line, name, path) in &icons {
-            assert_eq!(
-                name, path,
-                "icon at line {line}: name {name:?} disagrees with embedded asset {path:?}; \
-                 the URI/cache key derives from the name, so it must match the bytes"
-            );
-        }
-    }
-
-    #[test]
-    fn every_icon_asset_exists_on_disk() {
-        let root = env!("CARGO_MANIFEST_DIR");
-        for (line, name, _path) in embedded_icons() {
-            let asset = Path::new(root).join("assets/icons").join(&name);
+    fn every_icon_file_is_embedded_and_tintable() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons");
+        let mut files = Vec::new();
+        svg_files(&root, &mut files, &root);
+        let embedded: HashSet<String> = embedded_paths().into_iter().collect();
+        for f in &files {
+            assert!(embedded.contains(f), "{f} is not embedded by any constant");
+            let svg = std::fs::read_to_string(root.join(f)).unwrap();
+            let open_tag = &svg[..svg.find('>').unwrap()];
             assert!(
-                asset.exists(),
-                "icon at line {line}: asset {} (from name {name:?}) does not exist",
-                asset.display()
+                open_tag.contains(r##"color="#fff""##),
+                "{f}: root element must set color=\"#fff\" so tinting works"
             );
-        }
-    }
-
-    #[test]
-    fn icon_names_are_unique() {
-        let mut seen: HashMap<String, usize> = HashMap::new();
-        for (line, name, _path) in embedded_icons() {
-            if let Some(prev) = seen.insert(name.clone(), line) {
-                panic!(
-                    "icon name {name:?} embedded twice (lines {prev} and {line}); \
-                     names are cache keys and must be unique"
-                );
-            }
         }
     }
 }

@@ -78,8 +78,8 @@ impl AlertKind {
     pub fn icon(&self) -> &'static Icon {
         match self {
             AlertKind::Info => &icons::INFO,
-            AlertKind::Success => &icons::SETTINGS_STATUS_LINE,
-            AlertKind::Warning => &icons::STATUS_ERROR,
+            AlertKind::Success => &icons::SUCCESS,
+            AlertKind::Warning => &icons::WARNING,
             AlertKind::Error => &icons::STATUS_ERROR,
         }
     }

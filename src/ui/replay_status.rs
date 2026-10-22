@@ -164,7 +164,7 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
                     ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.xs;
 
                     // Complete indicator - icon + text
-                    ui.add(icons::SETTINGS_STATUS_LINE.as_image_tinted(
+                    ui.add(icons::SUCCESS.as_image_tinted(
                         Vec2::splat(icon_sizes::STATUS_INDICATOR),
                         DESIGN_TOKENS.semantic.extended.bullish,
                     ));

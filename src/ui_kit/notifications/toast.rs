@@ -51,8 +51,8 @@ impl ToastKind {
     pub fn icon(&self) -> &'static Icon {
         match self {
             ToastKind::Info => &icons::INFO,
-            ToastKind::Success => &icons::SETTINGS_STATUS_LINE,
-            ToastKind::Warning => &icons::STATUS_ERROR,
+            ToastKind::Success => &icons::SUCCESS,
+            ToastKind::Warning => &icons::WARNING,
             ToastKind::Error => &icons::STATUS_ERROR,
         }
     }
