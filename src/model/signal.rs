@@ -1,8 +1,8 @@
-//! What a host's analytics found, as the chart shows it.
+//! What a host's analytics found, in the form the chart is to show it.
 
 use chrono::{DateTime, Utc};
 
-/// One finding of the host's analytics: a marker, a level or a zone, which the chart draws in the
+/// One finding of the host's analytics: a marker, a level or a zone, for the chart to draw in the
 /// theme's colours for its direction and category.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Signal {

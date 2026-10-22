@@ -1,4 +1,5 @@
-//! Services a host supplies to the terminal, each through a small trait.
+//! Services a host supplies, each through a small trait. Nothing in the crate calls them yet;
+//! they define the contract for the assembled terminal.
 //!
 //! Like [`Datafeed`](crate::data::Datafeed), every service is held as an `Arc<dyn Trait>` and
 //! called on the UI thread. Its methods return at once and answer later through a
