@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use egui::Color32;
 
 use crate::icons::{Icon, icons};
-use crate::tokens::DESIGN_TOKENS;
+use crate::theme::UiColors;
 
 /// Counter for generating unique toast IDs
 static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -32,19 +32,14 @@ pub enum ToastKind {
 }
 
 impl ToastKind {
-    /// Get the background color for this toast kind
-    pub fn bg_color(&self) -> Color32 {
+    /// The theme's status colour for this kind, which tints the icon and the progress bar
+    pub fn color(&self, ui: &UiColors) -> Color32 {
         match self {
-            ToastKind::Info => DESIGN_TOKENS.semantic.extended.info.linear_multiply(0.9),
-            ToastKind::Success => DESIGN_TOKENS.semantic.extended.success.linear_multiply(0.9),
-            ToastKind::Warning => DESIGN_TOKENS.semantic.extended.warning.linear_multiply(0.9),
-            ToastKind::Error => DESIGN_TOKENS.semantic.extended.error.linear_multiply(0.9),
+            ToastKind::Info => ui.info,
+            ToastKind::Success => ui.success,
+            ToastKind::Warning => ui.warning,
+            ToastKind::Error => ui.error,
         }
-    }
-
-    /// Get the text color for this toast kind
-    pub fn text_color(&self) -> Color32 {
-        DESIGN_TOKENS.semantic.ui.text_light
     }
 
     /// Get the icon for this toast kind

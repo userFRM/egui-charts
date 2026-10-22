@@ -2,13 +2,14 @@
 //!
 //! A panel for displaying toast notifications.
 
-use egui::{Align2, Color32, Context, Order, RichText, Ui, Vec2};
+use egui::{Align2, Context, Order, RichText, Ui, Vec2};
 
 use super::toast::Toast;
 use super::toasts::{Toasts, current_time_seconds};
 use crate::icons::icons;
 use crate::theme::{Spacing, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 
 /// Position for the notification panel
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,19 +165,13 @@ impl NotificationPanel {
     fn render_toast(&self, ui: &mut Ui, toast: &Toast) -> bool {
         let mut dismissed = false;
 
-        let bg_color = toast.kind.bg_color();
-        let text_color = toast.kind.text_color();
+        let theme = ui.active_theme();
+        let kind_color = toast.kind.color(&theme.ui);
+        let text_color = theme.ui.text;
 
-        let frame = egui::Frame::new()
-            .fill(bg_color)
-            .corner_radius(DESIGN_TOKENS.rounding.md)
-            .inner_margin(egui::Margin::same(DESIGN_TOKENS.spacing.lg as i8))
-            .shadow(egui::epaint::Shadow {
-                offset: [0, 2],
-                blur: 8,
-                spread: 0,
-                color: Color32::from_black_alpha(60),
-            });
+        let frame = egui::Frame::window(ui.style())
+            .shadow(ui.visuals().popup_shadow)
+            .inner_margin(egui::Margin::same(theme.spacing.lg as i8));
 
         frame.show(ui, |ui| {
             ui.set_width(self.config.width);
@@ -185,31 +180,29 @@ impl NotificationPanel {
                 // Icon
                 let icon = toast.kind.icon();
                 let icon_size = DESIGN_TOKENS.sizing.icon_md;
-                ui.add(icon.as_image_tinted(Vec2::splat(icon_size), text_color));
+                ui.add(icon.as_image_tinted(Vec2::splat(icon_size), kind_color));
 
                 ui.add_space(DESIGN_TOKENS.spacing.md);
 
                 // Content
                 ui.vertical(|ui| {
-                    // Title
+                    // Title, then the message muted so the title stands out
+                    let mut message_color = text_color;
                     if let Some(title) = &toast.title {
-                        ui.label(RichText::new(title).color(text_color).strong());
+                        ui.label(RichText::new(title).strong());
+                        message_color = theme.ui.text_secondary;
                     }
-
-                    // Message
-                    ui.label(RichText::new(&toast.message).color(text_color));
+                    ui.label(RichText::new(&toast.message).color(message_color));
                 });
 
                 // Close button
                 if toast.dismissible {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        let close_btn = ui.add(icons::CLOSE.as_image_tinted(
-                            Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
-                            text_color.linear_multiply(0.7),
-                        ));
-                        if close_btn.clicked() {
-                            dismissed = true;
-                        }
+                        dismissed = IconButton::new(&icons::CLOSE)
+                            .size(ButtonSize::SM)
+                            .tooltip("Dismiss")
+                            .show(ui)
+                            .clicked();
                     });
                 }
             });
@@ -221,24 +214,19 @@ impl NotificationPanel {
                 let fraction = toast.remaining_fraction(current_time);
 
                 let (rect, _) = ui.allocate_exact_size(
-                    Vec2::new(
-                        self.config.width - DESIGN_TOKENS.spacing.xxl,
-                        DESIGN_TOKENS.spacing.xs,
-                    ),
+                    Vec2::new(ui.available_width(), theme.spacing.xs),
                     egui::Sense::hover(),
                 );
 
                 // Background bar
-                ui.painter()
-                    .rect_filled(rect, 1.0, text_color.linear_multiply(0.2));
+                ui.painter().rect_filled(rect, 1.0, theme.ui.border);
 
                 // Progress bar
                 let progress_rect = egui::Rect::from_min_size(
                     rect.min,
                     Vec2::new(rect.width() * fraction, rect.height()),
                 );
-                ui.painter()
-                    .rect_filled(progress_rect, 1.0, text_color.linear_multiply(0.5));
+                ui.painter().rect_filled(progress_rect, 1.0, kind_color);
             }
         });
 
