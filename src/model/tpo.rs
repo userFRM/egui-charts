@@ -105,7 +105,7 @@ pub struct TPOConfig {
     pub show_opening_range: bool,
     /// Split by session (RTH vs ETH)
     pub split_sessions: bool,
-    /// Custom letters sequence
+    /// Custom letters sequence; an empty string uses the default letters
     pub custom_letters: Option<String>,
 }
 
@@ -297,6 +297,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
     let letters = config
         .custom_letters
         .as_deref()
+        .filter(|letters| !letters.is_empty())
         .unwrap_or(TPO_LETTERS)
         .chars()
         .collect::<Vec<_>>();
@@ -731,6 +732,31 @@ mod tests {
             // No row is shared between periods here, so every row counts one TPO
             let ones: Vec<_> = want.iter().map(|&(i, _, _, _, key)| (i, key, 1)).collect();
             assert_eq!(counts, ones, "bars {bars:?}");
+        }
+    }
+
+    #[test]
+    fn custom_letters_name_the_periods() {
+        // Bars at minutes 0 and 45 fall in periods 0 and 1; an empty sequence means the default letters
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
+        let bars = [0, 45].map(|m| bar_at(start, m, 100.0, 100.0, 100.0, 100.0));
+        for (custom, want) in [(Some(""), ['A', 'B']), (Some("xy"), ['x', 'y'])] {
+            let config = TPOConfig {
+                tick_size: 1.0,
+                custom_letters: custom.map(String::from),
+                ..Default::default()
+            };
+            let profiles = to_tpo_profiles(&bars, &config);
+            let named: Vec<_> = profiles[0]
+                .letters
+                .iter()
+                .map(|l| (l.period_idx, l.letter))
+                .collect();
+            assert_eq!(
+                named,
+                [(0, want[0]), (1, want[1])],
+                "custom_letters {custom:?}"
+            );
         }
     }
 
