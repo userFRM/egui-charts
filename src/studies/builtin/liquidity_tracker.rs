@@ -15,8 +15,10 @@ use std::collections::HashMap;
 /// - Liquidity sweeps (price moves through liquidity zones)
 /// - Liquidity imbalances
 ///
-/// Bars with a non-finite price, an inverted range, or a range spanning more
-/// than 100,000 levels of the tick size are not tracked: they add no volume.
+/// Bars with a non-finite price or an inverted range are not tracked: they add
+/// no volume. Levels are grouped when a bar covers more than 1,000 tick levels:
+/// the bar then spreads its volume over every n-th level, n chosen so it
+/// touches at most 1,000 of them.
 #[derive(Clone)]
 pub struct LiquidityTracker {
     /// Period for analysis
@@ -358,12 +360,12 @@ impl Indicator for LiquidityTracker {
             let range = bar.high - bar.low;
 
             match super::bar_level_keys(bar, self.tick_size) {
-                Some((low_key, high_key)) if range > 0.0 => {
+                Some((low_key, high_key, step)) if range > 0.0 => {
                     // Distribute volume across price levels touched
-                    let levels_count = (high_key - low_key + 1) as f64;
+                    let levels_count = ((high_key - low_key) as u64 / step as u64 + 1) as f64;
                     let vol_per_level = bar.volume / levels_count;
 
-                    for key in low_key..=high_key {
+                    for key in (low_key..=high_key).step_by(step) {
                         let price = self.key_to_price(key);
                         self.add_volume(price, vol_per_level, idx, is_bullish);
                     }

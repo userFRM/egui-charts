@@ -15,8 +15,10 @@ use egui::Color32;
 /// - Repeated touches of the same price
 /// - Large cumulative volume relative to visible size
 ///
-/// Bars with a non-finite price, an inverted range, or a range spanning more
-/// than 100,000 levels of the estimated tick size are not tracked.
+/// Bars with a non-finite price or an inverted range are not tracked. Levels
+/// are grouped when a bar covers more than 1,000 levels of the estimated tick
+/// size: the bar then adds to every n-th level, n chosen so it touches at most
+/// 1,000 of them.
 #[derive(Clone)]
 pub struct IcebergDetector {
     /// Period for lookback analysis
@@ -129,12 +131,12 @@ impl Indicator for IcebergDetector {
         let tick_size = estimate_tick_size(data);
         // Quantize a tracked bar (see the type docs) to its low, high and close keys.
         let keys = |bar: &Bar| {
-            let (low, high) = super::bar_level_keys(bar, tick_size)?;
+            let (low, high, step) = super::bar_level_keys(bar, tick_size)?;
             let close = bar
                 .close
                 .is_finite()
                 .then(|| (bar.close / tick_size).round() as i64)?;
-            Some((low, high, close))
+            Some((low, high, step, close))
         };
 
         // Track price levels and their touches
@@ -143,14 +145,15 @@ impl Indicator for IcebergDetector {
 
         for (idx, bar) in data.iter().enumerate() {
             let mut value = IndicatorValue::None;
-            if let Some((low_key, high_key, close_key)) = keys(bar) {
+            if let Some((low_key, high_key, step, close_key)) = keys(bar) {
                 let is_bullish = bar.close >= bar.open;
 
                 // Track all price levels in this bar
-                for key in low_key..=high_key {
+                let levels = ((high_key - low_key) as u64 / step as u64 + 1) as f64;
+                for key in (low_key..=high_key).step_by(step) {
                     let entry = price_levels.entry(key).or_insert((0, 0.0, idx, is_bullish));
                     entry.0 += 1; // touches
-                    entry.1 += bar.volume / (high_key - low_key + 1) as f64; // volume per level
+                    entry.1 += bar.volume / levels; // volume per level
                 }
 
                 // Check for iceberg detection
@@ -179,9 +182,10 @@ impl Indicator for IcebergDetector {
 
             // Decay old price level data (sliding window)
             if idx >= self.period
-                && let Some((old_low_key, old_high_key, _)) = keys(&data[idx - self.period])
+                && let Some((old_low_key, old_high_key, old_step, _)) =
+                    keys(&data[idx - self.period])
             {
-                for key in old_low_key..=old_high_key {
+                for key in (old_low_key..=old_high_key).step_by(old_step) {
                     if let Some(entry) = price_levels.get_mut(&key) {
                         entry.0 = entry.0.saturating_sub(1);
                         if entry.0 == 0 {
