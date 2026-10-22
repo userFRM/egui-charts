@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - The crate builds warning-free on current stable Rust: float literals that relied on the deprecated `f32` inference fallback are now explicitly typed.
 - The documentation examples for the `ui` module use the current crate name and module paths, and they compile and run as doctests.
+- Order line labels are shortened by rendered width with an ellipsis instead of by byte count, so labels with multi-byte characters no longer panic.
 - Dashed lines are clipped to the visible area before they are dashed, so a drawing anchored far off screen no longer hangs the UI thread or exhausts memory. Every dashed line in the crate (drawings, crosshair, order lines, last-price line, session breaks, indicator pane zones) now shares this routine.
 - Auto-scaling flat price or indicator data now centres the series in a range proportional to the price level instead of collapsing to a near-zero range.
 - The anchored VWAP drawing computes the volume-weighted average of the typical price from its anchor bar, with bands one and two volume-weighted standard deviations away.

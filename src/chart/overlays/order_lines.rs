@@ -3,6 +3,7 @@
 //! Renders order lines on the chart showing entry prices, stop losses,
 //! take profits, and pending orders with labels and cancel buttons.
 
+use egui::text::{LayoutJob, TextWrapping};
 use egui::{
     Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
 };
@@ -366,20 +367,19 @@ fn render_order_line(ui: &mut Ui, chart_rect: Rect, y: f32, line: &OrderLine) ->
         );
     }
 
-    // Label text
-    let label_text_display = if line.label.len() > 18 {
-        format!("{}...", &line.label[..15])
-    } else {
-        line.label.clone()
-    };
-
-    painter.text(
-        label_rect.center(),
-        Align2::CENTER_CENTER,
-        &label_text_display,
+    // Label text, elided with an ellipsis when wider than the label
+    let mut label_job = LayoutJob::simple_singleline(
+        line.label.clone(),
         FontId::proportional(typography::SM),
         label_text_color,
     );
+    label_job.wrap =
+        TextWrapping::truncate_at_width(label_rect.width() - 2.0 * DESIGN_TOKENS.spacing.sm);
+    let label_galley = painter.layout_job(label_job);
+    let label_pos = Align2::CENTER_CENTER
+        .anchor_size(label_rect.center(), label_galley.size())
+        .min;
+    painter.galley(label_pos, label_galley, label_text_color);
 
     // Draw cancel button if active
     if let Some(cancel_resp) = cancel_response {
@@ -496,5 +496,39 @@ mod tests {
 
         overlay.clear();
         assert!(overlay.lines.is_empty());
+    }
+
+    #[test]
+    fn long_multibyte_label_is_elided_to_label_width() {
+        let label = "Ä".repeat(30);
+        let mut overlay = OrderLineOverlay::new();
+        overlay.add_line(OrderLine::take_profit(
+            "tp",
+            100.0,
+            OrderSide::Buy,
+            1.0,
+            label.clone(),
+            None,
+        ));
+
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                overlay.render(ui, ui.max_rect(), |_| 100.0);
+            });
+        });
+
+        let galley = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.galley.clone())
+                }
+                _ => None,
+            })
+            .expect("label text shape");
+        assert!(galley.elided);
+        assert!(galley.size().x <= DESIGN_TOKENS.sizing.charts_ext.order_line_label_width);
     }
 }
