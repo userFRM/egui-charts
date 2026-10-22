@@ -17,9 +17,9 @@ pub struct IndicatorDialogConfig {
 }
 
 impl IndicatorDialogConfig {
-    /// Create config from theme semantic tokens
+    /// Create config from `theme`
     pub fn from_theme(theme: &Theme) -> Self {
-        let ui = &theme.semantic.ui;
+        let ui = &theme.ui;
         Self {
             width: 750.0,
             height: 600.0,

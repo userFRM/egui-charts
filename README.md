@@ -27,7 +27,7 @@ Candlestick, bar, line, area, Japanese and range chart types, drawing tools, tec
 - **You need financial charts inside an egui application:** candlesticks, OHLC bars, Heikin-Ashi, Renko, Kagi, Market Profile (TPO) and other chart types.
 - **You're building a Tauri desktop trading terminal:** the chart is an egui widget, with optional toolbar, panel and dialog UI behind the `ui` feature.
 - **You want interactive drawings and indicators:** drawing tools with undo/redo, and indicators behind one `Indicator` trait.
-- **You need a themeable, token-driven design system:** five presets (Classic, Dark, Light, Midnight, High Contrast) backed by a RON-based token pipeline.
+- **You need a themeable design system:** one `Theme` value with dark, light and high-contrast presets and public fields to override.
 - **You want one codebase for desktop and web:** the same `Chart` widget renders natively on Linux/macOS/Windows and in the browser via WebAssembly.
 
 ---
@@ -81,7 +81,7 @@ egui-charts/src/
 ├── config/                    ChartConfig, ChartOptions, crosshair, tooltip, keyboard
 ├── data.rs                    DataSource trait: pluggable data provider interface
 ├── validation/                OHLC integrity checks, timestamp ordering
-├── theme/                     Theme system: presets, semantic tokens, component styles
+├── theme/                     Theme value, its presets, apply_to_egui
 ├── tokens/                    RON-based design tokens (colors, spacing, typography)
 ├── styles/                    Style computation from semantic tokens
 ├── widget/                    Chart egui widget, indicator panes
@@ -297,29 +297,32 @@ impl DataSource for MyBrokerData {
 
 ## Theme System
 
-Five built-in presets backed by a RON-based design-token pipeline:
+A `Theme` is one value: UI colours (`theme.ui`), chart colours (`theme.chart`), and the type, spacing and corner radius scales (`theme.text`, `theme.spacing`, `theme.radius`). All fields are public.
 
-**RON design tokens** → **semantic tokens** (light/dark resolved) → **component styles** → **egui visuals**
-
-| Preset | UI Chrome | Chart Background |
+| Preset | UI chrome | Chart |
 |---|---|---|
-| **Classic** (default) | Light | Dark |
-| **Dark** | Dark | Dark |
-| **Light** | Light | Light |
-| **Midnight** | Dark (blue) | Dark |
-| **High Contrast** | Dark | Dark |
+| `Theme::dark()` (default) | Dark | Dark |
+| `Theme::light()` | Light | Light |
+| `Theme::high_contrast()` | Black, text except disabled text at 7:1 or better | Black |
+
+Start from a preset, override what you need, and apply it once at startup and again after every change:
 
 ```rust
-use egui_charts::theme::{Theme, ThemePreset, apply_to_egui};
+use egui::Color32;
+use egui_charts::theme::{Theme, apply_to_egui};
 
 # let ctx = &egui::Context::default();
-let theme = Theme::from_preset(ThemePreset::Midnight);
+// The accent's hover and pressed shades, the text on it and the selection follow it.
+let mut theme = Theme::dark().with_accent(Color32::from_rgb(255, 120, 0));
+theme.chart.candle_up = Color32::from_rgb(0, 160, 120);
+theme.chart.candle_down = Color32::from_rgb(220, 60, 60);
 apply_to_egui(ctx, &theme);
 
-// Or use convenience constructors
-let theme = Theme::dark();
-let theme = Theme::high_contrast();
+// Light UI chrome with the dark chart.
+let classic = Theme { chart: Theme::dark().chart, ..Theme::light() };
 ```
+
+With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a theme can be stored in any serde format; fields missing from the input take the dark theme's values.
 
 Access chart colors anywhere via the `HasDesignTokens` extension trait on `egui::Ui`.
 

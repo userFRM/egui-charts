@@ -4,7 +4,7 @@
 
 use crate::icons::icons as embedded_icons;
 use crate::styles::typography;
-use crate::theme::{Theme, ThemePreset, follow_active_theme, theme_derived};
+use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{Local, Timelike};
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
@@ -62,9 +62,9 @@ pub struct TimeframeBarConfig {
 }
 
 impl TimeframeBarConfig {
-    /// Create config from theme semantic tokens
+    /// Create config from `theme`
     pub fn from_theme(theme: &Theme) -> Self {
-        let ui = &theme.semantic.ui;
+        let ui = &theme.ui;
         Self {
             height: DESIGN_TOKENS.sizing.toolbar.bottom_height,
             bg_color: Color32::TRANSPARENT, // Let parent Frame show through
@@ -115,8 +115,8 @@ pub struct TimeframeBar {
     pub active_timeframe: QuickTimeframe,
     pub show_adj: bool,
     pub adj_enabled: bool,
-    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
-    config_theme: Option<(ThemePreset, TimeframeBarConfig)>,
+    /// Theme and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(Theme, TimeframeBarConfig)>,
 }
 
 impl Default for TimeframeBar {
@@ -126,7 +126,7 @@ impl Default for TimeframeBar {
             active_timeframe: QuickTimeframe::OneDay,
             show_adj: true,
             adj_enabled: true,
-            config_theme: Some((ThemePreset::Dark, TimeframeBarConfig::default())),
+            config_theme: Some((Theme::dark(), TimeframeBarConfig::default())),
         }
     }
 }

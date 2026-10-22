@@ -3,7 +3,7 @@
 //! A date picker dialog with calendar for navigating to specific dates.
 use crate::ext::UiExt;
 use crate::styles::typography;
-use crate::theme::{Theme, ThemePreset, ThemeUiExt, follow_active_theme, theme_derived};
+use crate::theme::{Theme, ThemeUiExt, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{Datelike, NaiveDate};
 use egui::{Color32, Sense, Stroke, StrokeKind, Ui, Vec2, Window};
@@ -22,9 +22,9 @@ pub struct DatePickerConfig {
 }
 
 impl DatePickerConfig {
-    /// Create config from theme semantic tokens
+    /// Create config from `theme`
     pub fn from_theme(theme: &Theme) -> Self {
-        let ui = &theme.semantic.ui;
+        let ui = &theme.ui;
         Self {
             width: DESIGN_TOKENS.sizing.toolbar.right_panel_width,
             height: 350.0, // Date picker specific height
@@ -83,8 +83,8 @@ pub struct DatePicker {
     range_end: Option<NaiveDate>,
     /// Configuration
     config: DatePickerConfig,
-    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
-    config_theme: Option<(ThemePreset, DatePickerConfig)>,
+    /// Theme and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(Theme, DatePickerConfig)>,
 }
 
 impl Default for DatePicker {
@@ -105,7 +105,7 @@ impl DatePicker {
             range_start: None,
             range_end: None,
             config: DatePickerConfig::default(),
-            config_theme: Some((ThemePreset::Dark, DatePickerConfig::default())),
+            config_theme: Some((Theme::dark(), DatePickerConfig::default())),
         }
     }
 

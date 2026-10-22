@@ -148,12 +148,10 @@ pub trait UiExt {
     ///
     /// ```
     /// # use egui_charts::ext::UiExt;
-    /// # use egui_charts::theme::ThemePreset;
     /// # egui::__run_test_ui(|ui| {
-    /// # let mut theme = ThemePreset::Classic;
-    /// let changed = ui.combo_select("theme", &mut theme, ThemePreset::all().iter().copied(), |t| {
-    ///     t.display_name().to_string()
-    /// });
+    /// let mut theme = "dark";
+    /// let names = egui_charts::theme::presets().map(|(name, _)| name);
+    /// let changed = ui.combo_select("theme", &mut theme, names, |n| n.to_string());
     /// # });
     /// ```
     fn combo_select<T: PartialEq + Clone>(

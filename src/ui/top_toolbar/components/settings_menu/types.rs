@@ -224,16 +224,16 @@ pub struct CandleColorConfig {
 }
 
 impl CandleColorConfig {
-    /// Create config from theme semantic tokens
+    /// Create config from `theme`
     pub fn from_theme(theme: &Theme) -> Self {
-        let chart = &theme.semantic.chart;
+        let chart = &theme.chart;
         Self {
             body_up: chart.candle_up,
             body_down: chart.candle_down,
-            border_up: chart.candle_up_border,
-            border_down: chart.candle_down_border,
-            wick_up: chart.candle_up_wick,
-            wick_down: chart.candle_down_wick,
+            border_up: chart.candle_up,
+            border_down: chart.candle_down,
+            wick_up: chart.candle_up,
+            wick_down: chart.candle_down,
         }
     }
 }

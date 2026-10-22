@@ -511,9 +511,8 @@ All ui_kit components are **fully implemented** generic building blocks:
 - [x] `KeyboardOptions` (enable, pan amount, zoom step); key bindings are fixed, `KeyboardAction` is a display table for the help dialog
 
 ### Theming
-- [x] Full theme system with semantic tokens
-- [x] Dark and light presets
-- [x] Classic preset
+- [x] `Theme` value with public fields
+- [x] Dark, light and high-contrast presets
 - [x] Design token system (RON-based, ~300+ tokens)
 - [x] Token categories: sizing, spacing, rounding, stroke widths, semantic colors
 - [x] Theme helpers: `toolbar_bg()`, `icon_color()`, `sel_color()`, `hover_color()`

@@ -52,9 +52,7 @@ pub struct SemanticTokens {
 /// UI chrome color tokens with light and dark mode variants.
 ///
 /// Contains panel backgrounds, text colors, button states, icon colors,
-/// borders, and accent colors for both light and dark UI modes. The
-/// active variant is selected by [`theme::SemanticTokens`](crate::theme::SemanticTokens)
-/// based on the theme preset.
+/// borders, and accent colors for both light and dark UI modes.
 #[derive(Clone, Debug)]
 pub struct UiSemanticTokens {
     pub panel_bg_light: Color32,

@@ -1,92 +1,174 @@
-//! Theme Presets - Pre-built complete themes
-//!
-//! This module provides ready-to-use theme presets that match common design languages.
-//! Presets define which variant of colors (light/dark UI, light/dark chart) to use,
-//! and the actual colors come from DESIGN_TOKENS.
+//! The dark, light and high-contrast themes.
 
-use super::Theme;
+use egui::Color32;
 
-// ============================================================================
-// THEME PRESET ENUM
-// ============================================================================
+use super::{ChartColors, Radii, Spacing, TextSizes, Theme, UiColors};
 
-/// Pre-defined theme presets
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum ThemePreset {
-    /// Classic: Light UI chrome + Dark chart
-    #[default]
-    Classic,
-    /// Full dark theme
-    Dark,
-    /// Full light theme
-    Light,
-    /// Midnight blue theme (dark UI + dark chart)
-    Midnight,
-    /// High contrast for accessibility (dark UI + dark chart)
-    HighContrast,
+const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
+    Color32::from_rgb(r, g, b)
 }
 
-impl ThemePreset {
-    /// Get all available presets
-    pub fn all() -> &'static [ThemePreset] {
-        &[
-            ThemePreset::Classic,
-            ThemePreset::Dark,
-            ThemePreset::Light,
-            ThemePreset::Midnight,
-            ThemePreset::HighContrast,
-        ]
-    }
+/// Every preset with its name: "dark", "light" and "high-contrast".
+pub fn presets() -> [(&'static str, Theme); 3] {
+    [
+        ("dark", Theme::dark()),
+        ("light", Theme::light()),
+        ("high-contrast", Theme::high_contrast()),
+    ]
+}
 
-    /// Get preset name (for persistence)
-    pub fn name(&self) -> &'static str {
-        match self {
-            ThemePreset::Classic => "classic",
-            ThemePreset::Dark => "dark",
-            ThemePreset::Light => "light",
-            ThemePreset::Midnight => "midnight",
-            ThemePreset::HighContrast => "high_contrast",
+impl Theme {
+    /// Dark UI and chart. This is the default theme.
+    pub fn dark() -> Self {
+        let accent = rgb(41, 98, 255);
+        Self {
+            dark: true,
+            ui: UiColors {
+                panel_bg: rgb(30, 34, 45),
+                panel_bg_secondary: rgb(55, 59, 70),
+                panel_bg_floating: rgb(42, 46, 57),
+                text: rgb(209, 212, 220),
+                text_secondary: rgb(163, 167, 178),
+                text_muted: rgb(152, 157, 169),
+                text_disabled: rgb(131, 137, 151),
+                border: rgb(55, 59, 70),
+                border_control: rgb(120, 125, 138),
+                btn_bg_hover: rgb(55, 59, 70),
+                btn_bg_active: rgb(82, 82, 82),
+                selection_bg: accent,
+                selection_text: Color32::WHITE,
+                focus: Color32::WHITE,
+                accent,
+                accent_hover: rgb(35, 88, 230),
+                accent_active: rgb(31, 78, 205),
+                accent_text: Color32::WHITE,
+                danger_bg: rgb(211, 47, 47),
+                danger_bg_hover: rgb(198, 40, 40),
+                danger_bg_active: rgb(183, 28, 28),
+                danger_text: Color32::WHITE,
+                success: rgb(76, 175, 80),
+                warning: rgb(255, 152, 0),
+                error: rgb(247, 104, 99),
+                info: rgb(100, 181, 246),
+            },
+            chart: ChartColors {
+                bg: rgb(19, 23, 34),
+                bg_axis: rgb(30, 34, 45),
+                bg_tooltip: rgb(55, 59, 70),
+                grid_line: Color32::from_rgba_unmultiplied(255, 255, 255, 12),
+                grid_line_major: Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+                axis_text: rgb(209, 212, 220),
+                axis_text_secondary: rgb(120, 123, 134),
+                crosshair_line: Color32::from_rgba_unmultiplied(178, 181, 190, 120),
+                crosshair_label_bg: rgb(55, 59, 70),
+                crosshair_label_text: rgb(209, 212, 220),
+                candle_up: rgb(38, 166, 154),
+                candle_down: rgb(239, 83, 80),
+                volume_alpha: 128,
+            },
+            text: TextSizes::default(),
+            spacing: Spacing::default(),
+            radius: Radii::default(),
         }
     }
 
-    /// Get display name (for UI)
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            ThemePreset::Classic => "Classic",
-            ThemePreset::Dark => "Dark",
-            ThemePreset::Light => "Light",
-            ThemePreset::Midnight => "Midnight",
-            ThemePreset::HighContrast => "High Contrast",
+    /// Light UI and chart.
+    pub fn light() -> Self {
+        let dark = Self::dark();
+        Self {
+            dark: false,
+            ui: UiColors {
+                panel_bg: Color32::WHITE,
+                panel_bg_secondary: rgb(240, 243, 250),
+                panel_bg_floating: Color32::WHITE,
+                text: rgb(19, 23, 34),
+                text_secondary: rgb(78, 83, 96),
+                text_muted: rgb(96, 101, 114),
+                text_disabled: rgb(178, 181, 190),
+                border: rgb(224, 227, 235),
+                border_control: rgb(134, 138, 150),
+                btn_bg_hover: rgb(229, 232, 238),
+                btn_bg_active: rgb(220, 224, 233),
+                selection_bg: rgb(219, 229, 255),
+                selection_text: dark.ui.accent_active,
+                focus: dark.ui.accent_active,
+                success: rgb(46, 125, 50),
+                warning: rgb(180, 83, 9),
+                error: rgb(198, 40, 40),
+                info: rgb(2, 119, 189),
+                ..dark.ui
+            },
+            chart: ChartColors {
+                bg: Color32::WHITE,
+                bg_axis: rgb(240, 243, 250),
+                bg_tooltip: Color32::WHITE,
+                grid_line: Color32::from_black_alpha(12),
+                grid_line_major: Color32::from_black_alpha(20),
+                axis_text: rgb(19, 23, 34),
+                axis_text_secondary: rgb(78, 83, 96),
+                crosshair_line: Color32::from_rgba_unmultiplied(120, 120, 120, 150),
+                crosshair_label_bg: rgb(240, 243, 250),
+                crosshair_label_text: rgb(19, 23, 34),
+                ..dark.chart
+            },
+            ..dark
         }
     }
 
-    /// Parse preset from name
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_lowercase().as_str() {
-            "classic" => Some(ThemePreset::Classic),
-            "dark" => Some(ThemePreset::Dark),
-            "light" => Some(ThemePreset::Light),
-            "midnight" => Some(ThemePreset::Midnight),
-            "high_contrast" | "highcontrast" => Some(ThemePreset::HighContrast),
-            _ => None,
+    /// Black surfaces with white text, for low vision and bright surroundings.
+    ///
+    /// Every text colour except disabled text reads at 7:1 or better on panels and
+    /// windows, and outlines and the focus ring at 4.5:1 or better.
+    pub fn high_contrast() -> Self {
+        let dark = Self::dark();
+        Self {
+            ui: UiColors {
+                panel_bg: Color32::BLACK,
+                panel_bg_secondary: rgb(18, 18, 18),
+                panel_bg_floating: rgb(10, 10, 10),
+                text: Color32::WHITE,
+                text_secondary: rgb(235, 235, 235),
+                text_muted: rgb(200, 200, 200),
+                text_disabled: rgb(140, 140, 140),
+                border: rgb(150, 150, 150),
+                border_control: rgb(200, 200, 200),
+                btn_bg_hover: rgb(45, 45, 45),
+                btn_bg_active: rgb(70, 70, 70),
+                // A dark selection keeps the selection text, which egui also uses to outline a
+                // focused text input, light enough to read on the black panels.
+                selection_bg: rgb(41, 71, 102),
+                selection_text: Color32::WHITE,
+                focus: rgb(255, 214, 0),
+                // The shades get lighter, away from the black text on them.
+                accent: rgb(102, 178, 255),
+                accent_hover: rgb(140, 198, 255),
+                accent_active: rgb(179, 218, 255),
+                accent_text: Color32::BLACK,
+                danger_bg: rgb(255, 120, 120),
+                danger_bg_hover: rgb(255, 154, 154),
+                danger_bg_active: rgb(255, 188, 188),
+                danger_text: Color32::BLACK,
+                success: rgb(90, 220, 120),
+                warning: rgb(255, 200, 60),
+                error: rgb(255, 120, 120),
+                info: rgb(120, 200, 255),
+            },
+            chart: ChartColors {
+                bg: Color32::BLACK,
+                bg_axis: Color32::BLACK,
+                bg_tooltip: rgb(10, 10, 10),
+                grid_line: Color32::from_white_alpha(40),
+                grid_line_major: Color32::from_white_alpha(64),
+                axis_text: Color32::WHITE,
+                axis_text_secondary: rgb(200, 200, 200),
+                crosshair_line: Color32::WHITE,
+                crosshair_label_bg: rgb(45, 45, 45),
+                crosshair_label_text: Color32::WHITE,
+                candle_up: rgb(0, 220, 130),
+                candle_down: rgb(255, 95, 95),
+                volume_alpha: 128,
+            },
+            ..dark
         }
-    }
-
-    /// Whether this preset uses dark UI chrome
-    pub fn is_dark_ui(&self) -> bool {
-        matches!(
-            self,
-            ThemePreset::Dark | ThemePreset::Midnight | ThemePreset::HighContrast
-        )
-    }
-
-    /// Whether this preset uses dark chart background
-    pub fn is_dark_chart(&self) -> bool {
-        !matches!(self, ThemePreset::Light)
-    }
-
-    /// Convert to full Theme
-    pub fn to_theme(self) -> Theme {
-        Theme::from_preset(self)
     }
 }

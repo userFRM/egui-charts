@@ -732,15 +732,15 @@ impl DemoApp {
         // Swap the demo theme; `apply_to_egui` repaints every panel, toolbar,
         // and dialog from it next frame, and the chart background/grid follow
         // the matching config colors.
-        self.theme = if self.theme.is_dark_ui() {
+        self.theme = if self.theme.dark {
             Theme::light()
         } else {
             Theme::dark()
         };
         let cfg = self.trading_chart.config_mut();
-        cfg.background_color = self.theme.background();
-        cfg.text_color = self.theme.text();
-        cfg.grid_color = self.theme.grid();
+        cfg.background_color = self.theme.chart.bg;
+        cfg.text_color = self.theme.chart.axis_text;
+        cfg.grid_color = self.theme.chart.grid_line;
     }
 
     fn show_symbol_header(&mut self, ctx: &egui::Context, bg: egui::Color32) {

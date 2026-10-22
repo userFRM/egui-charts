@@ -4,7 +4,7 @@
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::{icons, stroke, typography};
-use crate::theme::{Theme, ThemePreset, follow_active_theme, theme_derived};
+use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -60,9 +60,9 @@ pub struct RightPanelTabsConfig {
 }
 
 impl RightPanelTabsConfig {
-    /// Create config from theme semantic tokens
+    /// Create config from `theme`
     pub fn from_theme(theme: &Theme) -> Self {
-        let ui = &theme.semantic.ui;
+        let ui = &theme.ui;
         Self {
             tab_bar_width: DESIGN_TOKENS.sizing.toolbar.right_icon_width,
             tab_button_size: DESIGN_TOKENS.sizing.button_lg,
@@ -71,9 +71,9 @@ impl RightPanelTabsConfig {
             active_tab_bg: ui.panel_bg,
             hover_bg: ui.btn_bg_hover,
             pressed_bg: ui.btn_bg_active,
-            icon_color: ui.icon,
+            icon_color: ui.text_secondary,
             active_icon_color: ui.accent,
-            border_color: ui.border_subtle,
+            border_color: ui.border,
         }
     }
 }
@@ -110,8 +110,8 @@ pub struct RightPanelTabs {
     pub active_tab: RightPanelTab,
     pub config: RightPanelTabsConfig,
     pub available_tabs: Vec<RightPanelTab>,
-    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
-    config_theme: Option<(ThemePreset, RightPanelTabsConfig)>,
+    /// Theme and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(Theme, RightPanelTabsConfig)>,
 }
 
 impl Default for RightPanelTabs {
@@ -120,7 +120,7 @@ impl Default for RightPanelTabs {
             active_tab: RightPanelTab::Alerts,
             config: RightPanelTabsConfig::default(),
             available_tabs: vec![RightPanelTab::Alerts, RightPanelTab::ObjectTree],
-            config_theme: Some((ThemePreset::Dark, RightPanelTabsConfig::default())),
+            config_theme: Some((Theme::dark(), RightPanelTabsConfig::default())),
         }
     }
 }

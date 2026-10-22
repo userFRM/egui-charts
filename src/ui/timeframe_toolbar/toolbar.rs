@@ -8,7 +8,7 @@ use super::{DateRange, SessionType, TimeframeToolbarAction, TimeframeToolbarStat
 use crate::ext::UiExt;
 use crate::icons::icons as embedded_icons;
 use crate::styles::{icons as icon_sizes, stroke, typography};
-use crate::theme::{Theme, ThemePreset, follow_active_theme, theme_derived};
+use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::theming;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::toolbar::ResponsiveToolbar;
@@ -20,8 +20,8 @@ pub struct TimeframeToolbar {
     pub state: TimeframeToolbarState,
     /// Configuration
     pub config: TimeframeToolbarConfig,
-    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
-    config_theme: Option<(ThemePreset, TimeframeToolbarConfig)>,
+    /// Theme and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(Theme, TimeframeToolbarConfig)>,
 }
 
 /// Configuration for the bottom panel appearance
@@ -54,16 +54,16 @@ pub struct TimeframeToolbarConfig {
 }
 
 impl TimeframeToolbarConfig {
-    /// Create config from theme semantic tokens
+    /// Create config from `theme`
     pub fn from_theme(theme: &Theme) -> Self {
-        let ui = &theme.semantic.ui;
+        let ui = &theme.ui;
         Self {
             background_color: Color32::TRANSPARENT, // Let parent Frame show through
             border_color: ui.border,
             text_color: ui.text_secondary,
             hover_text_color: ui.text,
             active_text_color: ui.text,
-            separator_color: ui.border_subtle,
+            separator_color: ui.border,
             hover_bg: ui.btn_bg_hover,
             active_bg: ui.btn_bg_active,
             font_size: typography::LG,
@@ -108,7 +108,7 @@ impl TimeframeToolbar {
         Self {
             state: TimeframeToolbarState::default(),
             config: TimeframeToolbarConfig::default(),
-            config_theme: Some((ThemePreset::Dark, TimeframeToolbarConfig::default())),
+            config_theme: Some((Theme::dark(), TimeframeToolbarConfig::default())),
         }
     }
 

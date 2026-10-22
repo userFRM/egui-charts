@@ -2,7 +2,7 @@
 //!
 //! Provides quick date range selection buttons: 1D, 5D, 1M, 6M, YTD, 1Y, 5Y, All
 use crate::styles::typography;
-use crate::theme::{Theme, ThemePreset, follow_active_theme, theme_derived};
+use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use egui::{Color32, FontId, Pos2, Response, Stroke, Ui, Vec2};
@@ -169,9 +169,9 @@ pub struct RangeSwitcherConfig {
 }
 
 impl RangeSwitcherConfig {
-    /// Create config from theme semantic tokens
+    /// Create config from `theme`
     pub fn from_theme(theme: &Theme) -> Self {
-        let ui = &theme.semantic.ui;
+        let ui = &theme.ui;
         Self {
             ranges: DateRange::default_presets(),
             btn_height: DESIGN_TOKENS.sizing.button_sm,
@@ -248,8 +248,8 @@ pub struct RangeSwitcher {
     selected: DateRange,
     /// Configuration
     config: RangeSwitcherConfig,
-    /// Preset and config `config` was last derived from; `None` when the caller supplied it.
-    config_theme: Option<(ThemePreset, RangeSwitcherConfig)>,
+    /// Theme and config `config` was last derived from; `None` when the caller supplied it.
+    config_theme: Option<(Theme, RangeSwitcherConfig)>,
     /// Unique ID for the widget
     id: egui::Id,
 }
@@ -266,7 +266,7 @@ impl RangeSwitcher {
         Self {
             selected: DateRange::Month1,
             config: RangeSwitcherConfig::default(),
-            config_theme: Some((ThemePreset::Dark, RangeSwitcherConfig::default())),
+            config_theme: Some((Theme::dark(), RangeSwitcherConfig::default())),
             id: egui::Id::new("range_switcher"),
         }
     }

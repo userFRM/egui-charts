@@ -320,7 +320,7 @@ impl SeriesContextMenu {
             return;
         }
 
-        let style = &theme.components.ctx_menu;
+        let style = &ContextMenuStyle::from_theme(theme);
         let menu_items = self.build_menu_items();
         let mut should_close = false;
         let mut sel_action = SeriesContextMenuAction::None;

@@ -133,7 +133,7 @@ impl TooltipOptions {
     /// These options with `Color32::PLACEHOLDER` colours taken from the theme applied to
     /// `ctx`, or from the dark chart tokens when none has been applied.
     pub(crate) fn resolved(&self, ctx: &egui::Context) -> Self {
-        let chart = ctx.active_theme().map(|theme| theme.semantic.chart);
+        let chart = ctx.active_theme().map(|theme| theme.chart);
         let tokens = &DESIGN_TOKENS.semantic;
         let or = |color: Color32, themed: Option<Color32>, fallback: Color32| {
             if color == Color32::PLACEHOLDER {

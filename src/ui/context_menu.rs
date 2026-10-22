@@ -370,7 +370,7 @@ impl ChartContextMenu {
             return;
         }
 
-        let style = &theme.components.ctx_menu;
+        let style = &ContextMenuStyle::from_theme(theme);
         let menu_items = self.build_menu_items();
         let (menu_width, menu_height) = Self::calculate_menu_dimensions(&menu_items);
         let pos = Self::clamp_position_to_screen(self.position, menu_width, menu_height, ctx);

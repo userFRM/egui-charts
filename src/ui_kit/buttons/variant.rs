@@ -48,8 +48,8 @@ impl ButtonVariant {
     /// Get the background color for this variant in the given state.
     ///
     /// Colours follow the theme applied to `ui`. Primary steps through the theme's accent,
-    /// accent hover and accent pressed shades, and Danger through the danger button reds;
-    /// both darken, so their text keeps its contrast. Secondary is one step above the
+    /// accent hover and accent pressed shades, and Danger through its danger shades; both
+    /// move away from their text colour, so the text keeps its contrast. Secondary is one step above the
     /// surface, and Ghost and Outlined are transparent at rest. For these neutral variants
     /// hover and press each move the fill one step further from the surface towards the text
     /// colour, so a pressed button never looks paler than a hovered one. In a disabled `ui`,
@@ -67,15 +67,15 @@ impl ButtonVariant {
         };
         let (rest, rest_steps) = match self {
             Self::Primary if ui.is_enabled() => {
-                let accent = ui.ctx().active_theme().unwrap_or_default().semantic.ui;
-                return state(accent.accent, accent.accent_hover, accent.accent_active);
+                let colors = ui.ctx().active_theme().unwrap_or_default().ui;
+                return state(colors.accent, colors.accent_hover, colors.accent_active);
             }
             Self::Danger if ui.is_enabled() => {
-                let danger = &DESIGN_TOKENS.semantic.buttons;
+                let colors = ui.ctx().active_theme().unwrap_or_default().ui;
                 return state(
-                    danger.danger_bg,
-                    danger.danger_bg_hover,
-                    danger.danger_bg_active,
+                    colors.danger_bg,
+                    colors.danger_bg_hover,
+                    colors.danger_bg_active,
                 );
             }
             Self::Secondary | Self::Primary | Self::Danger => (Color32::TRANSPARENT, 1),
@@ -92,7 +92,12 @@ impl ButtonVariant {
     /// Get the foreground (text/icon) color for this variant
     pub fn fg_color(&self, ui: &Ui) -> Color32 {
         match self {
-            Self::Primary | Self::Danger if ui.is_enabled() => ui.theme_data().ui_accent_text,
+            Self::Primary if ui.is_enabled() => {
+                ui.ctx().active_theme().unwrap_or_default().ui.accent_text
+            }
+            Self::Danger if ui.is_enabled() => {
+                ui.ctx().active_theme().unwrap_or_default().ui.danger_text
+            }
             _ => ui.visuals().strong_text_color(),
         }
     }
@@ -143,12 +148,17 @@ impl ButtonVariant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{all_themes, apply_to_egui, tests::contrast};
+    use crate::theme::{Theme, apply_to_egui, contrast, presets};
 
     #[test]
     fn primary_and_danger_text_reads_on_the_fill_in_every_state_and_preset() {
         let mut failures = Vec::new();
-        for theme in all_themes() {
+        // The presets all have `danger_text == accent_text`; an orange accent makes them differ.
+        let orange = Theme::light().with_accent(Color32::from_rgb(255, 120, 0));
+        for (name, theme) in presets()
+            .into_iter()
+            .chain([("light, orange accent", orange)])
+        {
             let ctx = egui::Context::default();
             apply_to_egui(&ctx, &theme);
             let _ = ctx.run(Default::default(), |ctx| {
@@ -171,9 +181,8 @@ mod tests {
                                         contrast(text, surface.blend(fill.gamma_multiply(fade)));
                                     if ratio < min {
                                         failures.push(format!(
-                                            "{}: {variant:?} {state} (enabled: {enabled}) is \
-                                             {ratio:.2}:1, below {min}:1",
-                                            theme.name()
+                                            "{name}: {variant:?} {state} (enabled: {enabled}) is \
+                                             {ratio:.2}:1, below {min}:1"
                                         ));
                                     }
                                 }

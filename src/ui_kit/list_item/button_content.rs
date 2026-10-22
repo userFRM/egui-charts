@@ -3,7 +3,7 @@
 use egui::{Color32, Response, Ui, Vec2, WidgetInfo, WidgetType};
 
 use crate::icons::Icon;
-use crate::theme::ThemeUiExt;
+use crate::theme::{ThemeContextExt, ThemeUiExt};
 use crate::tokens::DESIGN_TOKENS;
 
 use super::content::{ContentContext, ListItemContent};
@@ -171,8 +171,8 @@ impl<'a> ButtonContent<'a> {
                 }
             }
             ButtonStyle::Danger => {
-                let danger = DESIGN_TOKENS.semantic.buttons.danger_bg;
-                let text = ui.theme_data().ui_accent_text;
+                let colors = ui.ctx().active_theme().unwrap_or_default().ui;
+                let (danger, text) = (colors.danger_bg, colors.danger_text);
                 if active {
                     (danger.gamma_multiply(0.8), text, text)
                 } else if hovered {

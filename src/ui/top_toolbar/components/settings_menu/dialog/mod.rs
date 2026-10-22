@@ -204,7 +204,7 @@ impl SettingsDialog {
         }
 
         let mut is_open = self.is_open;
-        let style = &theme.components.settings_dialog;
+        let style = &SettingsDialogStyle::from_theme(theme);
 
         // fixed dialog size
         let w = if self.config.width > 0.0 {

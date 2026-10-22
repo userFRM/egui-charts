@@ -5,18 +5,17 @@
 //!
 //! # Example
 //! ```
-//! # use egui_charts::theme::ThemePreset;
 //! # use egui_charts::ui_kit::form::FormRow;
 //! # egui::__run_test_ui(|ui| {
-//! # let mut current = ThemePreset::Classic;
+//! # let mut current = "dark";
 //! FormRow::new("Theme")
 //!     .description("Color scheme for the application")
 //!     .show(ui, |ui| {
 //!         egui::ComboBox::from_id_salt("theme")
-//!             .selected_text(current.display_name())
+//!             .selected_text(current)
 //!             .show_ui(ui, |ui| {
-//!                 for preset in ThemePreset::all() {
-//!                     ui.selectable_value(&mut current, *preset, preset.display_name());
+//!                 for (name, _) in egui_charts::theme::presets() {
+//!                     ui.selectable_value(&mut current, name, name);
 //!                 }
 //!             });
 //!     });

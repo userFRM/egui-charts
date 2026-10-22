@@ -40,9 +40,9 @@ To add one: add a `ChartType` variant with its metadata, add any price transform
 
 ### A new theme
 
-Themes are built from design tokens. The token layer is in [`src/tokens/`](src/tokens) (raw and semantic tokens, plus `design_tokens.ron`), and theme presets live in [`src/theme/`](src/theme). The `ThemePreset` enum in [`src/theme/presets.rs`](src/theme/presets.rs) selects which light/dark variants to use.
+A theme is a `Theme` value with public fields. The presets are literal `Theme` values in [`src/theme/presets.rs`](src/theme/presets.rs); the token layer they draw on is in [`src/tokens/`](src/tokens) (raw and semantic tokens, plus `design_tokens.ron`).
 
-To add one: add a `ThemePreset` variant, include it in `ThemePreset::all()`, and map it to the token variants it should resolve. If you need new colors, add them to the token layer rather than hard-coding values in the preset.
+To add one: add a `Theme::<name>()` constructor in `src/theme/presets.rs` and add it to `presets()`. The test `theme::tests::text_and_control_outlines_are_readable_in_every_preset` then checks its text and outline contrast.
 
 ## Development setup
 

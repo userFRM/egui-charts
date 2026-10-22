@@ -61,6 +61,8 @@ ui = ["icons", "dep:thiserror"]
 backtest = []
 ## Embedded scripting support for user-defined indicators and strategies.
 scripting = []
+## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
+serde = []
 
 [dev-dependencies]
 # The bundled examples are standalone `eframe` apps; they need a windowing
@@ -86,6 +88,3 @@ thiserror = { version = "2.0.18", optional = true }
 log = "0.4.29"
 once_cell = "1.21.3"
 ron = "0.12.0"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3.85", features = ["Storage", "Window"] }

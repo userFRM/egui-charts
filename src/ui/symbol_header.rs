@@ -110,7 +110,7 @@ impl Default for SymbolHeaderConfig {
 impl SymbolHeaderConfig {
     /// Create config with colours fixed to `theme`.
     pub fn from_theme(theme: &crate::theme::Theme) -> Self {
-        let ui = &theme.semantic.ui;
+        let ui = &theme.ui;
         Self {
             text_color: ui.text,
             label_color: ui.text_secondary,

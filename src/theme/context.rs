@@ -189,49 +189,48 @@ impl Default for ThemeData {
 impl ThemeData {
     /// Create from a Theme
     pub fn from_theme(theme: &super::Theme) -> Self {
+        let (ui, chart) = (&theme.ui, &theme.chart);
         Self {
-            ui_panel_bg: theme.semantic.ui.panel_bg,
-            ui_panel_bg_secondary: theme.semantic.ui.panel_bg_secondary,
-            ui_button_bg: theme.semantic.ui.btn_bg,
-            ui_button_bg_hover: theme.semantic.ui.btn_bg_hover,
-            ui_button_bg_active: theme.semantic.ui.btn_bg_active,
-            ui_text: theme.semantic.ui.text,
-            ui_text_secondary: theme.semantic.ui.text_secondary,
-            ui_text_muted: theme.semantic.ui.text_muted,
-            ui_icon: theme.semantic.ui.icon,
-            ui_icon_hover: theme.semantic.ui.icon_hover,
-            ui_icon_active: theme.semantic.ui.icon_active,
-            ui_border: theme.semantic.ui.border,
-            ui_border_subtle: theme.semantic.ui.border_subtle,
-            ui_accent: theme.semantic.ui.accent,
-            ui_accent_hover: theme.semantic.ui.accent_hover,
-            ui_accent_text: theme.semantic.ui.accent_text,
+            ui_panel_bg: ui.panel_bg,
+            ui_panel_bg_secondary: ui.panel_bg_secondary,
+            ui_button_bg: ui.panel_bg,
+            ui_button_bg_hover: ui.btn_bg_hover,
+            ui_button_bg_active: ui.btn_bg_active,
+            ui_text: ui.text,
+            ui_text_secondary: ui.text_secondary,
+            ui_text_muted: ui.text_muted,
+            ui_icon: ui.text_secondary,
+            ui_icon_hover: ui.text,
+            ui_icon_active: ui.accent,
+            ui_border: ui.border,
+            ui_border_subtle: ui.border,
+            ui_accent: ui.accent,
+            ui_accent_hover: ui.accent_hover,
+            ui_accent_text: ui.accent_text,
 
             // Page background for gaps between panels
             // In dark UI mode, gaps are LIGHTER than panels for contrast
             // In light UI mode, gaps are DARKER (chart_bg) than white panels
-            page_bg: if theme.preset.is_dark_ui() {
-                // Gaps are lighter than panels in dark mode - use secondary panel bg
-                theme.semantic.ui.panel_bg_secondary
+            page_bg: if theme.dark {
+                ui.panel_bg_secondary
             } else {
-                // Use chart background for light UI
-                theme.semantic.chart.bg
+                chart.bg
             },
 
-            chart_bg: theme.semantic.chart.bg,
-            chart_bg_axis: theme.semantic.chart.bg_axis,
-            chart_grid: theme.semantic.chart.grid_line,
-            chart_grid_major: theme.semantic.chart.grid_line_major,
-            chart_text: theme.semantic.chart.axis_text,
-            chart_text_secondary: theme.semantic.chart.axis_text_secondary,
-            chart_crosshair: theme.semantic.chart.crosshair_line,
-            chart_crosshair_label_bg: theme.semantic.chart.crosshair_label_bg,
-            chart_crosshair_label_text: theme.semantic.chart.crosshair_label_text,
+            chart_bg: chart.bg,
+            chart_bg_axis: chart.bg_axis,
+            chart_grid: chart.grid_line,
+            chart_grid_major: chart.grid_line_major,
+            chart_text: chart.axis_text,
+            chart_text_secondary: chart.axis_text_secondary,
+            chart_crosshair: chart.crosshair_line,
+            chart_crosshair_label_bg: chart.crosshair_label_bg,
+            chart_crosshair_label_text: chart.crosshair_label_text,
 
-            bullish: theme.semantic.chart.candle_up,
-            bearish: theme.semantic.chart.candle_down,
-            volume_bullish: theme.semantic.chart.volume_up,
-            volume_bearish: theme.semantic.chart.volume_down,
+            bullish: chart.candle_up,
+            bearish: chart.candle_down,
+            volume_bullish: chart.volume_up(),
+            volume_bearish: chart.volume_down(),
 
             // Footprint colors - from DESIGN_TOKENS
             footprint_poc: DESIGN_TOKENS.semantic.footprint.poc,
@@ -247,12 +246,11 @@ impl ThemeData {
             tpo_session_separator: DESIGN_TOKENS.semantic.tpo.session_separator,
             tpo_letter_default: DESIGN_TOKENS.semantic.tpo.letter_default,
 
-            // Status colors from semantic tokens (properly flows through theme system)
-            warning: theme.semantic.ui.warning,
-            success: theme.semantic.ui.success,
+            warning: ui.warning,
+            success: ui.success,
 
-            is_dark_ui: theme.preset.is_dark_ui(),
-            is_dark_chart: theme.preset.is_dark_chart(),
+            is_dark_ui: theme.dark,
+            is_dark_chart: chart.bg.intensity() < 0.5,
         }
     }
 
@@ -562,25 +560,25 @@ macro_rules! theme_derived {
 #[cfg(feature = "ui")]
 pub(crate) use theme_derived;
 
-/// Rederive a theme-derived component config when the active theme's preset changes.
+/// Rederive a theme-derived component config when the active theme changes.
 ///
-/// `derived` holds the preset and config that `config` was last derived from, or
+/// `derived` holds the theme and config that `config` was last derived from, or
 /// `None` for a config the caller supplied, which is never replaced. Fields the
 /// caller has changed since are kept; the others follow the new theme.
 #[cfg(feature = "ui")]
 pub(crate) fn follow_active_theme<C: ThemeDerived>(
     ctx: &Context,
-    derived: &mut Option<(super::ThemePreset, C)>,
+    derived: &mut Option<(super::Theme, C)>,
     config: &mut C,
     from_theme: impl FnOnce(&super::Theme) -> C,
 ) {
     if let Some(theme) = ctx.active_theme()
-        && let Some((preset, old)) = derived
-        && *preset != theme.preset
+        && let Some((derived_from, old)) = derived
+        && *derived_from != theme
     {
         let new = from_theme(&theme);
         config.follow(old, &new);
-        *preset = theme.preset;
+        *derived_from = theme;
         *old = new;
     }
 }
@@ -600,8 +598,15 @@ mod tests {
         let mut custom =
             TimeframeToolbar::with_config(TimeframeToolbarConfig::from_theme(&Theme::dark()));
 
-        // Classic differs from the Dark config the toolbar is built with; Dark and Light are later changes.
-        for theme in [Theme::classic(), Theme::dark(), Theme::light()] {
+        // Light differs from the Dark config the toolbar is built with; Dark is a later change,
+        // and an edited Dark theme must propagate too.
+        let mut edited_dark = Theme::dark();
+        edited_dark.ui.border = Color32::GREEN;
+        for (name, theme) in [
+            ("light", Theme::light()),
+            ("dark", Theme::dark()),
+            ("edited dark", edited_dark),
+        ] {
             let _ = ctx.run(Default::default(), |ctx| {
                 apply_to_egui(ctx, &theme);
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -609,7 +614,6 @@ mod tests {
                     custom.show(ui);
                 });
             });
-            let name = format!("{:?}", theme.preset);
             assert_eq!(
                 themed.config.panel_height, 40.0,
                 "{name}: edited height replaced"
@@ -620,12 +624,12 @@ mod tests {
                 "{name}: edited colour replaced"
             );
             assert_eq!(
-                themed.config.border_color, theme.semantic.ui.border,
+                themed.config.border_color, theme.ui.border,
                 "{name}: untouched colour stale"
             );
             assert_eq!(
                 custom.config.border_color,
-                Theme::dark().semantic.ui.border,
+                Theme::dark().ui.border,
                 "{name}: with_config replaced"
             );
         }
