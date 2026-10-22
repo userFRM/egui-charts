@@ -35,11 +35,9 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
-use std::collections::VecDeque;
 
 /// Simple Moving Average indicator.
 ///
@@ -49,8 +47,6 @@ use std::collections::VecDeque;
 pub struct SMA {
     period: usize,
     values: Vec<IndicatorValue>,
-    /// The closes of the current window, oldest first.
-    stepper: Stepper<VecDeque<f64>>,
     color: Color32,
     visible: bool,
 }
@@ -64,7 +60,6 @@ impl SMA {
         Self {
             period: period.max(1),
             values: Vec::new(),
-            stepper: Stepper::default(),
             color: DESIGN_TOKENS.semantic.indicators.ma, // Orange for MA
             visible: true,
         }
@@ -99,19 +94,16 @@ impl Indicator for SMA {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         let period = self.period;
-        self.stepper
-            .run(data, from, &mut self.values, |window, bar| {
-                window.push_back(bar.close);
-                if window.len() > period {
-                    window.pop_front();
-                }
-                if window.len() < period {
-                    IndicatorValue::None
-                } else {
-                    // Summed afresh each bar so long series do not accumulate rounding drift.
-                    IndicatorValue::Single(window.iter().sum::<f64>() / period as f64)
-                }
+        self.values.truncate(from.min(data.len()));
+        for i in self.values.len()..data.len() {
+            self.values.push(if i + 1 < period {
+                IndicatorValue::None
+            } else {
+                // Summed afresh each bar so long series do not accumulate rounding drift.
+                let window = &data[i + 1 - period..=i];
+                IndicatorValue::Single(window.iter().map(|b| b.close).sum::<f64>() / period as f64)
             });
+        }
     }
 
     fn is_incremental(&self) -> bool {

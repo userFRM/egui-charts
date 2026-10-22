@@ -163,6 +163,7 @@ All notable changes to this project are documented in this file. The format is b
 - The cross, dot and arrow cursors are named "Cross Cursor", "Dot Cursor" and "Arrow Cursor" (`DrawingToolType::as_str` and `Display`), so "Arrow" names only the arrow drawing and "Cross" no longer names one tool while parsing to another. The floating toolbar's all-tools menu shows the new names. Migration: code that compares a cursor's `as_str()` or `to_string()` with "Cross", "Dot" or "Arrow" uses the new names.
 - Parsing a `DrawingToolType` fails with `drawings::ParseToolTypeError`, whose `input` field holds the name as given and whose message reads `unknown drawing tool "name"`, instead of a `String`. The names that parse, and the tools they parse to, are unchanged. Migration: code that used the error as a `String` reads `error.input` or calls `error.to_string()`.
 - `OrderId` and `OrderSide` now live in `model` (still re-exported from `chart::overlays`).
+- A last-bar update or an append of `SMA` reads the window from the bars instead of keeping a copy of it, so it no longer copies the whole close series when the period is longer than the series.
 
 ### Removed
 
