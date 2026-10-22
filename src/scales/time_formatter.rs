@@ -12,6 +12,7 @@ use crate::config::TimezoneMode;
 /// Time formatting trait for customizable time axis labels.
 /// Reference: lightweight-charts TimeFormatterFn.
 use chrono::{DateTime, TimeZone, Utc};
+use std::sync::Arc;
 
 #[cfg(test)]
 use chrono::Datelike;
@@ -133,8 +134,9 @@ impl TimeFormatter for LocaleTimeFormatter {
 }
 
 /// Custom time formatter using a closure
+#[derive(Clone)]
 pub struct CustomTimeFormatter {
-    formatter: Box<dyn Fn(DateTime<Utc>, TickMarkType) -> String + Send + Sync>,
+    formatter: Arc<dyn Fn(DateTime<Utc>, TickMarkType) -> String + Send + Sync>,
 }
 
 impl CustomTimeFormatter {
@@ -144,7 +146,7 @@ impl CustomTimeFormatter {
         F: Fn(DateTime<Utc>, TickMarkType) -> String + Send + Sync + 'static,
     {
         Self {
-            formatter: Box::new(formatter),
+            formatter: Arc::new(formatter),
         }
     }
 }
@@ -155,9 +157,7 @@ impl TimeFormatter for CustomTimeFormatter {
     }
 
     fn clone_box(&self) -> Box<dyn TimeFormatter> {
-        // Note: Cannot clone closures, so this returns default
-        // Users should manage their custom formatters explicitly
-        Box::new(DefaultTimeFormatter::default())
+        Box::new(self.clone())
     }
 }
 
@@ -411,6 +411,9 @@ mod tests {
         let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
         assert_eq!(formatter.format(time, TickMarkType::Year), "Year 2024");
         assert_eq!(formatter.format(time, TickMarkType::Month), "2024-06-15");
+
+        let cloned = formatter.clone_box();
+        assert_eq!(cloned.format(time, TickMarkType::Year), "Year 2024");
     }
 
     #[test]

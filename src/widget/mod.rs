@@ -1957,8 +1957,7 @@ mod selection_tests {
         let mut registry = IndicatorRegistry::new();
         let captured = values.clone();
         registry.add(Box::new(
-            CustomIndicator::new("TestLine", Box::new(move |_| captured.clone()))
-                .with_overlay(true),
+            CustomIndicator::new("TestLine", move |_| captured.clone()).with_overlay(true),
         ));
         // Prime the cached values without needing real bar input.
         registry.calculate_all(&[]);
@@ -2020,7 +2019,7 @@ mod selection_tests {
         let mut registry = IndicatorRegistry::new();
         let captured = values.clone();
         registry.add(Box::new(
-            CustomIndicator::new("Pane", Box::new(move |_| captured.clone())).with_overlay(false),
+            CustomIndicator::new("Pane", move |_| captured.clone()).with_overlay(false),
         ));
         registry.calculate_all(&[]);
 

@@ -10,7 +10,7 @@
 //! ```rust,ignore
 //! use egui_charts::studies::{CustomIndicator, IndicatorValue};
 //!
-//! let momentum = CustomIndicator::new("Momentum(10)", Box::new(|bars| {
+//! let momentum = CustomIndicator::new("Momentum(10)", |bars| {
 //!     bars.iter()
 //!         .enumerate()
 //!         .map(|(i, bar)| {
@@ -21,32 +21,31 @@
 //!             }
 //!         })
 //!         .collect()
-//! }))
+//! })
 //! .with_overlay(false)
 //! .with_description("Custom 10-bar price momentum");
 //! ```
 //!
-//! # Limitations
-//!
-//! Because the calculation closure is a `Box<dyn Fn>`, it cannot be truly
-//! cloned. [`Indicator::clone_box`] produces a copy that retains the cached
-//! values but replaces the closure with a no-op placeholder.
+//! The closure is shared behind an [`Arc`], so a clone computes exactly what
+//! the original does.
 
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
+use std::sync::Arc;
 
 /// Type alias for the custom calculation closure.
 ///
 /// The closure receives the full bar series and must return exactly one
 /// [`IndicatorValue`] per bar.
-pub type CalculateFn = Box<dyn Fn(&[Bar]) -> Vec<IndicatorValue> + Send>;
+pub type CalculateFn = Arc<dyn Fn(&[Bar]) -> Vec<IndicatorValue> + Send + Sync>;
 
 /// An indicator defined at runtime via a calculation closure.
 ///
 /// Build one with [`new`](Self::new) and customise it with the builder
 /// methods (`with_description`, `with_color`, `with_overlay`, etc.).
+#[derive(Clone)]
 pub struct CustomIndicator {
     name: String,
     desc: String,
@@ -67,13 +66,16 @@ impl CustomIndicator {
     /// * `calculate_fn` -- Closure that computes indicator values from bars.
     ///
     /// The indicator defaults to a single-line yellow overlay.
-    pub fn new(name: impl Into<String>, calculate_fn: CalculateFn) -> Self {
+    pub fn new<F>(name: impl Into<String>, calculate_fn: F) -> Self
+    where
+        F: Fn(&[Bar]) -> Vec<IndicatorValue> + Send + Sync + 'static,
+    {
         let name = name.into();
         Self {
             line_names: vec![name.clone()],
             name,
             desc: String::new(),
-            calculate_fn,
+            calculate_fn: Arc::new(calculate_fn),
             values: Vec::new(),
             colors: vec![DESIGN_TOKENS.semantic.extended.caution], // Yellow default
             is_overlay: true,
@@ -168,19 +170,20 @@ impl Indicator for CustomIndicator {
     }
 
     fn clone_box(&self) -> Box<dyn Indicator> {
-        // Note: Custom indicators with closures can't be fully cloned
-        // This is a limitation of the current design
-        // For production use, consider using a different approach
-        Box::new(Self {
-            name: self.name.clone(),
-            desc: self.desc.clone(),
-            calculate_fn: Box::new(|_| Vec::new()), // Placeholder
-            values: self.values.clone(),
-            colors: self.colors.clone(),
-            is_overlay: self.is_overlay,
-            line_cnt: self.line_cnt,
-            line_names: self.line_names.clone(),
-            visible: self.visible,
-        })
+        Box::new(self.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_keeps_the_calculation() {
+        let indicator = CustomIndicator::new("Constant", |_| vec![IndicatorValue::Single(1.0); 3]);
+
+        let mut cloned = indicator.clone_box();
+        cloned.calculate(&[]);
+        assert_eq!(cloned.values().len(), 3);
     }
 }
