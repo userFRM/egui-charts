@@ -446,9 +446,9 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 
 ### Export
 - [x] Export dialog UI (format selection, size options, path input)
-- [x] `Exportable` trait defined (`export_png`, `export_svg`, `copy_to_clipboard`)
+- [x] `Exportable` trait defined (`export`, `export_png`, `export_svg`)
 - [ ] No `Exportable` implementation in-crate (host must implement)
-- [ ] Browse button generates placeholder path (no native file dialog)
+- [ ] Save path is typed by hand (no native file dialog)
 - [ ] No actual PNG/SVG rendering logic
 
 ### Other UI

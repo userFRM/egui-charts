@@ -42,7 +42,7 @@ pub enum ExportFormat {
     Svg,
     /// Copy to system clipboard
     Clipboard,
-    /// CSV data export (OHLCV + optional indicators)
+    /// CSV export of the bar data (time and OHLCV)
     Csv,
 }
 
@@ -147,7 +147,11 @@ impl Default for ExportConfig {
 /// - Format selection (PNG, SVG, Clipboard)
 /// - Size configuration
 /// - Export options (title, ts, watermark)
-/// - File save path selection
+/// - File save path entry
+///
+/// The dialog only collects the request; the host performs the export. Use
+/// [`with_formats`](Self::with_formats) to offer only the formats the host
+/// can produce.
 ///
 /// # Example
 ///
@@ -176,7 +180,8 @@ impl Default for ExportConfig {
 pub struct ExportDialog {
     is_open: bool,
     config: ExportConfig,
-    save_path: Option<PathBuf>,
+    formats: Vec<ExportFormat>,
+    save_path: String,
     export_status: ExportStatus,
 }
 
@@ -205,9 +210,28 @@ impl ExportDialog {
         Self {
             is_open: false,
             config: ExportConfig::default(),
-            save_path: None,
+            formats: vec![
+                ExportFormat::Png,
+                ExportFormat::Svg,
+                ExportFormat::Csv,
+                ExportFormat::Clipboard,
+            ],
+            save_path: String::new(),
             export_status: ExportStatus::Idle,
         }
+    }
+
+    /// Offers only `formats`, in the given order, for hosts that cannot
+    /// perform every export. Selects the first of them if the current format
+    /// is not offered.
+    pub fn with_formats(mut self, formats: &[ExportFormat]) -> Self {
+        self.formats = formats.to_vec();
+        if !self.formats.contains(&self.config.format)
+            && let Some(&first) = self.formats.first()
+        {
+            self.config.format = first;
+        }
+        self
     }
 
     /// Opens the export dialog
@@ -279,14 +303,9 @@ impl ExportDialog {
     fn draw_format_selection(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Format:");
-            ui.radio_value(&mut self.config.format, ExportFormat::Png, "PNG");
-            ui.radio_value(&mut self.config.format, ExportFormat::Svg, "SVG");
-            ui.radio_value(&mut self.config.format, ExportFormat::Csv, "CSV");
-            ui.radio_value(
-                &mut self.config.format,
-                ExportFormat::Clipboard,
-                "Clipboard",
-            );
+            for &format in &self.formats {
+                ui.radio_value(&mut self.config.format, format, format.as_str());
+            }
         });
         ui.separator();
     }
@@ -294,7 +313,7 @@ impl ExportDialog {
     fn draw_export_options(&mut self, ui: &mut egui::Ui) {
         if self.config.format.is_data_format() {
             // CSV data export has no image-specific options
-            ui.label("Exports visible OHLCV bar data and active indicator values.");
+            ui.label("Exports the bar data: time, open, high, low, close, and volume.");
             ui.separator();
             return;
         }
@@ -344,19 +363,13 @@ impl ExportDialog {
             return;
         }
 
+        let hint = format!(
+            "chart_export.{}",
+            self.config.format.file_extension().unwrap_or("png")
+        );
         ui.horizontal(|ui| {
             ui.label("Save to:");
-            if let Some(path) = &self.save_path {
-                ui.label(path.display().to_string());
-            } else {
-                ui.label("(Select location)");
-            }
-            if ui.button("Browse...").clicked() {
-                self.save_path = Some(PathBuf::from(format!(
-                    "chart_export.{}",
-                    self.config.format.file_extension().unwrap_or("png")
-                )));
-            }
+            ui.add(egui::TextEdit::singleline(&mut self.save_path).hint_text(hint));
         });
         ui.separator();
     }
@@ -382,15 +395,17 @@ impl ExportDialog {
         let mut response = ExportResponse::None;
         ui.horizontal(|ui| {
             if ui.button("Export").clicked() {
-                if self.config.format == ExportFormat::Clipboard || self.save_path.is_some() {
+                let to_clipboard = self.config.format == ExportFormat::Clipboard;
+                let path = self.save_path.trim();
+                if to_clipboard || !path.is_empty() {
                     response = ExportResponse::Export {
                         config: self.config.clone(),
-                        save_path: self.save_path.clone(),
+                        save_path: (!to_clipboard).then(|| PathBuf::from(path)),
                     };
                     self.export_status = ExportStatus::Exporting;
                 } else {
                     self.export_status =
-                        ExportStatus::Error("Please select a save location".to_string());
+                        ExportStatus::Error("Please enter a save path".to_string());
                 }
             }
             if ui.button("Cancel").clicked() {
@@ -542,17 +557,6 @@ pub trait Exportable {
             ..Default::default()
         })
     }
-
-    /// Convenience method to copy to clipboard
-    ///
-    /// Note: This default implementation just exports as PNG.
-    /// Actual clipboard integration requires platform-specific code.
-    fn copy_to_clipboard(&self, _ctx: &Context) -> Result<(), String> {
-        let _bytes = self.export_png(1920, 1080, false)?;
-        // In a real implementation, this would use a clipboard library
-        // like arboard or copypasta
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -612,5 +616,11 @@ mod tests {
 
         dialog.close();
         assert!(!dialog.is_open());
+    }
+
+    #[test]
+    fn restricting_formats_selects_an_offered_format() {
+        let dialog = ExportDialog::new().with_formats(&[ExportFormat::Clipboard]);
+        assert_eq!(dialog.config.format, ExportFormat::Clipboard);
     }
 }

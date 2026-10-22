@@ -66,6 +66,23 @@ enum SidePanel {
     Alerts,
 }
 
+/// Export formats the demo can perform. The browser build has no file system
+/// access, so it offers only the clipboard. SVG rendering is not implemented.
+#[cfg(not(target_arch = "wasm32"))]
+const EXPORT_FORMATS: &[ExportFormat] = &[
+    ExportFormat::Png,
+    ExportFormat::Csv,
+    ExportFormat::Clipboard,
+];
+#[cfg(target_arch = "wasm32")]
+const EXPORT_FORMATS: &[ExportFormat] = &[ExportFormat::Clipboard];
+
+/// Where an export screenshot goes once egui delivers it.
+enum ScreenshotTarget {
+    File(Option<std::path::PathBuf>),
+    Clipboard,
+}
+
 /// App state surfaced to the toolbars via `ChartAppState`.
 pub struct DemoAppState {
     pub symbol: String,
@@ -210,7 +227,7 @@ impl DemoApp {
             series_settings: SeriesSettingsDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
-            export_dialog: ExportDialog::new(),
+            export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             pine_editor: PineEditor::new(),
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
@@ -449,7 +466,7 @@ impl DemoApp {
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
-            ExportResponse::Export { config, save_path } => self.run_export(config, save_path),
+            ExportResponse::Export { config, save_path } => self.run_export(ctx, config, save_path),
             ExportResponse::Closed | ExportResponse::None => {}
         }
 
@@ -523,17 +540,21 @@ impl DemoApp {
 
     fn run_export(
         &mut self,
+        ctx: &egui::Context,
         config: egui_charts::ui::export::ExportConfig,
         save_path: Option<std::path::PathBuf>,
     ) {
-        match config.format {
-            ExportFormat::Png | ExportFormat::Svg | ExportFormat::Clipboard => {
-                // Image/clipboard exports route through the egui screenshot path.
-                self.screenshot_requested = true;
-                let _ = save_path;
-            }
-            ExportFormat::Csv => self.export_csv(save_path),
-        }
+        // Image exports route through the egui screenshot path, tagged with
+        // where the delivered image goes.
+        let target = match config.format {
+            ExportFormat::Png => ScreenshotTarget::File(save_path),
+            ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
+            ExportFormat::Csv => return self.export_csv(save_path),
+            ExportFormat::Svg => unreachable!("SVG is not in EXPORT_FORMATS"),
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(
+            target,
+        )));
     }
 
     fn export_csv(&self, save_path: Option<std::path::PathBuf>) {
@@ -1291,15 +1312,26 @@ impl DemoApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
 
-        // Pull any delivered screenshot out of egui's event queue and persist it.
+        // Pull any delivered screenshot out of egui's event queue and deliver it.
         let shot = ctx.input(|i| {
             i.events.iter().find_map(|e| match e {
-                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                egui::Event::Screenshot {
+                    image, user_data, ..
+                } => Some((image.clone(), user_data.clone())),
                 _ => None,
             })
         });
-        if let Some(image) = shot {
-            self.save_screenshot(&image);
+        let Some((image, user_data)) = shot else {
+            return;
+        };
+        match user_data
+            .data
+            .as_ref()
+            .and_then(|d| d.downcast_ref::<ScreenshotTarget>())
+        {
+            Some(ScreenshotTarget::Clipboard) => ctx.copy_image((*image).clone()),
+            Some(ScreenshotTarget::File(path)) => self.save_screenshot(&image, path.clone()),
+            None => self.save_screenshot(&image, None),
         }
     }
 
@@ -1335,8 +1367,10 @@ impl DemoApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn save_screenshot(&self, image: &egui::ColorImage) {
-        let path = std::env::temp_dir().join(format!("{}_chart.png", self.state.symbol));
+    fn save_screenshot(&self, image: &egui::ColorImage, path: Option<std::path::PathBuf>) {
+        let path = path.unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("{}_chart.png", self.state.symbol))
+        });
         let (w, h) = (image.size[0] as u32, image.size[1] as u32);
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for px in &image.pixels {
@@ -1344,7 +1378,7 @@ impl DemoApp {
         }
         match image::RgbaImage::from_raw(w, h, rgba) {
             Some(buf) => {
-                if let Err(e) = buf.save(&path) {
+                if let Err(e) = buf.save_with_format(&path, image::ImageFormat::Png) {
                     log::warn!("[demo] screenshot save failed: {e}");
                 } else {
                     log::info!("[demo] screenshot saved to {}", path.display());
@@ -1355,7 +1389,7 @@ impl DemoApp {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn save_screenshot(&self, image: &egui::ColorImage) {
+    fn save_screenshot(&self, image: &egui::ColorImage, _path: Option<std::path::PathBuf>) {
         // A browser download requires Blob/anchor plumbing beyond this demo's
         // scope; log the capture so the control still does observable work.
         log::info!(
