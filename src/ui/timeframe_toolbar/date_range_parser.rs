@@ -1,7 +1,7 @@
 //! Date range string parser
 //!
 //! Parses various date range formats into timestamp pairs:
-//! - Absolute: "2024-01-01 to 2024-12-31"
+//! - Absolute: "2024-01-01 to 2024-12-31" (both dates included)
 //! - Relative: "last 30 days", "last 6 months"
 //! - Presets: "YTD", "MTD", "1M", "3M", "6M", "1Y", "5Y", "MAX"
 
@@ -23,7 +23,7 @@ pub enum DateRangeParseError {
     #[error("Invalid time unit: {0}")]
     InvalidTimeUnit(String),
 
-    #[error("Start date must be before end date")]
+    #[error("End date must not be before start date")]
     InvalidDateOrder,
 
     #[error("Unsupported format: {0}")]
@@ -134,7 +134,7 @@ fn try_parse_relative(s: &str) -> DateRangeResult {
     Ok(Some((start, now)))
 }
 
-/// Try to parse absolute formats:
+/// Try to parse absolute formats, which include both dates (the range ends at the midnight after the end date):
 /// - "2024-01-01 to 2024-12-31"
 /// - "2024-01-01..2024-12-31"
 /// - "2024-01-01 - 2024-12-31"
@@ -156,7 +156,11 @@ fn try_parse_absolute(s: &str) -> DateRangeResult {
     }
 
     let start = parse_date_string(parts[0].trim())?;
-    let end = parse_date_string(parts[1].trim())?;
+    let end_date = parts[1].trim();
+    // Both dates are included, so the range ends at the midnight after the end date.
+    let end = parse_date_string(end_date)?
+        .checked_add_signed(Duration::days(1))
+        .ok_or_else(|| DateRangeParseError::InvalidDateFormat(end_date.to_string()))?;
 
     if start >= end {
         return Err(DateRangeParseError::InvalidDateOrder);
@@ -238,33 +242,16 @@ mod tests {
     }
 
     #[test]
-    fn test_absolute_to() {
-        let result = parse_date_range("2024-01-01 to 2024-12-31");
-        assert!(result.is_ok());
-
-        let (start, end) = result.unwrap();
-        let start_dt = Utc.timestamp_opt(start, 0).unwrap();
-        let end_dt = Utc.timestamp_opt(end, 0).unwrap();
-
-        assert_eq!(start_dt.year(), 2024);
-        assert_eq!(start_dt.month(), 1);
-        assert_eq!(start_dt.day(), 1);
-
-        assert_eq!(end_dt.year(), 2024);
-        assert_eq!(end_dt.month(), 12);
-        assert_eq!(end_dt.day(), 31);
-    }
-
-    #[test]
-    fn test_absolute_dotdot() {
-        let result = parse_date_range("2024-01-01..2024-06-30");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_absolute_slash() {
-        let result = parse_date_range("2024/01/01 to 2024/06/30");
-        assert!(result.is_ok());
+    fn absolute_ranges_include_both_dates() {
+        let cases = [
+            ("2024-01-01 to 2024-12-31", (1_704_067_200, 1_735_689_600)),
+            ("2024-03-15 to 2024-03-15", (1_710_460_800, 1_710_547_200)),
+            ("2024-01-01..2024-06-30", (1_704_067_200, 1_719_792_000)),
+            ("2024/01/01 to 2024/06/30", (1_704_067_200, 1_719_792_000)),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(parse_date_range(input), Ok(expected), "{input}");
+        }
     }
 
     #[test]
@@ -284,6 +271,10 @@ mod tests {
                 InvalidNumber("9999999999999".into()),
             ),
             ("last 100000000 days", InvalidNumber("100000000".into())),
+            (
+                "2024-01-01 to 262142-12-31",
+                InvalidDateFormat("262142-12-31".into()),
+            ),
         ];
         for (input, expected) in cases {
             assert_eq!(parse_date_range(input), Err(expected), "{input}");
