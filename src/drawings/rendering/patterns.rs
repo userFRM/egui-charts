@@ -299,50 +299,22 @@ impl Drawing {
         }
 
         // Draw neckline and target projection for complete pattern
-        if self.points.len() >= 5 {
-            // Neckline connects the troughs (points 1 and len-2)
-            let neckline_start = self.points[1];
-            let neckline_end = self.points[self.points.len() - 2];
-
+        let extend =
+            DESIGN_TOKENS.sizing.technical_labels.fib_label_offset_x + DESIGN_TOKENS.spacing.xxxl;
+        if let Some((neckline, target_y)) = head_and_shoulders_neckline(&self.points, extend) {
             let neckline_color =
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200);
+            let last_x = self.points[self.points.len() - 1].x;
 
-            // Extend neckline
-            let dx = neckline_end.x - neckline_start.x;
-            let dy = neckline_end.y - neckline_start.y;
-            let extend = DESIGN_TOKENS.sizing.technical_labels.fib_label_offset_x
-                + DESIGN_TOKENS.spacing.xxxl;
-            let extended_end = if dx.abs() > 0.001 {
-                Pos2::new(neckline_end.x + extend, neckline_end.y + dy / dx * extend)
-            } else {
-                Pos2::new(neckline_end.x, neckline_end.y + extend)
-            };
-
-            painter.line_segment(
-                [neckline_start, extended_end],
-                Stroke::new(stroke::MEDIUM, neckline_color),
-            );
-
-            // Calculate and draw target projection
-            let head_point = self.points[3]; // Assuming head is point 3
-            let neckline_y_at_head = neckline_start.y + dy / dx * (head_point.x - neckline_start.x);
-            let pattern_height = (head_point.y - neckline_y_at_head).abs();
-
-            // Target is same distance below neckline
-            let is_top = head_point.y < neckline_y_at_head;
-            let target_y = if is_top {
-                neckline_end.y + pattern_height
-            } else {
-                neckline_end.y - pattern_height
-            };
+            painter.line_segment(neckline, Stroke::new(stroke::MEDIUM, neckline_color));
 
             // Draw target line (dashed)
             let target_color = DESIGN_TOKENS.semantic.indicators.ma.gamma_multiply(0.7); // Orange
             super::utils::draw_dashed_line(
                 painter,
-                Pos2::new(neckline_end.x, target_y),
+                Pos2::new(last_x, target_y),
                 Pos2::new(
-                    neckline_end.x + DESIGN_TOKENS.sizing.technical_labels.fib_label_offset_x,
+                    last_x + DESIGN_TOKENS.sizing.technical_labels.fib_label_offset_x,
                     target_y,
                 ),
                 Stroke::new(stroke::HAIRLINE, target_color),
@@ -357,7 +329,7 @@ impl Drawing {
                 .chart_axis_bg
                 .gamma_multiply(0.86);
             let target_label_pos = Pos2::new(
-                neckline_end.x
+                last_x
                     + DESIGN_TOKENS.sizing.technical_labels.fib_label_offset_x
                     + DESIGN_TOKENS.spacing.lg,
                 target_y,
@@ -786,6 +758,67 @@ impl Drawing {
                 "PRZ",
                 egui::FontId::proportional(typography::XS),
                 DESIGN_TOKENS.semantic.extended.bullish,
+            );
+        }
+    }
+}
+
+/// Head and shoulders neckline and target from the anchors (start, left shoulder, trough, head,
+/// trough, right shoulder, end): the neckline runs through the two troughs, from the left trough to
+/// `extend` past the last anchor's x, and the target y lies at the last anchor's x, as far beyond
+/// the neckline as the head is from it at the head's x, on the side away from the head. `None`
+/// until both troughs are placed, or while they share an x.
+fn head_and_shoulders_neckline(points: &[Pos2], extend: f32) -> Option<([Pos2; 2], f32)> {
+    let &[_, _, left, head, right, ..] = points else {
+        return None;
+    };
+    let dx = right.x - left.x;
+    if dx == 0.0 {
+        return None;
+    }
+    let neckline_y = |x: f32| left.y + (right.y - left.y) / dx * (x - left.x);
+    let last_x = points[points.len() - 1].x;
+    let end_x = last_x + extend;
+    Some((
+        [left, Pos2::new(end_x, neckline_y(end_x))],
+        neckline_y(last_x) - (head.y - neckline_y(head.x)),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn head_and_shoulders_neckline_runs_through_the_troughs() {
+        let anchors = |ys: [f32; 7], last_trough_x: f32| {
+            let mut points = ys.map(|y| Pos2::new(0.0, y));
+            for (i, p) in points.iter_mut().enumerate() {
+                p.x = 10.0 * i as f32;
+            }
+            points[4].x = last_trough_x;
+            points
+        };
+        let top = anchors([300.0, 200.0, 250.0, 100.0, 260.0, 210.0, 320.0], 40.0);
+        let inverse = anchors([100.0, 200.0, 150.0, 300.0, 140.0, 190.0, 80.0], 40.0);
+        let vertical = anchors([300.0, 200.0, 250.0, 100.0, 260.0, 210.0, 320.0], 20.0);
+        // Neckline slope 0.5 from the left trough: 255 at the head's x (height 155), 270 at the
+        // last anchor and 275 at 10 past it, so the target is 270 + 155. The inverse pattern
+        // mirrors y about 200: slope -0.5, 130 at the last anchor, target 130 - 155.
+        let cases = [
+            (&top[..], Some(([top[2], Pos2::new(70.0, 275.0)], 425.0))),
+            (
+                &inverse[..],
+                Some(([inverse[2], Pos2::new(70.0, 125.0)], -25.0)),
+            ),
+            (&vertical[..], None),
+            (&top[..4], None),
+        ];
+        for (points, expected) in cases {
+            assert_eq!(
+                head_and_shoulders_neckline(points, 10.0),
+                expected,
+                "{points:?}"
             );
         }
     }
