@@ -3,8 +3,8 @@ use crate::model::Bar;
 /// Converts prices into a Gaussian normal distribution
 /// More responsive than standard Fisher Transform
 ///
-/// Related: [`FisherTransform`](super::FisherTransform) uses a different
-/// smoothing factor (0.66 vs 0.33) producing a slightly different response curve.
+/// Related: [`FisherTransform`](super::FisherTransform) clamps the smoothed
+/// value instead of the normalized price.
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;

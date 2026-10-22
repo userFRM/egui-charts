@@ -87,13 +87,18 @@ impl Indicator for FisherTransform {
                 0.0
             };
 
-            // Smooth the normalized value
-            let value = 0.66 * normalized + 0.67 * prev_val;
-            // Clamp to avoid NaN from atanh
-            let clamped = value.clamp(-0.999, 0.999);
+            // Smooth the normalized value, then keep it inside the open interval
+            // the logarithm needs. Ehlers' published code limits values beyond
+            // 0.99 to 0.999, and the limited value feeds the next bar.
+            let mut value = 0.33 * normalized + 0.67 * prev_val;
+            if value > 0.99 {
+                value = 0.999;
+            } else if value < -0.99 {
+                value = -0.999;
+            }
 
             // Apply Fisher Transform
-            let fisher = 0.5 * ((1.0 + clamped) / (1.0 - clamped)).ln();
+            let fisher = 0.5 * ((1.0 + value) / (1.0 - value)).ln() + 0.5 * prev_fisher;
             let signal = prev_fisher;
 
             prev_val = value;
@@ -166,48 +171,64 @@ mod tests {
         }
     }
 
+    /// (high, low, expected (fisher, trigger)) for length 5, from Ehlers'
+    /// published construction computed independently. The series rises long
+    /// enough for the smoothed value to reach the clamp, stays flat until the
+    /// window has no range, then falls.
+    #[allow(clippy::type_complexity)]
+    const REFERENCE: &[(f64, f64, Option<(f64, f64)>)] = &[
+        (101.0, 99.0, None),
+        (102.0, 100.0, None),
+        (103.0, 101.0, None),
+        (104.0, 102.0, None),
+        (105.0, 103.0, Some((0.342828254415394, 0.0))),
+        (106.0, 104.0, Some((0.791373872129106, 0.342828254415394))),
+        (107.0, 105.0, Some((1.26149294935091, 0.791373872129106))),
+        (108.0, 106.0, Some((1.7251749834508, 1.26149294935091))),
+        (109.0, 107.0, Some((2.17540858067979, 1.7251749834508))),
+        (110.0, 108.0, Some((2.61256860142716, 2.17540858067979))),
+        (111.0, 109.0, Some((3.03914327264257, 2.61256860142716))),
+        (112.0, 110.0, Some((3.45779932767405, 3.03914327264257))),
+        (113.0, 111.0, Some((3.87077398411298, 3.45779932767405))),
+        (114.0, 112.0, Some((4.27977042664787, 3.87077398411298))),
+        (114.0, 112.0, Some((4.6860228060836, 4.27977042664787))),
+        (114.0, 112.0, Some((6.143212570292, 4.6860228060836))),
+        (114.0, 112.0, Some((6.8718074523962, 6.143212570292))),
+        (114.0, 112.0, Some((4.2454320902449, 6.8718074523962))),
+        (114.0, 112.0, Some((2.60547582289472, 4.2454320902449))),
+        (114.0, 112.0, Some((1.61276554585803, 2.60547582289472))),
+        (112.0, 110.0, Some((0.676974906197813, 1.61276554585803))),
+        (110.0, 108.0, Some((-0.104626787889589, 0.676974906197813))),
+        (108.0, 106.0, Some((-0.759435607263236, -0.104626787889589))),
+        (106.0, 104.0, Some((-1.32566396088824, -0.759435607263236))),
+        (104.0, 102.0, Some((-1.83329744102957, -1.32566396088824))),
+    ];
+
     #[test]
-    fn test_fisher_transform() {
+    fn matches_published_reference() {
+        let data: Vec<Bar> = REFERENCE
+            .iter()
+            .map(|&(h, l, _)| make_bar(h, l, (h + l) / 2.0))
+            .collect();
         let mut ft = FisherTransform::new(5);
-
-        let data: Vec<Bar> = (0..20)
-            .map(|i| make_bar(100.0 + i as f64, 98.0 + i as f64, 99.0 + i as f64))
-            .collect();
-
         ft.calculate(&data);
 
-        assert_eq!(ft.values.len(), 20);
-
-        // First few should be None
-        assert!(matches!(ft.values[0], IndicatorValue::None));
-
-        // Later values should be present
-        let last = &ft.values[19];
-        assert!(matches!(
-            last,
-            IndicatorValue::Multiple(_) | IndicatorValue::Single(_)
-        ));
-    }
-
-    #[test]
-    fn test_fisher_bounds() {
-        // Fisher transform should produce reasonable values
-        let mut ft = FisherTransform::new(3);
-
-        let data: Vec<Bar> = (0..10)
-            .map(|i| make_bar(100.0 + i as f64 * 2.0, 98.0 + i as f64, 99.0 + i as f64))
-            .collect();
-
-        ft.calculate(&data);
-
-        for value in &ft.values {
-            let v = match value {
-                IndicatorValue::Single(v) => *v,
-                IndicatorValue::Multiple(vals) => vals[0],
-                IndicatorValue::None => continue,
+        assert_eq!(ft.values.len(), REFERENCE.len());
+        for (i, (value, &(_, _, expected))) in ft.values.iter().zip(REFERENCE).enumerate() {
+            // A zero trigger is reported as a single line.
+            let actual = match value {
+                IndicatorValue::None => None,
+                IndicatorValue::Single(f) => Some((*f, 0.0)),
+                IndicatorValue::Multiple(v) => Some((v[0], v[1])),
             };
-            // Fisher values are typically between -2 and 2
-            assert!(v.abs() < 10.0, "Fisher value {v} out of expected range");
+            match (actual, expected) {
+                (None, None) => {}
+                (Some((f, t)), Some((ef, et))) => assert!(
+                    (f - ef).abs() < 1e-9 && (t - et).abs() < 1e-9,
+                    "bar {i}: got ({f}, {t}), expected ({ef}, {et})"
+                ),
+                _ => panic!("bar {i}: got {actual:?}, expected {expected:?}"),
+            }
         }
     }
 }

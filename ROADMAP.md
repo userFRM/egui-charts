@@ -269,7 +269,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] DPO, TRIX (signal line not drawn), Mass Index, Chande Momentum (CMO)
 - [x] True Strength Index (TSI), KDJ, Know Sure Thing (KST): only the first line is drawn (no D/J or signal lines)
 - [x] Schaff Trend Cycle, Double Stochastic, Elder Ray (Bear Power not drawn)
-- [x] Fisher Transform (non-standard smoothing, signal not drawn), Ehlers Fisher (trigger not drawn), Force Index
+- [x] Fisher Transform (signal not drawn), Ehlers Fisher (trigger not drawn), Force Index
 - [x] Center of Gravity (signal not drawn), Pretty Good Oscillator, Rainbow Oscillator
 - [x] Relative Vigor Index, Stochastic Momentum Index (signal lines not drawn)
 - [x] Ultimate Momentum, Trend Intensity Index, Qstick
