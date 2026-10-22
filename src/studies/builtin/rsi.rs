@@ -31,12 +31,15 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use egui_charts::studies::{RSI, Indicator};
+//! ```rust
+//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::studies::{RSI, Indicator, IndicatorValue};
 //!
 //! let mut rsi = RSI::new(14);
 //! rsi.calculate(&bars);
-//! // First `period` values are IndicatorValue::None (warmup)
+//! // The first `period` values are warmup.
+//! assert!(rsi.values()[..14].iter().all(|v| matches!(v, IndicatorValue::None)));
+//! assert!(matches!(rsi.values()[14], IndicatorValue::Single(_)));
 //! ```
 
 use crate::model::Bar;

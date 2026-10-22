@@ -18,27 +18,37 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```
+//! use egui::pos2;
 //! use egui_charts::drawings::services::{
-//!     SelectionService, HistoryService, SnapService, ZOrderService,
+//!     HistoryService, SelectionService, SnapService, SnapTargets, ZOrderService,
 //! };
+//! use egui_charts::drawings::{Drawing, DrawingToolType};
+//!
+//! let mut drawings = vec![
+//!     Drawing::new(1, DrawingToolType::TrendLine),
+//!     Drawing::new(2, DrawingToolType::HorizontalLine),
+//! ];
 //!
 //! // Selection
 //! let mut selection = SelectionService::new();
-//! selection.select(drawing_id);
-//! selection.toggle(other_id);  // Ctrl+click toggle
+//! selection.select(1);
+//! selection.toggle(2); // Ctrl+click toggle
 //!
 //! // Undo/redo
 //! let mut history = HistoryService::new();
-//! history.push_add(drawing.clone());
+//! let added = Drawing::new(3, DrawingToolType::Rect);
+//! drawings.push(added.clone());
+//! history.push_add(added);
 //! history.undo(&mut drawings);
 //!
 //! // Snapping
 //! let snap = SnapService::new();
-//! let snapped = snap.snap_point(cursor_pos, &snap_targets);
+//! let snap_targets = SnapTargets::with_price_time(vec![100.0, 120.0], vec![40.0, 80.0]);
+//! let snapped = snap.snap_point(pos2(41.0, 101.0), &snap_targets);
 //!
 //! // Z-ordering
-//! ZOrderService::bring_to_front(&mut drawings, selected_id);
+//! ZOrderService::bring_to_front(&mut drawings, 1);
 //! ZOrderService::sort_by_z_order(&mut drawings);
 //! ```
 

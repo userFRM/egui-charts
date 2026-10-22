@@ -4,19 +4,22 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use open_trading_charts::ui_kit::filter::FilterWidget;
+//! ```
+//! use egui_charts::ui_kit::filter::FilterWidget;
 //!
 //! // Create filter widget
 //! let mut filter = FilterWidget::new();
+//! # let items = ["AAPL", "MSFT", "NVDA"];
 //!
+//! # egui::__run_test_ctx(|ctx| egui::CentralPanel::default().show(ctx, |ui| {
 //! // Show the filter input
 //! filter.show(ui);
 //!
 //! // Filter your items
-//! for item in items.iter().filter(|i| filter.matches(&i.name)) {
-//!     ui.label(&item.name);
+//! for item in items.iter().filter(|name| filter.matches(name)) {
+//!     ui.label(*item);
 //! }
+//! # }).inner);
 //! ```
 
 use egui::{

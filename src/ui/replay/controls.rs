@@ -15,15 +15,17 @@ use egui::{RichText, Ui, Vec2};
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use egui_open_trading_charts::ui::replay::{ReplayControls, ReplayState, ReplayConfig};
+/// ```rust
+/// use egui_charts::ui::replay::{ReplayConfig, ReplayControls, ReplayState};
 ///
 /// let mut state = ReplayState::new();
 /// let config = ReplayConfig::default();
 /// let controls = ReplayControls::new(&config);
 ///
 /// // In your UI loop:
+/// # egui::__run_test_ctx(|ctx| egui::CentralPanel::default().show(ctx, |ui| {
 /// let action = controls.show(ui, &mut state);
+/// # }).inner);
 /// ```
 pub struct ReplayControls<'a> {
     config: &'a ReplayConfig,

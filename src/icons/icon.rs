@@ -6,17 +6,17 @@ use egui::Vec2;
 ///
 /// Icons are embedded at compile time using `include_bytes!`, which means
 /// they are part of the binary and don't require filesystem access at runtime.
+/// Create your own with [`icon_from_path!`](crate::icon_from_path).
 ///
 /// # Example
 ///
-/// ```ignore
-/// use egui_charts::ui_kit::icons::{icons, Icon};
+/// ```
+/// use egui::Vec2;
+/// use egui_charts::icons::icons;
 ///
-/// // Use pre-defined icon
+/// # egui::__run_test_ui(|ui| {
 /// ui.add(icons::SETTINGS.as_image(Vec2::splat(20.0)));
-///
-/// // Create custom icon (typically via icon_from_path! macro)
-/// const MY_ICON: Icon = Icon::new("custom.svg", include_bytes!("path/to/custom.svg"));
+/// # });
 /// ```
 #[derive(Clone, Copy)]
 pub struct Icon {
@@ -40,12 +40,6 @@ impl Icon {
     /// # Arguments
     ///
     /// * `size` - The size to render the icon at (width and height)
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// ui.add(icons::SETTINGS.as_image(Vec2::splat(20.0)));
-    /// ```
     #[inline]
     pub fn as_image(&self, size: Vec2) -> egui::Image<'static> {
         let uri = format!("bytes://{}", self.name);
@@ -99,14 +93,6 @@ impl Icon {
     /// # Arguments
     ///
     /// * `size` - The size to render the icon at
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// if ui.add(icons::CLOSE.as_button(Vec2::splat(16.0))).clicked() {
-    ///     self.close();
-    /// }
-    /// ```
     #[inline]
     pub fn as_button(&self, size: Vec2) -> egui::Button<'static> {
         egui::Button::image(self.as_image(size)).image_tint_follows_text_color(true)
@@ -118,14 +104,6 @@ impl Icon {
     ///
     /// * `size` - The size to render the icon at
     /// * `label` - The text label to display next to the icon
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// if ui.add(icons::ADD.as_button_with_label(Vec2::splat(16.0), "Add Item")).clicked() {
-    ///     self.add_item();
-    /// }
-    /// ```
     #[inline]
     pub fn as_button_with_label(
         &self,

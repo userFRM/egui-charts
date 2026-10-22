@@ -29,16 +29,18 @@ pub enum ButtonStyle {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use crate::icons::icons;
-/// use crate::ui_kit::list_item::{ListItem, ButtonContent};
+/// ```
+/// use egui_charts::icons::icons;
+/// use egui_charts::ui_kit::list_item::{ButtonContent, ListItem};
 ///
+/// # egui::__run_test_ui(|ui| {
 /// let response = ListItem::new()
-///     .show(ui, ButtonContent::new(&icons::ADD, "Add Item"));
+///     .show(ui, ButtonContent::new(&icons::PLUS, "Add Item"));
 ///
 /// if response.clicked() {
-///     self.add_item();
+///     // add the item
 /// }
+/// # });
 /// ```
 pub struct ButtonContent<'a> {
     icon: &'a Icon,

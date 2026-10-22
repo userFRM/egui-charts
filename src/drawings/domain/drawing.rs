@@ -21,7 +21,7 @@ use super::{
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use egui_charts::drawings::{Drawing, DrawingToolType};
 ///
 /// let mut drawing = Drawing::new(1, DrawingToolType::TrendLine);

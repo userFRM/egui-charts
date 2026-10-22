@@ -4,12 +4,15 @@
 //! a 1px vertical separator, and a remainder-width content area.
 //!
 //! # Example
-//! ```ignore
+//! ```
+//! # use egui_charts::ui_kit::sidebar_layout::SidebarLayout;
+//! # egui::__run_test_ui(|ui| {
 //! SidebarLayout::new(160.0)
 //!     .show(ui,
 //!         |ui| { /* sidebar navigation */ },
 //!         |ui| { /* scrollable content */ },
 //!     );
+//! # });
 //! ```
 
 use crate::styles::typography;
@@ -70,15 +73,17 @@ impl SidebarLayout {
 /// active/hover states.
 ///
 /// # Example
-/// ```ignore
-/// for tab in Tab::all() {
-///     if SidebarTab::new(tab.label(), tab == active)
-///         .icon(tab.icon())
-///         .show(ui)
-///     {
+/// ```
+/// # use egui_charts::ui_kit::sidebar_layout::SidebarTab;
+/// # egui::__run_test_ui(|ui| {
+/// let tabs = ["General", "Appearance", "Trading"];
+/// let mut active = "General";
+/// for tab in tabs {
+///     if SidebarTab::new(tab, tab == active).show(ui) {
 ///         active = tab;
 ///     }
 /// }
+/// # });
 /// ```
 pub struct SidebarTab<'a> {
     label: &'a str,

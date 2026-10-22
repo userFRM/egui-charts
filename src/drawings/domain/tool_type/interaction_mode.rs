@@ -15,7 +15,7 @@
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use egui_charts::drawings::{DrawingToolType, DrawingInteractionMode};
 ///
 /// assert_eq!(

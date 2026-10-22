@@ -3,12 +3,21 @@
 //! Eliminates the repeated `Grid::new("id").num_columns(2).spacing([lg, md])` boilerplate
 //! used across 25+ form dialogs.
 //!
-//! ```ignore
+//! ```
+//! # use egui_charts::ui_kit::FormGrid;
+//! # egui::__run_test_ui(|ui| {
+//! # let mut bg_type = "Solid";
 //! FormGrid::new("canvas_bg").show(ui, |ui| {
 //!     ui.label("Type");
-//!     ComboBox::from_id_salt("bg_type")...;
+//!     egui::ComboBox::from_id_salt("bg_type")
+//!         .selected_text(bg_type)
+//!         .show_ui(ui, |ui| {
+//!             ui.selectable_value(&mut bg_type, "Solid", "Solid");
+//!             ui.selectable_value(&mut bg_type, "Gradient", "Gradient");
+//!         });
 //!     ui.end_row();
 //! });
+//! # });
 //! ```
 
 use crate::tokens::DESIGN_TOKENS;

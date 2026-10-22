@@ -15,8 +15,12 @@ use egui::{Rect, Response, Sense, Ui, Vec2};
 ///
 /// # Example
 ///
-/// ```ignore
-/// use crate::icons::icons;
+/// ```
+/// use egui_charts::icons::icons;
+/// use egui_charts::ui_kit::buttons::{ButtonSize, IconButton};
+///
+/// # egui::__run_test_ui(|ui| {
+/// # let is_active = false;
 /// let response = IconButton::new(&icons::TREND_LINE)
 ///     .size(ButtonSize::MD)
 ///     .tooltip("Trend Line (Alt+T)")
@@ -24,8 +28,9 @@ use egui::{Rect, Response, Sense, Ui, Vec2};
 ///     .show(ui);
 ///
 /// if response.clicked() {
-///     select_tool(DrawingToolType::TrendLine);
+///     // select the trend line tool
 /// }
+/// # });
 /// ```
 pub struct IconButton<'a> {
     icon: &'a Icon,

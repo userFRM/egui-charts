@@ -4,13 +4,18 @@
 //! used in dialogs and forms.
 //!
 //! # Example
-//! ```ignore
-//! if let Some(ref error) = state.error {
+//! ```
+//! # use egui_charts::ui_kit::status_message::{MessageKind, status_message};
+//! # egui::__run_test_ui(|ui| {
+//! # let error: Option<String> = Some("Symbol not found".into());
+//! # let success: Option<String> = None;
+//! if let Some(ref error) = error {
 //!     status_message(ui, MessageKind::Error, error);
 //! }
-//! if let Some(ref msg) = state.success {
+//! if let Some(ref msg) = success {
 //!     status_message(ui, MessageKind::Success, msg);
 //! }
+//! # });
 //! ```
 
 use crate::theme::ThemeUiExt;

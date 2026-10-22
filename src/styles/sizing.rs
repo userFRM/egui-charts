@@ -4,12 +4,12 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use crate::styles::sizing;
+//! ```
+//! use egui_charts::styles::sizing;
 //!
 //! // All sizing uses fixed desktop constants
-//! let height = sizing::toolbar::TOP_HEIGHT;  // 38px
-//! let width = sizing::toolbar::LEFT_WIDTH;   // 52px
+//! let height = sizing::toolbar::TOP_HEIGHT;
+//! let width = sizing::toolbar::LEFT_WIDTH;
 //! ```
 
 // =============================================================================

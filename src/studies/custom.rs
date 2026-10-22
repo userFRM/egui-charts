@@ -7,7 +7,7 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use egui_charts::studies::{CustomIndicator, IndicatorValue};
 //!
 //! let momentum = CustomIndicator::new("Momentum(10)", |bars| {

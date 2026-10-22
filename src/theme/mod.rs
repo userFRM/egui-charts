@@ -29,12 +29,12 @@
 //!
 //! # Quick Start
 //!
-//! ```ignore
+//! ```
+//! use egui_charts::ext::HasDesignTokens;
 //! use egui_charts::theme::{Theme, ThemePreset, apply_to_egui};
-//! use egui_charts::ui_kit::ext::HasDesignTokens;
 //!
-//! // In your app's update() function:
-//! fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+//! // Called from your app's update function:
+//! fn update(ctx: &egui::Context) {
 //!     let theme = Theme::from_preset(ThemePreset::Classic);
 //!     apply_to_egui(ctx, &theme);
 //!
@@ -44,6 +44,7 @@
 //!         let bullish = ui.bullish_color();
 //!     });
 //! }
+//! # egui::__run_test_ctx(update);
 //! ```
 
 // Sub-modules
@@ -83,19 +84,20 @@ use egui::Color32;
 /// # Usage
 ///
 /// Access colors via semantic tokens:
-/// ```ignore
+/// ```
+/// # let theme = egui_charts::theme::Theme::dark();
 /// // UI colors
-/// theme.semantic.ui.panel_bg
-/// theme.semantic.ui.accent
+/// let panel_bg = theme.semantic.ui.panel_bg;
+/// let accent = theme.semantic.ui.accent;
 ///
 /// // Chart colors
-/// theme.semantic.chart.bg
-/// theme.semantic.chart.candle_up
-/// theme.semantic.chart.grid_line
+/// let chart_bg = theme.semantic.chart.bg;
+/// let candle_up = theme.semantic.chart.candle_up;
+/// let grid = theme.semantic.chart.grid_line;
 ///
 /// // Or use convenience accessors
-/// theme.chart_bg()
-/// theme.bullish()
+/// let chart_bg = theme.background();
+/// let bullish = theme.bullish();
 /// ```
 #[derive(Clone, Debug)]
 pub struct Theme {

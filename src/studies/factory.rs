@@ -7,7 +7,7 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use egui_charts::studies::IndicatorFactory;
 //!
 //! let factory = IndicatorFactory::new(); // includes all built-ins

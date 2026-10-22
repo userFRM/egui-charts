@@ -10,12 +10,20 @@
 //! Indicator panes are typically managed by [`super::Chart::show_with_indicators`], but
 //! they can also be used standalone:
 //!
-//! ```rust,ignore
-//! use egui_charts::widget::indicator_pane::{IndicatorPane, IndicatorPaneConfig};
+//! ```rust
+//! use egui_charts::widget::indicator_pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig};
 //!
+//! # fn example(
+//! #     ui: &mut egui::Ui,
+//! #     rsi_indicator: &egui_charts::studies::RSI,
+//! #     bars: &[egui_charts::model::Bar],
+//! #     visible_range: std::ops::Range<usize>,
+//! #     coords: IndicatorCoordParams,
+//! # ) {
 //! let config = IndicatorPaneConfig::rsi();
 //! let mut pane = IndicatorPane::with_config(config);
-//! pane.show_aligned(ui, &rsi_indicator, &bars, visible_range, coords);
+//! pane.show_aligned(ui, rsi_indicator, bars, visible_range, coords);
+//! # }
 //! ```
 //!
 //! # Coordinate Alignment

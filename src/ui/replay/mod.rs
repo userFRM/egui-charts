@@ -29,20 +29,22 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use egui_open_trading_charts::ui::replay::{
-//!     ReplayController, ReplayControls, ReplayConfig, ReplayAction
-//! };
+//! ```rust
+//! # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::ui::replay::{ReplayController, ReplayControls};
 //!
 //! // Create replay controller with data
+//! # let ts = bars.iter().map(|bar| bar.time).collect();
 //! let mut controller = ReplayController::new(bars, ts);
 //!
 //! // In your UI loop:
+//! # egui::__run_test_ctx(|ctx| {
 //! egui::TopBottomPanel::bottom("replay").show(ctx, |ui| {
 //!     let controls = ReplayControls::new(&controller.config);
 //!     let action = controls.show(ui, &mut controller.state);
 //!     controller.handle_action(action);
 //! });
+//! # });
 //!
 //! // Get current visible bars for chart rendering
 //! let visible_bars = controller.visible_bars();

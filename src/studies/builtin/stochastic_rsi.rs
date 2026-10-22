@@ -15,8 +15,9 @@
 //! - %K crossing %D: Trading signals
 //!
 //! # Example
-//! ```ignore
-//! use egui_charts::StochasticRSI;
+//! ```
+//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::studies::{StochasticRSI, Indicator};
 //!
 //! let mut stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
 //! stoch_rsi.calculate(&bars);

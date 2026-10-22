@@ -4,14 +4,16 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use open_trading_charts::ui_kit::section::Section;
+//! ```
+//! use egui_charts::ui_kit::section::Section;
 //!
+//! # egui::__run_test_ui(|ui| {
 //! Section::new("settings_section", "Settings")
 //!     .default_open(true)
 //!     .show(ui, |ui| {
 //!         ui.label("Section content here");
 //!     });
+//! # });
 //! ```
 
 use egui::{CollapsingResponse, Id, RichText, Ui, Vec2};

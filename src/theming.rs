@@ -6,7 +6,7 @@
 //! # Architecture
 //!
 //! ```text
-//! ui_kit/theming.rs
+//! theming.rs
 //! ├── Panel colors       - toolbar_bg, separator_color
 //! ├── Button states      - btn_bg_*, hover_color, sel_color
 //! ├── Icon colors        - icon_color, active_icon_color
@@ -17,9 +17,10 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use egui_charts::ui_kit::theming;
+//! ```
+//! use egui_charts::theming;
 //!
+//! # egui::__run_test_ui(|ui| {
 //! // Panel backgrounds
 //! let bg = theming::toolbar_bg(ui);
 //!
@@ -30,6 +31,7 @@
 //!
 //! // Icons
 //! let icon = theming::icon_color(ui);
+//! # });
 //! ```
 //!
 //! # Design Principles
@@ -48,13 +50,6 @@ use egui::{Color32, Ui};
 /// Get toolbar/panel background color from theme.
 ///
 /// This is the primary background color for toolbars and panels.
-///
-/// # Examples
-///
-/// ```ignore
-/// let bg = theming::toolbar_bg(ui);
-/// ui.painter().rect_filled(rect, 0.0, bg);
-/// ```
 #[inline]
 pub fn toolbar_bg(ui: &Ui) -> Color32 {
     ui.style().visuals.panel_fill
@@ -63,13 +58,6 @@ pub fn toolbar_bg(ui: &Ui) -> Color32 {
 /// Get separator/divider color from theme.
 ///
 /// Used for visual dividers between toolbar sections.
-///
-/// # Examples
-///
-/// ```ignore
-/// let color = theming::separator_color(ui);
-/// ui.painter().hline(x_range, y, Stroke::new(1.0, color));
-/// ```
 #[inline]
 pub fn separator_color(ui: &Ui) -> Color32 {
     ui.style().visuals.widgets.noninteractive.bg_stroke.color
@@ -88,15 +76,6 @@ pub fn btn_bg_normal(_ui: &Ui) -> Color32 {
 }
 
 /// Get button hover background color.
-///
-/// # Examples
-///
-/// ```ignore
-/// if response.hovered() {
-///     let bg = theming::hover_color(ui);
-///     painter.rect_filled(rect, rounding, bg);
-/// }
-/// ```
 #[inline]
 pub fn hover_color(ui: &Ui) -> Color32 {
     ui.style().visuals.widgets.hovered.bg_fill
@@ -111,15 +90,6 @@ pub fn btn_bg_hover(ui: &Ui) -> Color32 {
 /// Get selected/active/pressed background color.
 ///
 /// Used when a button is actively selected or being pressed.
-///
-/// # Examples
-///
-/// ```ignore
-/// if is_selected {
-///     let bg = theming::sel_color(ui);
-///     painter.rect_filled(rect, rounding, bg);
-/// }
-/// ```
 #[inline]
 pub fn sel_color(ui: &Ui) -> Color32 {
     ui.style().visuals.widgets.active.bg_fill
@@ -138,7 +108,11 @@ pub fn btn_bg_pressed(ui: &Ui) -> Color32 {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
+/// # use egui_charts::theming;
+/// # egui::__run_test_ui(|ui| {
+/// # let is_selected = true;
+/// # let response = ui.button("Tool");
 /// let bg = if is_selected && response.hovered() {
 ///     theming::active_hover_color(ui)
 /// } else if is_selected {
@@ -148,6 +122,7 @@ pub fn btn_bg_pressed(ui: &Ui) -> Color32 {
 /// } else {
 ///     theming::btn_bg_normal(ui)
 /// };
+/// # });
 /// ```
 #[inline]
 pub fn active_hover_color(ui: &Ui) -> Color32 {
@@ -166,13 +141,6 @@ pub fn active_hover_color(ui: &Ui) -> Color32 {
 /// Get default icon color from theme.
 ///
 /// Used for icons in their normal/inactive state.
-///
-/// # Examples
-///
-/// ```ignore
-/// let color = theming::icon_color(ui);
-/// svg_icon.paint(painter, rect, color);
-/// ```
 #[inline]
 pub fn icon_color(ui: &Ui) -> Color32 {
     ui.style().visuals.widgets.noninteractive.fg_stroke.color
@@ -211,13 +179,6 @@ pub fn icon_active(ui: &Ui) -> Color32 {
 // =============================================================================
 
 /// Get primary text color from theme.
-///
-/// # Examples
-///
-/// ```ignore
-/// let color = theming::text_color(ui);
-/// painter.text(pos, align, "Label", font, color);
-/// ```
 #[inline]
 pub fn text_color(ui: &Ui) -> Color32 {
     ui.style().visuals.text_color()
@@ -293,8 +254,13 @@ pub fn pill_bg(ui: &Ui) -> Color32 {
 ///
 /// # Examples
 ///
-/// ```ignore
-/// let lighter = theming::lighten_color(base, 0.1);  // 10% lighter
+/// ```
+/// use egui::Color32;
+/// use egui_charts::theming;
+///
+/// let base = Color32::from_rgb(100, 100, 100);
+/// let lighter = theming::lighten_color(base, 0.1); // 10% of the way to white
+/// assert_eq!(lighter, Color32::from_rgb(115, 115, 115));
 /// ```
 #[inline]
 pub fn lighten_color(color: Color32, factor: f32) -> Color32 {
@@ -314,8 +280,13 @@ pub fn lighten_color(color: Color32, factor: f32) -> Color32 {
 ///
 /// # Examples
 ///
-/// ```ignore
-/// let darker = theming::darken_color(base, 0.1);  // 10% darker
+/// ```
+/// use egui::Color32;
+/// use egui_charts::theming;
+///
+/// let base = Color32::from_rgb(100, 100, 100);
+/// let darker = theming::darken_color(base, 0.1); // 10% of the way to black
+/// assert_eq!(darker, Color32::from_rgb(90, 90, 90));
 /// ```
 #[inline]
 pub fn darken_color(color: Color32, factor: f32) -> Color32 {

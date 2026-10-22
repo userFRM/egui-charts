@@ -35,8 +35,9 @@
 //!
 //! # Quick start
 //!
-//! ```rust,ignore
-//! use egui_charts::studies::{SMA, RSI, BollingerBands, Indicator};
+//! ```rust
+//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::studies::{BollingerBands, Indicator, IndicatorRegistry, RSI, SMA};
 //!
 //! // Create indicators
 //! let mut sma = SMA::new(20);
@@ -78,7 +79,8 @@ use crate::model::Bar;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
+/// # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
 /// use egui_charts::studies::{IndicatorRegistry, SMA, EMA};
 ///
 /// let mut registry = IndicatorRegistry::new();

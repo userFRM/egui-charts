@@ -23,12 +23,15 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use egui_charts::studies::{SMA, Indicator};
+//! ```rust
+//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::studies::{SMA, Indicator, IndicatorValue};
 //!
 //! let mut sma = SMA::new(20);
 //! sma.calculate(&bars);
-//! // First 19 values are IndicatorValue::None (warmup)
+//! // The first 19 values are warmup.
+//! assert!(sma.values()[..19].iter().all(|v| matches!(v, IndicatorValue::None)));
+//! assert!(matches!(sma.values()[19], IndicatorValue::Single(_)));
 //! ```
 
 use crate::model::Bar;

@@ -1,9 +1,12 @@
 //! Empty state component — centered message for lists/panels with no content.
 //!
-//! ```ignore
+//! ```
+//! # use egui_charts::ui_kit::EmptyState;
+//! # egui::__run_test_ui(|ui| {
 //! EmptyState::new("No scan results")
 //!     .description("Add filters and click Scan to search")
 //!     .show(ui);
+//! # });
 //! ```
 
 use egui::{RichText, Ui};

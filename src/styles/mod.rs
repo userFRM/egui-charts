@@ -17,9 +17,9 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use crate::tokens::DESIGN_TOKENS;
-//! use crate::styles::{sizing, typography};
+//! ```rust
+//! use egui_charts::styles::{self, sizing, typography};
+//! use egui_charts::tokens::DESIGN_TOKENS;
 //!
 //! // Spacing (from DESIGN_TOKENS)
 //! let gap = DESIGN_TOKENS.spacing.panel_gap;
@@ -63,7 +63,7 @@ pub mod typography;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use egui_charts::styles::margin;
 /// use egui_charts::tokens::DESIGN_TOKENS;
 ///

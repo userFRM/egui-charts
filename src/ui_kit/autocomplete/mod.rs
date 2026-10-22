@@ -4,9 +4,10 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use open_trading_charts::ui_kit::autocomplete::AutocompleteEdit;
+//! ```
+//! use egui_charts::ui_kit::autocomplete::AutocompleteEdit;
 //!
+//! # egui::__run_test_ui(|ui| {
 //! let suggestions = vec!["Apple", "Banana", "Cherry", "Date"];
 //! let mut text = String::new();
 //!
@@ -18,6 +19,7 @@
 //! if let Some(selected) = response.selected {
 //!     println!("Selected: {}", selected);
 //! }
+//! # });
 //! ```
 
 use crate::tokens::DESIGN_TOKENS;

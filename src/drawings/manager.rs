@@ -106,9 +106,20 @@ impl Default for DrawingManagerOptions {
 ///
 /// # Frame loop integration
 ///
-/// ```ignore
+/// ```
+/// # use egui_charts::drawings::{DrawingManager, DrawingState};
+/// # use egui_charts::drawings::rendering::ChartView;
+/// # fn frame(
+/// #     manager: &mut DrawingManager,
+/// #     drawing_state: &DrawingState,
+/// #     painter: &egui::Painter,
+/// #     price_rect: egui::Rect,
+/// #     bars: &[egui_charts::model::Bar],
+/// #     bar_to_x: impl Fn(f32) -> f32 + Copy,
+/// #     price_to_y: impl Fn(f64) -> f32 + Copy,
+/// # ) {
 /// // 1. Sync state from app
-/// manager.sync_from_app_state(&drawing_state);
+/// manager.sync_from_app_state(drawing_state);
 ///
 /// // 2. Update screen coordinates from chart coordinates
 /// manager.update_all_screen_coords(bar_to_x, price_to_y);
@@ -117,7 +128,9 @@ impl Default for DrawingManagerOptions {
 /// // ... (start_drawing_with_coords, add_point_with_coords, etc.)
 ///
 /// // 4. Render against the chart's bars and coordinate mapping
-/// manager.render_all(&painter, price_rect, &view);
+/// let view = ChartView { bars, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
+/// manager.render_all(painter, price_rect, &view);
+/// # }
 /// ```
 pub struct DrawingManager {
     /// All completed drawings on the chart.

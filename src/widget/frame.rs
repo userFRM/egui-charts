@@ -156,17 +156,6 @@ impl Chart {
     /// [`ChartConfig`](crate::config::ChartConfig). No drawing tools or separate-pane indicators are rendered.
     ///
     /// Returns an [`egui::Response`] for additional interaction handling.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// egui::CentralPanel::default().show(ctx, |ui| {
-    ///     let response = chart.show(ui);
-    ///     if response.hovered() {
-    ///         // Chart is being hovered
-    ///     }
-    /// });
-    /// ```
     pub fn show(&mut self, ui: &mut Ui) -> Response {
         self.show_internal(ui, None, None)
     }

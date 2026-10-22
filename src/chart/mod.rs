@@ -45,9 +45,11 @@
 //!
 //! The primary entry point for consumers is [`builder::ChartBuilder`]:
 //!
-//! ```rust,ignore
+//! ```rust
 //! use egui_charts::ChartBuilder;
+//! use egui_charts::model::Timeframe;
 //!
+//! # fn example(my_data_source: impl egui_charts::DataSource + 'static, ui: &mut egui::Ui) {
 //! let mut trading_chart = ChartBuilder::extended()
 //!     .with_symbol("BTCUSDT")
 //!     .with_timeframe(Timeframe::Min1)
@@ -57,6 +59,7 @@
 //! // In your update loop:
 //! trading_chart.update();
 //! trading_chart.show(ui);
+//! # }
 //! ```
 
 pub mod builder;

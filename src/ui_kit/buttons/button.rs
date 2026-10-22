@@ -16,13 +16,14 @@ use crate::tokens::DESIGN_TOKENS;
 ///
 /// # Example
 ///
-/// ```ignore
-/// use open_trading_charts::ui_kit::buttons::{Button, ButtonVariant};
-/// use open_trading_charts::ui_kit::icons::icons;
+/// ```
+/// use egui_charts::icons::icons;
+/// use egui_charts::ui_kit::buttons::Button;
 ///
+/// # egui::__run_test_ui(|ui| {
 /// // Primary button (high emphasis)
 /// if Button::new("Save Changes").primary().show(ui).clicked() {
-///     save();
+///     // save
 /// }
 ///
 /// // Ghost button with icon (low emphasis)
@@ -34,6 +35,7 @@ use crate::tokens::DESIGN_TOKENS;
 /// Button::new("Delete")
 ///     .danger()
 ///     .show(ui);
+/// # });
 /// ```
 pub struct Button<'a> {
     text: Option<String>,

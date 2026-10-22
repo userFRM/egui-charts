@@ -15,8 +15,9 @@
 //! - Bullish divergence: Price makes lower low, UO makes higher low
 //!
 //! # Example
-//! ```ignore
-//! use egui_charts::UltimateOscillator;
+//! ```
+//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::studies::{UltimateOscillator, Indicator};
 //!
 //! let mut uo = UltimateOscillator::new(7, 14, 28);
 //! uo.calculate(&bars);

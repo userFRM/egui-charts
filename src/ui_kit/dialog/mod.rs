@@ -16,12 +16,20 @@ use crate::ui_kit::buttons::dialog_close_button;
 /// boilerplate found across all modal dialogs.
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// use egui::Vec2;
+/// use egui_charts::ui_kit::dialog::{DialogFrame, dialog_header};
+///
+/// # egui::__run_test_ctx(|ctx| {
+/// # let mut open = true;
 /// DialogFrame::new("Series Settings", Vec2::new(600.0, 500.0))
 ///     .show(ctx, |ui| {
-///         if dialog_header(ui, "Series Settings") { self.close(); }
+///         if dialog_header(ui, "Series Settings") {
+///             open = false;
+///         }
 ///         // content...
 ///     });
+/// # });
 /// ```
 pub struct DialogFrame {
     id: String,
@@ -83,13 +91,6 @@ impl DialogFrame {
 /// Standard dialog title bar: left-padded heading + right-aligned close button.
 ///
 /// Returns `true` if the close button was clicked.
-///
-/// # Example
-/// ```ignore
-/// if dialog_header(ui, "Notification Settings") {
-///     self.close();
-/// }
-/// ```
 pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
     let mut close_clicked = false;
     ui.horizontal(|ui| {
@@ -114,12 +115,15 @@ pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
 /// - Optional secondary button
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// # use egui_charts::ui_kit::dialog::DialogFooter;
+/// # egui::__run_test_ui(|ui| {
 /// let (ok, cancel) = DialogFooter::new("Ok")
 ///     .secondary("Cancel")
 ///     .show(ui);
 /// if ok { /* apply */ }
 /// if cancel { /* close */ }
+/// # });
 /// ```
 pub struct DialogFooter {
     primary_label: String,

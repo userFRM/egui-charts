@@ -6,13 +6,15 @@
 //! # Why Semantic Tokens?
 //!
 //! Instead of:
-//! ```ignore
-//! let color = DESIGN_TOKENS.semantic.ui.panel_bg_light;  // Which one to use?
+//! ```
+//! # use egui_charts::tokens::DESIGN_TOKENS;
+//! let color = DESIGN_TOKENS.semantic.ui.panel_bg_light; // Which one to use?
 //! ```
 //!
 //! You write:
-//! ```ignore
-//! let color = theme.semantic.ui.panel_bg;  // Already resolved for current theme!
+//! ```
+//! # let theme = egui_charts::theme::Theme::light();
+//! let color = theme.semantic.ui.panel_bg; // Already resolved for the current theme
 //! ```
 //!
 //! # Architecture

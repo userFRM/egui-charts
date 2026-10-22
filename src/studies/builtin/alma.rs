@@ -14,8 +14,9 @@
 //! - sigma: Gaussian sigma (typically 6, higher = smoother)
 //!
 //! # Example
-//! ```ignore
-//! use egui_charts::ALMA;
+//! ```
+//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::studies::{ALMA, Indicator};
 //!
 //! let mut alma = ALMA::new(9, 0.85, 6.0);
 //! alma.calculate(&bars);

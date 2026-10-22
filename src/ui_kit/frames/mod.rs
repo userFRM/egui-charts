@@ -6,11 +6,14 @@
 //! and inner corners are rounded where panels meet.
 //!
 //! # Example
-//! ```ignore
+//! ```
+//! # use egui_charts::ui_kit::frames::StyledPanelFrame;
+//! # egui::__run_test_ui(|ui| {
 //! let visuals = ui.style().visuals.clone();
 //! StyledPanelFrame::left(&visuals).show(ui, |ui| {
 //!     // Panel content
 //! });
+//! # });
 //! ```
 
 use egui::{Color32, CornerRadius, Frame, InnerResponse, Margin, Ui, Visuals};
@@ -50,12 +53,16 @@ pub enum PanelPosition {
 /// Handles selective corner rounding patterns where panels meet.
 ///
 /// # Example
-/// ```ignore
-/// let visuals = ui.style().visuals.clone();
+/// ```
+/// # use egui_charts::ui_kit::frames::StyledPanelFrame;
+/// # egui::__run_test_ctx(|ctx| {
+/// let visuals = ctx.style().visuals.clone();
 ///
 /// // Method 1: Show both frames with content
-/// StyledPanelFrame::left(&visuals).show(ui, |ui| {
-///     ui.label("Panel content");
+/// egui::CentralPanel::default().show(ctx, |ui| {
+///     StyledPanelFrame::left(&visuals).show(ui, |ui| {
+///         ui.label("Panel content");
+///     });
 /// });
 ///
 /// // Method 2: Get frames separately (for SidePanel usage)
@@ -67,6 +74,7 @@ pub enum PanelPosition {
 ///             ui.label("Panel content");
 ///         });
 ///     });
+/// # });
 /// ```
 pub struct StyledPanelFrame {
     position: PanelPosition,
@@ -251,19 +259,27 @@ impl StyledPanelFrame {
 /// Subtle card container with faint background, rounding, and padding.
 ///
 /// Replaces the common pattern:
-/// ```ignore
+/// ```
+/// # use egui_charts::tokens::DESIGN_TOKENS;
+/// # egui::__run_test_ui(|ui| {
 /// egui::Frame::NONE
 ///     .fill(ui.style().visuals.faint_bg_color)
 ///     .inner_margin(DESIGN_TOKENS.spacing.sm)
 ///     .corner_radius(DESIGN_TOKENS.rounding.sm)
-///     .show(ui, |ui| { ... });
+///     .show(ui, |ui| {
+///         ui.label("Content");
+///     });
+/// # });
 /// ```
 ///
 /// Usage:
-/// ```ignore
+/// ```
+/// # use egui_charts::ui_kit::Card;
+/// # egui::__run_test_ui(|ui| {
 /// Card::new().show(ui, |ui| {
 ///     ui.label("Content in a subtle card");
 /// });
+/// # });
 /// ```
 pub struct Card {
     rounding: f32,

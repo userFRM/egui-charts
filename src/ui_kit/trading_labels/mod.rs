@@ -17,11 +17,14 @@ use crate::tokens::DESIGN_TOKENS;
 ///
 /// Colors text using the theme's bullish/bearish colors based on value sign.
 ///
-/// ```ignore
-/// PnlLabel::currency(123.45).show(ui);     // "+$123.45" in green
-/// PnlLabel::currency(-50.0).show(ui);      // "-$50.00" in red
-/// PnlLabel::percent(0.0534).show(ui);      // "+5.34%" in green
+/// ```
+/// # use egui_charts::ui_kit::trading_labels::PnlLabel;
+/// # egui::__run_test_ui(|ui| {
+/// PnlLabel::currency(123.45).show(ui);       // "+$123.45" in green
+/// PnlLabel::currency(-50.0).show(ui);        // "-$50.00" in red
+/// PnlLabel::percent(0.0534).show(ui);        // "+5.34%" in green
 /// PnlLabel::value(-10.0, "custom").show(ui); // "custom" in red
+/// # });
 /// ```
 pub struct PnlLabel {
     value: f64,
@@ -99,11 +102,14 @@ impl PnlLabel {
 ///
 /// Uses bullish color for buy/long, bearish for sell/short.
 ///
-/// ```ignore
-/// SideLabel::buy().show(ui);    // "BUY" in green
-/// SideLabel::sell().show(ui);   // "SELL" in red
-/// SideLabel::long().show(ui);   // "LONG" in green
-/// SideLabel::short().show(ui);  // "SHORT" in red
+/// ```
+/// # use egui_charts::ui_kit::trading_labels::SideLabel;
+/// # egui::__run_test_ui(|ui| {
+/// SideLabel::buy().show(ui);   // "BUY" in green
+/// SideLabel::sell().show(ui);  // "SELL" in red
+/// SideLabel::long().show(ui);  // "LONG" in green
+/// SideLabel::short().show(ui); // "SHORT" in red
+/// # });
 /// ```
 pub struct SideLabel {
     is_buy: bool,

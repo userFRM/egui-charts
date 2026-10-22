@@ -19,7 +19,7 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```rust
 //! use egui_charts::ext::{UiExt, ContextExt, ResponseExt, HasDesignTokens};
 //!
 //! fn my_widget(ui: &mut egui::Ui) {

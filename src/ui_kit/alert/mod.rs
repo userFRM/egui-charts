@@ -4,9 +4,10 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use open_trading_charts::ui_kit::alert::{Alert, AlertKind};
+//! ```
+//! use egui_charts::ui_kit::alert::Alert;
 //!
+//! # egui::__run_test_ui(|ui| {
 //! // Simple alert
 //! Alert::info("This is an informational message").show(ui);
 //!
@@ -19,6 +20,7 @@
 //! Alert::warning("Your session will expire soon")
 //!     .dismissible(true)
 //!     .show(ui);
+//! # });
 //! ```
 
 use egui::{Color32, Response, RichText, Ui, Vec2};

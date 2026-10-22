@@ -4,8 +4,8 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use egui_charts::ui_kit::ext::WidgetExt;
+//! ```
+//! use egui_charts::ext::ButtonWidgetExt;
 //!
 //! let button = egui::Button::new("Save")
 //!     .fill_width()

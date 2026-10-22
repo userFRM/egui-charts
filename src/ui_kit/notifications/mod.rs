@@ -7,21 +7,24 @@
 //! Each chart instance owns its own [`Toasts`] queue, so notifications never
 //! leak across independent widgets sharing one process.
 //!
-//! ```ignore
-//! use open_trading_charts::ui_kit::notifications::{NotificationPanel, NotificationPosition, Toasts};
+//! ```
+//! use egui_charts::ui_kit::notifications::{NotificationPanel, NotificationPosition, Toasts};
 //!
 //! // In your state
 //! struct MyState {
 //!     toasts: Toasts,
 //! }
+//! # let mut state = MyState { toasts: Toasts::new() };
 //!
 //! // Add a toast
 //! state.toasts.success("Operation completed!");
 //!
 //! // Show notifications each frame
+//! # egui::__run_test_ctx(|ctx| {
 //! NotificationPanel::new()
 //!     .position(NotificationPosition::TopRight)
 //!     .show_with_toasts(ctx, &mut state.toasts);
+//! # });
 //! ```
 
 mod panel;

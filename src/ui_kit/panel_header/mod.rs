@@ -1,10 +1,13 @@
 //! Panel header component — heading + right-aligned actions + separator.
 //!
 //! Extracts the universal panel header boilerplate:
-//! ```ignore
+//! ```
+//! # use egui_charts::ui_kit::PanelHeader;
+//! # egui::__run_test_ui(|ui| {
 //! PanelHeader::new("Watchlist").show(ui, |ui| {
 //!     if ui.button("+").on_hover_text("Add Symbol").clicked() { /* ... */ }
 //! });
+//! # });
 //! ```
 
 use egui::{Align, Layout, Response, RichText, Ui};

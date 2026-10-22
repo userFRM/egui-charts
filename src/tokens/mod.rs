@@ -29,7 +29,7 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```rust
 //! use egui_charts::tokens::DESIGN_TOKENS;
 //!
 //! // Spacing

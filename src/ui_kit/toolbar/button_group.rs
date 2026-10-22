@@ -9,13 +9,16 @@ use crate::tokens::DESIGN_TOKENS;
 /// A group of toolbar buttons with optional separator
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// # use egui_charts::ui_kit::toolbar::ButtonGroup;
+/// # egui::__run_test_ui(|ui| {
 /// ButtonGroup::new()
 ///     .separator_after()
 ///     .show(ui, |ui| {
 ///         ui.button("Action 1");
 ///         ui.button("Action 2");
 ///     });
+/// # });
 /// ```
 pub struct ButtonGroup {
     separator_after: bool,
@@ -89,7 +92,9 @@ impl ToolbarLayout {
     /// in right-to-left layout at the end.
     ///
     /// # Example
-    /// ```ignore
+    /// ```
+    /// # use egui_charts::ui_kit::toolbar::ToolbarLayout;
+    /// # egui::__run_test_ui(|ui| {
     /// ToolbarLayout::left_right(ui,
     ///     |ui| {
     ///         ui.button("Left 1");
@@ -99,6 +104,7 @@ impl ToolbarLayout {
     ///         ui.button("Right 1");
     ///     },
     /// );
+    /// # });
     /// ```
     pub fn left_right<L, R>(
         ui: &mut Ui,

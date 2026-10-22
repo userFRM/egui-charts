@@ -5,13 +5,14 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use egui_charts::theme::context::ThemeExt;
+//! ```
+//! use egui_charts::theme::context::ThemeUiExt;
 //!
 //! fn my_widget(ui: &mut egui::Ui) {
-//!     let bg = ui.theme_ui().panel_bg;
-//!     let chart_bg = ui.theme_chart().bg;
+//!     let bg = ui.theme_panel_bg();
+//!     let chart_bg = ui.theme_chart_bg();
 //! }
+//! # egui::__run_test_ui(|ui| my_widget(ui));
 //! ```
 
 use egui::{Color32, Context, Ui};

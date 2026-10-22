@@ -12,10 +12,13 @@ use crate::tokens::DESIGN_TOKENS;
 ///
 /// # Example
 ///
-/// ```ignore
-/// use crate::icons::icons;
+/// ```
+/// # use egui_charts::icons::icons;
+/// # use egui_charts::ui_kit::list_item::{LabelContent, ListItem};
+/// # egui::__run_test_ui(|ui| {
 /// ListItem::new()
 ///     .show(ui, LabelContent::new("Hello World").with_icon(&icons::SETTINGS));
+/// # });
 /// ```
 pub struct LabelContent<'a> {
     text: String,

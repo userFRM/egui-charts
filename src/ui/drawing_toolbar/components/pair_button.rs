@@ -45,7 +45,10 @@ pub enum ArrowDirection {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// # use egui_charts::icons::icons;
+/// # use egui_charts::ui::drawing_toolbar::PairButton;
+/// # egui::__run_test_ui(|ui| {
 /// let btn = PairButton {
 ///     icon: &icons::ERASER,
 ///     tooltip: "Cross cursor",
@@ -53,13 +56,14 @@ pub enum ArrowDirection {
 ///     is_icon_active: false,
 ///     is_expanded: false,
 /// };
-/// let response = btn.show(&mut ui, 48.0, 48.0, 28.0, 10.0);
+/// let response = btn.show(ui, 48.0, 48.0, 28.0, 10.0);
 /// if response.icon_clicked {
 ///     // Handle icon click
 /// }
 /// if response.arrow_clicked {
 ///     // Handle arrow click (expand submenu)
 /// }
+/// # });
 /// ```
 pub struct PairButton<'a> {
     /// Icon to display

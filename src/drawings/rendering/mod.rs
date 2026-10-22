@@ -32,14 +32,22 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```
 //! use egui_charts::drawings::{Drawing, DrawingToolType};
 //! use egui_charts::drawings::rendering::ChartView;
 //!
+//! # fn example(
+//! #     painter: &egui::Painter,
+//! #     price_rect: egui::Rect,
+//! #     bars: &[egui_charts::model::Bar],
+//! #     bar_to_x: impl Fn(f32) -> f32,
+//! #     price_to_y: impl Fn(f64) -> f32,
+//! # ) {
 //! let drawing = Drawing::new(1, DrawingToolType::TrendLine);
 //! // After setting up points and calling update_screen_coords:
-//! let view = ChartView { bars: &bars, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
-//! drawing.render(&painter, price_rect, &view);
+//! let view = ChartView { bars, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
+//! drawing.render(painter, price_rect, &view);
+//! # }
 //! ```
 
 mod annotations;

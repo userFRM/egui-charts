@@ -80,7 +80,7 @@
 //!
 //! # Quick start
 //!
-//! ```ignore
+//! ```
 //! use egui_charts::drawings::{
 //!     Drawing, DrawingToolType, DrawingManager, ChartPoint,
 //!     LineStyle, ArrowStyle, FibonacciConfig,

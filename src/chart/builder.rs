@@ -6,10 +6,11 @@
 //!
 //! # Quick Start
 //!
-//! ```rust,ignore
+//! ```rust
 //! use egui_charts::ChartBuilder;
 //! use egui_charts::model::Timeframe;
 //!
+//! # fn example(my_data_source: impl egui_charts::DataSource + 'static, ui: &mut egui::Ui) {
 //! // Full-featured chart with drawing tools and indicators
 //! let mut chart = ChartBuilder::extended()
 //!     .with_symbol("BTCUSDT")
@@ -20,6 +21,7 @@
 //! // In your egui update loop:
 //! chart.update();   // polls data source, handles progressive loading
 //! chart.show(ui);   // renders the chart widget
+//! # }
 //! ```
 //!
 //! # Builder Variants
@@ -53,12 +55,14 @@ use log;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
-/// use egui_charts::{ChartBuilder, Timeframe, ChartType, Theme};
+/// ```rust
+/// use egui_charts::{ChartBuilder, ChartType};
+/// use egui_charts::model::Timeframe;
+/// use egui_charts::theme::Theme;
 ///
 /// let chart = ChartBuilder::new()
 ///     .with_symbol("ETHUSDT")
-///     .with_timeframe(Timeframe::H1)
+///     .with_timeframe(Timeframe::Hour1)
 ///     .with_theme(Theme::dark())
 ///     .with_chart_type(ChartType::Candles)
 ///     .with_visible_candles(120)
@@ -612,10 +616,12 @@ impl Default for ChartBuilder {
 /// source and handle progressive loading.  Then call [`show`](Self::show) to paint
 /// the chart into an egui `Ui`.
 ///
-/// ```rust,ignore
+/// ```rust
+/// # fn frame(trading_chart: &mut egui_charts::TradingChart, ui: &mut egui::Ui) {
 /// // In your egui app's update function:
 /// trading_chart.update();
 /// trading_chart.show(ui);
+/// # }
 /// ```
 pub struct TradingChart {
     /// The underlying chart widget that handles rendering and state.

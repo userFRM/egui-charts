@@ -6,11 +6,14 @@
 //!
 //! # Builder Pattern
 //!
-//! ```rust,ignore
+//! ```rust
+//! # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! # let bar_data = egui_charts::model::BarData::from_bars(bars.clone());
+//! use egui_charts::config::ChartOptions;
 //! use egui_charts::widget::Chart;
-//! use egui_charts::model::BarData;
 //!
-//! let chart = Chart::new(data)
+//! # let options = ChartOptions::default();
+//! let chart = Chart::new(bar_data)
 //!     .visible_bars(120)
 //!     .start_idx(0)
 //!     .with_chart_options(options);
@@ -18,11 +21,17 @@
 //!
 //! # Persistent Chart (Recommended for Real-Time)
 //!
-//! ```rust,ignore
+//! ```rust
+//! # use egui_charts::{ChartType, model::BarData, widget::Chart};
+//! # struct App { chart: Chart }
+//! # impl App {
+//! # fn on_frame(&mut self, new_data: BarData) {
 //! // Store in your app struct, update each frame:
 //! self.chart.update_data(new_data);
 //! self.chart.set_chart_type(ChartType::Candles);
 //! self.chart.enable_tracking_mode();
+//! # }
+//! # }
 //! ```
 
 use crate::chart::cursor_modes::CursorModeState;
@@ -45,12 +54,6 @@ impl Chart {
     /// # Arguments
     ///
     /// * `data` -- The OHLCV bar data to display
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let chart = Chart::new(bar_data);
-    /// ```
     pub fn new(data: BarData) -> Self {
         let chart_options = ChartOptions::default();
         let mut state = ChartState::new(data);

@@ -16,16 +16,21 @@ use egui::{Rect, Response, Sense, Stroke, Ui, Vec2, vec2};
 ///
 /// # Example
 ///
-/// ```ignore
-/// use crate::icons::icons;
-/// let response = SplitButton::new(&icons::LINES)
+/// ```
+/// use egui_charts::icons::icons;
+/// use egui_charts::ui_kit::buttons::SplitButton;
+///
+/// # egui::__run_test_ui(|ui| {
+/// # let is_submenu_open = false;
+/// let response = SplitButton::new(&icons::TREND_LINE)
 ///     .tooltip("Trend Lines")
 ///     .expanded(is_submenu_open)
 ///     .show(ui);
 ///
 /// if response.clicked() {
-///     toggle_submenu();
+///     // toggle the submenu
 /// }
+/// # });
 /// ```
 pub struct SplitButton {
     icon: &'static Icon,

@@ -32,12 +32,15 @@ pub enum Orientation {
 /// Desktop-only: No scrolling or mobile adaptations.
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// # use egui_charts::ui_kit::ResponsiveToolbar;
+/// # egui::__run_test_ui(|ui| {
 /// ResponsiveToolbar::horizontal("my_toolbar")
 ///     .height(48.0)
 ///     .show(ui, |ui, ctx| {
 ///         // Render toolbar contents
 ///     });
+/// # });
 /// ```
 pub struct ResponsiveToolbar {
     /// Unique toolbar ID, scoping the contents' egui state so multiple toolbars

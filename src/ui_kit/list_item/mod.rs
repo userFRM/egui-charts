@@ -10,9 +10,13 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use open_trading_charts::ui_kit::list_item::{ListItem, LabelContent, PropertyContent, ButtonContent};
+//! ```
+//! use egui::Color32;
+//! use egui_charts::icons::icons;
+//! use egui_charts::ui_kit::list_item::{ButtonContent, LabelContent, ListItem, PropertyContent};
 //!
+//! # egui::__run_test_ui(|ui| {
+//! # let is_selected = false;
 //! // Simple label
 //! let response = ListItem::new()
 //!     .selected(is_selected)
@@ -29,11 +33,12 @@
 //!
 //! // Action button
 //! if ListItem::new()
-//!     .show(ui, ButtonContent::new(&icons::ADD, "Add Item").primary())
+//!     .show(ui, ButtonContent::new(&icons::PLUS, "Add Item").primary())
 //!     .clicked()
 //! {
-//!     self.add_item();
+//!     // add the item
 //! }
+//! # });
 //! ```
 
 mod button_content;
@@ -160,12 +165,17 @@ impl ListItem {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// # use egui_charts::ui_kit::list_item::{ListItem, simple_list};
+/// # egui::__run_test_ui(|ui| {
+/// let items = ["AAPL", "MSFT", "NVDA"];
+/// let mut selected = None;
 /// simple_list(ui, &items, &mut selected, |ui, item, selected| {
 ///     ListItem::new()
 ///         .selected(selected)
-///         .show_text(ui, &item.name)
+///         .show_text(ui, *item)
 /// });
+/// # });
 /// ```
 pub fn simple_list<T, F>(ui: &mut Ui, items: &[T], selected: &mut Option<usize>, mut show_item: F)
 where

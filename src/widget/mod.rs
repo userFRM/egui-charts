@@ -8,25 +8,34 @@
 //!
 //! # Quick Start
 //!
-//! ```rust,ignore
-//! use egui_charts::widget::Chart;
+//! ```rust
+//! # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! # let bar_data = egui_charts::model::BarData::from_bars(bars.clone());
 //! use egui_charts::model::BarData;
+//! use egui_charts::widget::Chart;
 //!
 //! // Create chart with OHLCV data
 //! let mut chart = Chart::new(bar_data);
 //!
 //! // Show the chart in your egui update loop
+//! # egui::__run_test_ctx(|ctx| {
 //! egui::CentralPanel::default().show(ctx, |ui| {
 //!     chart.show(ui);
 //! });
+//! # });
 //! ```
 //!
 //! # Builder Pattern
 //!
 //! Configure the chart before showing it:
 //!
-//! ```rust,ignore
-//! let mut chart = Chart::new(data)
+//! ```rust
+//! # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! # let bar_data = egui_charts::model::BarData::from_bars(bars.clone());
+//! # use egui_charts::{config::{ChartConfig, ChartOptions}, widget::Chart};
+//! # let my_chart_config = ChartConfig::default();
+//! # let opts = ChartOptions::default();
+//! let mut chart = Chart::new(bar_data)
 //!     .visible_bars(100)          // Show 100 bars at a time
 //!     .config(my_chart_config)    // Custom visual config
 //!     .with_chart_options(opts);  // Scroll/zoom behavior
@@ -36,33 +45,41 @@
 //!
 //! For live data feeds, reuse the chart instance across frames:
 //!
-//! ```rust,ignore
+//! ```rust
+//! # use egui_charts::{model::BarData, widget::Chart};
 //! // In your app struct:
 //! struct MyApp {
 //!     chart: Chart,
 //! }
 //!
-//! // On new data:
-//! let auto_scrolled = self.chart.update_data(new_bar_data);
-//! self.chart.show(ui);
+//! impl MyApp {
+//!     fn on_new_data(&mut self, new_bar_data: BarData, ui: &mut egui::Ui) {
+//!         let auto_scrolled = self.chart.update_data(new_bar_data);
+//!         self.chart.show(ui);
+//!     }
+//! }
 //! ```
 //!
 //! # Drawing Tools and Indicators
 //!
-//! ```rust,ignore
+//! ```rust
+//! # use egui_charts::{drawings::DrawingManager, studies::IndicatorRegistry, widget::Chart};
+//! # fn example(chart: &mut Chart, ui: &mut egui::Ui, drawing_manager: &mut DrawingManager, indicator_registry: &IndicatorRegistry) {
 //! // With drawing tools and indicators:
 //! chart.show_with_indicators(
 //!     ui,
-//!     Some(&mut drawing_manager),
-//!     Some(&indicator_registry),
+//!     Some(drawing_manager),
+//!     Some(indicator_registry),
 //! );
+//! # }
 //! ```
 //!
 //! # Multi-Chart Sync
 //!
 //! Synchronize crosshairs and time scales between multiple charts:
 //!
-//! ```rust,ignore
+//! ```rust
+//! # fn example(chart_a: &egui_charts::Chart, chart_b: &mut egui_charts::Chart) {
 //! // Emit crosshair position from chart A
 //! let hover_idx = chart_a.get_hover_bar_idx();
 //!
@@ -72,6 +89,7 @@
 //! // Sync time scales
 //! let (spacing, offset) = chart_a.get_time_scale_state();
 //! chart_b.apply_synced_time_scale(spacing, offset);
+//! # }
 //! ```
 //!
 //! # Sub-modules
@@ -120,16 +138,20 @@ pub use state::{BoxZoomMode, BoxZoomState, ElasticBounceState, KineticScrollStat
 /// Use [`Chart::new`] or [`Chart::with_config`] to construct, then call
 /// [`Chart::show`] each frame to render:
 ///
-/// ```rust,ignore
-/// use egui_charts::widget::Chart;
+/// ```rust
+/// # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+/// # let bar_data = egui_charts::model::BarData::from_bars(bars.clone());
 /// use egui_charts::model::BarData;
+/// use egui_charts::widget::Chart;
 ///
 /// let mut chart = Chart::new(bar_data);
 ///
+/// # egui::__run_test_ctx(|ctx| {
 /// egui::CentralPanel::default().show(ctx, |ui| {
 ///     let response = chart.show(ui);
 ///     // response can be used for additional interaction handling
 /// });
+/// # });
 /// ```
 ///
 /// # Supported Chart Types

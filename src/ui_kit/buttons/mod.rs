@@ -10,11 +10,14 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```
+//! use egui_charts::icons::icons;
 //! use egui_charts::ui_kit::buttons::IconButton;
 //!
+//! # egui::__run_test_ui(|ui| {
+//! # let is_selected = false;
 //! // Simple icon button
-//! let response = IconButton::new(icon)
+//! let response = IconButton::new(&icons::TREND_LINE)
 //!     .tooltip("Trend Line (Alt+T)")
 //!     .selected(is_selected)
 //!     .show(ui);
@@ -22,6 +25,7 @@
 //! if response.clicked() {
 //!     // handle click
 //! }
+//! # });
 //! ```
 
 mod button;
@@ -97,15 +101,18 @@ fn finish(response: Response, selected: bool, label: &str, tooltip: Option<&str>
 ///
 /// # Example
 ///
-/// ```ignore
-/// use crate::ui_kit::buttons::dialog_close_button;
+/// ```
+/// use egui_charts::tokens::DESIGN_TOKENS;
+/// use egui_charts::ui_kit::buttons::dialog_close_button;
 ///
+/// # egui::__run_test_ui(|ui| {
 /// ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 ///     ui.add_space(DESIGN_TOKENS.spacing.sm);
 ///     if dialog_close_button(ui).clicked() {
 ///         // close the dialog
 ///     }
 /// });
+/// # });
 /// ```
 pub fn dialog_close_button(ui: &mut Ui) -> Response {
     IconButton::new(&crate::icons::icons::CLOSE)

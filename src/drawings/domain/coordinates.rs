@@ -10,7 +10,7 @@
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use egui_charts::drawings::ChartPoint;
 ///
 /// let point = ChartPoint::new(100.0, 150.50);

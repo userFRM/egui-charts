@@ -6,7 +6,9 @@
 //!
 //! Access via `DESIGN_TOKENS.sizing.*`, e.g.:
 //!
-//! ```rust,ignore
+//! ```rust
+//! use egui_charts::tokens::DESIGN_TOKENS;
+//!
 //! let btn_h = DESIGN_TOKENS.sizing.button_md;
 //! let toolbar_h = DESIGN_TOKENS.sizing.toolbar.top_height;
 //! let chart_pad = DESIGN_TOKENS.sizing.chart.padding;

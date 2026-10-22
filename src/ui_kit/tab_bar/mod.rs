@@ -4,14 +4,28 @@
 //! an accent-colored underline on the active tab. Used across all tabbed dialogs.
 //!
 //! # Example
-//! ```ignore
-//! use crate::ui_kit::tab_bar::{TabBar, TabLabel};
+//! ```
+//! use egui_charts::ui_kit::tab_bar::{TabBar, TabLabel};
 //!
-//! impl TabLabel for MyTab {
-//!     fn tab_label(&self) -> &str { self.display_name() }
+//! #[derive(Clone, Copy, PartialEq)]
+//! enum MyTab {
+//!     Chart,
+//!     Orders,
 //! }
 //!
-//! TabBar::new(MyTab::all(), &mut self.active_tab).show(ui);
+//! impl TabLabel for MyTab {
+//!     fn tab_label(&self) -> &str {
+//!         match self {
+//!             MyTab::Chart => "Chart",
+//!             MyTab::Orders => "Orders",
+//!         }
+//!     }
+//! }
+//!
+//! # egui::__run_test_ui(|ui| {
+//! # let mut active_tab = MyTab::Chart;
+//! TabBar::new(&[MyTab::Chart, MyTab::Orders], &mut active_tab).show(ui);
+//! # });
 //! ```
 
 use crate::styles::typography;

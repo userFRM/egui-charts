@@ -14,15 +14,18 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use egui_charts::ui_kit::icons::{icons, Icon};
+//! ```
+//! use egui::Vec2;
+//! use egui_charts::ext::UiExt;
+//! use egui_charts::icons::icons;
 //!
-//! // Use pre-defined icons
+//! # egui::__run_test_ui(|ui| {
+//! // Use a pre-defined icon directly
 //! ui.add(icons::SETTINGS.as_image(Vec2::splat(20.0)));
 //!
-//! // Or use the UiExt trait
-//! use egui_charts::ui_kit::UiExt;
+//! // Or through the UiExt helpers
 //! ui.medium_icon(&icons::SETTINGS);
+//! # });
 //! ```
 
 mod icon;
@@ -31,12 +34,15 @@ pub use icon::Icon;
 
 /// Macro to embed an SVG icon at compile time.
 ///
-/// The path is relative to the `assets/icons/` directory at the workspace root.
+/// The path is relative to the `assets/icons/` directory of the crate that invokes the macro.
 ///
 /// # Example
 ///
-/// ```ignore
-/// const MY_ICON: Icon = icon_from_path!("custom/my-icon.svg");
+/// ```
+/// use egui_charts::icon_from_path;
+/// use egui_charts::icons::Icon;
+///
+/// const ERASER: Icon = icon_from_path!("lines/eraser.svg");
 /// ```
 #[macro_export]
 macro_rules! icon_from_path {

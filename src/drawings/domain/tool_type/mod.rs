@@ -48,7 +48,8 @@ pub use interaction_mode::DrawingInteractionMode;
 /// `DrawingToolType` implements [`FromStr`](std::str::FromStr) with flexible
 /// case-insensitive matching, including common abbreviations:
 ///
-/// ```ignore
+/// ```
+/// # use egui_charts::drawings::DrawingToolType;
 /// let tool: DrawingToolType = "fib".parse().unwrap();
 /// assert_eq!(tool, DrawingToolType::FibonacciRetracement);
 /// ```

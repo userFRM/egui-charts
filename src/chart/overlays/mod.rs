@@ -6,9 +6,10 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use egui_charts::chart::overlays::{OrderLineOverlay, OrderLine, OrderSide, HeatmapStrip};
+//! ```
+//! use egui_charts::chart::overlays::{HeatmapStrip, OrderLine, OrderLineOverlay, OrderSide};
 //!
+//! # fn example(ui: &mut egui::Ui, chart_rect: egui::Rect, strip_rect: egui::Rect, price_to_y: impl Fn(f64) -> f32, deltas: &[f64], volumes: &[f64], visible_range: (usize, usize), bar_width: f32) {
 //! // Create order lines
 //! let mut orders = OrderLineOverlay::new();
 //! orders.add_line(OrderLine::entry("order1", 100.0, OrderSide::Buy, 1.0, "BUY LMT"));
@@ -21,6 +22,7 @@
 //! let mut heatmap = HeatmapStrip::new();
 //! heatmap.set_data(deltas.iter().enumerate().map(|(i, d)| (i, *d, volumes[i])));
 //! heatmap.render(ui, strip_rect, visible_range, bar_width);
+//! # }
 //! ```
 
 mod heatmap_strip;

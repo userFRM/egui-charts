@@ -7,7 +7,7 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use egui_charts::ext::HasDesignTokens;
 //!
 //! fn render_overlay(ui: &mut egui::Ui) {

@@ -26,7 +26,7 @@ All notable changes to this project are documented in this file. The format is b
 - `apply_to_egui` sets `error_fg_color` and `warn_fg_color` from the theme, so error text no longer uses egui's default pure red, and the status colours (success, warning, error, info) are defined per theme with at least 4.5:1 on its panels.
 - Hover and pressed fills in the light theme are visible against white (1.2:1 and 1.3:1, from 1.1:1), and the accent hover and pressed shades and the danger button reds keep white text at 4.5:1 or better.
 - The crate builds warning-free on current stable Rust: float literals that relied on the deprecated `f32` inference fallback are now explicitly typed.
-- The documentation examples for the `ui` module use the current crate name and module paths, and they compile and run as doctests.
+- The documentation examples across the crate use the current crate name and module paths, and they compile and run as doctests with all features; none are skipped. The `icon_from_path!` documentation now says its path is relative to the `assets/icons/` directory of the crate that invokes the macro.
 - Order line labels are shortened by rendered width with an ellipsis instead of by byte count, so labels with multi-byte characters no longer panic.
 - Cloning a `CustomIndicator` or `CustomTimeFormatter` now keeps its closure instead of replacing it with an empty or default one. Migration: `CustomIndicator::new` takes the closure directly (`CustomIndicator::new(name, |bars| ...)` instead of `Box::new(...)`), and the closure must be `Sync`.
 - The indicator dialog's Momentum entry creates a new `Momentum` study (the close minus the close n bars earlier, in price units) instead of Rate of Change; `Momentum` is also registered in the indicator factory.

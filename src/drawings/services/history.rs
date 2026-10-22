@@ -10,22 +10,31 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```
+//! use egui_charts::drawings::services::HistoryService;
+//! use egui_charts::drawings::{Drawing, DrawingToolType};
+//!
+//! let mut drawings = Vec::new();
 //! let mut history = HistoryService::new();
 //!
 //! // After creating a drawing
-//! history.push_add(drawing.clone());
+//! let drawing = Drawing::new(1, DrawingToolType::TrendLine);
+//! drawings.push(drawing.clone());
+//! history.push_add(drawing);
 //!
-//! // After modifying a drawing
-//! history.push_modify(id, old_state);
+//! // Undo removes it again, redo restores it
+//! assert_eq!(history.undo(&mut drawings), Some(1));
+//! assert!(drawings.is_empty());
+//! assert_eq!(history.redo(&mut drawings), Some(1));
+//! assert_eq!(drawings.len(), 1);
+//!
+//! // Before modifying a drawing, record its old state
+//! history.push_modify(1, drawings[0].clone());
 //!
 //! // After deleting a drawing
-//! history.push_delete(drawing);
-//!
-//! // Undo/redo
-//! if history.can_undo() {
-//!     history.undo(&mut drawings, &mut selection);
-//! }
+//! let removed = drawings.remove(0);
+//! history.push_delete(removed);
+//! assert!(history.can_undo());
 //! ```
 
 use crate::drawings::Drawing;

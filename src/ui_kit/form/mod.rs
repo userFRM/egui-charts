@@ -4,14 +4,23 @@
 //! label column and a right-aligned widget column.
 //!
 //! # Example
-//! ```ignore
+//! ```
+//! # use egui_charts::theme::ThemePreset;
+//! # use egui_charts::ui_kit::form::FormRow;
+//! # egui::__run_test_ui(|ui| {
+//! # let mut current = ThemePreset::Classic;
 //! FormRow::new("Theme")
 //!     .description("Color scheme for the application")
 //!     .show(ui, |ui| {
-//!         ComboBox::from_id_salt("theme")
+//!         egui::ComboBox::from_id_salt("theme")
 //!             .selected_text(current.display_name())
-//!             .show_ui(ui, |ui| { ... });
+//!             .show_ui(ui, |ui| {
+//!                 for preset in ThemePreset::all() {
+//!                     ui.selectable_value(&mut current, *preset, preset.display_name());
+//!                 }
+//!             });
 //!     });
+//! # });
 //! ```
 
 pub mod grid;

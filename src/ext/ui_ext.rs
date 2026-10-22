@@ -146,8 +146,15 @@ pub trait UiExt {
     /// Replaces the 11-line `ComboBox::from_id_salt → .show_ui → for … selectable_value` pattern.
     /// Returns `true` if the value changed.
     ///
-    /// ```ignore
-    /// ui.combo_select("theme", &mut settings.theme, ThemePreset::all().copied(), |t| t.display_name().to_string());
+    /// ```
+    /// # use egui_charts::ext::UiExt;
+    /// # use egui_charts::theme::ThemePreset;
+    /// # egui::__run_test_ui(|ui| {
+    /// # let mut theme = ThemePreset::Classic;
+    /// let changed = ui.combo_select("theme", &mut theme, ThemePreset::all().iter().copied(), |t| {
+    ///     t.display_name().to_string()
+    /// });
+    /// # });
     /// ```
     fn combo_select<T: PartialEq + Clone>(
         &mut self,
@@ -169,8 +176,12 @@ pub trait UiExt {
 
     /// Combo box for selecting a `String` value from `&str` options.
     ///
-    /// ```ignore
-    /// ui.combo_str_select("condition", &mut form.condition, &["Crossing", "Greater Than", "Less Than"]);
+    /// ```
+    /// # use egui_charts::ext::UiExt;
+    /// # egui::__run_test_ui(|ui| {
+    /// # let mut condition = String::from("Crossing");
+    /// let changed = ui.combo_str_select("condition", &mut condition, &["Crossing", "Greater Than", "Less Than"]);
+    /// # });
     /// ```
     fn combo_str_select(
         &mut self,

@@ -1,7 +1,10 @@
 //! Loading indicator component — spinner with optional message.
 //!
-//! ```ignore
+//! ```
+//! # use egui_charts::ui_kit::LoadingIndicator;
+//! # egui::__run_test_ui(|ui| {
 //! LoadingIndicator::new().message("Loading templates...").show(ui);
+//! # });
 //! ```
 
 use egui::{RichText, Ui};

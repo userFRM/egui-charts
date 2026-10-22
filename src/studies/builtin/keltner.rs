@@ -14,8 +14,9 @@
 //! - Channel squeeze (narrow bands): Low volatility, potential breakout
 //!
 //! # Example
-//! ```ignore
-//! use egui_charts::KeltnerChannels;
+//! ```
+//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::studies::{KeltnerChannels, Indicator};
 //!
 //! let mut keltner = KeltnerChannels::new(20, 10, 2.0);
 //! keltner.calculate(&bars);

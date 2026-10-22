@@ -11,8 +11,9 @@
 //! %R = (Highest High - Close) / (Highest High - Lowest Low) * -100
 //!
 //! # Example
-//! ```ignore
-//! use egui_charts::WilliamsR;
+//! ```
+//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::studies::{WilliamsR, Indicator};
 //!
 //! let mut williams = WilliamsR::new(14);
 //! williams.calculate(&bars);

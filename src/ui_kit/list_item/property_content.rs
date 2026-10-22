@@ -8,10 +8,14 @@ use super::content::{ContentContext, ListItemContent};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// # use egui::Color32;
+/// # use egui_charts::ui_kit::list_item::{ListItem, PropertyContent};
+/// # egui::__run_test_ui(|ui| {
 /// ListItem::new()
 ///     .show(ui, PropertyContent::new("Price", "$1,234.56")
 ///         .value_color(Color32::GREEN));
+/// # });
 /// ```
 pub struct PropertyContent {
     label: String,

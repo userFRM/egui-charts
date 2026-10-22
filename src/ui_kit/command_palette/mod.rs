@@ -4,9 +4,9 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use open_trading_charts::ui_kit::command_palette::{Command, CommandPaletteHandler};
+//! ```
 //! use egui::{Key, KeyboardShortcut, Modifiers};
+//! use egui_charts::ui_kit::command_palette::{Command, CommandPaletteHandler};
 //!
 //! // Create a handler with commands
 //! let mut handler = CommandPaletteHandler::new(vec![
@@ -20,14 +20,16 @@
 //! ]);
 //!
 //! // In your update loop
+//! # egui::__run_test_ctx(|ctx| {
 //! if let Some(command_id) = handler.update(ctx) {
 //!     match command_id.as_str() {
-//!         "new_chart" => create_new_chart(),
-//!         "settings" => open_settings(),
-//!         "add_indicator" => show_indicator_dialog(),
+//!         "new_chart" => { /* create a new chart */ }
+//!         "settings" => { /* open settings */ }
+//!         "add_indicator" => { /* show the indicator dialog */ }
 //!         _ => {}
 //!     }
 //! }
+//! # });
 //! ```
 
 mod command;
