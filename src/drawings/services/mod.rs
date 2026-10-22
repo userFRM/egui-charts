@@ -1,7 +1,7 @@
 //! Business logic services for the drawing system.
 //!
 //! Each service encapsulates a single concern and can be used independently or
-//! composed via [`DrawingManager`](crate::drawings::DrawingManager). This
+//! composed via [`DrawingManager`]. This
 //! decomposition makes the code testable in isolation and allows custom
 //! integrations to pick only the services they need.
 //!

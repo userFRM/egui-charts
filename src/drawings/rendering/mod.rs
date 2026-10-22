@@ -2,7 +2,7 @@
 //!
 //! This module implements `Drawing::render()` and `Drawing::render_original()`,
 //! which dispatch to category-specific rendering methods based on
-//! [`DrawingToolType`](crate::drawings::DrawingToolType). Each category is
+//! [`DrawingToolType`]. Each category is
 //! implemented in its own sub-module as `impl Drawing` blocks that add private
 //! render methods (e.g., `render_trend_line`, `render_fibonacci`, etc.).
 //!
