@@ -26,6 +26,7 @@ All notable changes to this project are documented in this file. The format is b
 - The forecast drawing shows the predicted change over its bar span and resolves to success once a bar reaches the target by the target bar, or to failure once the target bar has closed without that.
 - The bars pattern projection draws shifted copies of the selected bars.
 - The chart watermark falls back to the chart symbol and is hidden when there is none, instead of showing a placeholder.
+- Zooming the price axis in by hand stops at a span of one millionth of the price level instead of narrowing to a few nanounits, and repeated zooming out can no longer overflow the price range to infinite or NaN bounds.
 
 ### Changed
 
