@@ -7,6 +7,7 @@
 //! the volume profile, regression trend and position drawings
 //! ([`VolumeProfileConfig`], [`RegressionTrendConfig`], [`PositionSize`]).
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ops::RangeInclusive;
 
@@ -37,7 +38,7 @@ pub enum HandlePos {
 }
 
 /// Line style for drawing strokes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 pub enum LineStyle {
     #[default]
     Solid,
@@ -64,7 +65,7 @@ impl LineStyle {
 }
 
 /// Arrow/arrowhead style for line drawings
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 pub enum ArrowStyle {
     /// No arrowhead
     None,
@@ -114,7 +115,7 @@ impl ArrowStyle {
 }
 
 /// Font weight for text annotations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 pub enum FontWeight {
     #[default]
     Normal,
@@ -124,12 +125,21 @@ pub enum FontWeight {
 /// Per-timeframe visibility configuration
 ///
 /// Allows drawings to be visible only on specific timeframes.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TimeframeVisibility {
     /// If true, show on all timeframes (default behavior)
     pub show_on_all: bool,
     /// Set of timeframe strings where this drawing is visible
+    #[serde(serialize_with = "serialize_sorted")]
     pub visible_timeframes: HashSet<String>,
+}
+
+/// Writes the set sorted, so saving the same drawings gives the same file.
+fn serialize_sorted<S: serde::Serializer>(
+    set: &HashSet<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(set.iter().collect::<std::collections::BTreeSet<_>>())
 }
 
 impl TimeframeVisibility {
@@ -213,7 +223,7 @@ impl Default for DrawingOptions {
 }
 
 /// Configuration for a single Fibonacci level
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FibonacciLevel {
     /// The ratio value (e.g., 0.236, 0.382, 0.618)
     pub value: f32,
@@ -243,7 +253,7 @@ impl FibonacciLevel {
 }
 
 /// Configuration for all Fibonacci levels in a drawing
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FibonacciConfig {
     /// Individual level configurations
     pub levels: Vec<FibonacciLevel>,
@@ -309,10 +319,26 @@ impl FibonacciConfig {
 }
 
 /// Settings of the fixed range and anchored volume profile drawings.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "VolumeProfileFields")]
 pub struct VolumeProfileConfig {
     rows: usize,
     value_area: f64,
+}
+
+/// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
+#[derive(Deserialize)]
+struct VolumeProfileFields {
+    rows: usize,
+    value_area: f64,
+}
+
+impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
+    type Error = &'static str;
+
+    fn try_from(fields: VolumeProfileFields) -> Result<Self, Self::Error> {
+        Self::new(fields.rows, fields.value_area).ok_or("volume profile settings out of bounds")
+    }
 }
 
 impl VolumeProfileConfig {
@@ -349,9 +375,24 @@ impl Default for VolumeProfileConfig {
 }
 
 /// Settings of the regression trend drawing.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "RegressionTrendFields")]
 pub struct RegressionTrendConfig {
     deviations: f64,
+}
+
+/// Stored settings of a regression trend, checked by [`RegressionTrendConfig::new`] on load.
+#[derive(Deserialize)]
+struct RegressionTrendFields {
+    deviations: f64,
+}
+
+impl TryFrom<RegressionTrendFields> for RegressionTrendConfig {
+    type Error = &'static str;
+
+    fn try_from(fields: RegressionTrendFields) -> Result<Self, Self::Error> {
+        Self::new(fields.deviations).ok_or("regression trend settings out of bounds")
+    }
 }
 
 impl RegressionTrendConfig {
@@ -375,7 +416,7 @@ impl Default for RegressionTrendConfig {
 }
 
 /// How a long or short position drawing sizes its quantity.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PositionSize {
     /// A fixed quantity.
     Quantity(f64),

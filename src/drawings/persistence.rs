@@ -1,46 +1,42 @@
 //! Drawing persistence -- JSON serialization and storage.
 //!
 //! This module provides types for serializing drawings to and from JSON. The key
-//! design decision is that coordinates are stored as `(timestamp, price)` pairs
-//! (`StoredCoord`) rather than screen pixel positions, so drawings survive
-//! chart pan/zoom and resolution changes.
+//! design decision is that anchors are stored as `(timestamp, price)` pairs
+//! (`StoredCoord`) rather than bar indices or screen positions, so drawings
+//! survive pan/zoom, resolution changes and history being prepended.
 //!
 //! # Conversion flow
 //!
 //! ```text
-//! Drawing (in-memory)                StoredDrawing (serializable)
-//! ─────────────────                  ────────────────────────────
-//! points: Vec<Pos2>   ──────────►   points: Vec<StoredCoord>
-//! (screen pixels)      drawing_to_stored()  (timestamp + price)
+//! Drawing (in-memory)                    StoredDrawing (serializable)
+//! ─────────────────                      ────────────────────────────
+//! chart_points: Vec<ChartPoint> ──────►  points: Vec<StoredCoord>
+//! (bar index + price)  drawing_to_stored()  (timestamp + price)
+//! tool type and settings        ──────►  drawing: Drawing
 //!
-//! points: Vec<Pos2>   ◄──────────   points: Vec<StoredCoord>
-//! (screen pixels)      stored_to_drawing()  (timestamp + price)
+//! chart_points: Vec<ChartPoint> ◄──────  points: Vec<StoredCoord>
+//!                      stored_to_drawing()
 //! ```
+//!
+//! Screen points are not stored: [`Drawing::update_screen_coords`] rebuilds
+//! them from the anchors on the next frame.
 //!
 //! # Storage format
 //!
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
-//! includes a version number for forward-compatible migration, metadata, and an
-//! optional timeframe filter.
-//!
-//! # Limitations
-//!
-//! Saving and restoring drawings does not work end to end yet:
-//! `stored_to_drawing()` fills the screen `points` but not `chart_points`, so a
-//! restored drawing is cleared on the next frame; tool types are stored by
-//! display name and some names do not parse back; and nothing in the crate
-//! calls either conversion.
+//! includes a format version, metadata, and an optional timeframe filter.
+//! Loading migrates version 1 files, rejects versions it does not know and
+//! skips any drawing it cannot read
+//! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
-use crate::drawings::{Drawing, DrawingToolType};
-use egui::Color32;
+use crate::drawings::{ChartPoint, Drawing};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// A coordinate stored as a `(timestamp, price)` pair for persistence.
 ///
-/// Unlike screen-space coordinates ([`Pos2`](egui::Pos2)), these values are
-/// independent of chart pan/zoom and resolution, making them suitable for
-/// long-term storage and cross-device synchronization.
+/// Unlike screen-space coordinates ([`Pos2`](egui::Pos2)) and bar indices,
+/// these values are independent of chart pan/zoom and of the loaded history,
+/// making them suitable for long-term storage and cross-device synchronization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredCoord {
     /// Timestamp in Unix epoch milliseconds.
@@ -54,106 +50,22 @@ impl StoredCoord {
     pub fn new(ts_ms: i64, price: f64) -> Self {
         Self { ts_ms, price }
     }
-
-    /// Creates a stored coordinate by converting screen-space `(x, y)` to
-    /// `(timestamp, price)` using the provided conversion closures.
-    pub fn from_screen<F, G>(x: f64, y: f64, x_to_time: F, y_to_price: G) -> Self
-    where
-        F: Fn(f64) -> i64,
-        G: Fn(f64) -> f64,
-    {
-        Self {
-            ts_ms: x_to_time(x),
-            price: y_to_price(y),
-        }
-    }
-
-    /// Converts this stored coordinate back to screen-space `(x, y)` using the
-    /// provided conversion closures.
-    pub fn to_screen<F, G>(&self, time_to_x: F, price_to_y: G) -> (f64, f64)
-    where
-        F: Fn(i64) -> f64,
-        G: Fn(f64) -> f64,
-    {
-        (time_to_x(self.ts_ms), price_to_y(self.price))
-    }
-}
-
-/// A serializable RGBA color.
-///
-/// Converts to/from [`Color32`] and `[u8; 4]` via `From` implementations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredColor {
-    /// Red channel (0--255).
-    pub r: u8,
-    /// Green channel (0--255).
-    pub g: u8,
-    /// Blue channel (0--255).
-    pub b: u8,
-    /// Alpha channel (0--255, where 255 is fully opaque).
-    pub a: u8,
-}
-
-impl From<Color32> for StoredColor {
-    fn from(color: Color32) -> Self {
-        Self {
-            r: color.r(),
-            g: color.g(),
-            b: color.b(),
-            a: color.a(),
-        }
-    }
-}
-
-impl From<[u8; 4]> for StoredColor {
-    fn from(color: [u8; 4]) -> Self {
-        Self {
-            r: color[0],
-            g: color[1],
-            b: color[2],
-            a: color[3],
-        }
-    }
-}
-
-impl From<StoredColor> for Color32 {
-    fn from(color: StoredColor) -> Self {
-        Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a)
-    }
-}
-
-impl From<StoredColor> for [u8; 4] {
-    fn from(color: StoredColor) -> Self {
-        [color.r, color.g, color.b, color.a]
-    }
 }
 
 /// A fully serializable representation of a drawing with all its properties.
 ///
-/// This is the storage/wire format for drawings. It uses string-based tool type
-/// names and `(timestamp, price)` coordinates rather than the in-memory
-/// [`Drawing`] type which uses enum variants and screen pixels. Convert between
-/// the two with [`drawing_to_stored`] and [`stored_to_drawing`].
+/// This is the storage/wire format for drawings: the anchors as
+/// `(timestamp, price)` coordinates and the [`Drawing`] itself for the tool
+/// type and every setting. Convert between the two with [`drawing_to_stored`]
+/// and [`stored_to_drawing`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredDrawing {
     /// Unique identifier (string for backend compatibility).
     pub id: String,
-    /// Drawing tool type as a string (e.g., `"Trend Line"`, `"Fib Retracement"`).
-    pub tool_type: String,
     /// Anchor points in `(timestamp, price)` coordinates.
     pub points: Vec<StoredCoord>,
-    /// Line/stroke color.
-    pub color: StoredColor,
-    /// Line/stroke width in pixels.
-    pub line_width: f32,
-    /// Whether the drawing is selected
-    pub selected: bool,
-    /// Whether the drawing is locked
-    pub locked: bool,
-    /// Whether the drawing is visible
-    pub visible: bool,
-    /// Custom properties (tool-specific)
-    pub properties: HashMap<String, StoredValue>,
+    /// Tool type and settings; its id, points and completion state are not stored.
+    pub drawing: Drawing,
     /// Creation ts
     pub created_at: i64,
     /// Last modified ts
@@ -162,31 +74,14 @@ pub struct StoredDrawing {
     pub notes: Option<String>,
 }
 
-/// Generic stored value for custom properties
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum StoredValue {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    String(String),
-    Array(Vec<StoredValue>),
-}
-
 impl StoredDrawing {
-    /// Create a new stored drawing
-    pub fn new(id: impl Into<String>, tool_type: impl Into<String>) -> Self {
+    /// Create a new stored drawing without anchor points
+    pub fn new(id: impl Into<String>, drawing: Drawing) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         Self {
             id: id.into(),
-            tool_type: tool_type.into(),
             points: Vec::new(),
-            color: StoredColor::from(Color32::WHITE),
-            line_width: 1.0,
-            selected: false,
-            locked: false,
-            visible: true,
-            properties: HashMap::new(),
+            drawing,
             created_at: now,
             modified_at: now,
             notes: None,
@@ -198,23 +93,15 @@ impl StoredDrawing {
         self.points.push(point);
         self.modified_at = chrono::Utc::now().timestamp_millis();
     }
-
-    /// Set a custom property
-    pub fn set_property(&mut self, key: impl Into<String>, value: StoredValue) {
-        self.properties.insert(key.into(), value);
-        self.modified_at = chrono::Utc::now().timestamp_millis();
-    }
-
-    /// Get a custom property
-    pub fn get_property(&self, key: &str) -> Option<&StoredValue> {
-        self.properties.get(key)
-    }
 }
 
 /// Drawing storage for saving/loading drawings
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// It is read only through [`Self::from_json`], which checks the version,
+/// migrates older files and loads each drawing on its own.
+#[derive(Debug, Clone, Serialize)]
 pub struct DrawingStorage {
-    /// Version for migration support
+    /// Format version, [`Self::CURRENT_VERSION`] once loaded
     pub version: u32,
     /// Symbol this storage is for
     pub symbol: String,
@@ -250,7 +137,7 @@ impl Default for StorageMetadata {
 
 impl DrawingStorage {
     /// Current storage format version
-    pub const CURRENT_VERSION: u32 = 1;
+    pub const CURRENT_VERSION: u32 = 2;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -307,18 +194,59 @@ impl DrawingStorage {
         serde_json::to_string_pretty(self)
     }
 
-    /// Deserialize from JSON
-    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        let mut storage: Self = serde_json::from_str(json)?;
-        // Handle version migrations if needed
-        storage.migrate();
-        Ok(storage)
-    }
-
-    /// Migrate from older versions if needed
-    fn migrate(&mut self) {
-        // Future: add migration logic when version changes
-        self.version = Self::CURRENT_VERSION;
+    /// Deserialize from JSON, migrating version 1 to the current format.
+    ///
+    /// Fails as a whole on invalid JSON, on a version this release does not
+    /// know and on a missing or invalid symbol, timeframe or metadata. A
+    /// drawing that cannot be read (a missing field, a `null` written for a
+    /// non-finite number, a tool type from a newer release or a setting out of
+    /// bounds) is left out and returned as a [`SkippedDrawing`], so one bad
+    /// drawing does not lose the others. Saving the returned storage writes
+    /// only the drawings that loaded; keep the original file if the skipped
+    /// ones must be recovered.
+    pub fn from_json(json: &str) -> Result<(Self, Vec<SkippedDrawing>), serde_json::Error> {
+        #[derive(Deserialize)]
+        struct Version {
+            version: u32,
+        }
+        #[derive(Deserialize)]
+        struct Container {
+            symbol: String,
+            timeframe: Option<String>,
+            drawings: Vec<serde_json::Value>,
+            metadata: StorageMetadata,
+        }
+        let load: fn(serde_json::Value) -> Result<StoredDrawing, serde_json::Error> =
+            match serde_json::from_str::<Version>(json)?.version {
+                1 => v1::load,
+                Self::CURRENT_VERSION => serde_json::from_value,
+                version => {
+                    return Err(serde::de::Error::custom(format!(
+                        "unsupported drawing storage version {version}, expected 1 to {}",
+                        Self::CURRENT_VERSION
+                    )));
+                }
+            };
+        let container: Container = serde_json::from_str(json)?;
+        let mut skipped = Vec::new();
+        let drawings = container
+            .drawings
+            .into_iter()
+            .filter_map(|value| {
+                let id = value.get("id").and_then(|id| id.as_str()).map(String::from);
+                load(value)
+                    .map_err(|error| skipped.push(SkippedDrawing { id, error }))
+                    .ok()
+            })
+            .collect();
+        let storage = Self {
+            version: Self::CURRENT_VERSION,
+            symbol: container.symbol,
+            timeframe: container.timeframe,
+            drawings,
+            metadata: container.metadata,
+        };
+        Ok((storage, skipped))
     }
 
     /// Clear all drawings
@@ -328,136 +256,329 @@ impl DrawingStorage {
     }
 }
 
-/// Convert a Drawing to StoredDrawing
-pub fn drawing_to_stored<F, G>(drawing: &Drawing, x_to_time: F, y_to_price: G) -> StoredDrawing
-where
-    F: Fn(f64) -> i64,
-    G: Fn(f64) -> f64,
-{
-    let mut stored = StoredDrawing::new(drawing.id.to_string(), drawing.tool_type.as_str());
+/// A drawing [`DrawingStorage::from_json`] left out because it could not be read.
+#[derive(Debug)]
+pub struct SkippedDrawing {
+    /// The stored id, or `None` if the entry has no id or a non-string one.
+    pub id: Option<String>,
+    /// Why the drawing could not be read.
+    pub error: serde_json::Error,
+}
 
-    for point in &drawing.points {
-        stored.add_point(StoredCoord::from_screen(
-            point.x as f64,
-            point.y as f64,
-            &x_to_time,
-            &y_to_price,
-        ));
+/// The version 1 format, read only to migrate it: the tool by display name,
+/// the colour, width, lock, visibility and text, and nothing else.
+mod v1 {
+    use super::StoredCoord;
+    use crate::drawings::{Drawing, DrawingToolType};
+    use serde::Deserialize;
+    use serde::de::Error;
+    use std::collections::HashMap;
+
+    #[derive(Deserialize)]
+    struct StoredDrawing {
+        id: String,
+        tool_type: String,
+        points: Vec<StoredCoord>,
+        color: Color,
+        line_width: f32,
+        locked: bool,
+        visible: bool,
+        properties: HashMap<String, serde_json::Value>,
+        created_at: i64,
+        modified_at: i64,
+        notes: Option<String>,
     }
 
-    stored.color = drawing.color.into();
-    stored.line_width = drawing.stroke_width;
-
-    // Store tool-specific properties
-    match drawing.tool_type {
-        DrawingToolType::FibonacciRetracement => {
-            stored.set_property("show_levels", StoredValue::Bool(true));
-        }
-        DrawingToolType::Measure => {
-            stored.set_property("show_measurement", StoredValue::Bool(true));
-        }
-        _ => {}
+    #[derive(Deserialize)]
+    struct Color {
+        r: u8,
+        g: u8,
+        b: u8,
+        a: u8,
     }
 
-    // Store text for text labels
-    if let Some(ref text) = drawing.text {
-        stored.set_property("text", StoredValue::String(text.clone()));
+    /// Reads one version 1 drawing as a current one.
+    pub(super) fn load(
+        value: serde_json::Value,
+    ) -> Result<super::StoredDrawing, serde_json::Error> {
+        let stored: StoredDrawing = serde_json::from_value(value)?;
+        // Cursors share display names with drawing tools ("Arrow") and are never stored.
+        // The previous loader also accepted the names `FromStr` parses, such as "trendline".
+        let tool_type = DrawingToolType::all()
+            .iter()
+            .find(|tool| !tool.is_cursor() && tool.as_str() == stored.tool_type)
+            .copied()
+            .or_else(|| {
+                stored
+                    .tool_type
+                    .parse()
+                    .ok()
+                    .filter(|tool: &DrawingToolType| !tool.is_cursor())
+            })
+            .ok_or_else(|| {
+                serde_json::Error::custom(format!("unknown drawing tool {:?}", stored.tool_type))
+            })?;
+        let Color { r, g, b, a } = stored.color;
+        let mut drawing = Drawing::new(0, tool_type);
+        drawing.color = [r, g, b, a];
+        drawing.stroke_width = stored.line_width;
+        drawing.locked = stored.locked;
+        drawing.visible = stored.visible;
+        drawing.text = stored
+            .properties
+            .get("text")
+            .and_then(|text| text.as_str())
+            .map(String::from);
+        Ok(super::StoredDrawing {
+            id: stored.id,
+            points: stored.points,
+            drawing,
+            created_at: stored.created_at,
+            modified_at: stored.modified_at,
+            notes: stored.notes,
+        })
     }
+}
 
+/// Convert a Drawing to StoredDrawing, its anchors mapped from bar index to timestamp.
+///
+/// `bar_to_time` must accept fractional bar indices and extrapolate by the bar
+/// interval before index 0 and after the last bar instead of clamping: anchors
+/// can sit between bars, in the history not yet loaded or in the future area,
+/// and a clamping mapping would move them onto the first or last bar. It must
+/// be the inverse of the `time_to_bar` passed to [`stored_to_drawing`].
+pub fn drawing_to_stored(drawing: &Drawing, bar_to_time: impl Fn(f32) -> i64) -> StoredDrawing {
+    let mut settings = drawing.clone();
+    settings.points.clear();
+    settings.chart_points.clear();
+    let mut stored = StoredDrawing::new(drawing.id.to_string(), settings);
+    stored.points = drawing
+        .chart_points
+        .iter()
+        .map(|p| StoredCoord::new(bar_to_time(p.bar_idx), p.price))
+        .collect();
     stored
 }
 
-/// Convert StoredDrawing back to Drawing
-pub fn stored_to_drawing<F, G>(
+/// Convert StoredDrawing back to a completed Drawing, its anchors mapped from
+/// timestamp to bar index; the screen points follow on the next
+/// [`Drawing::update_screen_coords`].
+///
+/// `time_to_bar` must be the inverse of the `bar_to_time` passed to
+/// [`drawing_to_stored`]: it returns fractional bar indices and extrapolates
+/// before the first and after the last bar instead of clamping, or anchors
+/// outside the loaded bars collapse onto the edge bar.
+pub fn stored_to_drawing(
     stored: &StoredDrawing,
-    time_to_x: F,
-    price_to_y: G,
+    time_to_bar: impl Fn(i64) -> f32,
     next_id: usize,
-) -> Option<Drawing>
-where
-    F: Fn(i64) -> f64,
-    G: Fn(f64) -> f64,
-{
-    let tool_type = stored.tool_type.parse::<DrawingToolType>().ok()?;
-
-    let points: Vec<egui::Pos2> = stored
+) -> Drawing {
+    let mut drawing = stored.drawing.clone();
+    drawing.id = next_id;
+    drawing.chart_points = stored
         .points
         .iter()
-        .map(|p| {
-            let (x, y) = p.to_screen(&time_to_x, &price_to_y);
-            egui::Pos2::new(x as f32, y as f32)
-        })
+        .map(|p| ChartPoint::new(time_to_bar(p.ts_ms), p.price))
         .collect();
-
-    let mut drawing = Drawing::new(next_id, tool_type);
-    drawing.points = points;
-    drawing.color = stored.color.clone().into();
-    drawing.stroke_width = stored.line_width;
     drawing.completed = true;
-
-    // Restore text for text labels
-    if let Some(StoredValue::String(text)) = stored.get_property("text") {
-        drawing.text = Some(text.clone());
-    }
-
-    Some(drawing)
+    drawing
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawings::*;
 
-    #[test]
-    fn test_stored_coord() {
-        let coord = StoredCoord::new(1704067200000, 100.50);
-        assert_eq!(coord.ts_ms, 1704067200000);
-        assert!((coord.price - 100.50).abs() < 0.01);
+    const T0: i64 = 1_704_067_200_000;
+
+    fn bar_to_time(bar: f32) -> i64 {
+        T0 + (bar * 60_000.0) as i64
+    }
+
+    fn time_to_bar(ts_ms: i64) -> f32 {
+        (ts_ms - T0) as f32 / 60_000.0
+    }
+
+    fn bar_to_x(bar: f32) -> f32 {
+        100.0 + bar * 8.0
+    }
+
+    fn price_to_y(price: f64) -> f32 {
+        (500.0 - price * 2.0) as f32
+    }
+
+    fn restore(stored: &StoredDrawing, id: usize) -> Drawing {
+        let mut drawing = stored_to_drawing(stored, time_to_bar, id);
+        drawing.update_screen_coords(bar_to_x, price_to_y);
+        drawing
+    }
+
+    /// Every stored setting differs from `Drawing::new`, so a dropped field
+    /// shows up as a difference.
+    fn non_default_drawing(tool: DrawingToolType) -> Drawing {
+        let mut d = Drawing::new(7, tool);
+        d.chart_points = vec![
+            ChartPoint::new(3.0, 101.25),
+            ChartPoint::new(10.5, 99.5),
+            ChartPoint::new(-2.0, 120.0),
+        ];
+        d.update_screen_coords(bar_to_x, price_to_y);
+        d.color = [1, 2, 3, 4];
+        d.stroke_width = 3.5;
+        d.completed = true;
+        d.text = Some("note".into());
+        d.line_style = LineStyle::Dotted;
+        d.fill_color = Some([5, 6, 7, 8]);
+        d.locked = true;
+        d.visible = false;
+        d.font_size = 18.0;
+        d.font_weight = FontWeight::Bold;
+        d.extend_left = true;
+        d.extend_right = true;
+        d.arrow_start_style = ArrowStyle::Diamond;
+        d.arrow_end_style = ArrowStyle::Circle;
+        d.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+        d.position_size = Some(PositionSize::RiskPercent {
+            account_size: 25_000.0,
+            percent: 1.5,
+        });
+        d.fib_config = Some(FibonacciConfig {
+            levels: vec![FibonacciLevel {
+                value: 1.618,
+                label: "golden".into(),
+                color: [9, 10, 11, 12],
+                visible: false,
+                show_price: false,
+            }],
+            show_background: true,
+            background_opacity: 77,
+            extend_left: true,
+            extend_right: true,
+            reverse: true,
+        });
+        d.volume_profile = VolumeProfileConfig::new(50, 0.68);
+        d.regression_trend = RegressionTrendConfig::new(1.5);
+        d.z_order = -3;
+        d
     }
 
     #[test]
-    fn test_stored_color_conversion() {
-        let color = Color32::from_rgb(255, 128, 64);
-        let stored: StoredColor = color.into();
-        let back: Color32 = stored.into();
-        assert_eq!(color, back);
+    fn every_tool_round_trips_with_all_settings() {
+        for &tool in DrawingToolType::all() {
+            let drawing = non_default_drawing(tool);
+            let mut storage = DrawingStorage::new("AAPL");
+            storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
+            let (loaded, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+            let back = restore(&loaded.drawings()[0], drawing.id);
+            assert_eq!(format!("{back:?}"), format!("{drawing:?}"), "{tool:?}");
+        }
     }
 
+    /// The version 1 fixture was written by the previous release and the
+    /// version 2 fixture by this format's first implementation; they stand for
+    /// files already saved, so do not rewrite them.
     #[test]
-    fn test_drawing_storage() {
+    fn from_json_reads_saved_files_and_skips_the_drawings_it_cannot_read() {
+        let v1_json = include_str!("fixtures/storage_v1.json");
+        let (v1, skipped) = DrawingStorage::from_json(v1_json).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(v1.version, DrawingStorage::CURRENT_VERSION);
+        assert_eq!(v1.timeframe.as_deref(), Some("1h"));
+        let tools = [
+            (DrawingToolType::TrendLine, None),
+            (DrawingToolType::FibonacciRetracement, None),
+            (DrawingToolType::ElliottImpulse, None),
+            (DrawingToolType::Arrow, None),
+            (DrawingToolType::TextLabel, Some("breakout")),
+        ];
+        assert_eq!(v1.drawings().len(), tools.len());
+        for (stored, (tool, text)) in v1.drawings().iter().zip(tools) {
+            let mut want = Drawing::with_color(1, tool, [33, 150, 243, 255]);
+            want.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 110.0)];
+            want.update_screen_coords(bar_to_x, price_to_y);
+            want.stroke_width = 3.0;
+            want.completed = true;
+            want.text = text.map(String::from);
+            // The fixture's Arrow is the one drawing saved locked and hidden.
+            want.locked = tool == DrawingToolType::Arrow;
+            want.visible = tool != DrawingToolType::Arrow;
+            assert_eq!(format!("{:?}", restore(stored, 1)), format!("{want:?}"));
+        }
+
+        let (v2, skipped) =
+            DrawingStorage::from_json(include_str!("fixtures/storage_v2.json")).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let tools = [
+            DrawingToolType::TrendLine,
+            DrawingToolType::LongPos,
+            DrawingToolType::FixedRangeVolumeProfile,
+        ];
+        assert_eq!(v2.drawings().len(), tools.len());
+        for (stored, tool) in v2.drawings().iter().zip(tools) {
+            let want = non_default_drawing(tool);
+            assert_eq!(
+                format!("{:?}", restore(stored, want.id)),
+                format!("{want:?}")
+            );
+        }
+
+        let mut first = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+        first.volume_profile = VolumeProfileConfig::new(24, 0.7);
         let mut storage = DrawingStorage::new("AAPL");
+        storage.add_drawing(drawing_to_stored(&first, bar_to_time));
+        let second = Drawing::new(2, DrawingToolType::TrendLine);
+        storage.add_drawing(drawing_to_stored(&second, bar_to_time));
+        let current = storage.to_json().unwrap();
+        let unreadable_first_drawing = [
+            (
+                current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": null", 1),
+                "invalid type: null",
+                &["2"][..],
+            ),
+            (
+                current.replacen("\"rows\": 24", "\"rows\": 0", 1),
+                "volume profile settings out of bounds",
+                &["2"],
+            ),
+            (
+                current.replace("FixedRangeVolumeProfile", "NewerTool"),
+                "unknown variant `NewerTool`",
+                &["2"],
+            ),
+            (
+                // "fib retracement" is a name the previous loader also accepted.
+                v1_json.replacen("Trend Line", "Newer Tool", 1).replacen(
+                    "Fib Retracement",
+                    "fib retracement",
+                    1,
+                ),
+                "unknown drawing tool \"Newer Tool\"",
+                &["2", "3", "4", "5"],
+            ),
+        ];
+        for (json, error, loaded) in unreadable_first_drawing {
+            let (storage, skipped) = DrawingStorage::from_json(&json).unwrap();
+            let ids: Vec<_> = storage.drawings().iter().map(|d| d.id.as_str()).collect();
+            assert_eq!(ids, loaded);
+            assert_eq!(skipped.len(), 1);
+            assert_eq!(skipped[0].id.as_deref(), Some("1"));
+            assert!(skipped[0].error.to_string().contains(error), "{skipped:?}");
+        }
 
-        let mut drawing = StoredDrawing::new("1", "TrendLine");
-        drawing.add_point(StoredCoord::new(1704067200000, 100.0));
-        drawing.add_point(StoredCoord::new(1704153600000, 110.0));
-
-        storage.add_drawing(drawing);
-
-        assert_eq!(storage.drawings().len(), 1);
-        assert!(storage.get_drawing("1").is_some());
-    }
-
-    #[test]
-    fn test_json_serialization() {
-        let mut storage = DrawingStorage::new("AAPL");
-
-        let mut drawing = StoredDrawing::new("1", "TrendLine");
-        drawing.add_point(StoredCoord::new(1704067200000, 100.0));
-        drawing.set_property("extended", StoredValue::Bool(true));
-
-        storage.add_drawing(drawing);
-
-        let json = storage.to_json().unwrap();
-        let loaded = DrawingStorage::from_json(&json).unwrap();
-
-        assert_eq!(loaded.symbol, "AAPL");
-        assert_eq!(loaded.drawings().len(), 1);
+        let got = DrawingStorage::from_json(&current.replace("\"version\": 2", "\"version\": 3"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            got.contains("unsupported drawing storage version 3"),
+            "{got}"
+        );
     }
 
     #[test]
     fn test_remove_drawing() {
         let mut storage = DrawingStorage::new("AAPL");
-        storage.add_drawing(StoredDrawing::new("1", "TrendLine"));
-        storage.add_drawing(StoredDrawing::new("2", "HorizontalLine"));
+        storage.add_drawing(StoredDrawing::new("1", Drawing::default()));
+        storage.add_drawing(StoredDrawing::new("2", Drawing::default()));
 
         assert!(storage.remove_drawing("1"));
         assert_eq!(storage.drawings().len(), 1);

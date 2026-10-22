@@ -1,0 +1,273 @@
+{
+  "version": 2,
+  "symbol": "AAPL",
+  "timeframe": "1h",
+  "drawings": [
+    {
+      "id": "7",
+      "points": [
+        {
+          "ts_ms": 1704067380000,
+          "price": 101.25
+        },
+        {
+          "ts_ms": 1704067830000,
+          "price": 99.5
+        },
+        {
+          "ts_ms": 1704067080000,
+          "price": 120.0
+        }
+      ],
+      "drawing": {
+        "tool_type": "TrendLine",
+        "color": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "stroke_width": 3.5,
+        "text": "note",
+        "line_style": "Dotted",
+        "fill_color": [
+          5,
+          6,
+          7,
+          8
+        ],
+        "locked": true,
+        "visible": false,
+        "font_size": 18.0,
+        "font_weight": "Bold",
+        "extend_left": true,
+        "extend_right": true,
+        "arrow_start_style": "Diamond",
+        "arrow_end_style": "Circle",
+        "timeframe_visibility": {
+          "show_on_all": false,
+          "visible_timeframes": [
+            "1h"
+          ]
+        },
+        "position_size": {
+          "RiskPercent": {
+            "account_size": 25000.0,
+            "percent": 1.5
+          }
+        },
+        "fib_config": {
+          "levels": [
+            {
+              "value": 1.618,
+              "label": "golden",
+              "color": [
+                9,
+                10,
+                11,
+                12
+              ],
+              "visible": false,
+              "show_price": false
+            }
+          ],
+          "show_background": true,
+          "background_opacity": 77,
+          "extend_left": true,
+          "extend_right": true,
+          "reverse": true
+        },
+        "volume_profile": {
+          "rows": 50,
+          "value_area": 0.68
+        },
+        "regression_trend": {
+          "deviations": 1.5
+        },
+        "z_order": -3
+      },
+      "created_at": 1792653662110,
+      "modified_at": 1792653662110,
+      "notes": null
+    },
+    {
+      "id": "7",
+      "points": [
+        {
+          "ts_ms": 1704067380000,
+          "price": 101.25
+        },
+        {
+          "ts_ms": 1704067830000,
+          "price": 99.5
+        },
+        {
+          "ts_ms": 1704067080000,
+          "price": 120.0
+        }
+      ],
+      "drawing": {
+        "tool_type": "LongPos",
+        "color": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "stroke_width": 3.5,
+        "text": "note",
+        "line_style": "Dotted",
+        "fill_color": [
+          5,
+          6,
+          7,
+          8
+        ],
+        "locked": true,
+        "visible": false,
+        "font_size": 18.0,
+        "font_weight": "Bold",
+        "extend_left": true,
+        "extend_right": true,
+        "arrow_start_style": "Diamond",
+        "arrow_end_style": "Circle",
+        "timeframe_visibility": {
+          "show_on_all": false,
+          "visible_timeframes": [
+            "1h"
+          ]
+        },
+        "position_size": {
+          "RiskPercent": {
+            "account_size": 25000.0,
+            "percent": 1.5
+          }
+        },
+        "fib_config": {
+          "levels": [
+            {
+              "value": 1.618,
+              "label": "golden",
+              "color": [
+                9,
+                10,
+                11,
+                12
+              ],
+              "visible": false,
+              "show_price": false
+            }
+          ],
+          "show_background": true,
+          "background_opacity": 77,
+          "extend_left": true,
+          "extend_right": true,
+          "reverse": true
+        },
+        "volume_profile": {
+          "rows": 50,
+          "value_area": 0.68
+        },
+        "regression_trend": {
+          "deviations": 1.5
+        },
+        "z_order": -3
+      },
+      "created_at": 1792653662110,
+      "modified_at": 1792653662110,
+      "notes": null
+    },
+    {
+      "id": "7",
+      "points": [
+        {
+          "ts_ms": 1704067380000,
+          "price": 101.25
+        },
+        {
+          "ts_ms": 1704067830000,
+          "price": 99.5
+        },
+        {
+          "ts_ms": 1704067080000,
+          "price": 120.0
+        }
+      ],
+      "drawing": {
+        "tool_type": "FixedRangeVolumeProfile",
+        "color": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "stroke_width": 3.5,
+        "text": "note",
+        "line_style": "Dotted",
+        "fill_color": [
+          5,
+          6,
+          7,
+          8
+        ],
+        "locked": true,
+        "visible": false,
+        "font_size": 18.0,
+        "font_weight": "Bold",
+        "extend_left": true,
+        "extend_right": true,
+        "arrow_start_style": "Diamond",
+        "arrow_end_style": "Circle",
+        "timeframe_visibility": {
+          "show_on_all": false,
+          "visible_timeframes": [
+            "1h"
+          ]
+        },
+        "position_size": {
+          "RiskPercent": {
+            "account_size": 25000.0,
+            "percent": 1.5
+          }
+        },
+        "fib_config": {
+          "levels": [
+            {
+              "value": 1.618,
+              "label": "golden",
+              "color": [
+                9,
+                10,
+                11,
+                12
+              ],
+              "visible": false,
+              "show_price": false
+            }
+          ],
+          "show_background": true,
+          "background_opacity": 77,
+          "extend_left": true,
+          "extend_right": true,
+          "reverse": true
+        },
+        "volume_profile": {
+          "rows": 50,
+          "value_area": 0.68
+        },
+        "regression_trend": {
+          "deviations": 1.5
+        },
+        "z_order": -3
+      },
+      "created_at": 1792653662110,
+      "modified_at": 1792653662110,
+      "notes": null
+    }
+  ],
+  "metadata": {
+    "created_at": 1792653662110,
+    "modified_at": 1792653662110,
+    "app_version": null
+  }
+}

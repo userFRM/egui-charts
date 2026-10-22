@@ -21,6 +21,8 @@ mod categories;
 mod display;
 mod interaction_mode;
 
+use serde::{Deserialize, Serialize};
+
 pub use interaction_mode::DrawingInteractionMode;
 
 /// Enumeration of all drawing tool types available in the charting engine.
@@ -53,7 +55,10 @@ pub use interaction_mode::DrawingInteractionMode;
 /// let tool: DrawingToolType = "fib".parse().unwrap();
 /// assert_eq!(tool, DrawingToolType::FibonacciRetracement);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Serde writes and reads the variant name (`"FibonacciRetracement"`), which
+/// stays stable when display names change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DrawingToolType {
     // ============ CURSORS (4 tools) ============
     /// Crosshair cursor overlay -- not a drawing, provides precision targeting.

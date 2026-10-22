@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "symbol": "AAPL",
+  "timeframe": "1h",
+  "drawings": [
+    {
+      "id": "1",
+      "tool_type": "Trend Line",
+      "points": [
+        {
+          "ts_ms": 1704067200000,
+          "price": 100.0
+        },
+        {
+          "ts_ms": 1704067800000,
+          "price": 110.0
+        }
+      ],
+      "color": {
+        "r": 33,
+        "g": 150,
+        "b": 243,
+        "a": 255
+      },
+      "line_width": 3.0,
+      "selected": false,
+      "locked": false,
+      "visible": true,
+      "properties": {},
+      "created_at": 1792650707668,
+      "modified_at": 1792650707668,
+      "notes": null
+    },
+    {
+      "id": "2",
+      "tool_type": "Fib Retracement",
+      "points": [
+        {
+          "ts_ms": 1704067200000,
+          "price": 100.0
+        },
+        {
+          "ts_ms": 1704067800000,
+          "price": 110.0
+        }
+      ],
+      "color": {
+        "r": 33,
+        "g": 150,
+        "b": 243,
+        "a": 255
+      },
+      "line_width": 3.0,
+      "selected": false,
+      "locked": false,
+      "visible": true,
+      "properties": {
+        "show_levels": true
+      },
+      "created_at": 1792650707668,
+      "modified_at": 1792650707668,
+      "notes": null
+    },
+    {
+      "id": "3",
+      "tool_type": "Elliott Impulse Wave (12345)",
+      "points": [
+        {
+          "ts_ms": 1704067200000,
+          "price": 100.0
+        },
+        {
+          "ts_ms": 1704067800000,
+          "price": 110.0
+        }
+      ],
+      "color": {
+        "r": 33,
+        "g": 150,
+        "b": 243,
+        "a": 255
+      },
+      "line_width": 3.0,
+      "selected": false,
+      "locked": false,
+      "visible": true,
+      "properties": {},
+      "created_at": 1792650707668,
+      "modified_at": 1792650707668,
+      "notes": null
+    },
+    {
+      "id": "4",
+      "tool_type": "Arrow",
+      "points": [
+        {
+          "ts_ms": 1704067200000,
+          "price": 100.0
+        },
+        {
+          "ts_ms": 1704067800000,
+          "price": 110.0
+        }
+      ],
+      "color": {
+        "r": 33,
+        "g": 150,
+        "b": 243,
+        "a": 255
+      },
+      "line_width": 3.0,
+      "selected": false,
+      "locked": true,
+      "visible": false,
+      "properties": {},
+      "created_at": 1792650707668,
+      "modified_at": 1792650707668,
+      "notes": null
+    },
+    {
+      "id": "5",
+      "tool_type": "Text",
+      "points": [
+        {
+          "ts_ms": 1704067200000,
+          "price": 100.0
+        },
+        {
+          "ts_ms": 1704067800000,
+          "price": 110.0
+        }
+      ],
+      "color": {
+        "r": 33,
+        "g": 150,
+        "b": 243,
+        "a": 255
+      },
+      "line_width": 3.0,
+      "selected": false,
+      "locked": false,
+      "visible": true,
+      "properties": {
+        "text": "breakout"
+      },
+      "created_at": 1792650707668,
+      "modified_at": 1792650707668,
+      "notes": null
+    }
+  ],
+  "metadata": {
+    "created_at": 1792650707668,
+    "modified_at": 1792650707668,
+    "app_version": null
+  }
+}

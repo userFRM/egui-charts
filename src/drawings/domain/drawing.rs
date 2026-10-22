@@ -12,6 +12,7 @@ use super::{
     ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, LineStyle, PositionSize,
     RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
+use serde::{Deserialize, Serialize};
 
 /// A drawing on the chart
 ///
@@ -28,21 +29,30 @@ use super::{
 /// drawing.color = [33, 150, 243, 255]; // Blue
 /// drawing.stroke_width = 2.0;
 /// ```
-#[derive(Debug, Clone)]
+///
+/// Serde covers the tool and its settings only: the id, the points and the
+/// completion state are left out, since the anchors are stored as
+/// timestamps by [`persistence`](crate::drawings::persistence). A field added
+/// later needs `#[serde(default)]`, so that saved version 2 files still load.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Drawing {
     /// Unique identifier for this drawing
+    #[serde(skip)]
     pub id: usize,
     /// Type of drawing tool
     pub tool_type: DrawingToolType,
     /// Screen coordinates (updated each frame from chart_points)
+    #[serde(skip)]
     pub points: Vec<egui::Pos2>,
     /// Persistent chart coordinates (bar_idx, price) - stable across pan/zoom
+    #[serde(skip)]
     pub chart_points: Vec<ChartPoint>,
     /// Drawing color as RGBA
     pub color: [u8; 4],
     /// Stroke width in pixels
     pub stroke_width: f32,
     /// Whether the drawing is complete
+    #[serde(skip)]
     pub completed: bool,
     /// Optional text content (for text labels, notes, etc.)
     pub text: Option<String>,

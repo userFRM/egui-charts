@@ -227,11 +227,10 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [x] Generic indexed handle fallback for all other tools (functional but basic)
 
 #### Persistence
-- [x] Serializable `DrawingStorage` types (id, tool type, points, color, line width, timestamps)
-- [ ] Restore does not work: `stored_to_drawing` leaves `chart_points` empty, so restored drawings vanish on the next frame; some tool types fail to parse back; nothing calls save or load
-- [x] Version field with migration stub
-- [ ] `FibonacciConfig` (custom levels) not serialized: user customizations lost on save/load
-- [ ] `line_style`, `fill_color`, `font_size`, `extend_left/right`, `arrow_styles`, `z_order` not serialized
+- [x] Serializable `DrawingStorage` types: anchors as timestamps, every tool type by a stable identifier, and every drawing setting
+- [x] Restored drawings keep their anchors across frames
+- [x] Format version 2 with a migration from version 1; unknown versions are rejected
+- [ ] Nothing in the chart calls save or load
 
 #### Properties Dialog
 - [x] Multi-tab dialog: Style, Text, Visibility, Coordinates
@@ -555,9 +554,6 @@ All ui_kit components are **fully implemented** generic building blocks:
 | Medium | Ichimoku cloud renders as lines, not filled regions | `chart/renderers/indicator.rs` |
 | Medium | Parabolic SAR renders as line, not dots | `chart/renderers/indicator.rs` |
 | Medium | 80+ drawing tools use point-proximity hit test only | `drawings/services/interaction.rs` |
-| Medium | Drawing styling properties not fully serialized | `drawings/persistence.rs` |
-| Medium | FibonacciConfig not serialized | `drawings/persistence.rs` |
-| Medium | Restored drawings vanish on the next frame | `drawings/persistence.rs` |
 | Medium | Magnet snapping never applied to drawings | `drawings/manager.rs` |
 | Medium | Rotated Rectangle renders as axis-aligned | `drawings/rendering/shapes.rs` |
 | Low | Double Curve uses sine offset, not bezier | `drawings/rendering/shapes.rs` |
