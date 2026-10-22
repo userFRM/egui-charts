@@ -109,7 +109,7 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
     let mut bars = Vec::with_capacity(count);
     let mut price = spec.start_price;
     let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-    let step_secs = timeframe.as_seconds().max(1);
+    let step_ms = timeframe.duration_ms();
 
     // Per-symbol salt so each instrument has its own price action.
     let salt = spec.seed.wrapping_mul(0x9E37_79B1);
@@ -148,7 +148,7 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
         let vol_spike = 1.0 + return_pct.abs() * 30.0;
         let volume = base_vol * vol_spike;
 
-        let time = base_time + chrono::Duration::seconds(step_secs * i as i64);
+        let time = base_time + chrono::Duration::milliseconds(step_ms * i as i64);
 
         bars.push(Bar {
             time,

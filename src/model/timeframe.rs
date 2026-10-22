@@ -185,21 +185,6 @@ impl Timeframe {
         matches!(self, Timeframe::Custom(_))
     }
 
-    /// Get the number of seconds for this timeframe
-    pub fn total_seconds(&self) -> u64 {
-        (self.duration_ms() / 1000).max(0) as u64
-    }
-
-    /// Convert timeframe to seconds (signed, for range calculations)
-    pub fn as_seconds(self) -> i64 {
-        self.total_seconds() as i64
-    }
-
-    /// Alias for `as_seconds` for backward compatibility
-    pub fn to_seconds(self) -> i64 {
-        self.as_seconds()
-    }
-
     /// Convert a resolution string to Timeframe
     pub fn from_resolution(resolution: &str) -> Option<Self> {
         match resolution {
@@ -396,13 +381,6 @@ mod tests {
         assert_eq!(custom(45).to_string(), "45s");
         assert_eq!(custom(180).to_string(), "3min");
         assert_eq!(custom(7200).to_string(), "2h");
-    }
-
-    #[test]
-    fn test_total_seconds() {
-        assert_eq!(Timeframe::Min1.total_seconds(), 60);
-        assert_eq!(Timeframe::Hour1.total_seconds(), 3600);
-        assert_eq!(custom(45).total_seconds(), 45);
     }
 
     #[test]
