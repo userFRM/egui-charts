@@ -55,7 +55,7 @@
 //! | **Widget** | [`widget`] | `Chart` egui widget, `ChartBuilder`, `TradingChart` |
 //! | **Extensions** | [`ext`] | `UiExt`, `ContextExt`, `ResponseExt`, `HasDesignTokens` |
 //! | **Icons** | [`icons`] | 160+ compile-time embedded SVG icons |
-//! | **App UI** | `ui`, `ui_kit`, `templates` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
+//! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
 //! | **Backtest** | `backtest` | *(feature `backtest`)* Strategy backtesting on historical data |
 //! | **Scripting** | `scripting` | *(feature `scripting`)* User-defined indicators and strategies |
 //!
@@ -151,15 +151,6 @@ pub mod ui_kit;
 /// `ui` feature to access this module.
 #[cfg(feature = "ui")]
 pub mod ui;
-
-/// Chart settings template management.
-///
-/// Provides `SettingsTemplate` and
-/// `TemplateManager` for persisting and
-/// restoring chart configurations. Requires the `ui` feature because it
-/// re-exports types from [`ui::model`].
-#[cfg(feature = "ui")]
-pub mod templates;
 
 // ─── Optional domain modules (feature-gated) ─────────────────────────────────
 

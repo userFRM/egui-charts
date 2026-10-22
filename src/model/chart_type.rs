@@ -11,7 +11,6 @@
 //! | Enum variant   | `Candles`           | Short form, matches Rust naming convention  |
 //! | Doc comments   | "candlestick"       | Full technical name (Japanese candlesticks) |
 //! | Heikin-Ashi    | Always hyphenated   | Enum variant stays `Heikin`                 |
-//! | SeriesType     | `Candles`           | Matches `ChartType::Candles`                |
 //!
 //! # Chart Types
 //! - Standard: Bars, Candles, Hollow Candles, Volume Candles
@@ -315,65 +314,6 @@ impl ChartType {
 impl fmt::Display for ChartType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
-    }
-}
-
-// === ChartStyle <-> ChartType Conversions ===
-
-use crate::model::enums::ChartStyle;
-
-/// Every TV `ChartStyle` maps to a domain `ChartType`.
-impl From<ChartStyle> for ChartType {
-    fn from(style: ChartStyle) -> Self {
-        match style {
-            ChartStyle::Bar => ChartType::Bars,
-            ChartStyle::Candle => ChartType::Candles,
-            ChartStyle::Line => ChartType::Line,
-            ChartStyle::Area => ChartType::Area,
-            ChartStyle::Renko => ChartType::Renko,
-            ChartStyle::Kagi => ChartType::Kagi,
-            ChartStyle::PnF => ChartType::PointAndFigure,
-            ChartStyle::LineBreak => ChartType::LineBreak,
-            ChartStyle::HeikinAshi => ChartType::Heikin,
-            ChartStyle::HollowCandle => ChartType::HollowCandles,
-            ChartStyle::Baseline => ChartType::Baseline,
-            ChartStyle::HighLow => ChartType::HighLow,
-            ChartStyle::Column => ChartType::Bars, // closest match
-            ChartStyle::LineWithMarkers => ChartType::LineWithMarkers,
-            ChartStyle::Stepline => ChartType::StepLine,
-            ChartStyle::HLCArea => ChartType::HlcArea,
-            ChartStyle::VolCandle => ChartType::VolumeCandles,
-            ChartStyle::HLCBars => ChartType::HighLow, // closest match
-        }
-    }
-}
-
-impl ChartType {
-    /// Convert to `ChartStyle`, if a mapping exists.
-    ///
-    /// Domain-only types (TimePriceOpportunity, Range)
-    /// have no wire-format equivalent and return `None`.
-    pub fn to_chart_style(&self) -> Option<ChartStyle> {
-        match self {
-            ChartType::Bars => Some(ChartStyle::Bar),
-            ChartType::Candles => Some(ChartStyle::Candle),
-            ChartType::HollowCandles => Some(ChartStyle::HollowCandle),
-            ChartType::VolumeCandles => Some(ChartStyle::VolCandle),
-            ChartType::Line => Some(ChartStyle::Line),
-            ChartType::LineWithMarkers => Some(ChartStyle::LineWithMarkers),
-            ChartType::StepLine => Some(ChartStyle::Stepline),
-            ChartType::Area => Some(ChartStyle::Area),
-            ChartType::HlcArea => Some(ChartStyle::HLCArea),
-            ChartType::Baseline => Some(ChartStyle::Baseline),
-            ChartType::HighLow => Some(ChartStyle::HighLow),
-            ChartType::Renko => Some(ChartStyle::Renko),
-            ChartType::Kagi => Some(ChartStyle::Kagi),
-            ChartType::LineBreak => Some(ChartStyle::LineBreak),
-            ChartType::Heikin => Some(ChartStyle::HeikinAshi),
-            ChartType::PointAndFigure => Some(ChartStyle::PnF),
-            // Domain-only types with no TV equivalent
-            ChartType::Range | ChartType::TimePriceOpportunity => None,
-        }
     }
 }
 

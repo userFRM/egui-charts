@@ -32,7 +32,7 @@
 //! |--------|---------|
 //! | [`builder`] | `ChartBuilder` (fluent API) and `TradingChart` (runtime wrapper) |
 //! | [`coords`] | Unified coordinate system — single source of truth for idx/price ↔ screen |
-//! | [`series`] | Series types (Line, Area, Baseline, Histogram, Bar) with hit testing and selection |
+//! | [`series`] | Series hit testing, selection and display settings |
 //! | [`overlays`] | Visual overlays — order lines, heatmap strips, volume bubbles |
 //!
 //! # Internal Modules (crate-only)

@@ -17,7 +17,6 @@ mod chartstate;
 mod clock;
 mod color;
 mod date_range;
-pub mod enums;
 mod instrument;
 pub mod kagi;
 pub mod line_break;
