@@ -39,6 +39,7 @@ use crate::chart::selection::SelectionState;
 use crate::config::{ChartConfig, ChartOptions};
 use crate::model::ChartType;
 use crate::model::{BarData, ChartState};
+use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::validation::DataValidator;
 
 use super::Chart;
@@ -84,7 +85,7 @@ impl Chart {
             desired_visible_bars: None,
             last_visible_bars: 0,
             apply_visible_bars_once: false,
-            price_scale_drag_start: None,
+            price_axis_drag: None,
             pending_start_idx: None,
             chart_type: ChartType::Candles,
             renko_brick_size: 1.0,
@@ -98,7 +99,13 @@ impl Chart {
             symbol: String::new(),
             timeframe: String::new(),
             cursor_modes: CursorModeState::new(),
-            last_rendered_price_range: (0.0, 0.0),
+            last_price_map: PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(0.0, 100.0),
+                0.0,
+                0.0,
+                false,
+            ),
             last_rendered_price_rect: egui::Rect::NOTHING,
             last_rendered_volume_rect: egui::Rect::NOTHING,
             last_rendered_indicator_panes: Vec::new(),
@@ -154,7 +161,7 @@ impl Chart {
             desired_visible_bars: None,
             last_visible_bars: 0,
             apply_visible_bars_once: false,
-            price_scale_drag_start: None,
+            price_axis_drag: None,
             pending_start_idx: None,
             chart_type: ChartType::Candles,
             renko_brick_size: 1.0,
@@ -168,7 +175,13 @@ impl Chart {
             symbol: String::new(),
             timeframe: String::new(),
             cursor_modes: CursorModeState::new(),
-            last_rendered_price_range: (0.0, 0.0),
+            last_price_map: PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(0.0, 100.0),
+                0.0,
+                0.0,
+                false,
+            ),
             last_rendered_price_rect: egui::Rect::NOTHING,
             last_rendered_volume_rect: egui::Rect::NOTHING,
             last_rendered_indicator_panes: Vec::new(),
@@ -504,14 +517,6 @@ impl Chart {
         } else {
             width / visible_bars as f32
         }
-    }
-
-    /// Get the price range used for actual rendering (includes zoom adjustments)
-    ///
-    /// This is useful for external code that needs to use the same coordinate system
-    /// as the rendered chart (e.g., selection dots, hit testing).
-    pub fn get_rendered_price_range(&self) -> (f64, f64) {
-        self.last_rendered_price_range
     }
 
     /// Get the price rect used for actual rendering

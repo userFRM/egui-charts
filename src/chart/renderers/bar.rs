@@ -1,5 +1,6 @@
-use super::context::{BarRenderParams, LinearPriceMap, RenderContext, StyleColors};
+use super::context::{BarRenderParams, RenderContext, StyleColors};
 use crate::model::Bar;
+use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Stroke};
 
@@ -8,17 +9,17 @@ use egui::{Pos2, Stroke};
 pub fn render_ohlc_bar(
     context: &RenderContext,
     bar: &Bar,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     colors: &StyleColors,
     params: &BarRenderParams,
 ) {
     let color = colors.bar_color(bar.is_bullish());
 
-    // Convert prices to screen coords using LinearPriceMap helper
-    let high_y = price_scale.price_to_y(bar.high, context.rect);
-    let low_y = price_scale.price_to_y(bar.low, context.rect);
-    let open_y = price_scale.price_to_y(bar.open, context.rect);
-    let close_y = price_scale.price_to_y(bar.close, context.rect);
+    // Convert prices to screen coords
+    let high_y = price_scale.price_to_y(bar.high);
+    let low_y = price_scale.price_to_y(bar.low);
+    let open_y = price_scale.price_to_y(bar.open);
+    let close_y = price_scale.price_to_y(bar.close);
 
     // Draw vertical line from high to low
     context.painter.line_segment(

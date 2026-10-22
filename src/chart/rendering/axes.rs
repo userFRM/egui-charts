@@ -1,6 +1,7 @@
 //! Price and time axis rendering
 
 use crate::drawings::rendering::utils::draw_dashed_line;
+use crate::scales::PriceMap;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke, Vec2};
@@ -9,17 +10,18 @@ use egui::{Color32, Painter, Pos2, Rect, Stroke, Vec2};
 pub fn render_last_price_line(
     painter: &Painter,
     price_rect: Rect,
+    price_map: &PriceMap,
     last_close: f64,
     last_open: f64,
-    adjusted_min: f64,
-    adjusted_max: f64,
     bullish_color: Color32,
     bearish_color: Color32,
     show_right_axis: bool,
 ) {
-    let adjusted_range = (adjusted_max - adjusted_min).max(1e-12);
-    let y = price_rect.max.y
-        - ((last_close - adjusted_min) / adjusted_range) as f32 * price_rect.height();
+    let y = price_map.price_to_y(last_close);
+    // The newest bar can be scrolled or zoomed off the scale.
+    if !(price_rect.min.y..=price_rect.max.y).contains(&y) {
+        return;
+    }
 
     let price_color = if last_close >= last_open {
         bullish_color
@@ -39,7 +41,8 @@ pub fn render_last_price_line(
 
     // Draw price label on the right with colored background
     if show_right_axis {
-        let label = format!("{last_close:.2}");
+        let transform = price_map.transform();
+        let label = transform.label(transform.to_scale(last_close), 2);
         let label_pos = Pos2::new(price_rect.max.x + 5.0, y);
 
         // Measure text size first

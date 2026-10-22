@@ -17,8 +17,8 @@
 use egui::{Pos2, Rect, Response, Ui};
 use web_time::Instant;
 
-use crate::chart::helpers::{apply_price_zoom, y_to_price};
 use crate::chart::state::BoxZoomMode;
+use crate::scales::PriceTransform;
 use crate::widget::Chart;
 
 impl Chart {
@@ -266,7 +266,12 @@ impl Chart {
                     .axis_pressed_mouse_move
                     .price
             {
-                self.price_scale_drag_start = Some(start_pos);
+                // Zoom by this frame's movement around the point where the drag began.
+                let anchor_y = ui
+                    .input(|i| i.pointer.press_origin())
+                    .unwrap_or(start_pos)
+                    .y;
+                self.price_axis_drag = Some((anchor_y, response.drag_delta().y));
             } else if time_axis_rect.contains(start_pos)
                 && self.chart_options.handle_scale.axis_pressed_mouse_move.time
             {
@@ -380,7 +385,7 @@ impl Chart {
                 .price
                 && price_axis_rect.contains(pos)
             {
-                self.state.set_price_auto_scale(true);
+                self.state.price_scale_mut().reset();
             }
         }
     }
@@ -500,68 +505,41 @@ impl Chart {
                 .set_right_offset(target_right_offset);
         }
 
-        // Handle vertical (price) zoom
-        let price_min_y = max_y;
-        let price_max_y = min_y;
-
-        let price_range_height = chart_rect.height();
-        let price_min_ratio = (chart_rect.max.y - price_min_y) / price_range_height;
-        let price_max_ratio = (chart_rect.max.y - price_max_y) / price_range_height;
-
-        let (curr_min, curr_max) = self.state.price_range();
-        let curr_range = curr_max - curr_min;
-
-        let sel_min_price = curr_min + (price_min_ratio as f64 * curr_range);
-        let sel_max_price = curr_min + (price_max_ratio as f64 * curr_range);
-
-        self.state.set_price_range(sel_min_price, sel_max_price);
+        // Vertical zoom: the box's prices, in the units of the window it selects, whose first
+        // visible close (the base of the relative modes) can differ from the one it was drawn on.
+        let (p, q) = (
+            self.last_price_map.y_to_price(min_y),
+            self.last_price_map.y_to_price(max_y),
+        );
+        let transform = self.state.fit_price_scale();
+        let (a, b) = (transform.to_scale(p), transform.to_scale(q));
+        self.state.price_scale_mut().set_range(a.min(b), a.max(b));
 
         true // Zoom successfully applied
     }
 
     /// Apply deferred price-axis zoom from mouse wheel or price-axis drag.
     ///
-    /// Called after all input processing to avoid mutable borrow conflicts.
-    /// Updates the chart's price range and returns the new `(min, max)`.
-    pub fn apply_price_zoom(
+    /// Called after all input processing to avoid mutable borrow conflicts. A
+    /// movement of `dy` points scales the range by `exp(dy / height)`, so a drag
+    /// zooms by the same amount however many frames it spans.
+    pub(crate) fn apply_price_zoom(
         &mut self,
         pending_price_zoom: Option<f32>,
         response: &Response,
-        chart_rect: Rect,
-        adjusted_min: f64,
-        adjusted_max: f64,
-    ) -> (f64, f64) {
-        let mut new_min = adjusted_min;
-        let mut new_max = adjusted_max;
-
-        if let Some(delta_y) = pending_price_zoom
-            && let Some(hp) = response.hover_pos()
-        {
-            let anchor_price = y_to_price(hp.y, adjusted_min, adjusted_max, chart_rect);
-            let (min, max) = apply_price_zoom(
-                (adjusted_min, adjusted_max),
-                anchor_price,
-                delta_y,
-                chart_rect.height(),
-            );
-            self.state.set_price_range(min, max);
-            new_min = min;
-            new_max = max;
+        price_rect: Rect,
+        transform: PriceTransform,
+    ) {
+        let wheel = pending_price_zoom.zip(response.hover_pos().map(|p| p.y));
+        let drag = self.price_axis_drag.take().map(|(y, dy)| (dy, y));
+        for (dy, anchor_y) in wheel.into_iter().chain(drag) {
+            let scale = self.state.price_scale();
+            let anchor = scale
+                .map(transform, price_rect.min.y, price_rect.max.y)
+                .y_to_scale(anchor_y);
+            let factor = (dy as f64 / price_rect.height() as f64).exp();
+            self.state.price_scale_mut().zoom(factor, anchor);
         }
-
-        if let Some(start_pos) = self.price_scale_drag_start.take()
-            && let Some(curr_pos) = response.interact_pointer_pos()
-        {
-            let dy = curr_pos.y - start_pos.y;
-            let anchor_price = y_to_price(start_pos.y, new_min, new_max, chart_rect);
-            let (min, max) =
-                apply_price_zoom((new_min, new_max), anchor_price, dy, chart_rect.height());
-            self.state.set_price_range(min, max);
-            new_min = min;
-            new_max = max;
-        }
-
-        (new_min, new_max)
     }
 
     /// Apply pending timescale configuration: width, initial visible bars,
@@ -621,6 +599,91 @@ impl Chart {
                 let desired_offset = desired_right_border - base_idx;
                 self.state.time_scale_mut().set_right_offset(desired_offset);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::chart::series::SeriesSettings;
+    use crate::scales::PriceScaleMode;
+    use crate::widget::test_frames::{chart, frame};
+    use egui::{Event, Modifiers, PointerButton, Pos2};
+
+    /// Drags the price axis down by 100 points in `steps` frames and returns the resulting range.
+    fn drag_price_axis(steps: usize) -> (f64, f64) {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let rect = chart.last_rendered_price_rect;
+        let start = Pos2::new(rect.max.x + 10.0, rect.center().y);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let mut t = 0.0;
+        let mut step = |chart: &mut _, events| {
+            t += 0.02;
+            frame(&ctx, chart, t, events);
+        };
+        step(&mut chart, vec![Event::PointerMoved(start)]);
+        step(&mut chart, vec![button(start, true)]);
+        let mut pos = start;
+        for _ in 0..steps {
+            pos.y += 100.0 / steps as f32;
+            step(&mut chart, vec![Event::PointerMoved(pos)]);
+        }
+        step(&mut chart, vec![button(pos, false)]);
+        let range = chart.state.price_scale().range();
+        (range.min, range.max)
+    }
+
+    /// Zoom speed must not depend on how many frames a drag spans.
+    #[test]
+    fn price_axis_drag_zoom_is_frame_independent() {
+        let (one, ten) = (drag_price_axis(1), drag_price_axis(10));
+        let span = one.1 - one.0;
+        // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
+        assert!(span > 18.0, "1 frame: {one:?}");
+        assert!(
+            (one.0 - ten.0).abs() < span * 1e-9 && (one.1 - ten.1).abs() < span * 1e-9,
+            "1 frame: {one:?}, 10 frames: {ten:?}"
+        );
+    }
+
+    /// The prices inside a zoom box fill the pane on the next frame. The box re-centres the time
+    /// window, so the relative modes rebase on another first visible close than the box was drawn on.
+    #[test]
+    fn box_zoom_fills_the_pane_with_the_selected_prices() {
+        let lows: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
+        let highs: Vec<f64> = lows.iter().map(|low| low + 1.0).collect();
+        for mode in [PriceScaleMode::Normal, PriceScaleMode::Percentage] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&lows, &highs);
+            chart.apply_series_settings(&SeriesSettings {
+                price_scale_mode: mode,
+                ..SeriesSettings::default()
+            });
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let rect = chart.last_rendered_price_rect;
+            let before = chart.get_chart_mapping().price;
+            let (y_hi, y_lo) = (rect.top() + 100.0, rect.top() + 200.0);
+            let (hi, lo) = (before.y_to_price(y_hi), before.y_to_price(y_lo));
+            let (start, end) = (
+                Pos2::new(rect.right() - 150.0, y_hi),
+                Pos2::new(rect.right() - 50.0, y_lo),
+            );
+            assert!(chart.execute_box_zoom(start, end, rect, rect.width()));
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            let after = chart.get_chart_mapping().price;
+            let (top, bottom) = after.extent();
+            let (y_hi, y_lo) = (after.price_to_y(hi), after.price_to_y(lo));
+            assert!(
+                (y_hi - top).abs() < 0.5 && (y_lo - bottom).abs() < 0.5,
+                "{mode:?}: {lo}..{hi} at y {y_lo}..{y_hi}, pane {top}..{bottom}"
+            );
         }
     }
 }

@@ -1,12 +1,13 @@
-use super::context::{BarRenderParams, LinearPriceMap, RenderContext, StyleColors};
+use super::context::{BarRenderParams, RenderContext, StyleColors};
 use crate::model::Bar;
+use crate::scales::PriceMap;
 use egui::{Pos2, Rect, Stroke, Vec2};
 
 /// Renders a single candlestick with customizable body, border, and wick colors
 pub fn render_candle(
     context: &RenderContext,
     candle: &Bar,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     colors: &StyleColors,
     params: &BarRenderParams,
 ) {
@@ -14,11 +15,11 @@ pub fn render_candle(
     let body_color = colors.bar_color(is_bullish);
     let wick_color = colors.wick_color(is_bullish);
 
-    // Convert prices to screen coords using LinearPriceMap helper
-    let high_y = price_scale.price_to_y(candle.high, context.rect);
-    let low_y = price_scale.price_to_y(candle.low, context.rect);
-    let open_y = price_scale.price_to_y(candle.open, context.rect);
-    let close_y = price_scale.price_to_y(candle.close, context.rect);
+    // Convert prices to screen coords
+    let high_y = price_scale.price_to_y(candle.high);
+    let low_y = price_scale.price_to_y(candle.low);
+    let open_y = price_scale.price_to_y(candle.open);
+    let close_y = price_scale.price_to_y(candle.close);
 
     // Draw wick (high-low line) - uses separate wick color
     context.painter.line_segment(

@@ -2,12 +2,12 @@
 //!
 //! Includes: Area, HLC Area, Baseline
 
+use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
-use super::helpers::PriceCoords;
 use super::volume::render_volume_bars;
-use crate::chart::renderers::{LinearPriceMap, RenderContext, StyleColors};
+use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::model::{Bar, PriceSource};
 
 const AREA_ALPHA: u8 = 50;
@@ -24,13 +24,13 @@ pub(super) fn render_area(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     fill_color: Color32,
     price_source: PriceSource,
 ) {
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_rect);
+    let coords = *price_scale;
     let line_points = collect_price_points(
         visible_data,
         start_idx,
@@ -71,7 +71,6 @@ pub(super) fn render_area(
 /// HLC Area: fills between high and low with close line
 pub(super) fn render_hlc_area(
     painter: &Painter,
-    price_rect: Rect,
     volume_ctx: &RenderContext,
     visible_data: &[Bar],
     start_idx: usize,
@@ -79,7 +78,7 @@ pub(super) fn render_hlc_area(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
@@ -90,7 +89,7 @@ pub(super) fn render_hlc_area(
         return;
     }
 
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_rect);
+    let coords = *price_scale;
     let points = collect_hlc_points(
         visible_data,
         start_idx,
@@ -134,7 +133,7 @@ pub(super) fn render_baseline(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
@@ -146,7 +145,7 @@ pub(super) fn render_baseline(
         None => return,
     };
 
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_rect);
+    let coords = *price_scale;
     let baseline = price_source.compute(first.open, first.high, first.low, first.close);
     let baseline_y = coords.price_to_y(baseline);
 
@@ -184,7 +183,7 @@ pub(super) fn render_baseline(
 fn collect_price_points(
     data: &[Bar],
     start_idx: usize,
-    coords: &PriceCoords,
+    coords: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     price_source: PriceSource,
@@ -210,7 +209,7 @@ struct HlcPoint {
 fn collect_hlc_points(
     data: &[Bar],
     start_idx: usize,
-    coords: &PriceCoords,
+    coords: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     price_source: PriceSource,
@@ -279,7 +278,7 @@ fn draw_baseline_segments(
     painter: &Painter,
     data: &[Bar],
     start_idx: usize,
-    coords: &PriceCoords,
+    coords: &PriceMap,
     baseline: f64,
     baseline_y: f32,
     chart_rect_min_x: f32,

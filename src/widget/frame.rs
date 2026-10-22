@@ -2,7 +2,7 @@
 
 use super::selection::hit_test_main_chart;
 use super::{Chart, RightClickTarget};
-use crate::chart::renderers::{self, ChartMapping, PriceScale, RenderContext, StyleColors};
+use crate::chart::renderers::{self, ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
 use crate::drawings::DrawingManager;
@@ -415,22 +415,16 @@ impl Chart {
             }
         }
 
-        // Determine price bounds
-        let (mut adjusted_min, mut adjusted_max) = self.state.price_range();
+        // Fit the price scale, then apply this frame's price zoom
+        let transform = self.state.fit_price_scale();
+        self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
+        let price_map = self
+            .state
+            .price_scale()
+            .map(transform, price_rect.min.y, price_rect.max.y);
 
-        // Apply price zoom
-        let (new_min, new_max) = self.apply_price_zoom(
-            pending_price_zoom,
-            &response,
-            chart_rect,
-            adjusted_min,
-            adjusted_max,
-        );
-        adjusted_min = new_min;
-        adjusted_max = new_max;
-
-        // Store the final rendered price range and rects for external use (selection dots, hit testing)
-        self.last_rendered_price_range = (adjusted_min, adjusted_max);
+        // Store the final price mapping and rects for external use (selection dots, hit testing)
+        self.last_price_map = price_map;
         self.last_rendered_price_rect = price_rect;
         self.last_rendered_volume_rect = volume_rect;
 
@@ -454,28 +448,20 @@ impl Chart {
 
         // Draw grid
         if self.config.show_horizontal_grid {
-            rendering::render_grid(
-                &painter,
-                price_rect,
-                adjusted_min,
-                adjusted_max,
-                self.config.grid_color,
-            );
+            rendering::render_grid(&painter, price_rect, &price_map, self.config.grid_color);
         }
 
         // Create rendering contexts
         let bar_spacing = self.state.time_scale().bar_spacing();
         let bar_width = bar_spacing * self.config.candle_width;
         let price_ctx = RenderContext::new(&painter, price_rect);
-        let price_scale = PriceScale::new(adjusted_min, adjusted_max);
         let coords = ChartMapping::new(
             price_rect,
             bar_spacing,
             start_idx,
             self.state.time_scale().base_idx(),
             self.state.time_scale().right_offset(),
-            adjusted_min,
-            adjusted_max,
+            price_map,
         );
         let colors = StyleColors {
             bullish: self.config.bullish_color,
@@ -562,7 +548,7 @@ impl Chart {
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
             volume_ctx: &clipped_volume_ctx,
-            price_scale: &price_scale,
+            price_scale: &price_map,
             colors: &colors,
             visible_data,
             // Full dataset so window-independent transforms (Heikin-Ashi) can be
@@ -589,7 +575,7 @@ impl Chart {
                 &price_ctx,
                 indicator_registry.indicators(),
                 visible_data,
-                &price_scale,
+                &price_map,
                 &coords,
             );
         }
@@ -705,32 +691,26 @@ impl Chart {
                 &clipped_price_ctx,
                 &self.marks,
                 visible_data,
-                &price_scale,
+                &price_map,
                 &coords,
             );
         }
 
         // Draw price labels
         if self.config.show_right_axis {
-            rendering::render_price_labels(
-                &price_ctx,
-                &price_scale,
-                &colors,
-                crate::scales::PriceScaleMode::Normal,
-            );
+            rendering::render_price_labels(&price_ctx, &price_map, &colors);
         }
 
-        // Last price line & label
+        // Last price line & label, from the newest bar even when it is scrolled out of view
         if self.config.show_symbol_last_val
-            && let Some(last) = visible_data.last()
+            && let Some(last) = self.state.data().bars.last()
         {
             rendering::render_last_price_line(
                 &painter,
                 price_rect,
+                &price_map,
                 last.close,
                 last.open,
-                adjusted_min,
-                adjusted_max,
                 self.config.bullish_color,
                 self.config.bearish_color,
                 self.config.show_right_axis,
@@ -794,8 +774,7 @@ impl Chart {
                 &mut cursor_modes,
                 &response,
                 price_rect,
-                adjusted_min,
-                adjusted_max,
+                &price_map,
                 &painter,
                 &timescale,
             );
@@ -847,7 +826,7 @@ impl Chart {
                 &price_ctx,
                 hover_pos,
                 visible_data,
-                &price_scale,
+                &price_map,
                 &coords,
                 &self.chart_options.crosshair,
             );
@@ -866,7 +845,7 @@ impl Chart {
                     hover_pos,
                     candle,
                     tooltip_options,
-                    &price_scale,
+                    &price_map,
                     &coords,
                     visible_data,
                 );
@@ -889,7 +868,7 @@ impl Chart {
                             &price_ctx,
                             synced_pos,
                             visible_data,
-                            &price_scale,
+                            &price_map,
                             &coords,
                             &self.chart_options.crosshair,
                         );
@@ -905,5 +884,45 @@ impl Chart {
         crate::styles::focus::draw_focus_ring(ui, &response);
 
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::chart::series::SeriesSettings;
+    use crate::scales::PriceScaleMode;
+    use crate::widget::test_frames::{chart, frame};
+
+    /// On a logarithmic scale 100 lies halfway between 10 and 1,000 (ln 100 is the mean of ln 10 and
+    /// ln 1,000); a linear mapping puts it a tenth of the way up. A range zoomed by hand before the
+    /// switch, current or in the zoom history, is in the old mode's units and must not carry over.
+    #[test]
+    fn log_mode_reaches_the_rendered_mapping() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[1000.0]);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        chart.state.price_scale_mut().zoom(0.5, 500.0);
+        chart.state.push_zoom_state();
+        chart.apply_series_settings(&SeriesSettings {
+            price_scale_mode: PriceScaleMode::Logarithmic,
+            ..SeriesSettings::default()
+        });
+        chart.state.pop_zoom_state();
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        let map = chart.get_chart_mapping();
+        let (y10, y100, y1000) = (
+            map.price_to_y(10.0),
+            map.price_to_y(100.0),
+            map.price_to_y(1000.0),
+        );
+        assert!(
+            (y100 - (y10 + y1000) / 2.0).abs() < 0.01,
+            "{y10} {y100} {y1000}"
+        );
+        let (top, bottom) = map.price.extent();
+        assert!(
+            top < y1000 && y10 < bottom,
+            "{y10}..{y1000} outside {top}..{bottom}"
+        );
     }
 }

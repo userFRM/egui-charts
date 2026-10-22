@@ -2,12 +2,12 @@
 //!
 //! Includes: Renko, Kagi, Line Break, Point & Figure
 
-use super::helpers::{PriceCoords, draw_brick, draw_o_symbol, draw_x_symbol};
-use crate::chart::renderers::LinearPriceMap;
+use super::helpers::{draw_brick, draw_o_symbol, draw_x_symbol};
 use crate::model::{
     Bar, ColumnDirection, KagiConfig, LineBreakConfig, PointFigureConfig, RenkoConfig,
     to_kagi_lines, to_line_break_lines, to_pnf_columns, to_renko_bricks,
 };
+use crate::scales::PriceMap;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
 const MAX_ELEMENTS: usize = 2000;
@@ -20,13 +20,13 @@ pub(super) fn render_renko(
     _start_idx: usize,
     bar_width: f32,
     renko_brick_size: f64,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     _chart_rect_min_x: f32,
     _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_rect);
+    let coords = *price_scale;
     let bricks = to_renko_bricks(visible_data, &RenkoConfig::new(renko_brick_size));
     let brick_count = bricks.len().min(MAX_ELEMENTS);
     let spacing = calc_spacing(price_rect.width(), brick_count, bar_width);
@@ -54,13 +54,13 @@ pub(super) fn render_kagi(
     visible_data: &[Bar],
     _start_idx: usize,
     kagi_reversal_amount: f64,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     _chart_rect_min_x: f32,
     _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_rect);
+    let coords = *price_scale;
     let lines = to_kagi_lines(visible_data, &KagiConfig::new(kagi_reversal_amount));
     if lines.is_empty() {
         return;
@@ -80,13 +80,13 @@ pub(super) fn render_line_break(
     visible_data: &[Bar],
     _start_idx: usize,
     bar_width: f32,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     _chart_rect_min_x: f32,
     _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_rect);
+    let coords = *price_scale;
     let lines = to_line_break_lines(visible_data, &LineBreakConfig::new(3));
     if lines.is_empty() {
         return;
@@ -120,13 +120,13 @@ pub(super) fn render_point_and_figure(
     _start_idx: usize,
     bar_width: f32,
     box_size: f64,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     _chart_rect_min_x: f32,
     _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_rect);
+    let coords = *price_scale;
     let config = PointFigureConfig {
         box_size,
         reversal_boxes: 3,
@@ -177,7 +177,7 @@ fn in_range(x: f32, rect: Rect) -> bool {
     x >= rect.min.x && x <= rect.max.x
 }
 
-fn calc_brick_rect(x: f32, bar: &Bar, coords: &PriceCoords, spacing: f32) -> Rect {
+fn calc_brick_rect(x: f32, bar: &Bar, coords: &PriceMap, spacing: f32) -> Rect {
     let y_open = coords.price_to_y(bar.open);
     let y_close = coords.price_to_y(bar.close);
     let top = y_open.min(y_close);
@@ -191,7 +191,7 @@ fn calc_brick_rect(x: f32, bar: &Bar, coords: &PriceCoords, spacing: f32) -> Rec
     )
 }
 
-fn calc_line_break_rect(x: f32, open: f64, close: f64, coords: &PriceCoords, width: f32) -> Rect {
+fn calc_line_break_rect(x: f32, open: f64, close: f64, coords: &PriceMap, width: f32) -> Rect {
     let y_open = coords.price_to_y(open);
     let y_close = coords.price_to_y(close);
     let top = y_open.min(y_close);
@@ -205,7 +205,7 @@ fn calc_line_break_rect(x: f32, open: f64, close: f64, coords: &PriceCoords, wid
 
 fn collect_kagi_points(
     lines: &[crate::model::kagi::KagiLine],
-    coords: &PriceCoords,
+    coords: &PriceMap,
     price_rect: Rect,
     spacing: f32,
 ) -> Vec<(Pos2, crate::model::kagi::KagiThickness)> {
@@ -264,7 +264,7 @@ fn draw_pnf_column(
     x: f32,
     column: &crate::model::point_figure::PnfColumn,
     box_size: f64,
-    coords: &PriceCoords,
+    coords: &PriceMap,
     price_rect: Rect,
     symbol_size: f32,
     bullish_color: Color32,

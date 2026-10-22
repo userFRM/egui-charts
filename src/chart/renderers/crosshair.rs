@@ -1,17 +1,18 @@
-use super::context::{ChartMapping, LinearPriceMap, RenderContext};
+use super::context::{ChartMapping, RenderContext};
 use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairStyle};
 use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::model::Bar;
+use crate::scales::{PriceMap, PriceScaleMode};
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, FontId, Pos2, Rect, Stroke};
+use egui::{Color32, FontId, Pos2, Stroke};
 
 /// Renders crosshair with full customization: style, mode, color, line width, line style
 pub fn render_crosshair_full(
     context: &RenderContext,
     hover_pos: Pos2,
     visible_data: &[Bar],
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     coords: &ChartMapping,
     mode: CrosshairMode,
     style: CrosshairStyle,
@@ -45,9 +46,8 @@ pub fn render_crosshair_full(
                 let candle_x = coords.idx_to_x(t_idx as usize);
 
                 // Snap to nearest OHLC price
-                let snap_price =
-                    snap_to_nearest_ohlc(hover_pos.y, context.rect, price_scale, candle);
-                let snap_y = price_scale.price_to_y(snap_price, context.rect);
+                let snap_price = snap_to_nearest_ohlc(hover_pos.y, price_scale, candle);
+                let snap_y = price_scale.price_to_y(snap_price);
 
                 (candle_x, snap_y)
             }
@@ -126,11 +126,18 @@ pub fn render_crosshair_full(
     }
 
     // Calculate price at cursor
-    let price_ratio = (context.rect.max.y - actual_pos.y) / context.rect.height();
-    let price = price_scale.min_price + price_ratio as f64 * price_scale.price_range();
+    let price = price_scale.y_to_price(actual_pos.y);
 
-    // Price label on Y-axis with "+" alert indicator
-    let price_label = format!("{price:.8}");
+    // Price label on Y-axis with "+" alert indicator, in the axis units of the relative modes
+    let transform = price_scale.transform();
+    let price_label = if matches!(
+        transform.mode,
+        PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+    ) {
+        transform.label(price_scale.y_to_scale(actual_pos.y), 2)
+    } else {
+        format!("{price:.8}")
+    };
     let price_pos = Pos2::new(
         context.rect.max.x + DESIGN_TOKENS.sizing.crosshair.label_offset_x,
         actual_pos.y,
@@ -236,17 +243,12 @@ pub fn render_crosshair_full(
 }
 
 /// Snap to nearest OHLC price (for Magnet mode)
-fn snap_to_nearest_ohlc(
-    hover_y: f32,
-    price_rect: Rect,
-    price_scale: &LinearPriceMap,
-    candle: &Bar,
-) -> f64 {
-    // Get Y positions of all OHLC values using LinearPriceMap helper
-    let open_y = price_scale.price_to_y(candle.open, price_rect);
-    let high_y = price_scale.price_to_y(candle.high, price_rect);
-    let low_y = price_scale.price_to_y(candle.low, price_rect);
-    let close_y = price_scale.price_to_y(candle.close, price_rect);
+fn snap_to_nearest_ohlc(hover_y: f32, price_scale: &PriceMap, candle: &Bar) -> f64 {
+    // Get Y positions of all OHLC values
+    let open_y = price_scale.price_to_y(candle.open);
+    let high_y = price_scale.price_to_y(candle.high);
+    let low_y = price_scale.price_to_y(candle.low);
+    let close_y = price_scale.price_to_y(candle.close);
 
     // Find the nearest one
     let candidates = [

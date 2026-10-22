@@ -105,6 +105,7 @@ use crate::chart::series::SeriesSettings;
 use crate::config::{ChartConfig, ChartOptions};
 use crate::model::ChartState;
 use crate::model::ChartType;
+use crate::scales::PriceMap;
 use crate::validation::DataValidator;
 pub mod indicator_pane;
 use egui::{Pos2, Rect, Vec2};
@@ -113,7 +114,7 @@ pub use indicator_pane::{
 };
 
 // Re-export from logic layer
-use crate::chart::{helpers, state};
+use crate::chart::state;
 
 pub mod builder;
 mod frame;
@@ -124,7 +125,6 @@ mod selection;
 mod sync;
 pub(crate) mod tool_interaction;
 
-pub use helpers::{apply_price_zoom, y_to_price};
 pub use state::{BoxZoomMode, BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// Interactive financial chart widget for egui.
@@ -204,8 +204,8 @@ pub struct Chart {
     pub(crate) scroll_start_offset: Option<f32>,
     /// Previous widget width for resize handling (UI state only)
     pub(crate) prev_width: Option<f32>,
-    /// Drag state for price-axis scaling (UI state only)
-    pub(crate) price_scale_drag_start: Option<Pos2>,
+    /// Price-axis drag this frame: anchor y where the drag began, and the y movement (UI state only)
+    pub(crate) price_axis_drag: Option<(f32, f32)>,
     /// Apply external start-index once to time scale (UI state only)
     pub(crate) pending_start_idx: Option<usize>,
     /// Chart type (candlestick, line, area, bar, Renko, Kagi)
@@ -233,8 +233,8 @@ pub struct Chart {
     /// Cursor mode state (Demonstration, Magic, Eraser effects)
     #[doc(hidden)]
     pub cursor_modes: CursorModeState,
-    /// Last rendered price range (includes zoom adjustments) for external use
-    pub(crate) last_rendered_price_range: (f64, f64),
+    /// Price mapping of the last rendered frame (includes zoom adjustments)
+    pub(crate) last_price_map: PriceMap,
     /// Last rendered price rect (actual rect used for candle rendering).
     /// Use [`get_rendered_price_rect`](Chart::get_rendered_price_rect) instead.
     #[doc(hidden)]
@@ -469,12 +469,14 @@ impl Chart {
         self.chart_options.crosshair.style = style;
     }
 
-    /// Apply series settings to chart colors and price source.
+    /// Apply series settings to chart colors, price source and price scale.
     ///
     /// Copies candlestick colors (bullish/bearish fill, border, wick) and the
     /// price source field from the given [`SeriesSettings`] into the chart's
-    /// [`ChartConfig`]. Call this when the user changes series appearance in a
-    /// settings dialog.
+    /// [`ChartConfig`], and its scale mode and inversion into the main price
+    /// scale. A new scale mode returns the scale to auto-scaling and clears the
+    /// zoom history, whose ranges are in the old mode's units. Call this when
+    /// the user changes series appearance in a settings dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
         self.config.bullish_color = settings.bullish_color;
         self.config.bearish_color = settings.bearish_color;
@@ -483,6 +485,13 @@ impl Chart {
         self.config.bullish_wick_color = settings.bullish_wick_color;
         self.config.bearish_wick_color = settings.bearish_wick_color;
         self.config.price_source = settings.price_source;
+        if self.state.price_scale().options().mode != settings.price_scale_mode {
+            self.state.price_scale_mut().reset();
+            self.state.clear_zoom_history();
+        }
+        let options = self.state.price_scale_mut().options_mut();
+        options.mode = settings.price_scale_mode;
+        options.invert_scale = settings.invert_scale;
     }
 
     /// Get a [`ChartMapping`] for coordinate conversions.
@@ -498,8 +507,7 @@ impl Chart {
             self.start_idx,
             self.state.time_scale().base_idx(),
             self.state.time_scale().right_offset(),
-            self.last_rendered_price_range.0,
-            self.last_rendered_price_range.1,
+            self.last_price_map,
         )
     }
 
@@ -510,5 +518,43 @@ impl Chart {
     /// whole [`ChartConfig`]. Changes take effect on the next rendered frame.
     pub fn config_mut(&mut self) -> &mut ChartConfig {
         &mut self.config
+    }
+}
+
+/// Headless frames for widget tests: a fixed 800x600 screen and explicit input events.
+#[cfg(test)]
+pub(crate) mod test_frames {
+    use super::Chart;
+    use crate::model::{Bar, BarData};
+    use chrono::{TimeZone, Utc};
+    use egui::{Context, Event, Pos2, RawInput, Rect, Vec2};
+
+    /// 100 daily bars; bar `i` opens at `lows[i % len]` and closes at `highs[i % len]`.
+    pub(crate) fn chart(lows: &[f64], highs: &[f64]) -> Chart {
+        let bars = (0..100)
+            .map(|i| {
+                let t = Utc
+                    .timestamp_opt(1_700_000_000 + i as i64 * 86_400, 0)
+                    .unwrap();
+                let (lo, hi) = (lows[i % lows.len()], highs[i % highs.len()]);
+                Bar::new(t, lo, hi, lo, hi, 1.0)
+            })
+            .collect();
+        Chart::new(BarData::from_bars(bars))
+    }
+
+    /// Runs one frame at `time` seconds with `events`.
+    pub(crate) fn frame(ctx: &Context, chart: &mut Chart, time: f64, events: Vec<Event>) {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                chart.show(ui);
+            });
+        });
     }
 }

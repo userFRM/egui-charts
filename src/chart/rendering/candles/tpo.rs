@@ -13,9 +13,9 @@
 //! the currently visible bars and anchors each session's letter histogram under
 //! the session it summarises, staying correct under pan and zoom.
 
+use crate::scales::PriceMap;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
-use super::helpers::PriceCoords;
 use crate::model::{
     Bar, TPOColorMode, TPOConfig, TPODisplayMode, TPOProfile, derive_tick_size, to_tpo_profiles,
 };
@@ -107,7 +107,7 @@ impl TpoRenderConfig {
 /// This is the live entry point used by `render_chart_type`. It builds the
 /// profiles from the currently visible bars and anchors each session's letter
 /// histogram at the x-coordinate of that session's first visible bar.
-/// Coordinates flow through the chart's shared price mapping ([`PriceCoords`])
+/// Coordinates flow through the chart's shared price mapping ([`PriceMap`])
 /// and the supplied `idx_to_coord`, so the profile stays correct under pan and
 /// zoom.
 ///
@@ -121,8 +121,7 @@ pub fn render_live_tpo(
     price_rect: Rect,
     visible_data: &[Bar],
     start_idx: usize,
-    min_price: f64,
-    max_price: f64,
+    price_map: &PriceMap,
     base_config: &TPOConfig,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     chart_rect_min_x: f32,
@@ -133,7 +132,8 @@ pub fn render_live_tpo(
         return;
     }
 
-    let price_range = max_price - min_price;
+    let (range, transform) = (price_map.range(), price_map.transform());
+    let price_range = (transform.to_price(range.max) - transform.to_price(range.min)).abs();
     if !price_range.is_finite() || price_range <= 0.0 {
         return;
     }
@@ -149,7 +149,6 @@ pub fn render_live_tpo(
         return;
     }
 
-    let coords = PriceCoords::new(min_price, max_price, price_rect);
     let render_config = TpoRenderConfig::default();
 
     // Map each profile back to the index of its first visible bar so it anchors
@@ -171,7 +170,7 @@ pub fn render_live_tpo(
                 draw_session_profile(
                     painter,
                     price_rect,
-                    &coords,
+                    price_map,
                     profile,
                     &config,
                     &render_config,
@@ -190,7 +189,7 @@ pub fn render_live_tpo(
         draw_session_profile(
             painter,
             price_rect,
-            &coords,
+            price_map,
             profile,
             &config,
             &render_config,
@@ -206,7 +205,7 @@ pub fn render_live_tpo(
 fn draw_session_profile(
     painter: &Painter,
     price_rect: Rect,
-    coords: &PriceCoords,
+    coords: &PriceMap,
     profile: &TPOProfile,
     config: &TPOConfig,
     render_config: &TpoRenderConfig,
@@ -229,7 +228,9 @@ fn draw_session_profile(
     // Row height in pixels for one tick — used to size blocks/letters so they
     // fill their price bin without overlapping the neighbour above/below.
     let row_height = {
-        let h = (coords.price_to_y(0.0) - coords.price_to_y(tick_size)).abs();
+        // Measured at the POC: a row is not the same height everywhere on a log scale.
+        let poc = profile.poc_price;
+        let h = (coords.price_to_y(poc) - coords.price_to_y(poc + tick_size)).abs();
         h.clamp(1.0, render_config.row_height * 1.5)
     };
 

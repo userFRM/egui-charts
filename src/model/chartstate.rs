@@ -7,6 +7,7 @@
 /// ChartState Backend - Pure state management (no rendering).
 /// Combines data with coordinate systems.
 use super::{BarData, TimeScale};
+use crate::scales::{PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Source of [`ChartState::revision`] values, so that no two chart states or
@@ -27,7 +28,7 @@ pub struct ZoomState {
     pub bar_spacing: f32,
     /// Right offset in bars from the chart edge.
     pub right_offset: f32,
-    /// Manual price range override, if any.
+    /// Manual price range in scale units, or `None` when auto-scaled.
     pub price_range: Option<(f64, f64)>,
 }
 
@@ -53,10 +54,8 @@ pub struct ChartState {
     data: BarData,
     /// Time coordinate system (logical index <-> pixel mapping).
     time_scale: TimeScale,
-    /// Whether to auto-calculate the visible price range from data.
-    price_auto_scale: bool,
-    /// Manual price range override `(min, max)`, active when auto-scale is off.
-    price_range: Option<(f64, f64)>,
+    /// The main (right) price scale.
+    price_scale: PriceScale,
     /// Stack of previous zoom snapshots for the "zoom out" button.
     zoom_history: Vec<ZoomState>,
     /// See [`revision`](Self::revision).
@@ -69,8 +68,7 @@ impl Clone for ChartState {
         Self {
             data: self.data.clone(),
             time_scale: self.time_scale.clone(),
-            price_auto_scale: self.price_auto_scale,
-            price_range: self.price_range,
+            price_scale: self.price_scale.clone(),
             zoom_history: self.zoom_history.clone(),
             revision: next_revision(),
         }
@@ -86,8 +84,7 @@ impl ChartState {
         Self {
             data,
             time_scale,
-            price_auto_scale: true,
-            price_range: None,
+            price_scale: PriceScale::new(PriceScaleOptions::default()),
             zoom_history: Vec::new(),
             revision: next_revision(),
         }
@@ -244,52 +241,42 @@ impl ChartState {
         (start, end)
     }
 
-    /// Enable/disable price auto-scaling
-    pub fn set_price_auto_scale(&mut self, enabled: bool) {
-        self.price_auto_scale = enabled;
-        if enabled {
-            self.price_range = None;
-        }
+    /// Returns the main (right) price scale.
+    pub fn price_scale(&self) -> &PriceScale {
+        &self.price_scale
     }
 
-    /// Set manual price range
-    pub fn set_price_range(&mut self, min: f64, max: f64) {
-        self.price_auto_scale = false;
-        self.price_range = Some((min, max));
+    /// Returns the main (right) price scale for changing its options or range.
+    pub fn price_scale_mut(&mut self) -> &mut PriceScale {
+        &mut self.price_scale
     }
 
-    /// Get price range (auto-calculated or manual)
-    pub fn price_range(&self) -> (f64, f64) {
-        if let Some((min, max)) = self.price_range {
-            return (min, max);
-        }
-
-        // Auto-calculate from visible data
+    /// Fits the price scale to the visible bars, unless the user scaled by hand,
+    /// and returns this frame's transform: percentage and indexed modes are
+    /// relative to the first visible close.
+    pub fn fit_price_scale(&mut self) -> PriceTransform {
+        let mode = self.price_scale.options().mode;
         let visible = self.visible_data();
-        if visible.is_empty() {
-            return (0.0, 100.0);
-        }
-
-        let vmin = visible
+        let base = visible.first().map_or(f64::NAN, |bar| bar.close);
+        let relative = matches!(
+            mode,
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+        );
+        // Without a usable base there is no percentage, so such a frame shows prices.
+        let transform = if relative && !(base.is_finite() && base != 0.0) {
+            PriceTransform::default()
+        } else {
+            PriceTransform { mode, base }
+        };
+        let (min, max) = visible
             .iter()
-            .map(|c| c.low)
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap();
-        let vmax = visible
-            .iter()
-            .map(|c| c.high)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap();
-
-        // Apply 10% margin
-        let range = crate::scales::auto_scale_span(vmin, vmax);
-        let margin = range * 0.1;
-        (vmin - margin, vmax + margin)
-    }
-
-    /// Check if price auto-scaling is enabled
-    pub fn is_price_auto_scale(&self) -> bool {
-        self.price_auto_scale
+            .flat_map(|bar| [transform.to_scale(bar.low), transform.to_scale(bar.high)])
+            .filter(|value| value.is_finite())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
+                (min.min(value), max.max(value))
+            });
+        self.price_scale.autoscale(min, max);
+        transform
     }
 
     /// Save current zoom state to history
@@ -297,7 +284,10 @@ impl ChartState {
         let curr_state = ZoomState {
             bar_spacing: self.time_scale.bar_spacing(),
             right_offset: self.time_scale.right_offset(),
-            price_range: self.price_range,
+            price_range: self
+                .price_scale
+                .is_manual()
+                .then(|| (self.price_scale.range().min, self.price_scale.range().max)),
         };
         self.zoom_history.push(curr_state);
     }
@@ -307,8 +297,10 @@ impl ChartState {
         if let Some(state) = self.zoom_history.pop() {
             self.time_scale.set_bar_spacing(state.bar_spacing);
             self.time_scale.set_right_offset(state.right_offset);
-            self.price_range = state.price_range;
-            self.price_auto_scale = state.price_range.is_none();
+            match state.price_range {
+                Some((min, max)) => self.price_scale.set_range(min, max),
+                None => self.price_scale.reset(),
+            }
             true
         } else {
             false
@@ -344,7 +336,11 @@ mod tests {
             .collect();
         let mut state = ChartState::new(BarData::from_bars(bars));
         state.time_scale_mut().set_width(800.0);
-        let (min, max) = state.price_range();
+        state.fit_price_scale();
+        let (min, max) = (
+            state.price_scale().range().min,
+            state.price_scale().range().max,
+        );
         assert!(min < 100.0 && 100.0 < max, "({min}, {max})");
         // At least one cent at a price of 100, at most the price itself.
         assert!((0.01..=100.0).contains(&(max - min)), "({min}, {max})");

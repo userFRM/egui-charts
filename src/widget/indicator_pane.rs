@@ -34,6 +34,7 @@
 
 use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::model::Bar;
+use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
@@ -185,8 +186,13 @@ impl IndicatorCoordParams {
             self.start_idx,
             self.base_idx,
             self.right_offset,
-            y_min,
-            y_max,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(y_min, y_max),
+                rect.min.y,
+                rect.max.y,
+                false,
+            ),
         )
     }
 }

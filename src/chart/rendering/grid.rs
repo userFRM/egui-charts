@@ -2,22 +2,14 @@
 //! Grid lines are fixed to bar indices and price levels, moving 1:1 with the chart
 
 use crate::chart::renderers::ChartMapping;
-use crate::scales::{PriceMarkGenerator, PriceScaleMode};
+use crate::scales::{PriceMap, PriceMarkGenerator};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
 /// Renders horizontal price grid lines using smart mark generation
 /// Lines anchor to "nice" price values and adapt density based on zoom
-pub fn render_grid(painter: &Painter, rect: Rect, min: f64, max: f64, grid_color: Color32) {
-    let generator = PriceMarkGenerator::new();
-    let marks = generator.generate_marks(
-        min,
-        max,
-        rect.height(),
-        PriceScaleMode::Normal,
-        rect.min.y,
-        rect.max.y,
-    );
+pub fn render_grid(painter: &Painter, rect: Rect, price_map: &PriceMap, grid_color: Color32) {
+    let marks = PriceMarkGenerator::new().generate_marks(price_map);
 
     for mark in marks {
         let stroke_width = if mark.weight >= 80 {

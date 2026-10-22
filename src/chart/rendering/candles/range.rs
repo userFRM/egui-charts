@@ -2,16 +2,16 @@
 //!
 //! Includes: High-Low, Range Bars
 
+use crate::scales::PriceMap;
 use egui::{Color32, Painter, Pos2, Rect, Shape};
 
 use super::volume::render_volume_bars;
-use crate::chart::renderers::{LinearPriceMap, RenderContext, StyleColors};
+use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::model::{Bar, RangeBarConfig, to_range_bars_from_ohlc};
 
 /// High-Low chart: just the range bars
 pub(super) fn render_high_low(
     painter: &Painter,
-    price_rect: Rect,
     volume_ctx: &RenderContext,
     visible_data: &[Bar],
     start_idx: usize,
@@ -19,22 +19,17 @@ pub(super) fn render_high_low(
     show_volume: bool,
     max_volume: f64,
     colors: &StyleColors,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    let (min_price, max_price) = (price_scale.min_price, price_scale.max_price);
-    let price_range = (max_price - min_price).max(1e-12);
-
     for (i, bar) in visible_data.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
 
-        let y_high =
-            price_rect.max.y - ((bar.high - min_price) / price_range) as f32 * price_rect.height();
-        let y_low =
-            price_rect.max.y - ((bar.low - min_price) / price_range) as f32 * price_rect.height();
+        let y_high = price_scale.price_to_y(bar.high);
+        let y_low = price_scale.price_to_y(bar.low);
 
         let color = if bar.close > bar.open {
             bullish_color
@@ -67,20 +62,16 @@ pub(super) fn render_high_low(
 /// Range bars: price-based bars
 pub(super) fn render_range_bars(
     painter: &Painter,
-    price_rect: Rect,
     visible_data: &[Bar],
     start_idx: usize,
     bar_width: f32,
     range_size: f64,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    let (min_price, max_price) = (price_scale.min_price, price_scale.max_price);
-    let price_range = (max_price - min_price).max(1e-12);
-
     let config = RangeBarConfig {
         range_size,
         use_atr: false,
@@ -92,10 +83,8 @@ pub(super) fn render_range_bars(
     for (i, range_bar) in range_bars.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
 
-        let y_open = price_rect.max.y
-            - ((range_bar.open - min_price) / price_range) as f32 * price_rect.height();
-        let y_close = price_rect.max.y
-            - ((range_bar.close - min_price) / price_range) as f32 * price_rect.height();
+        let y_open = price_scale.price_to_y(range_bar.open);
+        let y_close = price_scale.price_to_y(range_bar.close);
 
         let color = if range_bar.close > range_bar.open {
             bullish_color

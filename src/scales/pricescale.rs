@@ -193,6 +193,15 @@ impl PriceTransform {
             PriceScaleMode::IndexedTo100 => value / 100.0 * self.base,
         }
     }
+
+    /// Formats a scale value for the axis: prices, signed percentages or index values.
+    pub(crate) fn label(&self, value: f64, decimals: usize) -> String {
+        match self.mode {
+            PriceScaleMode::Percentage => format!("{value:+.decimals$}%"),
+            PriceScaleMode::Logarithmic => format!("{:.decimals$}", self.to_price(value)),
+            _ => format!("{value:.decimals$}"),
+        }
+    }
 }
 
 /// One price axis: options and the visible range in scale units, fitted to the
@@ -338,6 +347,11 @@ impl PriceMap {
     /// Returns the visible range in scale units.
     pub fn range(&self) -> PriceRange {
         self.range
+    }
+
+    /// Returns the pane's vertical extent `(top, bottom)` in points.
+    pub(crate) fn extent(&self) -> (f32, f32) {
+        (self.top, self.bottom)
     }
 
     /// Converts a price to a y coordinate.

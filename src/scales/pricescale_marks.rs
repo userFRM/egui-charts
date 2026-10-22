@@ -5,14 +5,13 @@
 //! both linear and logarithmic scales and automatically adjusts label
 //! precision based on the step size.
 
-/// Smart price axis mark generation.
-/// Reference: lightweight-charts PriceFormatter.
-use super::PriceScaleMode;
+use super::{PriceMap, PriceScaleMode};
 
 /// A single price tick mark on the Y axis
 #[derive(Debug, Clone)]
 pub struct PriceMark {
-    /// Price value
+    /// Axis value: the price in normal and logarithmic mode, the percentage or
+    /// index value otherwise
     pub price: f64,
 
     /// Formatted label text
@@ -71,53 +70,41 @@ impl PriceMarkGenerator {
         Self { config }
     }
 
-    /// Generate price marks for a given price range and display height
-    pub fn generate_marks(
-        &self,
-        min_price: f64,
-        max_price: f64,
-        height_pixels: f32,
-        scale_mode: PriceScaleMode,
-        rect_min_y: f32,
-        rect_max_y: f32,
-    ) -> Vec<PriceMark> {
-        if min_price >= max_price || height_pixels <= 0.0 {
+    /// Generates marks for the visible range of `map`, positioned through it.
+    ///
+    /// Logarithmic scales get marks at 1, 2 and 5 times powers of ten; the other
+    /// modes get evenly stepped marks in scale units, labelled as prices, signed
+    /// percentages or index values.
+    pub fn generate_marks(&self, map: &PriceMap) -> Vec<PriceMark> {
+        let range = map.range();
+        let (top, bottom) = map.extent();
+        let height_pixels = bottom - top;
+        if range.min >= range.max || height_pixels <= 0.0 {
             return Vec::new();
         }
 
-        match scale_mode {
-            PriceScaleMode::Normal => self.generate_linear_marks(
-                min_price,
-                max_price,
-                height_pixels,
-                rect_min_y,
-                rect_max_y,
-            ),
-            PriceScaleMode::Logarithmic => {
-                self.generate_log_marks(min_price, max_price, height_pixels, rect_min_y, rect_max_y)
-            }
-            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100 => {
-                // For percentage mode, we still use linear spacing
-                // but the formatting will be different (handled by formatter)
-                self.generate_linear_marks(
-                    min_price,
-                    max_price,
-                    height_pixels,
-                    rect_min_y,
-                    rect_max_y,
-                )
-            }
+        let transform = map.transform();
+        if transform.mode != PriceScaleMode::Logarithmic {
+            return self.generate_linear_marks(range.min, range.max, height_pixels, map, false);
         }
+        let (min_price, max_price) = (transform.to_price(range.min), transform.to_price(range.max));
+        let marks = self.generate_log_marks(min_price, max_price, height_pixels, map);
+        if marks.len() >= 3 {
+            return marks;
+        }
+        // A narrow log range holds few multiples of powers of ten: step it in prices instead.
+        self.generate_linear_marks(min_price, max_price, height_pixels, map, true)
     }
 
-    /// Generate marks for linear (normal) price scale
+    /// Generate evenly stepped marks between two scale values, or between two
+    /// prices when `prices` is set
     fn generate_linear_marks(
         &self,
         min_price: f64,
         max_price: f64,
         height_pixels: f32,
-        rect_min_y: f32,
-        rect_max_y: f32,
+        map: &PriceMap,
+        prices: bool,
     ) -> Vec<PriceMark> {
         // Guard against invalid inputs (NaN, infinite, or invalid ranges)
         if !min_price.is_finite()
@@ -167,13 +154,19 @@ impl PriceMarkGenerator {
 
         while curr_price <= max_price && iterations < max_iterations {
             if curr_price >= min_price {
-                // Calculate Y coord using full rect bounds
-                let ratio = (curr_price - min_price) / price_range;
-                let y = rect_max_y - (ratio as f32 * (rect_max_y - rect_min_y));
+                let y = if prices {
+                    map.price_to_y(curr_price)
+                } else {
+                    map.scale_to_y(curr_price)
+                };
 
                 // Determine precision based on price value and step
-                let precision = self.calculate_precision(curr_price, nice_step);
-                let label = self.format_price(curr_price, precision);
+                let precision = self.calculate_precision(nice_step);
+                let label = if prices {
+                    self.format_price(curr_price, precision)
+                } else {
+                    map.transform().label(curr_price, precision)
+                };
 
                 // Calculate weight (higher for rounder numbers)
                 let weight = self.calculate_weight(curr_price, nice_step);
@@ -200,8 +193,7 @@ impl PriceMarkGenerator {
         min_price: f64,
         max_price: f64,
         height_pixels: f32,
-        rect_min_y: f32,
-        rect_max_y: f32,
+        map: &PriceMap,
     ) -> Vec<PriceMark> {
         // Guard against invalid inputs
         if min_price <= 0.0
@@ -240,12 +232,9 @@ impl PriceMarkGenerator {
                 let price = base * multiplier;
 
                 if price >= min_price && price <= max_price {
-                    // Calculate Y using logarithmic scale with full rect bounds
-                    let log_price = price.ln();
-                    let ratio = (log_price - log_min) / log_range;
-                    let y = rect_max_y - (ratio as f32 * (rect_max_y - rect_min_y));
+                    let y = map.price_to_y(price);
 
-                    let precision = self.calculate_precision(price, base);
+                    let precision = self.calculate_precision(base);
                     let label = self.format_price(price, precision);
 
                     let weight = if multiplier == 1.0 {
@@ -303,12 +292,9 @@ impl PriceMarkGenerator {
         nice_fraction * 10f64.powf(exponent)
     }
 
-    /// Calculate appropriate decimal precision for a price value
-    fn calculate_precision(&self, price: f64, step: f64) -> usize {
-        if price == 0.0 {
-            return 2;
-        }
-
+    /// Calculate the decimal precision for marks `step` apart, the same for every
+    /// mark including zero
+    fn calculate_precision(&self, step: f64) -> usize {
         // For very small steps, we need more precision
         if step <= 0.0001 {
             8
@@ -446,13 +432,13 @@ mod tests {
     fn test_precision_calculation() {
         let generator = PriceMarkGenerator::new();
 
-        assert_eq!(generator.calculate_precision(100.0, 0.00001), 8);
-        assert_eq!(generator.calculate_precision(100.0, 0.001), 6);
-        assert_eq!(generator.calculate_precision(100.0, 0.01), 4);
-        assert_eq!(generator.calculate_precision(100.0, 0.1), 3);
-        assert_eq!(generator.calculate_precision(100.0, 1.0), 2);
-        assert_eq!(generator.calculate_precision(100.0, 10.0), 1);
-        assert_eq!(generator.calculate_precision(100.0, 100.0), 0);
+        assert_eq!(generator.calculate_precision(0.00001), 8);
+        assert_eq!(generator.calculate_precision(0.001), 6);
+        assert_eq!(generator.calculate_precision(0.01), 4);
+        assert_eq!(generator.calculate_precision(0.1), 3);
+        assert_eq!(generator.calculate_precision(1.0), 2);
+        assert_eq!(generator.calculate_precision(10.0), 1);
+        assert_eq!(generator.calculate_precision(100.0), 0);
     }
 
     #[test]
@@ -466,10 +452,21 @@ mod tests {
         assert_eq!(generator.calculate_weight(1.0, step), 40); // Base step
     }
 
+    fn map(mode: PriceScaleMode, min: f64, max: f64) -> PriceMap {
+        let transform = crate::scales::PriceTransform { mode, base: 0.0 };
+        PriceMap::new(
+            transform,
+            crate::scales::PriceRange::new(min, max),
+            0.0,
+            500.0,
+            false,
+        )
+    }
+
     #[test]
     fn test_linear_marks_generation() {
         let generator = PriceMarkGenerator::new();
-        let marks = generator.generate_linear_marks(100.0, 200.0, 500.0, 0.0, 500.0);
+        let marks = generator.generate_marks(&map(PriceScaleMode::Normal, 100.0, 200.0));
 
         assert!(!marks.is_empty());
         assert!(marks.len() <= 20); // Max marks constraint
@@ -488,7 +485,8 @@ mod tests {
     #[test]
     fn test_log_marks_generation() {
         let generator = PriceMarkGenerator::new();
-        let marks = generator.generate_log_marks(10.0, 1000.0, 500.0, 0.0, 500.0);
+        let (lo, hi) = (10f64.ln(), 1000f64.ln());
+        let marks = generator.generate_marks(&map(PriceScaleMode::Logarithmic, lo, hi));
 
         assert!(!marks.is_empty());
 
@@ -498,5 +496,15 @@ mod tests {
         let has_1000 = marks.iter().any(|m| (m.price - 1000.0).abs() < 0.01);
 
         assert!(has_10 || has_100 || has_1000);
+
+        // 18,200..22,800 holds one multiple of a power of ten (20,000), so the marks
+        // fall back to price steps: 4,600 over 15 target marks rounds up to 500.
+        let (lo, hi) = (18_200f64.ln(), 22_800f64.ln());
+        let marks = generator.generate_marks(&map(PriceScaleMode::Logarithmic, lo, hi));
+        let labels: Vec<&str> = marks.iter().map(|m| m.label.as_str()).collect();
+        let expected = [
+            "18500", "19000", "19500", "20000", "20500", "21000", "21500", "22000", "22500",
+        ];
+        assert_eq!(labels, expected);
     }
 }

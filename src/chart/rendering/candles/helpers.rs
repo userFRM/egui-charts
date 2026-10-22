@@ -2,32 +2,9 @@
 //!
 //! Shared utilities for price-to-pixel conversion and drawing primitives.
 
+use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
-
-/// Price range context for coordinate calculations
-#[derive(Clone, Copy)]
-pub struct PriceCoords {
-    pub min_price: f64,
-    pub price_range: f64,
-    pub rect: Rect,
-}
-
-impl PriceCoords {
-    pub fn new(min_price: f64, max_price: f64, rect: Rect) -> Self {
-        Self {
-            min_price,
-            price_range: (max_price - min_price).max(1e-12),
-            rect,
-        }
-    }
-
-    /// Convert price to Y coordinate
-    #[inline]
-    pub fn price_to_y(&self, price: f64) -> f32 {
-        self.rect.max.y - ((price - self.min_price) / self.price_range) as f32 * self.rect.height()
-    }
-}
 
 /// Pre-computed pixel Y coordinates for a single OHLC bar.
 ///
@@ -41,7 +18,7 @@ pub struct OhlcYCoords {
 }
 
 impl OhlcYCoords {
-    pub fn from_bar(bar: &crate::model::Bar, coords: &PriceCoords) -> Self {
+    pub fn from_bar(bar: &crate::model::Bar, coords: &PriceMap) -> Self {
         let y_open = coords.price_to_y(bar.open);
         let y_high = coords.price_to_y(bar.high);
         let y_low = coords.price_to_y(bar.low);

@@ -1,6 +1,7 @@
-use super::context::{ChartMapping, LinearPriceMap, RenderContext};
+use super::context::{ChartMapping, RenderContext};
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::model::Bar;
+use crate::scales::PriceMap;
 use crate::styles::typography;
 /// Tooltip Renderers
 ///
@@ -17,7 +18,7 @@ pub fn render_tooltip_with_options(
     hover_pos: Pos2,
     candle: &Bar,
     options: &TooltipOptions,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     coords: &ChartMapping,
     visible_data: &[Bar],
 ) {
@@ -252,7 +253,7 @@ pub fn render_magnifier_tooltip(
     hover_pos: Pos2,
     _candle: &Bar,
     options: &TooltipOptions,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     coords: &ChartMapping,
     visible_data: &[Bar],
 ) {
@@ -292,20 +293,9 @@ pub fn render_magnifier_tooltip(
     let src_width = size / zoom;
     let src_height = size / zoom;
 
-    // Calculate the price range visible in magnifier. A zero-height rect yields
-    // no price-per-pixel gradient rather than an infinite/NaN one.
-    let rect_height = context.rect.height() as f64;
-    let price_per_pixel = if rect_height.abs() < f64::EPSILON {
-        0.0
-    } else {
-        price_scale.price_range() / rect_height
-    };
-    let center_price =
-        price_scale.min_price + (context.rect.max.y - hover_pos.y) as f64 * price_per_pixel;
-
-    let mag_price_range = src_height as f64 * price_per_pixel;
-    let mag_min_price = center_price - mag_price_range / 2.0;
-    let mag_max_price = center_price + mag_price_range / 2.0;
+    // Prices at the bottom and top edges of the magnified area
+    let mag_min_price = price_scale.y_to_price(hover_pos.y + src_height / 2.0);
+    let mag_max_price = price_scale.y_to_price(hover_pos.y - src_height / 2.0);
 
     // Calculate bar indices visible in magnifier. Degenerate bar spacing maps
     // every pixel onto the same bar rather than dividing by zero.

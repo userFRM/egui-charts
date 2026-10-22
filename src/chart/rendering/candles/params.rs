@@ -2,16 +2,17 @@
 //!
 //! Consolidates the many parameters needed for chart rendering into organized structs.
 
+use crate::scales::PriceMap;
 use egui::Color32;
 
-use crate::chart::renderers::{LinearPriceMap, RenderContext, StyleColors};
+use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::model::{Bar, PriceSource};
 
 /// Core rendering contexts and data
 pub struct CandleDataContext<'a> {
     pub price_ctx: &'a RenderContext<'a>,
     pub volume_ctx: &'a RenderContext<'a>,
-    pub price_scale: &'a LinearPriceMap,
+    pub price_scale: &'a PriceMap,
     pub colors: &'a StyleColors,
     /// The bars in the current visible window.
     pub visible_data: &'a [Bar],

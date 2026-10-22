@@ -25,6 +25,7 @@ pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
 };
+#[cfg(feature = "widget")]
 pub(crate) use pricescale::auto_scale_span;
 pub use pricescale::{
     PriceMap, PriceRange, PriceScale, PriceScaleId, PriceScaleMargins, PriceScaleMode,

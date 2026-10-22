@@ -435,9 +435,8 @@ impl ChartBuilder {
 
     /// Configure the right price scale
     ///
-    /// The right price scale is the primary scale, shown by default. The
-    /// visibility flag is applied; the mode is stored, but the chart currently
-    /// renders the right scale in normal (linear) mode whatever mode is set.
+    /// The right price scale is the primary scale, shown by default. The chart
+    /// starts with this visibility and scale mode.
     ///
     /// # Examples
     /// ```
@@ -523,8 +522,10 @@ impl ChartBuilder {
         self.config = self.theme.apply_to_config(self.config);
 
         // Create chart
+        let right_scale_mode = self.config.right_axis_scale_mode;
         let mut chart =
             Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
+        chart.state.price_scale_mut().options_mut().mode = right_scale_mode;
 
         chart.set_chart_type(self.chart_type);
         chart.set_visible_bars(self.visible_candles);
@@ -988,7 +989,7 @@ impl TradingChart {
     ///
     /// Forwards to [`Chart::apply_series_settings`](crate::Chart::apply_series_settings),
     /// copying candle colors and the price source from `settings` into the
-    /// chart config.
+    /// chart config and the scale mode and inversion into the main price scale.
     pub fn apply_series_settings(&mut self, settings: &crate::chart::series::SeriesSettings) {
         self.chart.apply_series_settings(settings);
     }

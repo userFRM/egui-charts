@@ -231,6 +231,7 @@ pub(super) fn hit_test_main_chart(
 mod selection_tests {
     use super::*;
     use crate::model::Bar;
+    use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::studies::{CustomIndicator, IndicatorValue};
     use chrono::{TimeZone, Utc};
     use egui::{Pos2, Rect, Vec2};
@@ -255,7 +256,15 @@ mod selection_tests {
             })
             .collect();
         // base_idx = last bar, no scroll offset, price window covers the data.
-        let mapping = ChartMapping::new(rect, 40.0, 0, bars.len() - 1, 0.0, 8.0, 16.0);
+        let range = PriceRange::new(8.0, 16.0);
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            range,
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        let mapping = ChartMapping::new(rect, 40.0, 0, bars.len() - 1, 0.0, price);
         (mapping, bars)
     }
 

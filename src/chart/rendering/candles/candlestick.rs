@@ -3,17 +3,16 @@
 //! Includes: Candlestick, OHLC Bars, Hollow Candles, Heikin-Ashi, Volume Candles
 
 use super::heikin_ashi;
-use super::helpers::{
-    OhlcYCoords, PriceCoords, bar_color, draw_body_filled, draw_body_hollow, draw_wicks,
-};
-use crate::chart::renderers::{self, BarRenderParams, LinearPriceMap, RenderContext, StyleColors};
+use super::helpers::{OhlcYCoords, bar_color, draw_body_filled, draw_body_hollow, draw_wicks};
+use crate::chart::renderers::{self, BarRenderParams, RenderContext, StyleColors};
 use crate::model::Bar;
+use crate::scales::PriceMap;
 use egui::Color32;
 
 pub(super) fn render_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
     start_idx: usize,
@@ -39,7 +38,7 @@ pub(super) fn render_candles(
 pub(super) fn render_ohlc_bars(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
     start_idx: usize,
@@ -66,7 +65,7 @@ pub(super) fn render_ohlc_bars(
 pub(super) fn render_hollow_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
     start_idx: usize,
@@ -80,7 +79,7 @@ pub(super) fn render_hollow_candles(
     bearish_color: Color32,
 ) {
     let painter = price_ctx.painter;
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_ctx.rect);
+    let coords = *price_scale;
 
     for (i, bar) in visible_data.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
@@ -111,7 +110,7 @@ pub(super) fn render_hollow_candles(
 pub(super) fn render_heikin_ashi(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
     full_data: &[Bar],
@@ -134,7 +133,7 @@ pub(super) fn render_heikin_ashi(
     let ha_window = heikin_ashi::window(full_data, revision, start_idx, visible_data.len());
 
     let painter = price_ctx.painter;
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_ctx.rect);
+    let coords = *price_scale;
 
     for (i, bar) in ha_window.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
@@ -167,7 +166,7 @@ pub(super) fn render_heikin_ashi(
 pub(super) fn render_volume_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
     start_idx: usize,
@@ -180,7 +179,7 @@ pub(super) fn render_volume_candles(
     bearish_color: Color32,
 ) {
     let painter = price_ctx.painter;
-    let coords = PriceCoords::new(price_scale.min_price, price_scale.max_price, price_ctx.rect);
+    let coords = *price_scale;
 
     for (i, bar) in visible_data.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);

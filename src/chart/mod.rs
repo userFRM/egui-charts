@@ -37,7 +37,7 @@
 //!
 //! # Internal Modules (crate-only)
 //!
-//! The remaining sub-modules (`state`, `helpers`, `hit_test`, `indicators`,
+//! The remaining sub-modules (`state`, `hit_test`, `indicators`,
 //! `selection`, `cursor_modes`, `renderers`, `rendering`) are implementation
 //! details and not part of the public API.
 //!
@@ -70,7 +70,6 @@ pub mod series;
 
 // Internal engine modules — used within the crate but not part of the public API.
 pub(crate) mod cursor_modes;
-pub(crate) mod helpers;
 pub(crate) mod hit_test;
 pub(crate) mod indicators;
 pub(crate) mod renderers;

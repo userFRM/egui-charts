@@ -1,7 +1,7 @@
-use super::context::{ChartMapping, LinearPriceMap, RenderContext, StyleColors};
+use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::model::Bar;
 use crate::scales::{
-    PriceMarkGenerator, PriceScaleId, PriceScaleMode, TickMark, TickMarkGenerator,
+    PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkGenerator,
     TickMarkGeneratorConfig, TickMarkWeight, TimeFormatter,
 };
 use crate::styles::typography;
@@ -11,42 +11,23 @@ use egui::{Color32, FontId, Pos2, Rect};
 
 /// Renders price labels on the right side using smart tick mark generation
 /// Uses intelligent price mark distribution system
-pub fn render_price_labels(
-    context: &RenderContext,
-    price_scale: &LinearPriceMap,
-    colors: &StyleColors,
-    scale_mode: PriceScaleMode,
-) {
-    render_price_labels_at_pos(
-        context,
-        price_scale,
-        colors,
-        scale_mode,
-        PriceScaleId::Right,
-    );
+pub fn render_price_labels(context: &RenderContext, price_scale: &PriceMap, colors: &StyleColors) {
+    render_price_labels_at_pos(context, price_scale, colors, PriceScaleId::Right);
 }
 
 /// Renders price labels at the specified position (left or right)
 /// Core implementation for price label rendering
 pub fn render_price_labels_at_pos(
     context: &RenderContext,
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     colors: &StyleColors,
-    scale_mode: PriceScaleMode,
     position: PriceScaleId,
 ) {
     // Create price mark generator with default config
     let generator = PriceMarkGenerator::new();
 
     // Generate smart price marks using "nice numbers" algorithm
-    let marks = generator.generate_marks(
-        price_scale.min_price,
-        price_scale.max_price,
-        context.rect.height(),
-        scale_mode,
-        context.rect.min.y,
-        context.rect.max.y,
-    );
+    let marks = generator.generate_marks(price_scale);
 
     // Determine positioning based on scale position
     let (x_offset, alignment) = match position {

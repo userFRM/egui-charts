@@ -18,6 +18,7 @@ use crate::chart::cursor_modes::CursorModeState;
 use crate::drawings::DrawingInteractionMode;
 use crate::drawings::DrawingManager;
 use crate::drawings::rendering::ChartView;
+use crate::scales::PriceMap;
 use crate::widget::Chart;
 use egui::{Painter, Rect, Response, Ui};
 
@@ -39,15 +40,11 @@ impl Chart {
         cursor_modes: &mut CursorModeState,
         response: &Response,
         price_rect: Rect,
-        adjusted_min: f64,
-        adjusted_max: f64,
+        price_map: &PriceMap,
         painter: &Painter,
         timescale: &crate::model::TimeScale,
     ) {
-        let adjusted_range = (adjusted_max - adjusted_min).max(1e-12);
         let rect_min_x = price_rect.min.x;
-        let rect_max_y = price_rect.max.y;
-        let rect_height = price_rect.height();
 
         let rect_width = price_rect.width();
 
@@ -64,14 +61,10 @@ impl Chart {
         // Prevents pixelation when zooming - preserves sub-pixel positioning
         let x_to_bar_precise =
             |x: f32| -> f32 { timescale.coord_to_idx(x, rect_min_x, rect_width) };
-        let price_to_y = |price: f64| -> f32 {
-            let ratio = (price - adjusted_min) / adjusted_range;
-            rect_max_y - (ratio as f32 * rect_height)
-        };
-        let y_to_price = |y: f32| -> f64 {
-            let ratio = ((rect_max_y - y) / rect_height).clamp(0.0, 1.0) as f64;
-            adjusted_min + ratio * adjusted_range
-        };
+        let price_to_y = |price: f64| -> f32 { price_map.price_to_y(price) };
+        // Points placed with the pointer stay on the pane.
+        let y_to_price =
+            |y: f32| -> f64 { price_map.y_to_price(y.clamp(price_rect.min.y, price_rect.max.y)) };
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
         drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);

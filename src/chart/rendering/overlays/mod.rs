@@ -9,8 +9,9 @@ pub use realtime_btn::render_realtime_btn;
 // Re-export directly from renderers (no wrapper needed)
 pub use crate::chart::renderers::{render_legend, render_ohlc_info};
 
-use crate::chart::renderers::{ChartMapping, LinearPriceMap, RenderContext};
+use crate::chart::renderers::{ChartMapping, RenderContext};
 use crate::config::CrosshairOptions;
+use crate::scales::PriceMap;
 use egui::Pos2;
 
 /// Renders crosshair with full customization from CrosshairOptions.
@@ -21,7 +22,7 @@ pub fn render_crosshair_with_options(
     price_ctx: &RenderContext,
     hover_pos: Pos2,
     visible_data: &[crate::model::Bar],
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     coords: &ChartMapping,
     options: &CrosshairOptions,
 ) {

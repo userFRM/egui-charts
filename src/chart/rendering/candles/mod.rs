@@ -138,7 +138,6 @@ pub fn render_chart_type(
         ChartType::Line => {
             line::render_line(
                 painter,
-                price_rect,
                 ctx.volume_ctx,
                 ctx.visible_data,
                 ctx.start_idx,
@@ -156,7 +155,6 @@ pub fn render_chart_type(
         ChartType::LineWithMarkers => {
             line::render_line_with_markers(
                 painter,
-                price_rect,
                 ctx.volume_ctx,
                 ctx.visible_data,
                 ctx.start_idx,
@@ -174,7 +172,6 @@ pub fn render_chart_type(
         ChartType::StepLine => {
             line::render_step_line(
                 painter,
-                price_rect,
                 ctx.volume_ctx,
                 ctx.visible_data,
                 ctx.start_idx,
@@ -212,7 +209,6 @@ pub fn render_chart_type(
         ChartType::HlcArea => {
             area::render_hlc_area(
                 painter,
-                price_rect,
                 ctx.volume_ctx,
                 ctx.visible_data,
                 ctx.start_idx,
@@ -252,7 +248,6 @@ pub fn render_chart_type(
         ChartType::HighLow => {
             range::render_high_low(
                 painter,
-                price_rect,
                 ctx.volume_ctx,
                 ctx.visible_data,
                 ctx.start_idx,
@@ -270,7 +265,6 @@ pub fn render_chart_type(
         ChartType::Range => {
             range::render_range_bars(
                 painter,
-                price_rect,
                 ctx.visible_data,
                 ctx.start_idx,
                 params.bar_width(),
@@ -356,8 +350,7 @@ pub fn render_chart_type(
                 price_rect,
                 ctx.visible_data,
                 ctx.start_idx,
-                ctx.price_scale.min_price,
-                ctx.price_scale.max_price,
+                ctx.price_scale,
                 &tpo_config,
                 &idx_to_coord,
                 params.chart_rect_min_x(),

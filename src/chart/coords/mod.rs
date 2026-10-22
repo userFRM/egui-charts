@@ -14,6 +14,7 @@
 //! x = rect.min.x + rect.width() - (delta_from_right + 0.5) * bar_spacing - 1.0
 //! ```
 
+use crate::scales::PriceMap;
 use egui::{Pos2, Rect};
 
 /// Unified coordinate mapping for charts and indicator panes.
@@ -36,10 +37,9 @@ pub struct ChartMapping {
     pub base_idx: usize,
     /// Right-side offset for chart scrolling (in bar units)
     pub right_offset: f32,
-    /// Minimum price in the visible range
-    pub price_min: f64,
-    /// Maximum price in the visible range
-    pub price_max: f64,
+    /// Price-to-y mapping of the pane; it carries its own vertical extent,
+    /// which need not match `rect`
+    pub price: PriceMap,
 }
 
 impl ChartMapping {
@@ -50,8 +50,7 @@ impl ChartMapping {
         start_idx: usize,
         base_idx: usize,
         right_offset: f32,
-        price_min: f64,
-        price_max: f64,
+        price: PriceMap,
     ) -> Self {
         Self {
             rect,
@@ -59,29 +58,7 @@ impl ChartMapping {
             start_idx,
             base_idx,
             right_offset,
-            price_min,
-            price_max,
-        }
-    }
-
-    /// Create a ChartMapping for X-axis only (no price conversion).
-    ///
-    /// Useful for indicator panes that have their own Y-axis range.
-    pub fn x_only(
-        rect: Rect,
-        bar_spacing: f32,
-        start_idx: usize,
-        base_idx: usize,
-        right_offset: f32,
-    ) -> Self {
-        Self {
-            rect,
-            bar_spacing,
-            start_idx,
-            base_idx,
-            right_offset,
-            price_min: 0.0,
-            price_max: 1.0,
+            price,
         }
     }
 
@@ -173,27 +150,13 @@ impl ChartMapping {
     /// Convert price to Y screen coordinate.
     #[inline]
     pub fn price_to_y(&self, price: f64) -> f32 {
-        let price_range = self.price_max - self.price_min;
-        if price_range.abs() < f64::EPSILON {
-            return self.rect.center().y;
-        }
-        let ratio = (price - self.price_min) / price_range;
-        self.rect.max.y - (ratio as f32 * self.rect.height())
+        self.price.price_to_y(price)
     }
 
     /// Convert Y screen coordinate to price (inverse of price_to_y).
-    ///
-    /// A zero-height rect has no inverse mapping, so the lower price bound is
-    /// returned rather than dividing by zero and yielding an infinite/NaN price.
     #[inline]
     pub fn y_to_price(&self, y: f32) -> f64 {
-        let height = self.rect.height();
-        if height.abs() < f32::EPSILON {
-            return self.price_min;
-        }
-        let price_range = self.price_max - self.price_min;
-        let ratio = (self.rect.max.y - y) / height;
-        self.price_min + (ratio as f64 * price_range)
+        self.price.y_to_price(y)
     }
 
     /// Check if a Y coordinate is within the visible chart bounds.
@@ -228,16 +191,10 @@ impl ChartMapping {
     // Utility methods
     // =========================================================================
 
-    /// Create a new ChartMapping with a different price range (for indicator panes).
-    pub fn with_price_range(self, price_min: f64, price_max: f64) -> Self {
-        Self {
-            price_min,
-            price_max,
-            ..self
-        }
-    }
-
     /// Create a new ChartMapping with a different rect (for sub-regions).
+    ///
+    /// Only the x mapping and the bounds checks follow the new rect: `price`
+    /// still maps onto its own pane.
     pub fn with_rect(self, rect: Rect) -> Self {
         Self { rect, ..self }
     }
@@ -246,10 +203,32 @@ impl ChartMapping {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scales::{PriceRange, PriceTransform};
+
+    /// A mapping with a linear price axis over `min..max`.
+    fn mapping(
+        rect: Rect,
+        bar_spacing: f32,
+        start_idx: usize,
+        base_idx: usize,
+        right_offset: f32,
+        min: f64,
+        max: f64,
+    ) -> ChartMapping {
+        let range = PriceRange::new(min, max);
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            range,
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        ChartMapping::new(rect, bar_spacing, start_idx, base_idx, right_offset, price)
+    }
 
     #[test]
     fn test_idx_to_x_roundtrip() {
-        let mapping = ChartMapping::new(
+        let mapping = mapping(
             Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
             10.0, // bar_spacing
             50,   // start_idx
@@ -271,7 +250,7 @@ mod tests {
     fn test_price_to_y_finite_on_flat_range() {
         // A flat price window must map to a finite, in-rect y rather than
         // dividing by zero and producing an off-screen NaN/inf.
-        let mapping = ChartMapping::new(
+        let mapping = mapping(
             Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
             10.0,
             50,
@@ -289,7 +268,7 @@ mod tests {
     fn test_inverse_transforms_on_degenerate_inputs() {
         // Zero bar spacing and zero rect height have no inverse; the guards
         // return finite, sensible fallbacks instead of NaN/inf.
-        let degenerate = ChartMapping::new(
+        let degenerate = mapping(
             Rect::from_min_size(Pos2::new(0.0, 0.0), egui::Vec2::new(0.0, 0.0)),
             0.0, // bar_spacing
             0,
@@ -310,7 +289,7 @@ mod tests {
     #[test]
     fn test_local_idx_at_x_resolves_bar_under_cursor() {
         // 6 visible bars [50..=55], anchored so the data fills the rect.
-        let mapping = ChartMapping::new(
+        let mapping = mapping(
             Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
             10.0, // bar_spacing
             50,   // start_idx
@@ -335,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_local_idx_at_x_edges_and_empty() {
-        let mapping = ChartMapping::new(
+        let mapping = mapping(
             Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
             10.0,
             50,
@@ -375,7 +354,7 @@ mod tests {
     fn test_local_idx_at_x_degenerate_spacing() {
         // Zero bar spacing has no inverse; resolution declines rather than dividing
         // by zero.
-        let mapping = ChartMapping::new(
+        let mapping = mapping(
             Rect::from_min_size(Pos2::new(0.0, 0.0), egui::Vec2::new(800.0, 400.0)),
             0.0,
             0,
@@ -389,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_price_to_y_roundtrip() {
-        let mapping = ChartMapping::new(
+        let mapping = mapping(
             Rect::from_min_size(Pos2::new(100.0, 50.0), egui::Vec2::new(800.0, 400.0)),
             10.0,
             50,  // start_idx

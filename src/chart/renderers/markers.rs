@@ -1,6 +1,7 @@
-use super::context::{ChartMapping, LinearPriceMap, RenderContext};
+use super::context::{ChartMapping, RenderContext};
 /// Marker renderer for chart annotations
 use crate::model::{Bar, Marker, MarkerPos, MarkerShape};
+use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, epaint::StrokeKind};
 
@@ -9,7 +10,7 @@ pub fn render_markers(
     context: &RenderContext,
     markers: &[Marker],
     visible_data: &[Bar],
-    price_scale: &LinearPriceMap,
+    price_scale: &PriceMap,
     coords: &ChartMapping,
 ) {
     for marker in markers {
@@ -21,28 +22,28 @@ pub fn render_markers(
             // Calculate marker position using ChartCoords helper
             let x = coords.idx_to_x(global_idx);
 
-            // Calculate Y position based on marker position setting using LinearPriceMap helper
+            // Calculate Y position based on marker position setting
             let y = match marker.position {
                 MarkerPos::AboveBar => {
-                    let high_y = price_scale.price_to_y(bar.high, context.rect);
+                    let high_y = price_scale.price_to_y(bar.high);
                     high_y - 20.0 * marker.size // 20 pixels above high
                 }
                 MarkerPos::BelowBar => {
-                    let low_y = price_scale.price_to_y(bar.low, context.rect);
+                    let low_y = price_scale.price_to_y(bar.low);
                     low_y + 20.0 * marker.size // 20 pixels below low
                 }
-                MarkerPos::InBar => price_scale.price_to_y(bar.close, context.rect),
+                MarkerPos::InBar => price_scale.price_to_y(bar.close),
                 MarkerPos::Top => context.rect.top() + 20.0 * marker.size,
                 MarkerPos::Bottom => context.rect.bottom() - 20.0 * marker.size,
                 MarkerPos::Left | MarkerPos::Right | MarkerPos::Absolute => {
-                    price_scale.price_to_y(bar.close, context.rect)
+                    price_scale.price_to_y(bar.close)
                 }
                 MarkerPos::AbsoluteUp => {
-                    let high_y = price_scale.price_to_y(bar.high, context.rect);
+                    let high_y = price_scale.price_to_y(bar.high);
                     high_y - 10.0 * marker.size
                 }
                 MarkerPos::AbsoluteDown => {
-                    let low_y = price_scale.price_to_y(bar.low, context.rect);
+                    let low_y = price_scale.price_to_y(bar.low);
                     low_y + 10.0 * marker.size
                 }
             };
