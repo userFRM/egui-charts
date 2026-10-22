@@ -157,7 +157,7 @@ mod tests {
         {
             let ctx = egui::Context::default();
             apply_to_egui(&ctx, &theme);
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            ctx.run_ui(Default::default(), |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     // Disabled buttons are exempt from 4.5:1 but must stay as legible as other
                     // disabled buttons; egui fades everything a disabled `Ui` paints.
@@ -186,7 +186,8 @@ mod tests {
                         });
                     }
                 });
-            });
+            })
+            .drop_without_applying_deltas();
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }

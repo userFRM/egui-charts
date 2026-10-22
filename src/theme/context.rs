@@ -124,13 +124,14 @@ mod tests {
             ("dark", Theme::dark()),
             ("edited dark", edited_dark),
         ] {
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            ctx.run_ui(Default::default(), |ui| {
                 apply_to_egui(ui.ctx(), &theme);
                 egui::CentralPanel::default().show(ui, |ui| {
                     themed.show(ui);
                     custom.show(ui);
                 });
-            });
+            })
+            .drop_without_applying_deltas();
             assert_eq!(
                 themed.config.panel_height, 40.0,
                 "{name}: edited height replaced"

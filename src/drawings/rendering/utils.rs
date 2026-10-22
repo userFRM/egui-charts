@@ -122,6 +122,7 @@ mod tests {
                 );
             });
             let n = output.shapes.len();
+            output.drop_without_applying_deltas();
             assert!(n > 0, "the visible part must still be drawn");
             assert!(
                 n <= (visible_width / (dash + gap)) as usize + 2,

@@ -493,6 +493,7 @@ mod tests {
                 _ => None,
             })
             .expect("label text shape");
+        output.drop_without_applying_deltas();
         assert!(galley.elided);
         assert!(galley.size().x <= DESIGN_TOKENS.sizing.charts_ext.order_line_label_width);
     }

@@ -271,7 +271,7 @@ mod tests {
                 screen_rect: Some(screen),
                 ..Default::default()
             };
-            let _ = ctx.run_ui(input, |ui| {
+            ctx.run_ui(input, |ui| {
                 DialogFrame::new("d", Vec2::new(420.0, 240.0)).show(ui.ctx(), |ui| {
                     window = ui.layer_id().id;
                     ui.label("Body");
@@ -279,7 +279,8 @@ mod tests {
                         .secondary("Cancel")
                         .show_with_left(ui, |ui| row = ui.max_rect());
                 });
-            });
+            })
+            .drop_without_applying_deltas();
             (ctx.memory(|m| m.area_rect(window)).unwrap(), row)
         };
         frame(); // sizing pass

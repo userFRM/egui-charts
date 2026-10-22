@@ -475,11 +475,12 @@ mod tests {
         ]);
         let focus_ring_of = |ctx: &egui::Context| {
             let mut focus_ring = Color32::TRANSPARENT;
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            ctx.run_ui(Default::default(), |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     focus_ring = crate::styles::focus::focus_ring_color(ui);
                 });
-            });
+            })
+            .drop_without_applying_deltas();
             focus_ring
         };
         let mut failures = Vec::new();

@@ -551,10 +551,11 @@ pub(crate) mod test_frames {
             events,
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        ctx.run_ui(input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 chart.show(ui);
             });
-        });
+        })
+        .drop_without_applying_deltas();
     }
 }

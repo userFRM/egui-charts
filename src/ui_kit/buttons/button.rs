@@ -335,7 +335,7 @@ mod tests {
         // Multi-byte characters: the width must follow the rendered text, not the byte count.
         let label = "Größe ändern";
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        ctx.run_ui(Default::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let font = egui::TextStyle::Button.resolve(ui.style());
                 let text_width = ui
@@ -346,6 +346,7 @@ mod tests {
                 let width = Button::new(label).show(ui).rect.width();
                 assert_eq!(width, text_width + 2.0 * DESIGN_TOKENS.spacing.xl);
             });
-        });
+        })
+        .drop_without_applying_deltas();
     }
 }

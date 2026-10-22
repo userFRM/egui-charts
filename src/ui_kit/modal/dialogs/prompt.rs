@@ -210,9 +210,10 @@ mod tests {
                 events,
                 ..Default::default()
             };
-            let _ = ctx.run_ui(input, |ui| {
+            ctx.run_ui(input, |ui| {
                 result = PromptDialog::new("p", "Name").show(ui.ctx(), &mut open)
-            });
+            })
+            .drop_without_applying_deltas();
             result
         };
         frame(vec![]); // the input takes focus
