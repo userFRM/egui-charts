@@ -47,8 +47,7 @@ pub enum IndicatorValue {
 ///
 /// 1. Construct the indicator with desired parameters. Built-in indicators
 ///    raise a length (period, smoothing, level or row count) of 0 to 1. No
-///    length or bar value makes `calculate` panic, and its work and memory stay
-///    bounded by the number of bars.
+///    length or bar value makes `calculate` panic or allocate without bound.
 /// 2. Call [`calculate`](Indicator::calculate) with bar data.
 /// 3. Read results via [`values`](Indicator::values).
 /// 4. The rendering layer queries [`is_overlay`](Indicator::is_overlay),
