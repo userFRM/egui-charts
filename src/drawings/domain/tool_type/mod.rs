@@ -11,9 +11,9 @@
 //!   [`DrawingToolType::required_points`]
 //! - **`categories`** -- [`DrawingToolType::all`], [`DrawingToolType::by_category`],
 //!   [`DrawingToolType::categories`]
-//! - **`display`** -- [`Display`](std::fmt::Display), [`FromStr`](std::str::FromStr),
-//!   [`DrawingToolType::as_str`], [`DrawingToolType::data_name`],
-//!   [`DrawingToolType::icon`]
+//! - **`display`** -- [`Display`](std::fmt::Display), [`FromStr`](std::str::FromStr)
+//!   and its [`ParseToolTypeError`], [`DrawingToolType::as_str`],
+//!   [`DrawingToolType::data_name`], [`DrawingToolType::icon`]
 //! - **`interaction_mode`** -- [`DrawingInteractionMode`] enum
 
 mod behavior;
@@ -23,6 +23,7 @@ mod interaction_mode;
 
 use serde::{Deserialize, Serialize};
 
+pub use display::ParseToolTypeError;
 pub use interaction_mode::DrawingInteractionMode;
 
 /// Enumeration of all drawing tool types available in the charting engine.

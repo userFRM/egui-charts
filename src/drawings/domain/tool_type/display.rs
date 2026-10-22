@@ -16,198 +16,172 @@ impl fmt::Display for DrawingToolType {
     }
 }
 
+/// The error [`DrawingToolType`]'s [`FromStr`] returns for a name that is not a
+/// drawing tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseToolTypeError {
+    /// The name that did not parse, as given.
+    pub input: String,
+}
+
+impl fmt::Display for ParseToolTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown drawing tool {:?}", self.input)
+    }
+}
+
+impl std::error::Error for ParseToolTypeError {}
+
 impl FromStr for DrawingToolType {
-    type Err = String;
+    type Err = ParseToolTypeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
+        let name = s.to_lowercase();
+        if let Some(tool) = Self::all()
+            .iter()
+            .find(|tool| tool.as_str().eq_ignore_ascii_case(&name))
+        {
+            return Ok(*tool);
+        }
+        // Names other than the display names.
+        match name.as_str() {
             // Cursors
-            "crosscursor" | "cross cursor" | "crosshair" | "cursor" => Ok(Self::CrossCursor),
-            "dotcursor" | "dot cursor" | "dot" => Ok(Self::DotCursor),
-            "arrowcursor" | "arrow cursor" | "pointer" => Ok(Self::ArrowCursor),
-            "eraser" | "erase" => Ok(Self::Eraser),
+            "crosscursor" | "crosshair" | "cursor" => Ok(Self::CrossCursor),
+            "dotcursor" | "dot" => Ok(Self::DotCursor),
+            "arrowcursor" | "pointer" => Ok(Self::ArrowCursor),
+            "erase" => Ok(Self::Eraser),
 
             // Lines
-            "trendline" | "trend line" | "trend" => Ok(Self::TrendLine),
-            "ray" => Ok(Self::Ray),
-            "infoline" | "info line" | "info" => Ok(Self::InfoLine),
-            "extendedline" | "extended line" | "extended" => Ok(Self::ExtendedLine),
-            "horizontalline" | "horizontal line" | "horizontal" | "hline" => {
-                Ok(Self::HorizontalLine)
-            }
-            "horizontalray" | "horizontal ray" | "hray" => Ok(Self::HorizontalRay),
-            "verticalline" | "vertical line" | "vertical" | "vline" => Ok(Self::VerticalLine),
-            "crossline" | "cross line" | "cross" => Ok(Self::CrossLine),
-            "trendangle" | "trend angle" | "angle" => Ok(Self::TrendAngle),
+            "trendline" | "trend" => Ok(Self::TrendLine),
+            "infoline" | "info" => Ok(Self::InfoLine),
+            "extendedline" | "extended" => Ok(Self::ExtendedLine),
+            "horizontalline" | "horizontal" | "hline" => Ok(Self::HorizontalLine),
+            "horizontalray" | "hray" => Ok(Self::HorizontalRay),
+            "verticalline" | "vertical" | "vline" => Ok(Self::VerticalLine),
+            "crossline" | "cross" => Ok(Self::CrossLine),
+            "trendangle" | "angle" => Ok(Self::TrendAngle),
 
             // Channels
-            "parallelchannel" | "parallel channel" | "channel" => Ok(Self::ParallelChannel),
-            "regressiontrend" | "regression trend" | "regression" | "linear regression" => {
-                Ok(Self::RegressionTrend)
-            }
-            "flattopbottom" | "flat top bottom" | "flat top/bottom" | "flat channel" => {
-                Ok(Self::FlatTopBottom)
-            }
-            "disjointchannel" | "disjoint channel" => Ok(Self::DisjointChannel),
+            "parallelchannel" | "channel" => Ok(Self::ParallelChannel),
+            "regressiontrend" | "regression" | "linear regression" => Ok(Self::RegressionTrend),
+            "flattopbottom" | "flat top bottom" | "flat channel" => Ok(Self::FlatTopBottom),
+            "disjointchannel" => Ok(Self::DisjointChannel),
 
             // Pitchforks
-            "pitchfork" | "andrews pitchfork" | "andrews" => Ok(Self::Pitchfork),
-            "schiffpitchfork" | "schiff pitchfork" | "schiff" => Ok(Self::SchiffPitchfork),
-            "modifiedschiffpitchfork" | "modified schiff pitchfork" | "modified schiff" => {
-                Ok(Self::ModifiedSchiffPitchfork)
-            }
-            "insidepitchfork" | "inside pitchfork" | "inside" => Ok(Self::InsidePitchfork),
+            "andrews pitchfork" | "andrews" => Ok(Self::Pitchfork),
+            "schiffpitchfork" | "schiff" => Ok(Self::SchiffPitchfork),
+            "modifiedschiffpitchfork" | "modified schiff" => Ok(Self::ModifiedSchiffPitchfork),
+            "insidepitchfork" | "inside" => Ok(Self::InsidePitchfork),
 
             // Fibonacci
-            "fibonacci" | "fib" | "fibonacci retracement" | "fib retracement" => {
-                Ok(Self::FibonacciRetracement)
+            "fibonacci" | "fib" | "fibonacci retracement" => Ok(Self::FibonacciRetracement),
+            "fibonacciextension" | "fibonacci extension" | "fib extension" | "fib ext" => {
+                Ok(Self::FibonacciExtension)
             }
-            "fibonacciextension"
-            | "fibonacci extension"
-            | "trend-based fib extension"
-            | "fib extension"
-            | "fib ext" => Ok(Self::FibonacciExtension),
-            "fibonaccichannel" | "fibonacci channel" | "fib channel" => Ok(Self::FibonacciChannel),
-            "fibonaccitimezones"
-            | "fibonacci time zones"
-            | "fib time zone"
-            | "fib time"
-            | "fib time zones" => Ok(Self::FibonacciTimeZones),
-            "fibonaccispeedfan"
-            | "fibonacci speed fan"
-            | "fib speed resistance fan"
-            | "fib speed fan"
-            | "speed fan" => Ok(Self::FibonacciSpeedFan),
-            "trendbasedfibtime"
-            | "trend based fib time"
-            | "trend-based fib time"
-            | "fib trend time" => Ok(Self::TrendBasedFibTime),
-            "fibonaccicircles" | "fibonacci circles" | "fib circles" => Ok(Self::FibonacciCircles),
-            "fibonaccispiral" | "fibonacci spiral" | "fib spiral" | "spiral" => {
-                Ok(Self::FibonacciSpiral)
+            "fibonaccichannel" | "fibonacci channel" => Ok(Self::FibonacciChannel),
+            "fibonaccitimezones" | "fibonacci time zones" | "fib time" | "fib time zones" => {
+                Ok(Self::FibonacciTimeZones)
             }
-            "fibonaccispeedresistancearcs"
-            | "fibonacci speed resistance arcs"
-            | "fib speed resistance arcs"
-            | "fib arcs" => Ok(Self::FibonacciSpeedResistanceArcs),
-            "fibonacciwedge" | "fibonacci wedge" | "fib wedge" => Ok(Self::FibonacciWedge),
-            "pitchfan" | "pitch fan" => Ok(Self::Pitchfan),
+            "fibonaccispeedfan" | "fibonacci speed fan" | "fib speed fan" | "speed fan" => {
+                Ok(Self::FibonacciSpeedFan)
+            }
+            "trendbasedfibtime" | "trend based fib time" | "fib trend time" => {
+                Ok(Self::TrendBasedFibTime)
+            }
+            "fibonaccicircles" | "fibonacci circles" => Ok(Self::FibonacciCircles),
+            "fibonaccispiral" | "fibonacci spiral" | "spiral" => Ok(Self::FibonacciSpiral),
+            "fibonaccispeedresistancearcs" | "fibonacci speed resistance arcs" | "fib arcs" => {
+                Ok(Self::FibonacciSpeedResistanceArcs)
+            }
+            "fibonacciwedge" | "fibonacci wedge" => Ok(Self::FibonacciWedge),
+            "pitch fan" => Ok(Self::Pitchfan),
 
             // Gann
-            "gannbox" | "gann box" => Ok(Self::GannBox),
-            "gannsquare" | "gann square" => Ok(Self::GannSquare),
-            "gannfixed" | "gann fixed" | "gann square fixed" => Ok(Self::GannFixed),
-            "gannfan" | "gann fan" | "gann" => Ok(Self::GannFan),
+            "gannbox" => Ok(Self::GannBox),
+            "gannsquare" => Ok(Self::GannSquare),
+            "gannfixed" | "gann fixed" => Ok(Self::GannFixed),
+            "gannfan" | "gann" => Ok(Self::GannFan),
 
             // Patterns
-            "xabcdpattern" | "xabcd pattern" | "xabcd" => Ok(Self::XABCDPattern),
-            "cypherpattern" | "cypher pattern" | "cypher" => Ok(Self::CypherPattern),
-            "headandshoulders" | "head and shoulders" | "h&s" | "head shoulders" => {
-                Ok(Self::HeadAndShoulders)
-            }
-            "abcdpattern" | "abcd pattern" | "abcd" => Ok(Self::ABCDPattern),
-            "trianglepattern" | "triangle pattern" => Ok(Self::TrianglePattern),
-            "threedrivespattern" | "three drives pattern" | "three drives" => {
-                Ok(Self::ThreeDrivesPattern)
-            }
+            "xabcdpattern" | "xabcd" => Ok(Self::XABCDPattern),
+            "cypherpattern" | "cypher" => Ok(Self::CypherPattern),
+            "headandshoulders" | "h&s" | "head shoulders" => Ok(Self::HeadAndShoulders),
+            "abcdpattern" | "abcd" => Ok(Self::ABCDPattern),
+            "trianglepattern" => Ok(Self::TrianglePattern),
+            "threedrivespattern" | "three drives" => Ok(Self::ThreeDrivesPattern),
 
             // Elliott Wave
-            "elliottimpulse"
-            | "elliott impulse"
-            | "elliott impulse wave (12345)"
-            | "impulse wave"
-            | "impulse" => Ok(Self::ElliottImpulse),
-            "elliottcorrection"
-            | "elliott correction"
-            | "elliott correction wave (abc)"
-            | "correction wave"
-            | "abc" => Ok(Self::ElliottCorrection),
-            "elliotttriangle"
-            | "elliott triangle"
-            | "elliott triangle wave (abcde)"
-            | "triangle wave" => Ok(Self::ElliottTriangle),
-            "elliottdoublecombo"
-            | "elliott double combo"
-            | "elliott double combo wave (wxy)"
-            | "wxy" => Ok(Self::ElliottDoubleCombo),
-            "elliotttriplecombo"
-            | "elliott triple combo"
-            | "elliott triple combo wave (wxyxz)"
-            | "wxyxz" => Ok(Self::ElliottTripleCombo),
+            "elliottimpulse" | "elliott impulse" | "impulse wave" | "impulse" => {
+                Ok(Self::ElliottImpulse)
+            }
+            "elliottcorrection" | "elliott correction" | "correction wave" | "abc" => {
+                Ok(Self::ElliottCorrection)
+            }
+            "elliotttriangle" | "elliott triangle" | "triangle wave" => Ok(Self::ElliottTriangle),
+            "elliottdoublecombo" | "elliott double combo" | "wxy" => Ok(Self::ElliottDoubleCombo),
+            "elliotttriplecombo" | "elliott triple combo" | "wxyxz" => Ok(Self::ElliottTripleCombo),
 
             // Cycles
-            "cycliclines" | "cyclic lines" | "cyclic" => Ok(Self::CyclicLines),
-            "timecycles" | "time cycles" => Ok(Self::TimeCycles),
-            "sineline" | "sine line" | "sine" => Ok(Self::SineLine),
+            "cycliclines" | "cyclic" => Ok(Self::CyclicLines),
+            "timecycles" => Ok(Self::TimeCycles),
+            "sineline" | "sine" => Ok(Self::SineLine),
 
             // Projection
-            "longposition" | "long position" | "long" => Ok(Self::LongPos),
-            "shortposition" | "short position" | "short" => Ok(Self::ShortPos),
-            "forecast" => Ok(Self::Forecast),
-            "barspattern" | "bars pattern" => Ok(Self::BarsPattern),
-            "ghostfeed" | "ghost feed" => Ok(Self::GhostFeed),
-            "projectiontool" | "projection tool" | "projection" => Ok(Self::ProjectionTool),
+            "longposition" | "long" => Ok(Self::LongPos),
+            "shortposition" | "short" => Ok(Self::ShortPos),
+            "barspattern" => Ok(Self::BarsPattern),
+            "ghostfeed" => Ok(Self::GhostFeed),
+            "projectiontool" | "projection tool" => Ok(Self::ProjectionTool),
 
             // Volume Tools
-            "anchoredvwap" | "anchored vwap" | "vwap" => Ok(Self::AnchoredVWAP),
-            "fixedrangevolumeprofile" | "fixed range volume profile" | "volume profile" => {
-                Ok(Self::FixedRangeVolumeProfile)
-            }
-            "anchoredvolumeprofile" | "anchored volume profile" => Ok(Self::AnchoredVolumeProfile),
+            "anchoredvwap" | "vwap" => Ok(Self::AnchoredVWAP),
+            "fixedrangevolumeprofile" | "volume profile" => Ok(Self::FixedRangeVolumeProfile),
+            "anchoredvolumeprofile" => Ok(Self::AnchoredVolumeProfile),
 
             // Measurers
-            "measure" | "ruler" => Ok(Self::Measure),
-            "pricerange" | "price range" => Ok(Self::PriceRange),
-            "daterange" | "date range" | "time range" => Ok(Self::DateRange),
-            "dateandpricerange" | "date and price range" => Ok(Self::DateAndPriceRange),
+            "ruler" => Ok(Self::Measure),
+            "pricerange" => Ok(Self::PriceRange),
+            "daterange" | "time range" => Ok(Self::DateRange),
+            "dateandpricerange" => Ok(Self::DateAndPriceRange),
 
             // Brushes
-            "brush" | "freehand" => Ok(Self::Brush),
-            "highlighter" | "highlight" => Ok(Self::Highlighter),
-            "paintbrush" | "paint brush" | "paint" => Ok(Self::Paintbrush),
+            "freehand" => Ok(Self::Brush),
+            "highlight" => Ok(Self::Highlighter),
+            "paint brush" | "paint" => Ok(Self::Paintbrush),
 
             // Arrows
-            "arrowmarker" | "arrow marker" => Ok(Self::ArrowMarker),
-            "arrow" => Ok(Self::Arrow),
-            "arrowmarkup" | "arrow mark up" | "arrow up" => Ok(Self::ArrowMarkUp),
-            "arrowmarkdown" | "arrow mark down" | "arrow down" => Ok(Self::ArrowMarkDown),
+            "arrowmarker" => Ok(Self::ArrowMarker),
+            "arrowmarkup" | "arrow up" => Ok(Self::ArrowMarkUp),
+            "arrowmarkdown" | "arrow down" => Ok(Self::ArrowMarkDown),
 
             // Shapes
-            "rect" | "rectangle" => Ok(Self::Rect),
-            "rotatedrect" | "rotated rect" | "rotated rectangle" => Ok(Self::RotatedRect),
-            "path" | "multipath" => Ok(Self::Path),
-            "circle" => Ok(Self::Circle),
-            "ellipse" | "oval" => Ok(Self::Ellipse),
-            "polyline" | "poly line" | "multiline" => Ok(Self::Polyline),
-            "triangle" => Ok(Self::Triangle),
-            "arc" => Ok(Self::Arc),
-            "curve" | "bezierquadro" | "bezier quadro" => Ok(Self::Curve),
-            "doublecurve" | "double curve" | "beziercubic" | "bezier cubic" => {
-                Ok(Self::DoubleCurve)
-            }
+            "rect" => Ok(Self::Rect),
+            "rotatedrect" | "rotated rect" => Ok(Self::RotatedRect),
+            "multipath" => Ok(Self::Path),
+            "oval" => Ok(Self::Ellipse),
+            "poly line" | "multiline" => Ok(Self::Polyline),
+            "bezierquadro" | "bezier quadro" => Ok(Self::Curve),
+            "doublecurve" | "beziercubic" | "bezier cubic" => Ok(Self::DoubleCurve),
 
             // Annotations
-            "textlabel" | "text label" | "text" | "label" => Ok(Self::TextLabel),
-            "anchoredtext" | "anchored text" => Ok(Self::AnchoredText),
-            "note" | "textnote" | "text note" => Ok(Self::Note),
-            "pricenote" | "price note" => Ok(Self::PriceNote),
-            "anchorednote" | "anchored note" | "pin" => Ok(Self::AnchoredNote),
-            "table" => Ok(Self::Table),
-            "callout" => Ok(Self::Callout),
-            "comment" => Ok(Self::Comment),
-            "pricelabel" | "price label" => Ok(Self::PriceLabel),
-            "signpost" => Ok(Self::Signpost),
-            "flagnote" | "flag note" | "flag" | "flagmark" | "flag mark" => Ok(Self::FlagNote),
+            "textlabel" | "text label" | "label" => Ok(Self::TextLabel),
+            "anchoredtext" => Ok(Self::AnchoredText),
+            "textnote" | "text note" => Ok(Self::Note),
+            "pricenote" => Ok(Self::PriceNote),
+            "anchorednote" | "anchored note" => Ok(Self::AnchoredNote),
+            "pricelabel" => Ok(Self::PriceLabel),
+            "flagnote" | "flag note" | "flag" | "flagmark" => Ok(Self::FlagNote),
 
             // Content
-            "image" | "img" => Ok(Self::Image),
-            "tweet" | "twitter" => Ok(Self::Tweet),
-            "idea" => Ok(Self::Idea),
+            "img" => Ok(Self::Image),
+            "twitter" => Ok(Self::Tweet),
 
             // Icons
-            "fonticon" | "font icon" | "icon" | "emoji" => Ok(Self::FontIcon),
+            "fonticon" | "font icon" | "emoji" => Ok(Self::FontIcon),
 
-            _ => Err(format!("Invalid drawing tool type: {s}")),
+            _ => Err(ParseToolTypeError {
+                input: s.to_string(),
+            }),
         }
     }
 }

@@ -29,4 +29,4 @@ pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos, LineStyle,
     PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
-pub use tool_type::{DrawingInteractionMode, DrawingToolType};
+pub use tool_type::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
