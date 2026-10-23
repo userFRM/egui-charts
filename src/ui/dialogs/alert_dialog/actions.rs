@@ -2,9 +2,6 @@
 
 use crate::model::Alert;
 
-/// The complete alert handed to the host. Prefer [`Alert`] in new code.
-pub type AlertData = Alert;
-
 /// Dialog result; only a submitted alert reaches the host service.
 #[derive(Clone, Debug)]
 pub enum AlertDialogAction {

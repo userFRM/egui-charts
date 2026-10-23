@@ -131,7 +131,7 @@ pub fn render_alert_levels<'a>(
 /// The host decides whether to open a dialog or save a default alert at the returned price.
 pub fn alert_shortcut_price(ui: &mut Ui, mapping: &ChartMapping) -> Option<f64> {
     let pointer = ui.ctx().pointer_hover_pos()?;
-    if !mapping.rect.contains(pointer)
+    if !ui.rect_contains_pointer(mapping.rect)
         || ui.ctx().egui_wants_keyboard_input()
         || egui::Popup::is_any_open(ui.ctx())
     {

@@ -124,7 +124,7 @@ impl AlertsPanel {
         &self.log
     }
 
-    /// Save a price alert from the shared dialog. The list changes only after a host push.
+    /// Save an alert from the shared dialog. The list changes only after a host push.
     pub fn save(&mut self, alert: Alert) {
         if !alert.is_valid() {
             self.error = Some(FeedError::InvalidData(
@@ -297,8 +297,18 @@ impl AlertsPanel {
                     for alert in &self.alerts {
                         let Some(id) = &alert.id else { continue };
                         ui.push_id(&id.0, |ui| {
-                            ui.label(RichText::new(&alert.symbol).strong());
+                            let subject = alert.watchlist.as_ref().map_or_else(
+                                || alert.symbol.clone(),
+                                |id| format!("Watchlist: {id}"),
+                            );
+                            ui.label(RichText::new(subject).strong());
                             ui.label(alert.condition.to_string());
+                            if !alert.additional_conditions.is_empty() {
+                                ui.label(format!(
+                                    "{} additional conditions",
+                                    alert.additional_conditions.len()
+                                ));
+                            }
                             if !alert.name.is_empty() {
                                 ui.label(&alert.name);
                             }

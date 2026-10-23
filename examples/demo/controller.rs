@@ -2056,7 +2056,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
-        let frame = |app: &mut DemoApp, events: Vec<egui::Event>, _modifiers: egui::Modifiers| {
+        let frame = |app: &mut DemoApp, events: Vec<egui::Event>, covered: bool| {
             ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -2068,13 +2068,23 @@ mod tests {
                 },
                 |ui| {
                     app.show_chart(ui, egui::Color32::BLACK);
+                    if covered {
+                        egui::Window::new("Settings overlay")
+                            .fixed_pos(
+                                app.chart.get_chart_mapping().rect.center()
+                                    - egui::vec2(50.0, 50.0),
+                            )
+                            .show(ui.ctx(), |ui| {
+                                ui.label("Settings");
+                            });
+                    }
                 },
             )
             .drop_without_applying_deltas();
             app.alerts.poll(&ctx, &mut app.toasts);
         };
-        frame(&mut app, vec![], egui::Modifiers::NONE);
-        frame(&mut app, vec![], egui::Modifiers::NONE);
+        frame(&mut app, vec![], false);
+        frame(&mut app, vec![], false);
         let map = app.chart.get_chart_mapping();
         let point = egui::pos2(map.rect.center().x, map.rect.center().y);
         let range = map.price.range();
@@ -2091,7 +2101,7 @@ mod tests {
                     modifiers: egui::Modifiers::ALT,
                 },
             ],
-            egui::Modifiers::ALT,
+            false,
         );
         assert_eq!(app.alerts.alerts().len(), 1);
         assert_eq!(
@@ -2107,7 +2117,7 @@ mod tests {
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
             }],
-            egui::Modifiers::NONE,
+            false,
         );
         let target = point + egui::vec2(0.0, 45.0);
         let button = |pos, pressed| egui::Event::PointerButton {
@@ -2117,18 +2127,14 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         };
         let scale = app.chart.get_time_scale_state();
-        frame(&mut app, vec![button(point, true)], egui::Modifiers::NONE);
+        frame(&mut app, vec![button(point, true)], false);
         frame(
             &mut app,
             vec![egui::Event::PointerMoved(point + egui::vec2(0.0, 5.0))],
-            egui::Modifiers::NONE,
+            false,
         );
-        frame(
-            &mut app,
-            vec![egui::Event::PointerMoved(target)],
-            egui::Modifiers::NONE,
-        );
-        frame(&mut app, vec![button(target, false)], egui::Modifiers::NONE);
+        frame(&mut app, vec![egui::Event::PointerMoved(target)], false);
+        frame(&mut app, vec![button(target, false)], false);
         let AlertCondition::Crossing(level) = app.alerts.alerts()[0].condition else {
             panic!("expected crossing");
         };
@@ -2142,6 +2148,24 @@ mod tests {
             app.chart.get_time_scale_state(),
             scale,
             "dragging an alert must not pan the chart"
+        );
+        frame(&mut app, vec![egui::Event::PointerMoved(point)], true);
+        frame(&mut app, vec![], true);
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::ALT,
+            }],
+            true,
+        );
+        assert_eq!(
+            app.alerts.alerts().len(),
+            1,
+            "a covering window owns the hovered point"
         );
     }
 

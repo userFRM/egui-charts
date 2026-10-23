@@ -108,7 +108,6 @@ impl egui_charts::services::Storage for DemoAlerts {
 struct Evaluation {
     sample: Option<(chrono::DateTime<chrono::Utc>, u64, u64)>,
     previous: Vec<(Option<f64>, Option<f64>)>,
-    satisfied: bool,
     triggered_bar: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -147,8 +146,7 @@ impl DemoAlerts {
             let bar = &bars[index];
             let run = evaluation.entry(id.clone()).or_default();
             let sample = (bar.time, bar.close.to_bits(), bar.volume.to_bits());
-            if run.sample == Some(sample) || (closed && run.sample.is_some_and(|s| s.0 == bar.time))
-            {
+            if closed && run.sample.is_some_and(|s| s.0 == bar.time) {
                 continue;
             }
             let rules = std::iter::once((&alert.source, &alert.condition)).chain(
@@ -197,10 +195,12 @@ impl DemoAlerts {
                 });
                 inputs.push((current, other));
             }
+            if run.sample == Some(sample) && run.previous == inputs {
+                continue;
+            }
             let fire = satisfied
                 && match alert.frequency {
-                    AlertFrequency::Once => true,
-                    AlertFrequency::EveryTime => !run.satisfied,
+                    AlertFrequency::Once | AlertFrequency::EveryTime => true,
                     AlertFrequency::OncePerBar | AlertFrequency::OncePerBarClose => {
                         run.triggered_bar != Some(bar.time)
                     }
@@ -208,7 +208,6 @@ impl DemoAlerts {
                 };
             run.previous = inputs;
             run.sample = Some(sample);
-            run.satisfied = satisfied;
             if fire {
                 run.triggered_bar = Some(bar.time);
                 if alert.frequency == AlertFrequency::Once {
@@ -484,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn host_evaluation_reports_once_triggers_expiry_and_per_bar_frequency() {
+    fn host_evaluation_preserves_frequency_expiry_and_nonprice_changes() {
         let now = Utc::now();
         let host = Arc::new(DemoAlerts::default());
         let mut panel = AlertsPanel::default();
@@ -539,5 +538,50 @@ mod tests {
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.log().len(), 3);
         assert_eq!(panel.alerts()[2].status, AlertStatus::Active);
+
+        // Every changed sample that crosses is a new occurrence, even on the same bar.
+        let mut alert = Alert::new(chart.symbol(), C::Crossing(100.0));
+        alert.frequency = AlertFrequency::EveryTime;
+        panel.save(alert);
+        for (price, expected) in [(99.0, 4), (101.0, 5), (99.0, 6), (99.0, 6)] {
+            chart.set_data(
+                egui_charts::chart::series::SeriesId::MAIN,
+                vec![
+                    Bar::new(now, 101.0, 101.0, 101.0, 101.0, 20.0),
+                    Bar::new(
+                        now + TimeDelta::minutes(1),
+                        price,
+                        price,
+                        price,
+                        price,
+                        30.0,
+                    ),
+                ],
+            );
+            host.evaluate(&chart, now);
+            panel.poll(&ctx, &mut toasts);
+            assert_eq!(panel.log().len(), expected, "crossing at {price}");
+        }
+
+        // Moving a comparison drawing changes the input even while the feed is idle.
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use egui_charts::model::{AlertComparison, AlertSource};
+        let mut drawing = Drawing::new(7, DrawingToolType::HorizontalLine);
+        drawing.chart_points.push(ChartPoint::new(0.0, 110.0));
+        chart.drawings_mut().drawings.push(drawing);
+        panel.save(Alert::new(
+            chart.symbol(),
+            C::Compare {
+                other: AlertSource::Drawing("7".into()),
+                comparison: AlertComparison::Crossing,
+            },
+        ));
+        host.evaluate(&chart, now);
+        panel.poll(&ctx, &mut toasts);
+        assert_eq!(panel.log().len(), 6);
+        chart.drawings_mut().drawings[0].chart_points[0].price = 90.0;
+        host.evaluate(&chart, now);
+        panel.poll(&ctx, &mut toasts);
+        assert_eq!(panel.log().len(), 7);
     }
 }

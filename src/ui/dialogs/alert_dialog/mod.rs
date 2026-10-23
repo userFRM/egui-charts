@@ -6,6 +6,6 @@ mod actions;
 mod config;
 mod dialog;
 
-pub use actions::{AlertData, AlertDialogAction};
+pub use actions::AlertDialogAction;
 pub use config::AlertDialogConfig;
 pub use dialog::AlertDialog;

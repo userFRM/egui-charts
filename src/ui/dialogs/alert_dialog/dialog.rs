@@ -12,8 +12,8 @@ use crate::model::{
     Alert, AlertComparison, AlertCondition, AlertFrequency, AlertRule, AlertSource,
 };
 use crate::services::{Storage, StoreKind};
-use crate::ui_kit::buttons::ButtonExt;
-use crate::ui_kit::dialog::{DialogFrame, dialog_header};
+use crate::ui_kit::FormGrid;
+use crate::ui_kit::dialog::{DialogFooter, DialogFrame, dialog_header};
 use crate::ui_kit::status_message::{MessageKind, status_message};
 
 /// A dialog that creates or edits the same alert type the host stores and evaluates.
@@ -174,108 +174,110 @@ impl AlertDialog {
         } else {
             "Create Alert"
         };
-        DialogFrame::with_width(title, self.config.width.max(540.0)).show(ctx, |ui| {
+        DialogFrame::with_width(title, self.config.width).show(ctx, |ui| {
             if dialog_header(ui, title) {
                 self.close();
                 action = AlertDialogAction::Cancel;
             }
             ui.separator();
+            let mut expiry = Ok(None);
+            let mut valid = false;
             egui::ScrollArea::vertical()
                 .max_height(
                     (ui.available_height() - 65.0)
-                        .min(self.config.height.max(580.0))
-                        .max(80.0),
+                        .min(self.config.height)
+                        .max(0.0),
                 )
-                .show(ui, |ui| self.form(ui));
-            ui.separator();
-            let expiry = if self.expires.trim().is_empty() {
-                Ok(None)
-            } else {
-                DateTime::parse_from_rfc3339(self.expires.trim())
-                    .map(|t| Some(t.with_timezone(&Utc)))
-            };
-            let valid = self.alert.is_valid() && expiry.is_ok();
-            if !valid {
-                status_message(
-                    ui,
-                    MessageKind::Error,
-                    "Check the subject, levels, lookback and expiry (RFC 3339)",
-                );
+                .show(ui, |ui| {
+                    self.form(ui);
+                    expiry = if self.expires.trim().is_empty() {
+                        Ok(None)
+                    } else {
+                        DateTime::parse_from_rfc3339(self.expires.trim())
+                            .map(|t| Some(t.with_timezone(&Utc)))
+                    };
+                    valid = self.alert.is_valid() && expiry.is_ok();
+                    if !valid {
+                        status_message(
+                            ui,
+                            MessageKind::Error,
+                            "Check the subject, levels, lookback and expiry (RFC 3339)",
+                        );
+                    }
+                    if let Some(error) = &self.error {
+                        status_message(ui, MessageKind::Error, error);
+                    }
+                });
+            let (save, cancel) = DialogFooter::new("Save alert")
+                .secondary("Cancel")
+                .primary_enabled(valid)
+                .show(ui);
+            if cancel {
+                self.close();
+                action = AlertDialogAction::Cancel;
             }
-            if let Some(error) = &self.error {
-                status_message(ui, MessageKind::Error, error);
+            if save {
+                self.alert.expires = expiry.unwrap();
+                action = AlertDialogAction::Create(Box::new(self.alert.clone()));
+                self.close();
             }
-            ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
-                    self.close();
-                    action = AlertDialogAction::Cancel;
-                }
-                if ui
-                    .add_enabled(valid, "Save alert".primary_button())
-                    .clicked()
-                {
-                    self.alert.expires = expiry.unwrap();
-                    action = AlertDialogAction::Create(Box::new(self.alert.clone()));
-                    self.close();
-                }
-            });
         });
         action
     }
 
     fn form(&mut self, ui: &mut Ui) {
-        egui::Grid::new("alert_details")
-            .num_columns(2)
-            .spacing([16.0, 10.0])
-            .show(ui, |ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut self.alert.name);
-                ui.end_row();
-                ui.label("Symbol");
-                ui.text_edit_singleline(&mut self.alert.symbol);
-                ui.end_row();
-                ui.label("Watchlist");
-                egui::ComboBox::from_id_salt("alert_watchlist")
-                    .selected_text(
-                        self.alert
-                            .watchlist
-                            .as_ref()
-                            .and_then(|id| {
-                                self.watchlists
-                                    .iter()
-                                    .find(|(key, _)| key == id)
-                                    .map(|(_, name)| name.as_str())
-                            })
-                            .unwrap_or(self.alert.watchlist.as_deref().unwrap_or("One symbol")),
-                    )
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.alert.watchlist, None, "One symbol");
-                        for (id, name) in &self.watchlists {
-                            ui.selectable_value(&mut self.alert.watchlist, Some(id.clone()), name);
-                        }
-                    });
-                ui.end_row();
-                ui.label("Frequency");
-                egui::ComboBox::from_id_salt("alert_frequency")
-                    .selected_text(self.alert.frequency.to_string())
-                    .show_ui(ui, |ui| {
-                        for (value, label) in [
-                            (AlertFrequency::Once, "Only once"),
-                            (AlertFrequency::EveryTime, "Every time"),
-                            (AlertFrequency::OncePerBar, "Once per bar"),
-                            (AlertFrequency::OncePerBarClose, "Once per bar close"),
-                        ] {
-                            ui.selectable_value(&mut self.alert.frequency, value, label);
-                        }
-                    });
-                ui.end_row();
-                ui.label("Expiry (optional)");
-                ui.text_edit_singleline(&mut self.expires);
-                ui.end_row();
-                ui.label("Message");
-                ui.text_edit_multiline(&mut self.alert.message);
-                ui.end_row();
-            });
+        ui.spacing_mut().text_edit_width = (ui.available_width() - 110.0).clamp(40.0, 280.0);
+        FormGrid::new("alert_details").show(ui, |ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut self.alert.name);
+            ui.end_row();
+            ui.label("Symbol");
+            ui.text_edit_singleline(&mut self.alert.symbol);
+            ui.end_row();
+            ui.label("Watchlist");
+            egui::ComboBox::from_id_salt("alert_watchlist")
+                .width(ui.spacing().text_edit_width)
+                .truncate()
+                .selected_text(
+                    self.alert
+                        .watchlist
+                        .as_ref()
+                        .and_then(|id| {
+                            self.watchlists
+                                .iter()
+                                .find(|(key, _)| key == id)
+                                .map(|(_, name)| name.as_str())
+                        })
+                        .unwrap_or(self.alert.watchlist.as_deref().unwrap_or("One symbol")),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.alert.watchlist, None, "One symbol");
+                    for (id, name) in &self.watchlists {
+                        ui.selectable_value(&mut self.alert.watchlist, Some(id.clone()), name);
+                    }
+                });
+            ui.end_row();
+            ui.label("Frequency");
+            egui::ComboBox::from_id_salt("alert_frequency")
+                .selected_text(self.alert.frequency.to_string())
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        (AlertFrequency::Once, "Only once"),
+                        (AlertFrequency::EveryTime, "Every time"),
+                        (AlertFrequency::OncePerBar, "Once per bar"),
+                        (AlertFrequency::OncePerBarClose, "Once per bar close"),
+                    ] {
+                        ui.selectable_value(&mut self.alert.frequency, value, label);
+                    }
+                });
+            ui.end_row();
+            ui.label("Expiry (optional)");
+            ui.text_edit_singleline(&mut self.expires);
+            ui.end_row();
+            ui.label("Message");
+            ui.text_edit_multiline(&mut self.alert.message);
+            ui.end_row();
+        });
         ui.separator();
         ui.label("All conditions must hold on the same bar");
         ui.push_id("first", |ui| {
@@ -301,13 +303,13 @@ impl AlertDialog {
         }
         if ui.button("Add condition").clicked() {
             self.alert.additional_conditions.push(AlertRule {
-                source: AlertSource::Price,
+                source: self.alert.source.clone(),
                 condition: self.alert.condition.clone(),
             });
         }
         if self.storage.is_some() {
             ui.separator();
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Preset");
                 ui.text_edit_singleline(&mut self.preset_name);
                 if ui
@@ -366,6 +368,8 @@ fn source_picker(
         .map(|(_, name)| name.clone())
         .unwrap_or_else(|| format!("{source:?}"));
     egui::ComboBox::from_id_salt(id)
+        .width(ui.available_width().min(200.0))
+        .truncate()
         .selected_text(label)
         .show_ui(ui, |ui| {
             ui.selectable_value(source, AlertSource::Price, "Price");
@@ -445,7 +449,7 @@ fn rule_form(
         .selected_text(selected)
         .show_ui(ui, |ui| {
             for (value, label) in choices {
-                if ui.selectable_label(label == selected, label).clicked() {
+                if ui.selectable_label(label == selected, label).clicked() && label != selected {
                     if matches!(value, AlertCondition::VolumeAboveAverage { .. }) {
                         *source = AlertSource::Volume;
                     }
@@ -453,7 +457,7 @@ fn rule_form(
                 }
             }
         });
-    ui.horizontal(|ui| match condition {
+    ui.horizontal_wrapped(|ui| match condition {
         AlertCondition::Crossing(v)
         | AlertCondition::CrossingUp(v)
         | AlertCondition::CrossingDown(v)
@@ -522,6 +526,90 @@ mod tests {
         }
         fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
             reply.send(Ok(()));
+        }
+    }
+
+    #[test]
+    fn alert_form_and_actions_fit_narrow_windows_in_both_themes() {
+        for dark in [false, true] {
+            let ctx = Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut dialog = AlertDialog::new();
+            dialog.set_storage(Arc::new(Store::default()));
+            dialog.open_at("SAMPLE".into(), 100.0);
+            dialog
+                .watchlists
+                .push(("list".into(), "A long host watchlist name".repeat(4)));
+            dialog.alert.watchlist = Some("list".into());
+            dialog.alert.frequency = AlertFrequency::OncePerBarClose;
+            dialog.sources.push((
+                AlertSource::Drawing("7".into()),
+                "A long drawing name".repeat(4),
+            ));
+            dialog.alert.additional_conditions.push(AlertRule {
+                source: AlertSource::Volume,
+                condition: AlertCondition::VolumeAboveAverage {
+                    multiplier: 2.0,
+                    bars: 20,
+                },
+            });
+            dialog.alert.additional_conditions.push(AlertRule {
+                source: AlertSource::Price,
+                condition: AlertCondition::Compare {
+                    other: AlertSource::Drawing("7".into()),
+                    comparison: AlertComparison::Crossing,
+                },
+            });
+            for size in [egui::vec2(1440.0, 900.0), egui::vec2(320.0, 450.0)] {
+                for invalid in [false, true] {
+                    dialog.expires = if invalid { "invalid" } else { "" }.into();
+                    for frame in 0..3 {
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    size,
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                dialog.show(ui.ctx());
+                            },
+                        );
+                        let save = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "Save alert" => {
+                                Some((
+                                    shape.clip_rect,
+                                    egui::Rect::from_min_size(text.pos, text.galley.size()),
+                                ))
+                            }
+                            _ => None,
+                        });
+                        output.drop_without_applying_deltas();
+                        if frame > 0 {
+                            let (clip, button) = save.expect("save action is painted");
+                            assert!(
+                                clip.contains_rect(button),
+                                "save action is clipped: {button:?}"
+                            );
+                        }
+                    }
+                    let rect = ctx
+                        .memory(|m| m.area_rect(egui::Id::unique(Some("Create Alert"))))
+                        .unwrap();
+                    assert!(
+                        rect.left() >= 0.0
+                            && rect.right() <= size.x
+                            && rect.top() >= 0.0
+                            && rect.bottom() <= size.y,
+                        "dark={dark}, invalid={invalid}, size={size:?}: {rect:?}"
+                    );
+                }
+            }
         }
     }
 
