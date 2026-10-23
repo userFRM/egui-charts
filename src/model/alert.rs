@@ -340,6 +340,105 @@ mod tests {
     }
 
     #[test]
+    fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
+        type Edit = fn(&mut Alert);
+        let rows: [(Edit, bool); 14] = [
+            (|a| a.condition = AlertCondition::Crossing(f64::NAN), false),
+            (
+                |a| a.condition = AlertCondition::Above(f64::INFINITY),
+                false,
+            ),
+            (|a| a.condition = AlertCondition::Below(-12.5), true),
+            (
+                |a| {
+                    a.condition = AlertCondition::EnteringChannel {
+                        lower: 2.0,
+                        upper: 1.0,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::ExitingChannel {
+                        lower: 1.0,
+                        upper: 1.0,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::MovingBy {
+                        value: 1.0,
+                        bars: 0,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::MovingByPercent {
+                        percent: 0.0,
+                        bars: 1,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::VolumeAboveAverage {
+                        multiplier: -2.0,
+                        bars: 20,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::VolumeAboveAverage {
+                        multiplier: 2.0,
+                        bars: 0,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.source = AlertSource::Study {
+                        id: " ".into(),
+                        output: 0,
+                    }
+                },
+                false,
+            ),
+            (|a| a.symbol.clear(), false),
+            (
+                |a| {
+                    a.symbol.clear();
+                    a.watchlist = Some("technology".into());
+                },
+                true,
+            ),
+            (|a| a.watchlist = Some(" ".into()), false),
+            (
+                |a| {
+                    a.additional_conditions.push(AlertRule {
+                        source: AlertSource::Drawing(String::new()),
+                        condition: AlertCondition::Above(1.0),
+                    })
+                },
+                false,
+            ),
+        ];
+        for (index, (edit, valid)) in rows.into_iter().enumerate() {
+            let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
+            edit(&mut alert);
+            assert_eq!(alert.is_valid(), valid, "row {index}");
+        }
+    }
+
+    #[test]
     fn a_minimal_stored_alert_loads() {
         let stored = r#"{"symbol":"AAPL","condition":{"CrossingUp":101.5}}"#;
         let alert: Alert = serde_json::from_str(stored).unwrap();
