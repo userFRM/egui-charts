@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Selected indicator rows take both their fill and text from `IndicatorDialogConfig`, including when the configuration was frozen from another theme. The default follows the active selection pair. Migration: add `sel_text_color` to configuration literals or use `..Default::default()`. ([#437](https://github.com/userFRM/egui-charts/issues/437))
+
 - Modal dialogs, modal handlers and the command palette read `UiColors::modal_overlay` from the active theme. Light dialogs dim white panels to 159 rather than 75; high contrast uses its window outline without dimming. Migration: add `modal_overlay` to colour literals and saved palettes, or construct colours from a preset. ([#585](https://github.com/userFRM/egui-charts/issues/585))
 
 - Active widget rail entries use the selection colour pair and show the pressed step when held. Alert counts use `danger_bg` with `danger_text` instead of mixing a status foreground with the badge text. ([#387](https://github.com/userFRM/egui-charts/issues/387), [#531](https://github.com/userFRM/egui-charts/issues/531))

@@ -384,7 +384,7 @@ impl IndicatorDialog {
 
         // Selected rows take the selection text colour, as egui's selected labels do.
         let (text, secondary) = if is_sel {
-            let selected = ui.visuals().selection.stroke.color;
+            let selected = config.sel_text_color;
             (selected, selected)
         } else {
             (config.text_color, config.muted_color)
@@ -892,5 +892,23 @@ mod tests {
         assert_eq!(dialog.config.width, 900.0);
         assert_eq!(dialog.config.text_color, Color32::RED);
         assert_eq!(dialog.config.hover_color, hover);
+        // A frozen config keeps its selected text paired with its fill even in another UI theme.
+        let themed = Theme::light().with_accent(Color32::from_rgb(255, 120, 0));
+        let config = IndicatorDialogConfig::from_theme(&themed);
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &Theme::dark());
+        let indicator = dialog.indicators[0].clone();
+        dialog.sel_indicator = Some(indicator.clone());
+        let output = ctx.run_ui(Default::default(), |ui| {
+            dialog.draw_indicator_item(ui, &config, &themed, &indicator, false);
+        });
+        let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == indicator.name => {
+                Some(text.galley.job.sections[0].format.color)
+            }
+            _ => None,
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(text, Some(themed.ui.selection_text));
     }
 }
