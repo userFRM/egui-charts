@@ -1196,6 +1196,13 @@ impl DemoApp {
     }
 
     fn show_widget_bar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        self.widget_bar.active_icon = match self.open_panel {
+            Some(SidePanel::ObjectTree) => Some(RightBarIcon::ObjectTree),
+            Some(SidePanel::Alerts) => Some(RightBarIcon::Alerts),
+            _ => None,
+        };
+        self.widget_bar.active_widget =
+            (self.open_panel == Some(SidePanel::DataWindow)).then_some(1);
         egui::Panel::right("widget_bar")
             .resizable(false)
             .exact_size(49.0)
