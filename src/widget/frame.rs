@@ -1434,7 +1434,7 @@ impl Chart {
                     .map(|local| start_idx + local);
                 let snapped = if price_rect.contains(hover_pos) {
                     index.map_or(hover_pos, |index| {
-                        self.snap_crosshair(hover_pos, &price_map, index, None)
+                        self.snap_crosshair(hover_pos, &price_map, index)
                     })
                 } else {
                     hover_pos
@@ -1469,7 +1469,11 @@ impl Chart {
                         volume_rect.bottom(),
                         false,
                     )
-                    .with_price_precision(Some(0));
+                    .with_price_precision(Some(
+                        self.instrument()
+                            .and_then(|instrument| instrument.volume_decimals)
+                            .unwrap_or(0),
+                    ));
                     let mut pos = hover_pos;
                     if let Some(index) = index {
                         pos.x = coords.idx_to_x(index);
@@ -1596,10 +1600,7 @@ impl Chart {
                     == crate::config::CrosshairMode::Magnet
                     && let Some(index) = coords.local_idx_at_x(pos.x, visible_data.len())
                 {
-                    price_map.y_to_price(
-                        self.snap_crosshair(pos, &price_map, start_idx + index, None)
-                            .y,
-                    )
+                    price_map.y_to_price(self.snap_crosshair(pos, &price_map, start_idx + index).y)
                 } else {
                     price_map.y_to_price(pos.y)
                 };
@@ -2598,7 +2599,10 @@ mod tests {
                                 "{values:?}"
                             );
                             assert_eq!(
-                                values.iter().filter(|text| **text == "0.123").count(),
+                                values
+                                    .windows(2)
+                                    .filter(|pair| *pair == ["Fixture", "0.123"])
+                                    .count(),
                                 2,
                                 "{values:?}"
                             );

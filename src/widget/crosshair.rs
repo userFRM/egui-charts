@@ -12,13 +12,7 @@ impl Chart {
         self.chart_options.crosshair.mode = mode;
     }
 
-    pub(super) fn snap_crosshair(
-        &self,
-        mut pos: Pos2,
-        map: &PriceMap,
-        index: usize,
-        pane: Option<usize>,
-    ) -> Pos2 {
+    pub(super) fn snap_crosshair(&self, mut pos: Pos2, map: &PriceMap, index: usize) -> Pos2 {
         if self.chart_options.crosshair.mode != CrosshairMode::Magnet {
             return pos;
         }
@@ -26,20 +20,17 @@ impl Chart {
             .state
             .shown()
             .get(index)
-            .filter(|_| pane.is_none() && self.main_series_visible)
+            .filter(|_| self.main_series_visible)
             .into_iter()
             .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close]);
         let studies = self
             .studies
             .indicators()
             .iter()
-            .enumerate()
-            .filter(|(at, study)| {
-                !self.chart_type.is_time_independent()
-                    && study.is_visible()
-                    && pane.map_or(study.is_overlay(), |pane| pane == *at)
+            .filter(|study| {
+                !self.chart_type.is_time_independent() && study.is_visible() && study.is_overlay()
             })
-            .flat_map(|(_, study)| {
+            .flat_map(|study| {
                 (0..study.line_cnt())
                     .filter(|line| study.plot_style(*line).visible)
                     .filter_map(move |line| study.values().value(line, index))

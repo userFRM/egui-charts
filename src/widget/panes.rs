@@ -145,9 +145,28 @@ impl Chart {
                 let index = index.round() as usize;
                 (index < self.state.shown().len()).then_some(index)
             });
+            let hover_rect = Rect::from_min_max(plot.min, Pos2::new(plot.right(), time_axis.top()));
             let hover = self
-                .last_hover_bar_idx
-                .and_then(|_| ui.input(|input| input.pointer.hover_pos()))
+                .axis_hover
+                .map(|(pos, _)| pos)
+                .or_else(|| {
+                    ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
+                        hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
+                    })
+                })
+                .or_else(|| {
+                    self.synced_crosshair_bar_idx
+                        .filter(|index| index.is_finite() && *index >= 0.0)
+                        .map(|index| {
+                            Pos2::new(
+                                coords
+                                    .to_mapping(plot, 0.0, 1.0)
+                                    .idx_to_x(index.round() as usize),
+                                plot.center().y,
+                            )
+                        })
+                        .filter(|pos| plot.contains(*pos))
+                })
                 .filter(|_| !egui::Popup::is_any_open(ui.ctx()));
             let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
             if self.drawings.eraser_mode {
@@ -326,6 +345,9 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
                 let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+                chart.config.show_indicator_inputs = true;
+                chart.study_inputs[0] =
+                    "A long study input caption that must leave room for controls ".repeat(3);
                 chart.selection.select(
                     crate::chart::selection::ChartElementId::Indicator(rsi),
                     None,
@@ -373,6 +395,23 @@ mod tests {
                 if size.1 > 200.0 {
                     assert!(dots > 0, "missing selection dots");
                 }
+                let mut legend_seen = false;
+                for shape in &painted {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.text().starts_with("RSI ")
+                    {
+                        legend_seen = true;
+                        let visible = Rect::from_min_size(text.pos, text.galley.size())
+                            .intersect(shape.clip_rect);
+                        let controls_left = panes[0].chart_rect.right() - 60.0;
+                        assert!(
+                            visible.right() <= controls_left,
+                            "legend overlaps controls at {size:?}"
+                        );
+                    }
+                }
+
+                assert!(legend_seen, "missing pane legend");
                 let last = panes.last().unwrap().panel_rect;
                 assert!(
                     (bounds.bottom() - last.bottom() - 28.0).abs() < 1.0,
@@ -502,9 +541,18 @@ mod tests {
     fn every_pane_shares_hover_readouts_and_uses_its_own_horizontal_scale() {
         use crate::studies::{CustomIndicator, IndicatorValue};
         use crate::widget::test_frames::{frame, shapes};
-        for left in [false, true] {
+        for (left, theme) in [
+            (false, crate::theme::Theme::light()),
+            (true, crate::theme::Theme::light()),
+            (false, crate::theme::Theme::dark()),
+            (true, crate::theme::Theme::dark()),
+        ] {
             let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
             let mut chart = chart(&[100.0], &[110.0]);
+            chart.set_instrument(Some(
+                crate::model::Instrument::new("SAMPLE").with_volume_decimals(3),
+            ));
             chart.config.show_right_axis = !left;
             chart.config.show_left_axis = left;
             for (name, base) in [("Readout", 20.0), ("Other", 30.0)] {
@@ -555,6 +603,12 @@ mod tests {
                         _ => None,
                     })
                     .collect();
+                if step == 1 {
+                    assert!(
+                        text.contains(&"0.500"),
+                        "volume cursor lost its precision: {text:?}"
+                    );
+                }
                 for expected in ["Readout 27.00", "Other 37.00", "Open"] {
                     assert!(text.contains(&expected), "{expected}: {text:?}");
                 }
@@ -572,6 +626,26 @@ mod tests {
                         && points[1] == Pos2::new(map.idx_to_x(70), pane.bottom()))), "vertical in {pane:?}");
                 }
             }
+
+            // Empty space still has a cursor in every pane, without selecting a bar.
+            let pos = Pos2::new(map.idx_to_x(102), rects[2].center().y);
+            assert!(rects[2].contains(pos));
+            let painted = shapes(&ctx, &mut chart, 9.0, vec![Event::PointerMoved(pos)]);
+            assert_eq!(chart.get_hover_bar_idx(), None);
+            for pane in &rects[2..] {
+                assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == egui::Color32::RED && points[0] == Pos2::new(pos.x, pane.top())
+                        && points[1] == Pos2::new(pos.x, pane.bottom()))), "missing cursor in empty pane space");
+            }
+
+            chart.set_synced_crosshair_bar_idx(Some(70.0));
+            let painted = shapes(&ctx, &mut chart, 9.5, vec![Event::PointerGone]);
+            for pane in &rects[2..] {
+                assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == egui::Color32::RED && points[0] == Pos2::new(map.idx_to_x(70), pane.top())
+                        && points[1] == Pos2::new(map.idx_to_x(70), pane.bottom()))), "missing synced cursor in pane");
+            }
+            chart.set_synced_crosshair_bar_idx(None);
             let painted = shapes(&ctx, &mut chart, 10.0, vec![Event::PointerGone]);
             assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Readout 29.90")));
             chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;

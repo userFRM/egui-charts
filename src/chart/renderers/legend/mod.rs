@@ -47,7 +47,7 @@ pub struct Legend<'a> {
     pub timeframe: &'a str,
     /// Description, exchange and price precision reported by the host.
     pub instrument: Option<&'a Instrument>,
-    /// The bar selected by the crosshair, or the last visible bar when none is selected.
+    /// The bar selected by the crosshair, or the latest bar when none is selected.
     pub bar: &'a Bar,
     /// Close of the bar preceding `bar`, including when it is outside the viewport.
     pub previous_close: Option<f64>,

@@ -213,40 +213,45 @@ pub fn render_floating_tooltip(
     } else {
         theme.spacing.lg
     };
-    let size = Vec2::new(
-        label_width
-            + if options.on_long_press {
-                26.0
-            } else {
-                theme.spacing.lg
-            }
-            + value_width,
-        rows.len() as f32 * line_height - row_gap,
-    ) + Vec2::splat(2.0 * padding);
-
     let inset = theme.spacing.lg;
+    let mut bounds = price_rect.shrink(inset);
+    if hover_pos.x > price_rect.center().x {
+        bounds.max.x = hover_pos.x - inset;
+    } else {
+        bounds.min.x = hover_pos.x + inset;
+    }
+    if !bounds.is_positive() {
+        return;
+    }
+    let padding = padding.min(bounds.width() / 8.0).min(bounds.height() / 8.0);
+    let gap = theme.spacing.lg.min(bounds.width() / 8.0);
+    let content_width = (bounds.width() - 2.0 * padding - gap).max(0.0);
+    let value_width = value_width.min(content_width * 0.65);
+    let label_width = label_width.min(content_width - value_width);
+    let fit = |galley: std::sync::Arc<egui::Galley>, width| {
+        let mut job = (*galley.job).clone();
+        job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+        painter.layout_job(job)
+    };
+    let rows: Vec<_> = rows
+        .into_iter()
+        .map(|(label, value)| (fit(label, label_width), fit(value, value_width)))
+        .collect();
+    let size = Vec2::new(
+        label_width + gap + value_width + 2.0 * padding,
+        (rows.len() as f32 * line_height - row_gap + 2.0 * padding).min(bounds.height()),
+    );
     let x = if hover_pos.x > price_rect.center().x {
-        price_rect.min.x + inset
+        bounds.left()
     } else {
-        price_rect.max.x - inset - size.x
+        bounds.right() - size.x
     };
-    let pos = if options.on_long_press {
-        let x = if hover_pos.x + 16.0 + size.x <= price_rect.right() {
-            hover_pos.x + 16.0
-        } else {
-            hover_pos.x - 16.0 - size.x
-        };
-        Pos2::new(
-            x.max(price_rect.left()),
-            (hover_pos.y - size.y / 2.0).clamp(
-                price_rect.top(),
-                (price_rect.bottom() - size.y).max(price_rect.top()),
-            ),
-        )
+    let y = if options.on_long_press {
+        (hover_pos.y - size.y / 2.0).clamp(bounds.top(), bounds.bottom() - size.y)
     } else {
-        Pos2::new(x, price_rect.min.y + inset)
+        bounds.top()
     };
-    let tooltip_rect = Rect::from_min_size(pos, size);
+    let tooltip_rect = Rect::from_min_size(Pos2::new(x, y), size);
     if options.on_long_press {
         painter.add(
             egui::Shadow {
@@ -272,7 +277,9 @@ pub fn render_floating_tooltip(
         StrokeKind::Inside,
     );
 
-    // Labels left-aligned, values right-aligned
+    // Labels left-aligned, values right-aligned. Overflow stays within the readout.
+    let painter =
+        painter.with_clip_rect(tooltip_rect.shrink(padding).intersect(painter.clip_rect()));
     let values_right = tooltip_rect.max.x - padding;
     for (i, (label, value)) in rows.into_iter().enumerate() {
         let y = tooltip_rect.min.y + padding + i as f32 * line_height;
@@ -578,6 +585,80 @@ mod tests {
     const HOVER: Pos2 = Pos2::new(400.0, 250.0);
 
     /// The shapes the lens paints over 80 bars on a logarithmic scale, cursor at `HOVER`.
+    #[test]
+    fn floating_study_readout_fits_narrow_plots_away_from_the_pointer() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [160.0, 320.0, 800.0] {
+                for (fraction, held) in [(0.25, false), (0.75, false), (0.25, true), (0.75, true)] {
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let plot = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(width, 300.0));
+                    let pointer = Pos2::new(plot.left() + width * fraction, plot.center().y);
+                    let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
+                    let studies = vec![
+                        StudyValue {
+                            study: "A very long study caption with several input parameters".into(),
+                            plot: "Signal".into(),
+                            value: Some(1234.567),
+                            precision: 3,
+                            color: egui::Color32::RED,
+                        };
+                        12
+                    ];
+                    let mut output = ctx.run_ui(Default::default(), |ui| {
+                        render_floating_tooltip(
+                            ui.painter(),
+                            pointer,
+                            plot,
+                            &bar,
+                            None,
+                            &TooltipOptions {
+                                on_long_press: held,
+                                ..Default::default()
+                            },
+                            egui::Color32::GREEN,
+                            crate::scales::TimeFormatterBuilder::new().build().as_ref(),
+                            3600,
+                            &studies,
+                            None,
+                        );
+                    });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let mut labels = 0;
+                    for shape in shapes {
+                        match shape.shape {
+                            egui::Shape::Text(text) => {
+                                let visible = Rect::from_min_size(text.pos, text.galley.size())
+                                    .intersect(shape.clip_rect);
+                                if visible.is_positive() {
+                                    assert!(
+                                        plot.contains_rect(visible),
+                                        "text escapes plot at {width}: {visible:?}"
+                                    );
+                                    labels += 1;
+                                }
+                            }
+                            egui::Shape::Rect(panel) if panel.stroke.width == 1.0 => {
+                                assert!(
+                                    plot.contains_rect(panel.rect),
+                                    "tooltip escapes plot at {width}: {:?}",
+                                    panel.rect
+                                );
+                                assert!(
+                                    !panel.rect.x_range().contains(pointer.x),
+                                    "tooltip covers hovered bar"
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    assert!(labels > 0);
+                }
+            }
+        }
+    }
+
     fn lens_shapes(options: &TooltipOptions) -> Vec<egui::epaint::ClippedShape> {
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
         let transform = PriceTransform {

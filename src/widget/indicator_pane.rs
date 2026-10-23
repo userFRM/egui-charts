@@ -638,8 +638,15 @@ impl IndicatorPane {
                 indicator.is_visible(),
             )
         });
+        let legend_rect = Rect::from_min_max(
+            chart_rect.min,
+            Pos2::new(
+                controls.map_or(chart_rect.right(), |rect| rect.left()),
+                chart_rect.bottom(),
+            ),
+        );
         self.draw_legend(
-            &painter.with_clip_rect(chart_rect.intersect(ui.clip_rect())),
+            &painter.with_clip_rect(legend_rect.intersect(ui.clip_rect())),
             chart_rect,
             indicator,
             text_color,
