@@ -597,6 +597,7 @@ impl Chart {
         self.config.bullish_wick_color = settings.bullish_wick_color;
         self.config.bearish_wick_color = settings.bearish_wick_color;
         self.config.price_source = settings.price_source;
+        self.set_chart_type_params(settings.chart_type_params.clone());
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();
@@ -604,6 +605,26 @@ impl Chart {
         let options = self.state.price_scale_mut().options_mut();
         options.mode = settings.price_scale_mode;
         options.invert_scale = settings.invert_scale;
+    }
+
+    /// Read the current appearance and chart type parameters for the series settings dialog.
+    /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
+    /// [`Self::apply_series_settings`]. The active chart type is dialog context only.
+    pub fn series_settings(&self) -> SeriesSettings {
+        SeriesSettings {
+            chart_type: self.chart_type,
+            chart_type_params: self.chart_type_params.clone(),
+            bullish_color: self.config.bullish_color,
+            bearish_color: self.config.bearish_color,
+            bullish_border_color: self.config.bullish_border_color,
+            bearish_border_color: self.config.bearish_border_color,
+            bullish_wick_color: self.config.bullish_wick_color,
+            bearish_wick_color: self.config.bearish_wick_color,
+            price_source: self.config.price_source,
+            price_scale_mode: self.state.price_scale().options().mode,
+            invert_scale: self.state.price_scale().options().invert_scale,
+            ..Default::default()
+        }
     }
 
     /// Get a [`ChartMapping`] for coordinate conversions.

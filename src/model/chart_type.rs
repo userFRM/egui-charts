@@ -20,13 +20,14 @@
 //! - Range-based: High-Low, Range Bars
 //! - Advanced: TPO (Market Profile)
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Chart visualization types
 ///
 /// Each variant represents a distinct way to visualize OHLCV data.
 /// The default is `Candles` (Japanese candlesticks).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ChartType {
     // === Standard OHLC Types ===
     /// Traditional OHLC bars with tick marks
@@ -326,7 +327,7 @@ impl fmt::Display for ChartType {
 }
 
 /// Where the Baseline chart draws its base line.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BaselineLevel {
     /// A price.
     Price(f64),
@@ -336,8 +337,11 @@ pub enum BaselineLevel {
 
 /// The parameters of the chart types that need them. Sizes are in price units and are used as
 /// given; a size the chart cannot use is reported on the chart instead of being replaced.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChartTypeParams {
+    /// Independent line, area and baseline styles, retained across chart type changes.
+    pub styles: super::ChartTypeStyles,
     /// Renko: size of a brick.
     pub renko_brick_size: f64,
     /// Kagi: the move against the line that starts a new line.
@@ -358,6 +362,7 @@ pub struct ChartTypeParams {
 impl Default for ChartTypeParams {
     fn default() -> Self {
         Self {
+            styles: super::ChartTypeStyles::default(),
             renko_brick_size: 1.0,
             kagi_reversal: 1.0,
             range_size: 1.0,

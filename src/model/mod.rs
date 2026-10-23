@@ -27,6 +27,7 @@ pub(crate) trait PriceBuilder {
 mod alert;
 mod annotations;
 pub mod bar;
+mod chart_style;
 mod chart_type;
 mod chartstate;
 mod clock;
@@ -56,6 +57,7 @@ pub use annotations::{Annotation, MarkerType};
 pub(crate) use bar::SpanCache;
 pub(crate) use bar::percent_change;
 pub use bar::{Bar, BarData};
+pub use chart_style::{AreaStyle, BaselineStyle, ChartTypeStyles, LinePlotStyle};
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
 pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;

@@ -6,13 +6,12 @@ use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
+use super::line::draw_styled_line;
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
-use crate::model::{Bar, BaselineLevel, PriceSource};
+use crate::model::{AreaStyle, Bar, BaselineLevel, BaselineStyle, PriceSource};
 
-const AREA_ALPHA: u8 = 115;
 const HLC_AREA_ALPHA: u8 = 30;
-const BASELINE_FILL_ALPHA: u8 = 30;
 
 pub(super) fn render_area(
     painter: &Painter,
@@ -26,7 +25,7 @@ pub(super) fn render_area(
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    fill_color: Color32,
+    style: &AreaStyle,
     price_source: PriceSource,
 ) {
     let coords = *price_scale;
@@ -44,13 +43,10 @@ pub(super) fn render_area(
             painter,
             &line_points,
             price_rect.max.y,
-            fill_color,
-            AREA_ALPHA,
+            style.top_fill,
+            style.bottom_fill,
         );
-        painter.add(Shape::line(
-            line_points,
-            Stroke::new(DESIGN_TOKENS.stroke.thick, fill_color),
-        ));
+        draw_styled_line(painter, line_points, &style.line);
     }
 
     if show_volume {
@@ -132,8 +128,7 @@ pub(super) fn render_baseline(
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
+    style: &BaselineStyle,
     price_source: PriceSource,
     level: BaselineLevel,
 ) {
@@ -158,8 +153,7 @@ pub(super) fn render_baseline(
         baseline_y,
         chart_rect_min_x,
         &idx_to_coord,
-        bullish_color,
-        bearish_color,
+        style,
         price_source,
     );
 
@@ -226,21 +220,22 @@ fn collect_hlc_points(
         .collect()
 }
 
-fn draw_area_fill(painter: &Painter, points: &[Pos2], baseline_y: f32, color: Color32, alpha: u8) {
+fn draw_area_fill(
+    painter: &Painter,
+    points: &[Pos2],
+    baseline_y: f32,
+    top_color: Color32,
+    bottom_color: Color32,
+) {
     let top = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
     if !top.is_finite() || baseline_y <= top {
         return;
     }
     let mut mesh = egui::Mesh::default();
     for (i, point) in points.iter().enumerate() {
-        let opacity = (f32::from(alpha) * (baseline_y - point.y) / (baseline_y - top))
-            .clamp(0.0, 255.0)
-            .round() as u8;
-        mesh.colored_vertex(
-            *point,
-            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), opacity),
-        );
-        mesh.colored_vertex(Pos2::new(point.x, baseline_y), Color32::TRANSPARENT);
+        let fraction = ((point.y - top) / (baseline_y - top)).clamp(0.0, 1.0);
+        mesh.colored_vertex(*point, top_color.lerp_to_gamma(bottom_color, fraction));
+        mesh.colored_vertex(Pos2::new(point.x, baseline_y), bottom_color);
         if i > 0 {
             let n = (2 * i) as u32;
             mesh.add_triangle(n - 2, n, n - 1);
@@ -295,8 +290,7 @@ fn draw_baseline_segments(
     baseline_y: f32,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
+    style: &BaselineStyle,
     price_source: PriceSource,
 ) {
     let point = |i: usize| {
@@ -316,34 +310,10 @@ fn draw_baseline_segments(
         if crossing {
             let t = (baseline_y - prev.y) / (curr.y - prev.y);
             let cross = Pos2::new(prev.x + (curr.x - prev.x) * t, baseline_y);
-            draw_baseline_part(
-                painter,
-                coords,
-                prev,
-                cross,
-                baseline_y,
-                bullish_color,
-                bearish_color,
-            );
-            draw_baseline_part(
-                painter,
-                coords,
-                cross,
-                curr,
-                baseline_y,
-                bullish_color,
-                bearish_color,
-            );
+            draw_baseline_part(painter, coords, prev, cross, baseline_y, style);
+            draw_baseline_part(painter, coords, cross, curr, baseline_y, style);
         } else {
-            draw_baseline_part(
-                painter,
-                coords,
-                prev,
-                curr,
-                baseline_y,
-                bullish_color,
-                bearish_color,
-            );
+            draw_baseline_part(painter, coords, prev, curr, baseline_y, style);
         }
     }
 }
@@ -355,25 +325,19 @@ fn draw_baseline_part(
     a: Pos2,
     b: Pos2,
     baseline_y: f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
+    style: &BaselineStyle,
 ) {
     // The side is decided by value, so an inverted price scale keeps its colours; a part that
     // only touches the base line takes its other side.
-    let color = if coords.y_to_price(f32::midpoint(a.y, b.y)) >= coords.y_to_price(baseline_y) {
-        bullish_color
-    } else {
-        bearish_color
-    };
-    painter.add(Shape::line_segment(
-        [a, b],
-        Stroke::new(DESIGN_TOKENS.stroke.thick, color),
-    ));
-
-    let fill_color =
-        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), BASELINE_FILL_ALPHA);
+    let (line, fill) =
+        if coords.y_to_price(f32::midpoint(a.y, b.y)) >= coords.y_to_price(baseline_y) {
+            (&style.above, style.above_fill)
+        } else {
+            (&style.below, style.below_fill)
+        };
     let fill_points = vec![a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)];
-    painter.add(Shape::convex_polygon(fill_points, fill_color, Stroke::NONE));
+    painter.add(Shape::convex_polygon(fill_points, fill, Stroke::NONE));
+    draw_styled_line(painter, vec![a, b], line);
 }
 
 #[cfg(test)]
@@ -401,8 +365,8 @@ mod tests {
                         pos2(30.0, top),
                     ],
                     100.0,
-                    Color32::BLUE,
-                    115,
+                    Color32::from_rgba_unmultiplied(0, 0, 255, 115),
+                    Color32::TRANSPARENT,
                 );
             });
             let vertices: Vec<_> = output

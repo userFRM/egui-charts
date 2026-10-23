@@ -2,7 +2,7 @@
 
 use crate::chart::series::SeriesSettings;
 use crate::ext::UiExt;
-use crate::model::PriceSource;
+use crate::model::{ChartType, LinePlotStyle, LineStyle, PriceSource};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::FormGrid;
 use egui::{Color32, Ui};
@@ -15,32 +15,50 @@ impl SymbolTab {
     pub fn show(ui: &mut Ui, settings: &mut SeriesSettings) {
         ui.space_md();
 
-        // Line style section
-        ui.label("Line");
+        ui.label(settings.chart_type.name());
         ui.space_sm();
-
-        FormGrid::new("symbol_line_grid").show(ui, |ui| {
-            // Price source
-            ui.label("Price source");
-            Self::price_source_dropdown(ui, &mut settings.price_source);
-            ui.end_row();
-
-            // Line style
-            ui.label("Line");
-            Self::line_color_picker(ui, &mut settings.bullish_color);
-            ui.end_row();
-        });
-
-        ui.space_xl();
-        ui.separator();
-        ui.space_xl();
-
-        // Candle colors section (shown for candlestick chart types)
-        ui.label("Candle colors");
-        ui.space_sm();
-
-        FormGrid::new("symbol_candle_grid").show(ui, |ui| {
-            Self::candle_colors_section(ui, settings);
+        FormGrid::new("symbol_style_grid").show(ui, |ui| {
+            if !settings.chart_type.uses_ohlc() || settings.chart_type == ChartType::LineWithMarkers
+            {
+                ui.label("Price source");
+                Self::price_source_dropdown(ui, &mut settings.price_source);
+                ui.end_row();
+            }
+            let styles = &mut settings.chart_type_params.styles;
+            match settings.chart_type {
+                ChartType::Line => Self::line_style(ui, &mut styles.line),
+                ChartType::StepLine => Self::line_style(ui, &mut styles.step_line),
+                ChartType::LineWithMarkers => {
+                    Self::line_style(ui, &mut styles.line_with_markers);
+                    ui.label("Marker radius");
+                    ui.add(
+                        egui::DragValue::new(&mut styles.marker_radius)
+                            .range(0.0..=20.0)
+                            .suffix(" pt"),
+                    );
+                    ui.end_row();
+                }
+                ChartType::Area => {
+                    Self::line_style(ui, &mut styles.area.line);
+                    Self::fill_row(ui, "Top fill", &mut styles.area.top_fill);
+                    Self::fill_row(ui, "Bottom fill", &mut styles.area.bottom_fill);
+                }
+                ChartType::Baseline => {
+                    ui.label("Above base");
+                    ui.end_row();
+                    ui.push_id("above", |ui| {
+                        Self::line_style(ui, &mut styles.baseline.above)
+                    });
+                    Self::fill_row(ui, "Above fill", &mut styles.baseline.above_fill);
+                    ui.label("Below base");
+                    ui.end_row();
+                    ui.push_id("below", |ui| {
+                        Self::line_style(ui, &mut styles.baseline.below)
+                    });
+                    Self::fill_row(ui, "Below fill", &mut styles.baseline.below_fill);
+                }
+                _ => Self::candle_colors_section(ui, settings),
+            }
         });
 
         ui.space_xl();
@@ -91,21 +109,34 @@ impl SymbolTab {
         });
     }
 
-    fn line_color_picker(ui: &mut Ui, color: &mut Color32) {
-        ui.horizontal(|ui| {
-            let mut color_arr = color.to_array();
-            if ui
-                .color_edit_button_srgba_unmultiplied(&mut color_arr)
-                .changed()
-            {
-                *color = Color32::from_rgba_unmultiplied(
-                    color_arr[0],
-                    color_arr[1],
-                    color_arr[2],
-                    color_arr[3],
-                );
-            }
-        });
+    fn line_style(ui: &mut Ui, style: &mut LinePlotStyle) {
+        Self::fill_row(ui, "Line colour", &mut style.color);
+        ui.label("Line width");
+        ui.add(
+            egui::DragValue::new(&mut style.width)
+                .range(0.0..=10.0)
+                .speed(0.1)
+                .suffix(" pt"),
+        );
+        ui.end_row();
+        ui.label("Line style");
+        ui.combo_select(
+            "line_style",
+            &mut style.style,
+            LineStyle::all().iter().copied(),
+            |s| match s {
+                LineStyle::Solid => "Solid".to_owned(),
+                LineStyle::Dashed => "Dashed".to_owned(),
+                LineStyle::Dotted => "Dotted".to_owned(),
+            },
+        );
+        ui.end_row();
+    }
+
+    fn fill_row(ui: &mut Ui, label: &str, color: &mut Color32) {
+        ui.label(label);
+        Self::color_picker(ui, color);
+        ui.end_row();
     }
 
     fn candle_colors_section(ui: &mut Ui, settings: &mut SeriesSettings) {
@@ -147,18 +178,7 @@ impl SymbolTab {
     }
 
     fn color_picker(ui: &mut Ui, color: &mut Color32) {
-        let mut color_arr = color.to_array();
-        if ui
-            .color_edit_button_srgba_unmultiplied(&mut color_arr)
-            .changed()
-        {
-            *color = Color32::from_rgba_unmultiplied(
-                color_arr[0],
-                color_arr[1],
-                color_arr[2],
-                color_arr[3],
-            );
-        }
+        ui.color_edit_button_srgba(color);
     }
 
     fn optional_color_picker(ui: &mut Ui, color: &mut Option<Color32>, default: Color32) {

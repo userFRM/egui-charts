@@ -12,7 +12,6 @@ mod live;
 use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
-use egui_charts::chart::series::SeriesSettings;
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
@@ -530,7 +529,7 @@ impl DemoApp {
 
     fn open_series_settings_dialog(&mut self) {
         self.series_settings
-            .open(SeriesId::MAIN, SeriesSettings::default());
+            .open(SeriesId::MAIN, self.chart.series_settings());
     }
 
     fn open_drawing_props_for(&mut self, drawing_id: usize) {
