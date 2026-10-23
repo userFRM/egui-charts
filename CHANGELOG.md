@@ -88,6 +88,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Dark button hover fills are neutral and quieter than the pressed state on black panels.
+
 - Held values use one snapped vertical guide and a compact six-row panel; ordinary Cross mode keeps both crosshair lines.
 
 - Choosing a timezone in the demo updates both the chart and the bottom clock through the existing timezone API.

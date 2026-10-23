@@ -33,7 +33,7 @@ impl Theme {
                 text_disabled: rgb(87, 87, 87),
                 border: rgb(42, 42, 42),
                 border_control: rgb(120, 125, 138),
-                btn_bg_hover: rgb(55, 59, 70),
+                btn_bg_hover: rgb(32, 32, 32),
                 btn_bg_active: rgb(42, 42, 42),
                 selection_bg: accent,
                 selection_text: Color32::WHITE,
