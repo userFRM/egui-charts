@@ -89,7 +89,7 @@ impl IndicatorDialog {
         self
     }
 
-    /// Set a custom dialog configuration
+    /// Set a custom dialog configuration; its `TRANSPARENT` colours follow the theme
     pub fn with_config(mut self, config: IndicatorDialogConfig) -> Self {
         self.config = config;
         self
@@ -131,9 +131,7 @@ impl IndicatorDialog {
             return IndicatorDialogAction::None;
         }
 
-        // Update config from theme each frame for live color updates
-        self.config = IndicatorDialogConfig::from_theme(theme);
-        let config = self.config.clone();
+        let config = self.config.resolved(theme);
 
         // Escape clears a search before it closes the dialog.
         if !self.search.is_empty() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
@@ -763,6 +761,26 @@ mod tests {
             shown.top() >= 0.0 && shown.bottom() <= 500.0,
             "the dialog spans {shown:?} in a 500 px window"
         );
+    }
+
+    #[test]
+    fn show_keeps_the_configuration_a_caller_sets() {
+        let custom = IndicatorDialogConfig {
+            width: 900.0,
+            text_color: Color32::RED,
+            ..IndicatorDialogConfig::default()
+        };
+        let hover = custom.hover_color;
+        let mut dialog = IndicatorDialog::new().with_config(custom);
+        dialog.open();
+        egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                dialog.show(ui.ctx(), &Theme::light());
+            })
+            .drop_without_applying_deltas();
+        assert_eq!(dialog.config.width, 900.0);
+        assert_eq!(dialog.config.text_color, Color32::RED);
+        assert_eq!(dialog.config.hover_color, hover);
     }
 
     #[test]
