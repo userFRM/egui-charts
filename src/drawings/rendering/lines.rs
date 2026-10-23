@@ -596,13 +596,14 @@ impl Drawing {
     }
 }
 
-/// Where a ray from `start` through `end` leaves `rect` on the right, or at the
-/// top or bottom when it is vertical.
+/// Where a ray from `start` through `end` leaves `rect`: on the side `end` is
+/// towards, or at the top or bottom when it is vertical.
 pub(super) fn ray_end(start: Pos2, end: Pos2, rect: Rect) -> Pos2 {
     let (dx, dy) = (end.x - start.x, end.y - start.y);
     if dx.abs() > 1e-6 {
-        let t = (rect.max.x - start.x) / dx;
-        Pos2::new(rect.max.x, start.y + t * dy)
+        let edge = if dx > 0.0 { rect.max.x } else { rect.min.x };
+        let t = (edge - start.x) / dx;
+        Pos2::new(edge, start.y + t * dy)
     } else if dy > 0.0 {
         Pos2::new(start.x, rect.max.y)
     } else {
@@ -648,4 +649,34 @@ pub(super) fn arc_points(center: Pos2, edge: Pos2) -> Vec<Pos2> {
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// In a pane from (0, 0) to (1000, 600), a ray from (500, 100) moving 100 px across and
+    /// 50 px down per step reaches the right edge after 5 steps at y = 350, and moving 100 px
+    /// left reaches the left edge after 5 steps, also at y = 350. A vertical ray runs to the
+    /// bottom or the top edge, whichever its second anchor is towards.
+    #[test]
+    fn rays_run_through_their_second_anchor_to_the_pane_edge() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 600.0));
+        let start = Pos2::new(500.0, 100.0);
+        let cases = [
+            ((600.0, 150.0), (1000.0, 350.0)),
+            ((400.0, 150.0), (0.0, 350.0)),
+            ((500.0, 300.0), (500.0, 600.0)),
+            ((500.0, 50.0), (500.0, 0.0)),
+        ];
+        let wrong: Vec<String> = cases
+            .into_iter()
+            .filter_map(|((x, y), (want_x, want_y))| {
+                let got = ray_end(start, Pos2::new(x, y), rect);
+                (got != Pos2::new(want_x, want_y))
+                    .then(|| format!("through ({x}, {y}): got {got:?}, want ({want_x}, {want_y})"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
 }

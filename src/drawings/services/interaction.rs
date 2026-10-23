@@ -577,7 +577,8 @@ mod tests {
     }
 
     /// Each point is at least 40 px from every anchor. A ray from (0, 0) through (100, 50) runs on
-    /// through (300, 150) and not back through (-100, -50). The cross line through (100, 100) runs
+    /// through (300, 150) and not back through (-100, -50); one from (500, 100) through
+    /// (400, 150) runs left through (200, 250). The cross line through (100, 100) runs
     /// down through (100, 300). The pattern's second leg runs from
     /// (100, 100) to (200, 0) through (150, 50). The triangle's edge from (200, 0) to (100, 200)
     /// passes (150, 100); without a fill its inside is empty. The circle around (100, 100)
@@ -621,6 +622,12 @@ mod tests {
                 (0.0, 50.0),
                 Some(7),
                 vec![(100.0, 100.0), (200.0, 150.0)],
+            ),
+            (
+                T::Ray,
+                (200.0, 250.0),
+                Some(7),
+                vec![(500.0, 100.0), (400.0, 150.0)],
             ),
             (T::CrossLine, (100.0, 300.0), Some(7), vec![(100.0, 100.0)]),
             (
