@@ -63,13 +63,15 @@ pub(super) fn render_ohlc_bars(
     }
 }
 
-/// Hollow candles: hollow when bullish, filled when bearish
+/// Hollow candles: coloured by the close versus the previous close, hollow when the close is above
+/// the open and filled otherwise
 pub(super) fn render_hollow_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
     price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
+    full_data: &[Bar],
     start_idx: usize,
     bar_width: f32,
     wick_width: f32,
@@ -84,8 +86,13 @@ pub(super) fn render_hollow_candles(
     let coords = *price_scale;
 
     for (i, bar) in visible_data.iter().enumerate() {
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let color = bar_color(bar, bullish_color, bearish_color);
+        let g = start_idx + i;
+        let x = idx_to_coord(g, chart_rect_min_x);
+        let color = if bar.close >= prev_close(full_data, g) {
+            bullish_color
+        } else {
+            bearish_color
+        };
         let y = OhlcYCoords::from_bar(bar, &coords);
 
         draw_wicks(painter, x, &y, wick_width, color);

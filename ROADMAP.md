@@ -12,7 +12,7 @@ Each item is marked as complete, partial, or missing.
 #### Standard OHLC
 - [x] **Candles**: Filled body with optional border, wicks, optional volume bars
 - [x] **Bars**: OHLC bars with tick marks
-- [x] **Hollow Candles**: Hollow body when bullish, filled when bearish
+- [x] **Hollow Candles**: Colored by the close versus the previous close, hollow when the close is above the open and filled otherwise
 - [x] **Volume Candles**: Bar width scaled 30-100% by relative volume
 
 #### Line-Based
@@ -22,8 +22,9 @@ Each item is marked as complete, partial, or missing.
 
 #### Area-Based
 - [x] **Area**: Filled polygon under the price line (about 20% alpha)
-- [x] **HLC Area**: Band fill between high and low, close line on top
-- [x] **Baseline**: Colored segments above/below a reference baseline
+- [x] **HLC Area**: Fill from high to close in the up color and from close to low in the down color, close line on top
+- [x] **Baseline**: Colored segments above/below a configurable baseline (a price or a share of the pane height), split where they cross it
+- [x] **Columns**: One column per bar from the pane bottom to the close, colored by the close versus the previous close
 
 #### Range-Based
 - [x] **High-Low**: Thin rects from high to low per bar
@@ -31,9 +32,9 @@ Each item is marked as complete, partial, or missing.
 
 #### Japanese
 - [x] **Heikin-Ashi**: Full HA formula (HA_close, HA_open), rendered as candles
-- [x] **Renko**: Brick rendering via `to_renko_bricks()`, max 2000 elements
+- [x] **Renko**: Bricks built once over the whole history and extended with each new bar, brick size from `ChartTypeParams`, max 2000 drawn
 - [x] **Kagi**: Thick/thin line segments with shoulder/elbow logic
-- [x] **Line Break**: 3-line break bricks via `to_line_break_lines()`
+- [x] **Line Break**: Line break bricks with a configurable line count (1 to 10), built once over the whole history
 - [x] **Point & Figure**: X/O column rendering, max 1000 columns
 
 #### Advanced

@@ -8,7 +8,7 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
-use crate::model::{Bar, PriceSource};
+use crate::model::{Bar, BaselineLevel, PriceSource};
 
 const AREA_ALPHA: u8 = 50;
 const HLC_AREA_ALPHA: u8 = 30;
@@ -68,7 +68,8 @@ pub(super) fn render_area(
     }
 }
 
-/// HLC Area: fills between high and low with close line
+/// HLC Area: fills high to close in the bullish colour and close to low in the bearish colour,
+/// with the close line
 pub(super) fn render_hlc_area(
     painter: &Painter,
     volume_ctx: &RenderContext,
@@ -82,7 +83,7 @@ pub(super) fn render_hlc_area(
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
-    _bearish_color: Color32,
+    bearish_color: Color32,
     price_source: PriceSource,
 ) {
     if visible_data.is_empty() {
@@ -100,7 +101,7 @@ pub(super) fn render_hlc_area(
     );
 
     if points.len() > 1 {
-        draw_hlc_fill(painter, &points, bullish_color);
+        draw_hlc_fill(painter, &points, bullish_color, bearish_color);
         let close_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, p.y_close)).collect();
         painter.add(Shape::line(
             close_points,
@@ -122,7 +123,7 @@ pub(super) fn render_hlc_area(
     }
 }
 
-/// Baseline chart: colored based on position relative to baseline
+/// Baseline chart: coloured by the side of the base line, split where a segment crosses it
 pub(super) fn render_baseline(
     painter: &Painter,
     price_rect: Rect,
@@ -139,15 +140,19 @@ pub(super) fn render_baseline(
     bullish_color: Color32,
     bearish_color: Color32,
     price_source: PriceSource,
+    level: BaselineLevel,
 ) {
-    let first = match visible_data.first() {
-        Some(b) => b,
-        None => return,
-    };
+    if visible_data.is_empty() {
+        return;
+    }
 
     let coords = *price_scale;
-    let baseline = price_source.compute(first.open, first.high, first.low, first.close);
-    let baseline_y = coords.price_to_y(baseline);
+    let baseline_y = match level {
+        BaselineLevel::Price(price) => coords.price_to_y(price),
+        BaselineLevel::PercentOfPane(percent) => {
+            price_rect.max.y - percent / 100.0 * price_rect.height()
+        }
+    };
 
     draw_baseline_line(painter, price_rect, baseline_y);
     draw_baseline_segments(
@@ -155,7 +160,6 @@ pub(super) fn render_baseline(
         visible_data,
         start_idx,
         &coords,
-        baseline,
         baseline_y,
         chart_rect_min_x,
         &idx_to_coord,
@@ -244,20 +248,27 @@ fn draw_area_fill(painter: &Painter, points: &[Pos2], baseline_y: f32, color: Co
     }
 }
 
-fn draw_hlc_fill(painter: &Painter, points: &[HlcPoint], color: Color32) {
-    let area_color =
-        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), HLC_AREA_ALPHA);
+fn draw_hlc_fill(painter: &Painter, points: &[HlcPoint], bullish: Color32, bearish: Color32) {
+    let tint = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), HLC_AREA_ALPHA);
+    let (up, down) = (tint(bullish), tint(bearish));
 
-    for i in 0..points.len() - 1 {
-        let p1 = &points[i];
-        let p2 = &points[i + 1];
-        let quad = vec![
+    // Both quads are convex: high >= close >= low at both ends of a segment.
+    for pair in points.windows(2) {
+        let (p1, p2) = (&pair[0], &pair[1]);
+        let above = vec![
             Pos2::new(p1.x, p1.y_high),
             Pos2::new(p2.x, p2.y_high),
+            Pos2::new(p2.x, p2.y_close),
+            Pos2::new(p1.x, p1.y_close),
+        ];
+        let below = vec![
+            Pos2::new(p1.x, p1.y_close),
+            Pos2::new(p2.x, p2.y_close),
             Pos2::new(p2.x, p2.y_low),
             Pos2::new(p1.x, p1.y_low),
         ];
-        painter.add(Shape::convex_polygon(quad, area_color, Stroke::NONE));
+        painter.add(Shape::convex_polygon(above, up, Stroke::NONE));
+        painter.add(Shape::convex_polygon(below, down, Stroke::NONE));
     }
 }
 
@@ -279,7 +290,6 @@ fn draw_baseline_segments(
     data: &[Bar],
     start_idx: usize,
     coords: &PriceMap,
-    baseline: f64,
     baseline_y: f32,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
@@ -287,38 +297,79 @@ fn draw_baseline_segments(
     bearish_color: Color32,
     price_source: PriceSource,
 ) {
+    let point = |i: usize| {
+        let bar = &data[i];
+        let value = price_source.compute(bar.open, bar.high, bar.low, bar.close);
+        Pos2::new(
+            idx_to_coord(start_idx + i, chart_rect_min_x),
+            coords.price_to_y(value),
+        )
+    };
     for i in 1..data.len() {
-        let prev_bar = &data[i - 1];
-        let curr_bar = &data[i];
-
-        let prev_x = idx_to_coord(start_idx + i - 1, chart_rect_min_x);
-        let curr_x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let prev_value =
-            price_source.compute(prev_bar.open, prev_bar.high, prev_bar.low, prev_bar.close);
-        let curr_value =
-            price_source.compute(curr_bar.open, curr_bar.high, curr_bar.low, curr_bar.close);
-        let prev_y = coords.price_to_y(prev_value);
-        let curr_y = coords.price_to_y(curr_value);
-
-        let color = if curr_value >= baseline {
-            bullish_color
+        let (prev, curr) = (point(i - 1), point(i));
+        // A segment that crosses the base line is split there, in screen space, where the
+        // line is straight on every price scale.
+        let crossing = (prev.y < baseline_y && curr.y > baseline_y)
+            || (prev.y > baseline_y && curr.y < baseline_y);
+        if crossing {
+            let t = (baseline_y - prev.y) / (curr.y - prev.y);
+            let cross = Pos2::new(prev.x + (curr.x - prev.x) * t, baseline_y);
+            draw_baseline_part(
+                painter,
+                coords,
+                prev,
+                cross,
+                baseline_y,
+                bullish_color,
+                bearish_color,
+            );
+            draw_baseline_part(
+                painter,
+                coords,
+                cross,
+                curr,
+                baseline_y,
+                bullish_color,
+                bearish_color,
+            );
         } else {
-            bearish_color
-        };
-
-        painter.add(Shape::line_segment(
-            [Pos2::new(prev_x, prev_y), Pos2::new(curr_x, curr_y)],
-            Stroke::new(DESIGN_TOKENS.stroke.thick, color),
-        ));
-
-        let fill_color =
-            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), BASELINE_FILL_ALPHA);
-        let fill_points = vec![
-            Pos2::new(prev_x, prev_y),
-            Pos2::new(curr_x, curr_y),
-            Pos2::new(curr_x, baseline_y),
-            Pos2::new(prev_x, baseline_y),
-        ];
-        painter.add(Shape::convex_polygon(fill_points, fill_color, Stroke::NONE));
+            draw_baseline_part(
+                painter,
+                coords,
+                prev,
+                curr,
+                baseline_y,
+                bullish_color,
+                bearish_color,
+            );
+        }
     }
+}
+
+/// A part of a segment that does not cross the base line: its line and its fill down to the base.
+fn draw_baseline_part(
+    painter: &Painter,
+    coords: &PriceMap,
+    a: Pos2,
+    b: Pos2,
+    baseline_y: f32,
+    bullish_color: Color32,
+    bearish_color: Color32,
+) {
+    // The side is decided by value, so an inverted price scale keeps its colours; a part that
+    // only touches the base line takes its other side.
+    let color = if coords.y_to_price(f32::midpoint(a.y, b.y)) >= coords.y_to_price(baseline_y) {
+        bullish_color
+    } else {
+        bearish_color
+    };
+    painter.add(Shape::line_segment(
+        [a, b],
+        Stroke::new(DESIGN_TOKENS.stroke.thick, color),
+    ));
+
+    let fill_color =
+        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), BASELINE_FILL_ALPHA);
+    let fill_points = vec![a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)];
+    painter.add(Shape::convex_polygon(fill_points, fill_color, Stroke::NONE));
 }

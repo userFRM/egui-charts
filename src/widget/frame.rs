@@ -435,16 +435,12 @@ impl Chart {
             return response;
         }
 
-        // Calculate volume range
-        let max_volume = if self.config.show_volume {
-            visible_data
-                .iter()
-                .map(|c| c.volume)
-                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .unwrap_or(1.0)
-        } else {
-            1.0
-        };
+        // Largest visible volume: the volume pane and volume candles scale by it
+        let max_volume = visible_data
+            .iter()
+            .map(|c| c.volume)
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(1.0);
 
         // Draw grid
         if self.config.show_horizontal_grid {

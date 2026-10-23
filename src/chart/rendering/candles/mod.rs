@@ -116,6 +116,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 ctx.colors,
                 ctx.visible_data,
+                ctx.full_data,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),
@@ -270,6 +271,7 @@ pub fn render_chart_type(
                 params.bullish_color(),
                 params.bearish_color(),
                 params.price_source(),
+                params.type_params.baseline,
             );
         }
 

@@ -298,7 +298,6 @@ impl Default for EventsSettings {
 pub struct ChartSettingsState {
     // Symbol tab
     pub candle_colors: CandleColorConfig,
-    pub color_based_on_prev_close: bool,
     pub precision: PrecisionMode,
     pub timezone: String,
 
@@ -338,7 +337,6 @@ impl Default for ChartSettingsState {
 
         Self {
             candle_colors: CandleColorConfig::default(),
-            color_based_on_prev_close: false,
             precision: PrecisionMode::Default,
             timezone: "UTC".to_string(),
 
