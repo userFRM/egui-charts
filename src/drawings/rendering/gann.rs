@@ -424,10 +424,14 @@ impl Drawing {
                 DESIGN_TOKENS.rounding.sm,
                 label_bg,
             );
+            let percentage = format!("{:.2}", level * 100.0);
             painter.text(
                 label_pos,
                 egui::Align2::CENTER_CENTER,
-                format!("{}%", level * 100.0),
+                format!(
+                    "{}%",
+                    percentage.trim_end_matches('0').trim_end_matches('.')
+                ),
                 egui::FontId::proportional(typography::XS),
                 label_color,
             );
@@ -452,7 +456,7 @@ impl Drawing {
         painter.circle_filled(center, DESIGN_TOKENS.rounding.sm, color);
     }
 
-    /// Render Gann Fixed - Fixed 1:1 aspect ratio with price/time square
+    /// Fixed price-per-bar range from its persistent chart anchors.
     pub(crate) fn render_gann_fixed(&self, painter: &egui::Painter) {
         if self.points.len() < 2 {
             return;
@@ -560,27 +564,28 @@ impl Drawing {
             .chart_axis_bg
             .gamma_multiply(0.8);
         let label_pos = Pos2::new(rect.max.x + DESIGN_TOKENS.rounding.lg, rect.min.y);
-        let label_rect = Rect::from_min_size(label_pos, egui::Vec2::new(28.0, 14.0));
-        painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-        painter.text(
-            Pos2::new(label_pos.x + 14.0, label_pos.y + 7.0),
-            egui::Align2::CENTER_CENTER,
-            self.chart_points
-                .first()
-                .zip(self.chart_points.get(1))
-                .map_or_else(
-                    || "n/a".to_owned(),
-                    |(a, b)| {
-                        let bars = (b.bar_idx - a.bar_idx).abs();
-                        if bars > 0.0 {
-                            format!("{:.4}/bar", (b.price - a.price).abs() / f64::from(bars))
-                        } else {
-                            "n/a".to_owned()
-                        }
-                    },
-                ),
-            egui::FontId::proportional(typography::XS),
+        let label = self
+            .chart_points
+            .first()
+            .zip(self.chart_points.get(1))
+            .map_or_else(
+                || "n/a".to_owned(),
+                |(a, b)| {
+                    let bars = (b.bar_idx - a.bar_idx).abs();
+                    if bars > 0.0 {
+                        format!("{:.4}/bar", (b.price - a.price).abs() / f64::from(bars))
+                    } else {
+                        "n/a".to_owned()
+                    }
+                },
+            );
+        super::measurements::boxed_label(
+            painter,
+            egui::Align2::LEFT_TOP,
+            label_pos,
+            label,
             color,
+            label_bg,
         );
 
         // Draw center point

@@ -93,6 +93,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Gann grid percentages suppress floating-point tails, the fixed-ratio label sizes to its text, and pitchfan labels sit at the visible ray ends where they have room.
+
 - Drawing placement collects the construction anchors: three for extensions, trend-based time, wedges, pitchfans, arcs, rotated rectangles, projections and channels; four for triangle patterns; seven for three drives; three and five for double and triple Elliott combinations. Price notes and arrow markers take two points. Positions place entry, target and stop in one click, with independent editable anchors. Extensions project the price leg from the third anchor and trend-based time projects its bar interval there.
 - Rotated rectangles use a sloping base and perpendicular width, Curve has a placed quadratic control, Double curve has two placed cubic controls, arcs pass through a third control, and pitchfan rays pass through Fibonacci fractions of the second-to-third anchor span. Table, Image, X post, Idea and Ghost feed stay loadable but are removed from tool menus until their content is implemented. Migration: new Curve and Double curve placements collect three and four anchors. Saved rotated rectangles, wedges and pitchfans need three anchors, and double curves four; incomplete records are reported by the loader.
 

@@ -229,8 +229,6 @@ impl Drawing {
             .zip(pitchfan_lines(center, end, boundary, rect))
             .enumerate()
         {
-            let fan_angle = (fan_end.y - center.y).atan2(fan_end.x - center.x);
-
             let line_stroke = if i == 0 || i == PITCHFAN_RATIOS.len() - 1 {
                 line_stroke_main
             } else {
@@ -247,16 +245,24 @@ impl Drawing {
 
             painter.line_segment([center, fan_end], line_stroke);
 
-            // Draw ratio label
-            let label_dist = 60.0 + i as f32 * 10.0;
-            let label_pos = Pos2::new(
-                center.x + label_dist * fan_angle.cos(),
-                center.y + label_dist * fan_angle.sin(),
-            );
+            // Place labels at the visible end of each ray, where the fan is widest.
+            let run = fan_end - center;
+            let t = if fan_end.y < rect.min.y {
+                (rect.min.y - center.y) / run.y
+            } else if fan_end.y > rect.max.y {
+                (rect.max.y - center.y) / run.y
+            } else {
+                1.0
+            };
+            let label_pos = center + run * t;
             if ratio > 0.0 {
                 painter.text(
                     label_pos,
-                    egui::Align2::LEFT_CENTER,
+                    if fan_end.x >= center.x {
+                        egui::Align2::RIGHT_BOTTOM
+                    } else {
+                        egui::Align2::LEFT_BOTTOM
+                    },
                     format!("{:.1}%", ratio * 100.0),
                     egui::FontId::proportional(typography::XS),
                     color,
