@@ -6,6 +6,11 @@
 //! actions. Indicator templates live in host memory. Controls that need a trading
 //! account show a notice, and the context menu entries it does not model do nothing.
 
+#[path = "layouts.rs"]
+mod layouts;
+use egui_charts::widget::ChartLayout;
+use layouts::{DemoChart, LayoutTab};
+
 #[path = "live.rs"]
 mod live;
 
@@ -120,6 +125,11 @@ impl ChartAppState for DemoAppState {
 /// The full demo application.
 pub struct DemoApp {
     pub chart: Chart,
+    layout: ChartLayout,
+    layout_slot: usize,
+    extra_charts: Vec<DemoChart>,
+    layout_tabs: Vec<LayoutTab>,
+    layout_tab: usize,
     live: Arc<LiveFeed>,
     /// Whether an object tree colour picker is editing a drawing, as one undo step.
     colour_drag: bool,
@@ -240,6 +250,11 @@ impl DemoApp {
         let mut app = Self {
             chart,
             live,
+            layout: ChartLayout::default(),
+            layout_slot: 0,
+            extra_charts: Vec::new(),
+            layout_tabs: vec![LayoutTab::unnamed()],
+            layout_tab: 0,
             colour_drag: false,
             footprint: None,
             footprint_scale: None,
@@ -786,6 +801,14 @@ impl eframe::App for DemoApp {
             }
         }
 
+        for extra in &mut self.extra_charts {
+            extra.live.set_symbol(extra.chart.symbol());
+            let delay = extra.live.advance(chrono::Utc::now());
+            if !extra.live.paused() {
+                ctx.request_repaint_after(delay);
+            }
+        }
+
         // A colour picker drag ends, as one edit, when the pointer is released.
         if self.colour_drag && !ctx.input(|i| i.pointer.any_down()) {
             self.colour_drag = false;
@@ -796,7 +819,10 @@ impl eframe::App for DemoApp {
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
+        self.show_layout_tabs(ui);
+        self.refresh_layout_menu();
         self.show_top_toolbar(ui, panel_bg);
+        self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.show_side_panel(ui);
@@ -837,7 +863,7 @@ impl DemoApp {
         self.top_toolbar.state.can_undo = drawings.can_undo();
         self.top_toolbar.state.can_redo = drawings.can_redo();
         egui::Panel::top("toolbar")
-            .exact_size(42.0)
+            .exact_size(44.0)
             .show_separator_line(false)
             .frame(panel_frame(bg).outer_margin(egui::Margin {
                 bottom: 4,
@@ -1043,11 +1069,7 @@ impl DemoApp {
             TopToolbarAction::Save => self.export_dialog.open(),
             // Light/dark toggle is a real, cheap visual change.
             TopToolbarAction::ThemeToggle => self.toggle_theme(),
-            // The layout-setup button opens the chart-object panel in this
-            // single-chart context.
-            TopToolbarAction::Layout(_) => {
-                self.open_panel = Some(SidePanel::ObjectTree);
-            }
+            TopToolbarAction::Layout(action) => self.handle_layout_action(action),
             TopToolbarAction::None => {}
         }
     }
@@ -1065,12 +1087,18 @@ impl DemoApp {
         cfg.background_color = self.theme.chart.bg;
         cfg.text_color = self.theme.chart.axis_text;
         cfg.grid_color = self.theme.chart.grid_line;
+        for extra in &mut self.extra_charts {
+            let cfg = extra.chart.config_mut();
+            cfg.background_color = self.theme.chart.bg;
+            cfg.text_color = self.theme.chart.axis_text;
+            cfg.grid_color = self.theme.chart.grid_line;
+        }
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
-            .exact_size(56.0)
+            .exact_size(54.0)
             .show_separator_line(false)
             .frame(
                 panel_frame(bg)
@@ -1448,6 +1476,14 @@ impl DemoApp {
                 let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
                 self.chart.disable_tracking_mode();
                 self.chart.apply_synced_time_scale(spacing, 0.5);
+                if self.layout.sync.sync_date_range
+                    && let Some(range) = self.chart.visible_time_range()
+                {
+                    let mut charts: Vec<_> =
+                        self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+                    charts.insert(self.layout_slot, &mut self.chart);
+                    self.layout.apply_date_range(&mut charts, range);
+                }
             }
             TimeframeToolbarAction::OpenDatePicker => self.date_picker.open(),
             TimeframeToolbarAction::OpenTimezoneMenu => {
@@ -1568,7 +1604,9 @@ impl DemoApp {
                             "Footprint requires a time-based chart", egui::FontId::proportional(14.0), self.theme.ui.text);
                     }
                 } else {
-                    self.chart.show(ui);
+                    let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+                    charts.insert(self.layout_slot, &mut self.chart);
+                    self.layout.show(ui, &mut charts);
                 }
                 if self.chart.take_scale_settings_request() {
                     self.open_series_settings_dialog();
@@ -1582,6 +1620,7 @@ impl DemoApp {
                 }
             });
         self.replay_control.set_dock_rect(chart.response.rect);
+        self.activate_chart_slot(self.layout.active());
         // Right-click context actions resolve after the chart is shown.
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(action);

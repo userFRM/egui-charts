@@ -15,6 +15,7 @@ use super::{
     actions::TopToolbarAction,
     buttons::{IconTextButton, TextIconButton, ToolbarIconButton, Trigger},
     components::{
+        chart_grid_selector::ChartGridSelector,
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
         layout_menu::{LayoutAction, LayoutMenu},
         timeframe_selector::{Timeframe, TimeframeAction, TimeframeSelector, TimeframeUnit},
@@ -42,6 +43,7 @@ enum Slot {
     Redo,
     Theme,
     Layouts,
+    LayoutName,
     Save,
     QuickSearch,
     Settings,
@@ -56,23 +58,24 @@ const LEFT: &[&[Slot]] = &[
     &[S::Symbol, S::Compare],
     &[S::Interval],
     &[S::ChartType],
-    &[S::Indicators, S::Templates],
+    &[S::Indicators, S::Templates, S::Layouts],
     &[S::Alert, S::Replay],
     &[S::Undo, S::Redo],
 ];
 
 /// Right-aligned part of the strip, in groups divided by separators.
 const RIGHT: &[&[Slot]] = &[
-    &[S::Layouts, S::Save],
+    &[S::LayoutName, S::Save],
     &[S::Settings, S::Fullscreen, S::Screenshot],
 ];
 
 /// Controls that move into the overflow menu when the strip is too narrow, the first to go
 /// first.
-const OVERFLOW_ORDER: [Slot; 12] = [
+const OVERFLOW_ORDER: [Slot; 13] = [
     S::Compare,
     S::Templates,
     S::Save,
+    S::LayoutName,
     S::Layouts,
     S::Screenshot,
     S::Fullscreen,
@@ -134,8 +137,8 @@ impl Slot {
                 "Toggle Theme",
                 A::ThemeToggle,
             ),
-            S::Layouts => (
-                &embedded_icons::LAYOUT_SINGLE,
+            S::Layouts | S::LayoutName => (
+                &embedded_icons::LAYOUT_GRID,
                 "Chart layout",
                 A::Layout(LayoutAction::OpenMenu),
             ),
@@ -168,7 +171,7 @@ impl Slot {
             S::Templates => Some(Control::Templates),
             S::Alert => Some(Control::Alerts),
             S::Replay => Some(Control::Replay),
-            S::Save | S::Layouts => Some(Control::Layouts),
+            S::Save | S::Layouts | S::LayoutName => Some(Control::Layouts),
             _ => None,
         }
     }
@@ -182,6 +185,8 @@ pub struct TopToolbar {
     pub timeframe_selector: TimeframeSelector,
     /// Chart type selector dropdown
     pub chart_type_selector: ChartTypeSelector,
+    /// Chart preset and synchronization menu.
+    pub chart_grid_selector: ChartGridSelector,
     /// Layout selector dropdown
     pub layout_menu: LayoutMenu,
     /// Controls the host hid.
@@ -198,6 +203,7 @@ impl Default for TopToolbar {
             timeframe_selector: TimeframeSelector::new(Timeframe::new(1, TimeframeUnit::Day)),
             chart_type_selector: ChartTypeSelector::new(ChartType::Candles),
             layout_menu: LayoutMenu::new(),
+            chart_grid_selector: ChartGridSelector::default(),
             host_hidden: HashSet::new(),
             indicator_templates: Vec::new(),
         }
@@ -362,6 +368,7 @@ impl TopToolbar {
             S::ChartType => self.chart_type_selector.trigger().width(ui),
             S::Compare | S::Templates | S::Layouts => self.config.btn_size,
             S::Save => Self::save_button(&self.config).width(ui),
+            S::LayoutName => self.layout_menu.width(ui),
             c if c.compacts() && !compact => c.entry().map_or(icon_button, |(_, label, _)| {
                 IconTextButton::new(&embedded_icons::INDICATORS, label, &self.config).width(ui)
             }),
@@ -455,6 +462,19 @@ impl TopToolbar {
         action: &mut TopToolbarAction,
     ) {
         match control {
+            S::Layouts => {
+                if let Some(mode) = self.chart_grid_selector.show(ui) {
+                    *action = TopToolbarAction::Layout(LayoutAction::SelectGrid(mode));
+                }
+                return;
+            }
+            S::LayoutName => {
+                let layout_action = self.layout_menu.show(ui);
+                if layout_action != LayoutAction::None {
+                    *action = TopToolbarAction::Layout(layout_action);
+                }
+                return;
+            }
             S::Interval => {
                 if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui)
                     && let Some(tf) = tf.to_model()
@@ -476,7 +496,7 @@ impl TopToolbar {
         };
         let response = match control {
             S::Symbol => Self::symbol_trigger(symbol).show(ui, false),
-            S::Compare | S::Layouts => ToolbarIconButton::new(icon, label, &self.config).show(ui),
+            S::Compare => ToolbarIconButton::new(icon, label, &self.config).show(ui),
             S::Templates => {
                 let response = ToolbarIconButton::new(icon, label, &self.config).show(ui);
                 egui::Popup::menu(&response)
@@ -602,7 +622,7 @@ impl TopToolbar {
     }
 
     /// The overflow button and its menu of the controls that left the strip.
-    fn show_overflow(&self, ui: &mut Ui, hidden: &[Slot], action: &mut TopToolbarAction) {
+    fn show_overflow(&mut self, ui: &mut Ui, hidden: &[Slot], action: &mut TopToolbarAction) {
         let response = IconButton::new(&embedded_icons::UI_MORE_HORIZONTAL)
             .tooltip("More")
             .show(ui);
@@ -610,7 +630,20 @@ impl TopToolbar {
             ui.set_width(DESIGN_TOKENS.sizing.dialog.submenu_width);
             let strip_order = LEFT.iter().chain(RIGHT).flat_map(|group| group.iter());
             for control in strip_order.filter(|&c| hidden.contains(c)) {
-                if *control == S::Templates {
+                if *control == S::Layouts {
+                    ui.menu_button("Chart layout", |ui| {
+                        if let Some(mode) = self.chart_grid_selector.show_menu(ui) {
+                            *action = TopToolbarAction::Layout(LayoutAction::SelectGrid(mode));
+                        }
+                    });
+                } else if *control == S::LayoutName {
+                    ui.menu_button("Named layouts", |ui| {
+                        let a = self.layout_menu.show_menu(ui);
+                        if a != LayoutAction::None {
+                            *action = TopToolbarAction::Layout(a);
+                        }
+                    });
+                } else if *control == S::Templates {
                     ui.menu_button("Indicator templates", |ui| {
                         self.show_indicator_templates(ui, action)
                     });
@@ -787,6 +820,18 @@ mod tests {
                 ),
                 (S::Save, "Export chart…", TopToolbarAction::Save),
                 (
+                    S::Layouts,
+                    "2x2 Grid",
+                    TopToolbarAction::Layout(LayoutAction::SelectGrid(
+                        crate::widget::ChartLayoutMode::Four,
+                    )),
+                ),
+                (
+                    S::LayoutName,
+                    "Save layout",
+                    TopToolbarAction::Layout(LayoutAction::Save),
+                ),
+                (
                     S::Templates,
                     "Save indicator template",
                     TopToolbarAction::SaveIndicatorTemplate,
@@ -879,10 +924,7 @@ mod tests {
             ),
             (
                 |t| t.set_control_visible(Control::Layouts, false),
-                &[
-                    TopToolbarAction::Save,
-                    TopToolbarAction::Layout(LayoutAction::OpenMenu),
-                ],
+                &[TopToolbarAction::Save],
             ),
         ];
         let ctx = egui::Context::default();
