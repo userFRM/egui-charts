@@ -147,9 +147,10 @@ impl ChartTypeSelector {
         let label = self.current.name();
         Trigger {
             icon: Some(self.current.icon()),
-            label: label.to_owned(),
+            label: String::new(),
             name: format!("Chart type: {label}"),
-            min_width: self.config.btn_width,
+            min_width: self.config.btn_width.max(40.0),
+            filled: false,
         }
     }
 
