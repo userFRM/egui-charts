@@ -73,9 +73,9 @@ pub enum KeyboardAction {
     PanLeft,
     /// Pan right (Right arrow)
     PanRight,
-    /// Pan up (Up arrow) - for vertical panning in price scale
+    /// Pan up in the price scale
     PanUp,
-    /// Pan down (Down arrow) - for vertical panning in price scale
+    /// Pan down in the price scale
     PanDown,
 
     // Zoom
@@ -91,59 +91,59 @@ pub enum KeyboardAction {
     // Reset/Fit
     /// Scroll to real-time / latest data (Home, End)
     ScrollToRealTime,
-    /// Fit content to visible range (F)
+    /// Fit content to visible range
     FitContent,
-    /// Reset zoom to default (R)
+    /// Reset zoom to default
     ResetZoom,
     /// Reset chart (includes zoom and pan) (Alt+R)
     ResetChart,
 
     // Scale modes
-    /// Toggle auto-scale (A)
+    /// Toggle auto-scale
     ToggleAutoScale,
-    /// Toggle logarithmic scale (L / Alt+L)
+    /// Toggle logarithmic scale
     ToggleLogScale,
-    /// Toggle percentage scale (%)
+    /// Toggle percentage scale
     TogglePercentageScale,
 
     // Visual toggles
-    /// Toggle crosshair (C)
+    /// Toggle crosshair
     ToggleCrosshair,
-    /// Toggle grid (G / Alt+G)
+    /// Toggle grid
     ToggleGrid,
-    /// Toggle volume (V)
+    /// Toggle volume
     ToggleVolume,
 
     // Chart type
-    /// Cycle through chart types (T)
+    /// Cycle through chart types
     CycleChartType,
 
     // Drawing tools
-    /// Enable/disable drawing mode (D)
+    /// Enable/disable drawing mode
     ToggleDrawingMode,
     /// Delete selected drawing (Delete, Backspace)
     DeleteSelectedDrawing,
     /// Escape/cancel current action (Escape)
     Cancel,
 
-    // Timeframe shortcuts (number keys)
-    /// 1-minute timeframe (1)
+    // Timeframe commands (unbound by default)
+    /// 1-minute timeframe
     SetTimeframe1Min,
-    /// 5-minute timeframe (2)
+    /// 5-minute timeframe
     SetTimeframe5Min,
-    /// 15-minute timeframe (3)
+    /// 15-minute timeframe
     SetTimeframe15Min,
-    /// 30-minute timeframe (4)
+    /// 30-minute timeframe
     SetTimeframe30Min,
-    /// 1-hour timeframe (5)
+    /// 1-hour timeframe
     SetTimeframe1Hour,
-    /// 4-hour timeframe (6)
+    /// 4-hour timeframe
     SetTimeframe4Hour,
-    /// Daily timeframe (7)
+    /// Daily timeframe
     SetTimeframeDaily,
-    /// Weekly timeframe (8)
+    /// Weekly timeframe
     SetTimeframeWeekly,
-    /// Monthly timeframe (9)
+    /// Monthly timeframe
     SetTimeframeMonthly,
 
     // App-level shortcuts
@@ -151,9 +151,9 @@ pub enum KeyboardAction {
     CreateAlert,
     /// Open indicator search (/)
     OpenIndicatorSearch,
-    /// Open symbol search (Alt+S)
+    /// Open symbol search
     OpenSymbolSearch,
-    /// Save layout (Ctrl+S)
+    /// Save layout
     SaveLayout,
     /// Show keyboard shortcuts help (?)
     ShowKeyboardHelp,

@@ -1,7 +1,7 @@
 //! User interaction handling for the chart widget.
 //!
 //! Implements tracking mode (auto-scroll to latest bar) and keyboard shortcuts
-//! (arrow keys for pan, +/- for zoom, Home for jump-to-latest, F for fit-all).
+//! through the chart's shared, configurable shortcut map.
 //! These methods are called by the main widget paint loop.
 
 use egui::{Response, Ui};
