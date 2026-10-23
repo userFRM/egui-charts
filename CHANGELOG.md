@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `IndicatorDialog::preferences` and `set_preferences` export and restore serializable `IndicatorPreferences`, including favourites for temporarily unavailable host studies. Hosts save this value in their user settings when `ToggleFavorite` fires; the library owns no storage. Study defaults, editable Keltner and Stochastic parameters and tab filtering were already corrected in #692. ([#170](https://github.com/userFRM/egui-charts/issues/170))
+
 - `MACombination` combines two to fourteen `AverageLine`s with independent simple, exponential, weighted, Wilder, volume-weighted or Hull formulas, lengths, sources and colours. `MACross`, `EMACross` and `MultipleMA` share its calculations with their existing defaults. The factory adds `SMA/EMA Cross`, `Triple MA` and `MA Ribbon`; the ribbon has twelve evenly spaced lengths, individual direction colours, a thicker slowest line and a fading purple bottom fill, with a muted variant available directly. Crossing markers identify changes of side, ignore touches and disappear when a live correction cancels the cross. ([#549](https://github.com/userFRM/egui-charts/issues/549))
 
 - `LinearRegressionChannel` fits the trailing window with upper, middle and lower lines, residual deviation bands with an `n - 1` denominator, selectable price source, Pearson correlation label and optional right extension. Updates clear expired bars and refit the trailing window on every live change, independently of history length. Right extensions project prices before mapping to the axis, including logarithmic and inverted scales. Drawings share the same headless least-squares maths. ([#548](https://github.com/userFRM/egui-charts/issues/548))

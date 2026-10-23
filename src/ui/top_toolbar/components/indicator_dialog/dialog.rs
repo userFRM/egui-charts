@@ -3,7 +3,7 @@
 use super::{
     actions::IndicatorDialogAction,
     config::IndicatorDialogConfig,
-    data::{IndicatorInfo, IndicatorParams},
+    data::{IndicatorInfo, IndicatorParams, IndicatorPreferences},
     types::{IndicatorCategory, IndicatorTab},
 };
 use crate::icons::icons;
@@ -68,6 +68,18 @@ impl Default for IndicatorDialog {
 }
 
 impl IndicatorDialog {
+    /// Settings to save in the host's user settings document. The dialog owns no storage.
+    pub fn preferences(&self) -> IndicatorPreferences {
+        IndicatorPreferences {
+            favorites: self.favorites.iter().cloned().collect(),
+        }
+    }
+
+    /// Restore the user's saved browser settings, including unavailable host studies.
+    pub fn set_preferences(&mut self, preferences: IndicatorPreferences) {
+        self.favorites = preferences.favorites.into_iter().collect();
+    }
+
     /// Create a new indicator dialog with the built-in studies
     pub fn new() -> Self {
         let factory = IndicatorFactory::new();
@@ -756,6 +768,30 @@ impl IndicatorDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_favorites_restore_the_favorites_list() {
+        let mut dialog = IndicatorDialog::new();
+        dialog
+            .favorites
+            .extend(["BB".to_owned(), "Host study".to_owned()]);
+        let saved = serde_json::to_string(&dialog.preferences()).unwrap();
+        let mut restored = IndicatorDialog::new();
+        restored.set_preferences(serde_json::from_str(&saved).unwrap());
+        restored.sel_category = IndicatorCategory::Favorites;
+        let listed: Vec<_> = restored
+            .indicators
+            .iter()
+            .filter(|i| restored.matches(i))
+            .collect();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "BB");
+        assert!(restored.favorites.contains("Host study"));
+        assert_eq!(
+            saved,
+            serde_json::to_string(&restored.preferences()).unwrap()
+        );
+    }
 
     #[test]
     fn each_tab_and_category_lists_only_its_own_indicators() {

@@ -2,6 +2,17 @@
 
 use crate::studies::IndicatorFactory;
 
+/// Host-owned indicator browser settings. Save these alongside the user's other settings
+/// after [`IndicatorDialogAction::ToggleFavorite`](super::IndicatorDialogAction::ToggleFavorite),
+/// and restore them with [`IndicatorDialog::set_preferences`](super::IndicatorDialog::set_preferences).
+/// Unknown study names are retained so temporarily unavailable host studies keep their stars.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IndicatorPreferences {
+    /// Favourite factory names, sorted for stable saved documents.
+    #[serde(default)]
+    pub favorites: std::collections::BTreeSet<String>,
+}
+
 /// Indicator information
 #[derive(Debug, Clone)]
 pub struct IndicatorInfo {
