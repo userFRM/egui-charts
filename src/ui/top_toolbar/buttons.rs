@@ -479,7 +479,7 @@ pub fn toolbar_tooltip(
         .id(response.id.with("toolbar_tooltip"))
         .kind(egui::PopupKind::Tooltip)
         .align(egui::RectAlign::BOTTOM)
-        .gap(8.0)
+        .gap(9.0)
         .sense(Sense::hover())
         .interactable(false)
         .open(response.enabled() && egui::Tooltip::should_show_tooltip(&response, false))
@@ -487,29 +487,29 @@ pub fn toolbar_tooltip(
             egui::Frame::new()
                 .fill(fill)
                 .corner_radius(3)
-                .inner_margin(egui::Margin::symmetric(8, 4)),
+                .inner_margin(egui::Margin::symmetric(8, 3)),
         )
         .show(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            ui.spacing_mut().interact_size.y = 15.0;
+            ui.spacing_mut().interact_size.y = 17.0;
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(text)
-                        .size(12.0)
+                        .size(14.0)
                         .color(Color32::from_gray(240)),
                 );
                 if let Some(shortcut) = shortcut {
                     ui.add_space(4.0);
                     for (index, key) in ui.ctx().format_shortcut(&shortcut).split('+').enumerate() {
                         if index > 0 {
-                            ui.label(egui::RichText::new("+").size(12.0).color(Color32::WHITE));
+                            ui.label(egui::RichText::new("+").size(14.0).color(Color32::WHITE));
                         }
                         egui::Frame::new()
                             .fill(Color32::from_gray(80))
                             .corner_radius(2)
                             .inner_margin(egui::Margin::symmetric(4, 0))
                             .show(ui, |ui| {
-                                ui.label(egui::RichText::new(key).size(12.0).color(Color32::WHITE));
+                                ui.label(egui::RichText::new(key).size(14.0).color(Color32::WHITE));
                             });
                     }
                 }
