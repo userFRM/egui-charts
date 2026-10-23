@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Modal dialogs, modal handlers and the command palette read `UiColors::modal_overlay` from the active theme. Light dialogs dim white panels to 159 rather than 75; high contrast uses its window outline without dimming. Migration: add `modal_overlay` to colour literals and saved palettes, or construct colours from a preset. ([#585](https://github.com/userFRM/egui-charts/issues/585))
+
 - Active widget rail entries use the selection colour pair and show the pressed step when held. Alert counts use `danger_bg` with `danger_text` instead of mixing a status foreground with the badge text. ([#387](https://github.com/userFRM/egui-charts/issues/387), [#531](https://github.com/userFRM/egui-charts/issues/531))
 
 - List action buttons and `UiExt` primary, secondary and danger helpers share the kit variants, including opaque themed state shades and their matching text. The dark primary blue now meets 4.5:1 with white. Ghost and Outlined controls use egui's hover and pressed fills, and neutral button glyphs use the same foreground states across button types. ([#435](https://github.com/userFRM/egui-charts/issues/435), [#582](https://github.com/userFRM/egui-charts/issues/582))
