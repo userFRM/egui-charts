@@ -33,8 +33,9 @@ pub struct TimeScaleOptions {
     /// Default: 0.0
     pub max_bar_spacing: f32,
 
-    /// Prevent scrolling to the left of the first bar.
-    /// Default: true
+    /// Prevent scrolling to the left of the first bar: the view stops with the first bar at the
+    /// left edge, and when every bar fits the empty space is on the right.
+    /// Default: false
     pub fix_left_edge: bool,
 
     /// Prevent scrolling to the right of the most recent bar.
@@ -93,7 +94,7 @@ impl Default for TimeScaleOptions {
             bar_spacing: 6.0,
             min_bar_spacing: 0.5,
             max_bar_spacing: 0.0,
-            fix_left_edge: true,   // Prevent scrolling beyond first bar
+            fix_left_edge: false,  // Allow scrolling past the first bar
             fix_right_edge: false, // Allow scrolling past latest bar
             lock_visible_time_range_on_resize: false,
             right_bar_stays_on_scroll: false,

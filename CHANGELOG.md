@@ -61,7 +61,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- `TimeScaleOptions::fix_left_edge` works: when set, panning, zooming and scrolling stop with the first bar at the left edge of the chart, or with the latest bar at the right edge when every bar fits. It had no effect, so its default is now `false`, matching how charts already behaved: the view can move up to 100 bars past the first bar.
+- `TimeScaleOptions::fix_left_edge` works: when set, panning, zooming and scrolling stop with the first bar at the left edge of the chart, and when every bar fits the empty space is on the right. It had no effect, so its default is now `false`, matching how charts already behaved: the view can move up to 100 bars past the first bar.
 - Dragging the chart pans the price axis vertically while auto-scale is off, so a range zoomed by hand can be moved to other prices. Dragging used to pan in time only.
 - Price zoom stops at a span of a millionth of the price level on every price scale mode, also for views that cross zero: a percentage view, a logarithmic view of prices near 1, or a spread. It used to take a millionth of the visible bounds, which shrinks with each step across zero, until every price landed on the middle of the pane. Box zoom stops at the same span, and flat data on a logarithmic scale is fitted like flat prices, with margins taken from 1% of the price instead of 1% of its logarithm.
 - Box zoom zooms in time: the bars inside the box fill the chart width, up to `TimeScaleOptions::max_bar_spacing`, centred on the box, and a box inside one bar shows that bar across the width. It used to re-centre the view on the box and keep the bar spacing.

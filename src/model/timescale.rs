@@ -97,7 +97,7 @@ impl TimeScale {
             bar_cnt: 0,
             min_bar_spacing: DEFAULT_MIN_BAR_SPACING,
             max_bar_spacing: 0.0, // unlimited
-            fix_left_edge: true,
+            fix_left_edge: false,
             fix_right_edge: false, // Allow scrolling past latest bar
         }
     }
@@ -370,15 +370,20 @@ impl TimeScale {
     }
 
     /// Calculate min allowed right_offset (most negative value).
-    /// This limits how far we can scroll to the LEFT (showing older data).
-    /// Uses a permissive bound to allow viewing all historical data.
+    /// This limits how far we can scroll to the LEFT (showing older data): with
+    /// `fix_left_edge` to the first bar at the left edge, also when every bar fits;
+    /// without it to 100 bars past the first.
     fn calculate_min_right_offset(&self) -> Option<f32> {
         if self.bar_cnt == 0 || self.bar_spacing <= 0.0 || self.width <= 0.0 {
             return None;
         }
 
-        // Allow scrolling to view all data plus some buffer
-        Some(-(self.bar_cnt as f32 + 100.0))
+        if self.fix_left_edge {
+            // The offset that puts the left border of `visible_logical_range` at bar 0.
+            Some(self.width / self.bar_spacing - self.bar_cnt as f32)
+        } else {
+            Some(-(self.bar_cnt as f32 + 100.0))
+        }
     }
 
     /// Calculate max allowed right_offset (most positive value).
@@ -450,7 +455,7 @@ mod tests {
         ] {
             let mut ts = TimeScale::new();
             ts.set_bar_cnt(100);
-            ts.apply_options(6.0, 0.5, 0.0, true, false, bars, pixels);
+            ts.apply_options(6.0, 0.5, 0.0, false, false, bars, pixels);
             ts.set_bar_spacing(spacing);
             let backs: [(&str, Back); 2] = [
                 ("follow", TimeScale::scroll_to_realtime),
@@ -465,6 +470,27 @@ mod tests {
                     "{pixels:?} at {spacing}, {name}"
                 );
             }
+        }
+    }
+
+    /// Scrolling far into the past stops with the first bar at the left edge while
+    /// `fix_left_edge` is set: 100 bars fit 800 px at a spacing of 8, so the right offset stops
+    /// at 100 - 1,000 bars, and at 100 - 50 bars when every bar fits, leaving the empty space on
+    /// the right. Unset, the view goes on to 100 bars past the first.
+    #[test]
+    fn fix_left_edge_stops_the_view_at_the_first_bar() {
+        for (fix, bars, expected) in [
+            (true, 1000, -900.0),
+            (false, 1000, -1100.0),
+            (true, 50, 50.0),
+            (false, 50, -150.0),
+        ] {
+            let mut ts = TimeScale::new();
+            ts.set_width(800.0);
+            ts.set_bar_cnt(bars);
+            ts.apply_options(8.0, 0.5, 0.0, fix, false, 2.5, None);
+            ts.scroll_bars(5000.0);
+            assert_eq!(ts.right_offset(), expected, "fix {fix}, {bars} bars");
         }
     }
 
