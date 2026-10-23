@@ -31,15 +31,12 @@ use egui::Color32;
 
 /// The colours and scales of the UI and the chart.
 ///
-/// With the `serde` feature, a theme serialises with any serde format, and fields
-/// missing from the input take their value from [`Theme::dark`]. Colours are egui's
-/// premultiplied `[r, g, b, a]` arrays.
+/// With the `serde` feature, a theme serialises with any serde format. The `dark`
+/// flag and both complete colour palettes are required; omitted text, spacing and
+/// radius scales use their defaults. Colours are egui's premultiplied `[r, g, b, a]`
+/// arrays.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Theme {
     /// Whether the UI is dark: selects egui's base visuals and the shadow strength.
     pub dark: bool,
@@ -48,10 +45,13 @@ pub struct Theme {
     /// Colours of the chart surface.
     pub chart: ChartColors,
     /// Type scale and chart text roles. Not applied to egui's text styles.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub text: TextSizes,
     /// Spacing scale.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub spacing: Spacing,
     /// Corner radius scale.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub radius: Radii,
 }
 
@@ -63,11 +63,7 @@ impl Default for Theme {
 
 /// Colours of the UI chrome.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UiColors {
     /// Panels, toolbars and inputs.
     pub panel_bg: Color32,
@@ -131,11 +127,7 @@ impl Default for UiColors {
 
 /// Colours of the chart surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChartColors {
     /// Plot background.
     pub bg: Color32,
@@ -583,6 +575,24 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
+    fn partial_light_palettes_are_rejected_instead_of_mixing_presets() {
+        let partial = serde_json::json!({"dark": false, "ui": {
+            "panel_bg": [255, 255, 255, 255],
+            "panel_bg_floating": [255, 255, 255, 255],
+            "text": [19, 23, 34, 255]
+        }});
+        assert!(serde_json::from_value::<Theme>(partial).is_err());
+        for (_, theme) in presets() {
+            let mut saved = serde_json::to_value(&theme).unwrap();
+            for scale in ["text", "spacing", "radius"] {
+                saved.as_object_mut().unwrap().remove(scale);
+            }
+            assert_eq!(serde_json::from_value::<Theme>(saved).unwrap(), theme);
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
     fn saved_text_roles_default_when_missing_and_keep_overrides_when_scaled() {
         for (role, default) in [
             ("chart_title", 16.0),
@@ -593,7 +603,8 @@ mod tests {
             ("bottom_bar", 14.0),
         ] {
             for override_size in [None, Some(19.0)] {
-                let mut saved = serde_json::json!({"text": {"body": 17.0}});
+                let mut saved = serde_json::to_value(Theme::dark()).unwrap();
+                saved["text"] = serde_json::json!({"body": 17.0});
                 if let Some(size) = override_size {
                     saved["text"][role] = serde_json::json!(size);
                 }
