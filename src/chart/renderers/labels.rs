@@ -411,6 +411,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn currency_button_reserves_ticks_and_opens_its_menu() {
+        use crate::model::Instrument;
+        for left in [false, true] {
+            for currency in [None, Some("USD")] {
+                let ctx = Context::default();
+                let mut chart = chart(&[100.0], &[110.0]);
+                chart.config_mut().show_right_axis = !left;
+                chart.config_mut().show_left_axis = left;
+                chart.set_instrument(
+                    currency.map(|code| Instrument::new("SAMPLE").with_currency(code)),
+                );
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let header = painted.iter().find_map(|shape| match shape {
+                    Shape::Text(text) if text.galley.text() == "USD" => Some(text),
+                    _ => None,
+                });
+                assert_eq!(header.is_some(), currency.is_some());
+                if let Some(header) = header {
+                    assert_eq!(
+                        header.galley.job.sections[0].format.font_id,
+                        super::axis_font(&ctx)
+                    );
+                    let plot = chart.get_rendered_price_rect();
+                    assert!(
+                        (header.pos.y + header.galley.size().y / 2.0 - plot.top() - 12.0).abs()
+                            < 0.1
+                    );
+                    let box_rect = painted
+                        .iter()
+                        .find_map(|shape| match shape {
+                            Shape::Rect(rect)
+                                if rect.rect.height() == 24.0 && rect.rect.contains(header.pos) =>
+                            {
+                                Some(rect.rect)
+                            }
+                            _ => None,
+                        })
+                        .expect("currency backdrop");
+                    assert_eq!(
+                        box_rect.right(),
+                        if left {
+                            plot.left()
+                        } else {
+                            plot.right() + chart.config().right_axis_width
+                        }
+                    );
+                    for shape in &painted {
+                        if let Shape::Text(text) = shape
+                            && text.galley.text().parse::<f64>().is_ok()
+                            && text.pos.x >= box_rect.left()
+                        {
+                            assert!(
+                                !Rect::from_min_size(text.pos, text.galley.size())
+                                    .intersects(box_rect)
+                            );
+                        }
+                    }
+                    let pos = box_rect.center();
+                    let events = vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ];
+                    frame(&ctx, &mut chart, 0.2, events);
+                    let popup = shapes(&ctx, &mut chart, 0.3, vec![]);
+                    assert_eq!(popup.iter().filter(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "USD")).count(), 2);
+                }
+            }
+        }
+    }
+
     /// A narrow legend wraps whole fields before the plot's axis inset.
     #[test]
     fn legend_fields_stay_inside_the_plot() {

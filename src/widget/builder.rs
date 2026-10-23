@@ -118,6 +118,8 @@ impl Chart {
             zoom_just_applied: false,
             symbol: String::new(),
             legend_instrument: None,
+            currency_choices: Vec::new(),
+            currency_choice: None,
             legend_badge: None,
             legend_statuses: Vec::new(),
             quote: None,

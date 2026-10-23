@@ -263,6 +263,8 @@ pub struct Chart {
     pub(crate) symbol: String,
     /// Metadata supplied directly by a host without a feed.
     legend_instrument: Option<crate::model::Instrument>,
+    currency_choices: Vec<String>,
+    currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
@@ -428,6 +430,17 @@ impl Chart {
             .instrument()
             .and_then(|instrument| instrument.price_decimals);
         self.state.price_scale_mut().set_price_precision(precision);
+    }
+
+    /// Supplies currencies the host can convert the chart into. Choosing one emits an intent;
+    /// the host replaces bars and instrument metadata together after conversion.
+    pub fn set_currency_choices(&mut self, currencies: Vec<String>) {
+        self.currency_choices = currencies;
+    }
+
+    /// Takes the selected currency. No prices change until the host supplies converted data.
+    pub fn take_currency_choice(&mut self) -> Option<String> {
+        self.currency_choice.take()
     }
 
     /// Supplies a host-owned instrument image for the legend. `None` hides it.

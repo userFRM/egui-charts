@@ -1328,6 +1328,31 @@ impl Chart {
             self.event_click = Some(id);
         }
 
+        if show_price_axis
+            && let Some(currency) = self
+                .instrument()
+                .and_then(|instrument| instrument.currency.as_deref())
+                .filter(|code| !code.is_empty())
+        {
+            let axis = Rect::from_min_max(
+                Pos2::new(
+                    if self.config.show_right_axis {
+                        price_rect.right()
+                    } else {
+                        rect.left()
+                    },
+                    price_rect.top(),
+                ),
+                Pos2::new(axis_edge, price_rect.bottom()),
+            );
+            let (button, choice) =
+                renderers::render_axis_currency(ui, axis, currency, &self.currency_choices);
+            if choice.is_some() {
+                self.currency_choice = choice;
+            }
+            tags.push(Some(button.rect));
+        }
+
         // Draw the axis labels, leaving out those the tags overlap
         tags.extend([last_price_tag, crosshair_tags[0], crosshair_tags[1]]);
         if self.config.show_right_axis {
