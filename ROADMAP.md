@@ -360,7 +360,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Symbol search pill (custom-drawn with icons)
 - [x] Compare/Add symbol button renders and emits OpenCompare (no compare overlay)
 - [x] Timeframe selector dropdown grouped by unit (only 9 of 25 presets map to a Timeframe)
-- [x] Chart type selector dropdown (all 18 types with icons + descriptions)
+- [x] Chart type selector dropdown (all 19 types with icons + descriptions)
 - [x] Indicators button
 - [x] Alert, Replay, Undo, Redo buttons
 - [x] Right rail buttons render: Quick Search, Publish, Trade, Camera, Fullscreen, Settings, Save, Layout (Publish, Trade and Layout have no backing feature)
@@ -539,7 +539,7 @@ The ui_kit components are generic building blocks:
 ## Feature Gap Summary
 
 ### What's built
-- 18 of 18 chart types render
+- 19 of 19 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
 - `DrawingToolType` defines 95 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
 - 129 registered indicators with calculation code; studies that keep the default line count of 1 draw only their first line

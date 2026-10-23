@@ -125,6 +125,15 @@ pub fn draw_o_symbol(painter: &Painter, center: Pos2, radius: f32, color: Color3
     ));
 }
 
+/// Close of the bar before `idx` in `full`; the first bar compares with its own open.
+pub fn prev_close(full: &[crate::model::Bar], idx: usize) -> f64 {
+    if idx > 0 {
+        full[idx - 1].close
+    } else {
+        full[0].open
+    }
+}
+
 /// Select bullish or bearish color based on bar direction
 #[inline]
 pub fn bar_color(bar: &crate::model::Bar, bullish: Color32, bearish: Color32) -> Color32 {

@@ -15,7 +15,7 @@
 //! # Chart Types
 //! - Standard: Bars, Candles, Hollow Candles, Volume Candles
 //! - Line-based: Line, Line with Markers, Step Line
-//! - Area-based: Area, HLC Area, Baseline
+//! - Area-based: Area, HLC Area, Baseline, Columns
 //! - Japanese: Renko, Kagi, Line Break, Heikin-Ashi, Point & Figure
 //! - Range-based: High-Low, Range Bars
 //! - Advanced: TPO (Market Profile)
@@ -54,6 +54,9 @@ pub enum ChartType {
     HlcArea,
     /// Baseline comparison chart with colored fill
     Baseline,
+    /// One column per bar from the bottom of the price pane to the close,
+    /// coloured by close versus the previous close
+    Columns,
 
     // === Range Types ===
     /// High-Low range visualization
@@ -135,6 +138,7 @@ impl ChartType {
             ChartType::Area,
             ChartType::HlcArea,
             ChartType::Baseline,
+            ChartType::Columns,
             ChartType::HighLow,
             ChartType::TimePriceOpportunity,
             ChartType::LineBreak,
@@ -159,6 +163,7 @@ impl ChartType {
             ChartType::Area => "Area",
             ChartType::HlcArea => "HLC area",
             ChartType::Baseline => "Baseline",
+            ChartType::Columns => "Columns",
             ChartType::HighLow => "High-low",
             ChartType::TimePriceOpportunity => "Time Price Opportunity",
             ChartType::LineBreak => "Line break",
@@ -188,6 +193,7 @@ impl ChartType {
             ChartType::Area => "Filled area chart",
             ChartType::HlcArea => "High-Low-Close area",
             ChartType::Baseline => "Baseline comparison",
+            ChartType::Columns => "Columns up to the close",
             ChartType::HighLow => "High-Low range",
             ChartType::TimePriceOpportunity => "TPO / Market Profile",
             ChartType::LineBreak => "Three line break",
@@ -216,7 +222,7 @@ impl ChartType {
                 ChartTypeCategory::LineBased
             }
 
-            ChartType::Area | ChartType::HlcArea | ChartType::Baseline => {
+            ChartType::Area | ChartType::HlcArea | ChartType::Baseline | ChartType::Columns => {
                 ChartTypeCategory::AreaBased
             }
 
@@ -262,7 +268,8 @@ impl ChartType {
             | ChartType::LineWithMarkers
             | ChartType::StepLine
             | ChartType::Area
-            | ChartType::Baseline => false,
+            | ChartType::Baseline
+            | ChartType::Columns => false,
         }
     }
 

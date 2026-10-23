@@ -188,7 +188,7 @@ Chart types in six categories:
 |---|---|
 | **Standard** | Candlesticks · OHLC Bars · Hollow Candles · Volume Candles |
 | **Line** | Line · Line with Markers · Step Line |
-| **Area** | Area · HLC Area · Baseline |
+| **Area** | Area · HLC Area · Baseline · Columns |
 | **Japanese** | Heikin-Ashi · Renko · Kagi · Line Break · Point & Figure |
 | **Range** | High-Low · Range Bars |
 | **Advanced** | TPO / Market Profile |

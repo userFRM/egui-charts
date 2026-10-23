@@ -189,6 +189,7 @@ pub fn chart_type_from_name(name: &str) -> Option<egui_charts::model::ChartType>
         "area" => Some(ChartType::Area),
         "hlc area" => Some(ChartType::HlcArea),
         "baseline" => Some(ChartType::Baseline),
+        "columns" => Some(ChartType::Columns),
         "heikin ashi" | "heikin" => Some(ChartType::Heikin),
         "renko" => Some(ChartType::Renko),
         "kagi" => Some(ChartType::Kagi),

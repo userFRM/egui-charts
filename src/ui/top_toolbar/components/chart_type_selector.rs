@@ -29,6 +29,7 @@ impl ChartTypeUiExt for ChartType {
             ChartType::Area => &embedded_icons::CHART_AREA,
             ChartType::HlcArea => &embedded_icons::CHART_HLC_AREA,
             ChartType::Baseline => &embedded_icons::CHART_BASELINE,
+            ChartType::Columns => &embedded_icons::CHART_COLUMNS,
             ChartType::HighLow => &embedded_icons::CHART_HIGH_LOW,
             ChartType::TimePriceOpportunity => &embedded_icons::CHART_TPO,
             ChartType::LineBreak => &embedded_icons::CHART_LINE_BREAK,

@@ -206,6 +206,7 @@ pub mod icons {
     pub const CHART_AREA: Icon = crate::icon_from_path!("chart-types/chart-area.svg");
     pub const CHART_HLC_AREA: Icon = crate::icon_from_path!("chart-types/chart-hlc-area.svg");
     pub const CHART_BASELINE: Icon = crate::icon_from_path!("chart-types/chart-baseline.svg");
+    pub const CHART_COLUMNS: Icon = crate::icon_from_path!("chart-types/chart-columns.svg");
     pub const CHART_HIGH_LOW: Icon = crate::icon_from_path!("chart-types/chart-high-low.svg");
     pub const CHART_TPO: Icon = crate::icon_from_path!("chart-types/chart-tpo.svg");
     pub const CHART_LINE_BREAK: Icon = crate::icon_from_path!("chart-types/chart-line-break.svg");

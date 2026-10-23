@@ -5,7 +5,7 @@
 //!
 //! - Standard: Candlestick, Bars, Hollow Candles, Volume Candles
 //! - Line-based: Line, Line with Markers, Step Line
-//! - Area-based: Area, HLC Area, Baseline
+//! - Area-based: Area, HLC Area, Baseline, Columns
 //! - Japanese: Renko, Kagi, Line Break, Heikin-Ashi
 //! - Range: High-Low, Range Bars, Point & Figure
 //! - Advanced: TPO
@@ -222,6 +222,24 @@ pub fn render_chart_type(
                 params.bullish_color(),
                 params.bearish_color(),
                 params.price_source(),
+            );
+        }
+        ChartType::Columns => {
+            candlestick::render_columns(
+                ctx.price_ctx,
+                ctx.volume_ctx,
+                ctx.price_scale,
+                ctx.colors,
+                ctx.visible_data,
+                ctx.full_data,
+                ctx.start_idx,
+                params.bar_width(),
+                params.show_volume(),
+                params.max_volume(),
+                params.chart_rect_min_x(),
+                &idx_to_coord,
+                params.bullish_color(),
+                params.bearish_color(),
             );
         }
         ChartType::Baseline => {
