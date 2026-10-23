@@ -125,11 +125,15 @@ pub struct TickData {
 }
 
 /// Build range bars from raw tick data (exact construction).
+///
+/// # Safety Limits
+/// - At most the newest 5,000 range bars
 pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> Vec<RangeBar> {
     if ticks.is_empty() {
         return Vec::new();
     }
 
+    const MAX_BARS: usize = 5_000;
     let range_size = config.range_size;
     let mut bars: Vec<RangeBar> = Vec::new();
 
@@ -155,8 +159,13 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
         curr_bar.end_time = tick.ts;
         curr_bar.tick_cnt += 1;
 
-        // Check if range is exceeded
-        if curr_bar.range() >= range_size {
+        // A tick that crosses several ranges closes one bar per range; a range of 0 or less closes none.
+        // A tick closes at most 100 bars, which bounds the work for one bad print; raise it if gaps
+        // that large must chart in full.
+        const MAX_CLOSES: usize = 100;
+        let mut closes = 0;
+        while curr_bar.range() >= range_size && range_size > 0.0 && closes < MAX_CLOSES {
+            closes += 1;
             // Determine close price based on direction
             if tick.price >= curr_bar.open {
                 // Bar is moving up
@@ -169,6 +178,9 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
             }
 
             bars.push(curr_bar.clone());
+            if bars.len() == 2 * MAX_BARS {
+                bars.drain(..MAX_BARS);
+            }
 
             // Start new bar from where the last one ended
             curr_bar = RangeBar {
@@ -180,16 +192,16 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
                 start_time: tick.ts,
                 end_time: tick.ts,
                 range_size,
-                tick_cnt: 0,
+                tick_cnt: 1,
             };
         }
     }
 
-    // Add the incomplete bar if it has any ticks
-    if curr_bar.tick_cnt > 0 {
+    // The incomplete bar holds the last trade, unless that trade only closed the previous bar exactly.
+    if bars.is_empty() || curr_bar.tick_cnt > 1 || curr_bar.range() > 0.0 {
         bars.push(curr_bar);
     }
-
+    bars.drain(..bars.len().saturating_sub(MAX_BARS));
     bars
 }
 
@@ -331,22 +343,6 @@ fn calculate_atr(data: &[Bar], period: usize) -> f64 {
 mod tests {
     use super::*;
 
-    fn create_test_ticks() -> Vec<TickData> {
-        let now = Utc::now();
-        let prices = [
-            100.0, 101.0, 102.0, 103.0, 105.0, 108.0, 110.0, 107.0, 104.0, 102.0,
-        ];
-
-        prices
-            .iter()
-            .map(|&price| TickData {
-                price,
-                volume: 100.0,
-                ts: now,
-            })
-            .collect()
-    }
-
     fn create_test_bars() -> Vec<Bar> {
         let now = Utc::now();
         (0..20)
@@ -371,17 +367,46 @@ mod tests {
     }
 
     #[test]
-    fn test_range_bars_from_ticks() {
-        let ticks = create_test_ticks();
-        let config = RangeBarConfig::new(5.0);
-        let bars = to_range_bars_from_ticks(&ticks, &config);
-
-        assert!(!bars.is_empty());
-
-        // Each completed bar should have range approximately equal to config
-        for bar in &bars[..bars.len().saturating_sub(1)] {
-            // Skip last (incomplete) bar
-            assert!(bar.range() <= config.range_size + 0.01);
+    fn range_bars_from_ticks_follow_every_tick() {
+        // (range, tick prices, (open, high, low, close) of each bar)
+        type Ohlc = (f64, f64, f64, f64);
+        let cases: [(f64, &[f64], &[Ohlc]); 4] = [
+            (
+                10.0,
+                &[100.0, 150.0],
+                &[
+                    (100.0, 110.0, 100.0, 110.0),
+                    (110.0, 120.0, 110.0, 120.0),
+                    (120.0, 130.0, 120.0, 130.0),
+                    (130.0, 140.0, 130.0, 140.0),
+                    (140.0, 150.0, 140.0, 150.0),
+                ],
+            ),
+            (
+                10.0,
+                &[100.0, 105.0, 112.0],
+                &[(100.0, 110.0, 100.0, 110.0), (110.0, 112.0, 110.0, 112.0)],
+            ),
+            // A last tick exactly on a boundary adds no zero-range bar with the previous bar's time.
+            (10.0, &[100.0, 110.0], &[(100.0, 110.0, 100.0, 110.0)]),
+            // A range of 0 closes nothing and still terminates.
+            (0.0, &[100.0, 0.0], &[(100.0, 100.0, 0.0, 0.0)]),
+        ];
+        for (range, prices, expected) in cases {
+            let ticks: Vec<TickData> = prices
+                .iter()
+                .enumerate()
+                .map(|(i, &price)| TickData {
+                    price,
+                    volume: 1.0,
+                    ts: DateTime::from_timestamp(i as i64, 0).unwrap(),
+                })
+                .collect();
+            let bars: Vec<_> = to_range_bars_from_ticks(&ticks, &RangeBarConfig::new(range))
+                .iter()
+                .map(|b| (b.open, b.high, b.low, b.close))
+                .collect();
+            assert_eq!(bars, expected, "{prices:?} range {range}");
         }
     }
 
