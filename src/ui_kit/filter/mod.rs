@@ -22,10 +22,11 @@
 //! # });
 //! ```
 
-use egui::{Margin, Rect, Response, Role, Sense, TextEdit, Ui, Vec2, Widget, WidgetInfo, pos2};
+use egui::{Margin, Rect, Response, TextEdit, Ui, UiBuilder, Vec2, Widget, pos2};
 
 use crate::icons::icons;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 
 /// Response from showing a FilterWidget
 pub struct FilterResponse {
@@ -137,7 +138,7 @@ pub fn filter_input(ui: &mut Ui, query: &mut String) -> FilterResponse {
 }
 
 /// A full-width text field with the search icon and the clear button inside its frame.
-/// Escape clears the query.
+/// Escape clears the query while the field has focus.
 fn search_field(
     ui: &mut Ui,
     query: &mut String,
@@ -187,19 +188,66 @@ fn search_field(
     }
     if show_clear && !query.is_empty() {
         let rect = icon_rect(response.rect.right() - inset - icon_size / 2.0);
-        let clear = ui.interact(rect, response.id.with("clear"), Sense::click());
-        clear.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Clear filter"));
-        icons::CLOSE
-            .as_image_tinted(Vec2::splat(icon_size), tint)
-            .paint_at(ui, rect);
+        let clear = ui
+            .scope_builder(UiBuilder::new().max_rect(rect.expand(4.0)), |ui| {
+                IconButton::new(&icons::CLOSE)
+                    .size(ButtonSize::SM)
+                    .tooltip("Clear filter")
+                    .show(ui)
+            })
+            .inner;
         if clear.clicked() {
             query.clear();
         }
     }
 
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !query.is_empty() {
+    if (response.has_focus() || response.lost_focus())
+        && !query.is_empty()
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
         query.clear();
     }
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Context, Event, Key, Modifiers, RawInput};
+
+    #[test]
+    fn escape_clears_only_the_focused_filter() {
+        for focused in [false, true] {
+            let ctx = Context::default();
+            let mut query = "RSI".to_owned();
+            let mut id = egui::Id::NULL;
+            ctx.run_ui(RawInput::default(), |ui| {
+                id = filter_input(ui, &mut query).response.id;
+            })
+            .drop_without_applying_deltas();
+            if focused {
+                ctx.memory_mut(|m| m.request_focus(id));
+            }
+            let input = RawInput {
+                events: vec![Event::Key {
+                    key: Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                filter_input(ui, &mut query);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                query,
+                if focused { "" } else { "RSI" },
+                "focused: {focused}"
+            );
+        }
+    }
 }
