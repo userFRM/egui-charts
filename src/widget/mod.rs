@@ -270,9 +270,13 @@ pub struct Chart {
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    server_time_offset: Option<chrono::TimeDelta>,
+    bar_close_time: Option<chrono::DateTime<chrono::Utc>>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,
+    pub(crate) measured_axis_width: f32,
+    last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
     events: Vec<crate::model::Marker>,
@@ -462,6 +466,26 @@ impl Chart {
         self.quote = quote;
     }
 
+    /// Supplies the current server time for a chart without a feed. The clock advances between
+    /// calls; update it when a replay jumps. `None` restores the feed clock or latest quote time.
+    pub fn set_server_time(&mut self, now: Option<chrono::DateTime<chrono::Utc>>) {
+        self.server_time_offset = now.map(|time| time - chrono::Utc::now());
+    }
+
+    /// Supplies an exact closing instant for the newest bar, for irregular sessions or replays.
+    /// `None` derives the close from the timeframe and the instrument's session.
+    pub fn set_bar_close_time(&mut self, close: Option<chrono::DateTime<chrono::Utc>>) {
+        self.bar_close_time = close;
+    }
+
+    /// Sets the right margin in bars and moves to that margin when it changes.
+    pub fn set_right_margin(&mut self, bars: f32) {
+        if bars.is_finite() && bars >= 0.0 && self.chart_options.time_scale.right_offset != bars {
+            self.chart_options.time_scale.right_offset = bars;
+            self.state.time_scale_mut().set_right_offset(bars);
+        }
+    }
+
     /// Supplies an independent extended-session price and qualifier. `None` hides the tag.
     pub fn set_session_quote(&mut self, quote: Option<crate::model::quote::SessionQuote>) {
         self.session_quote = quote;
@@ -509,12 +533,12 @@ impl Chart {
             .max(0.0)
             .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
         let left_axis = if self.config.show_left_axis {
-            self.config.left_axis_width.max(0.0)
+            self.config.left_axis_width.max(self.measured_axis_width)
         } else {
             0.0
         };
         let right_axis = if self.config.show_right_axis {
-            self.config.right_axis_width.max(0.0)
+            self.config.right_axis_width.max(self.measured_axis_width)
         } else {
             0.0
         };

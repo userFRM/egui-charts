@@ -125,7 +125,7 @@ pub fn render_floating_tooltip(
         let volume = VolumeFormatter {
             precision: instrument
                 .and_then(|instrument| instrument.volume_decimals)
-                .map_or(2, |decimals| usize::from(decimals.min(16))),
+                .map_or(2, usize::from),
         }
         .format(candle.volume);
         rows.push(("Vol", volume));
@@ -282,7 +282,7 @@ pub fn render_tracking_tooltip(
             VolumeFormatter {
                 precision: instrument
                     .and_then(|instrument| instrument.volume_decimals)
-                    .map_or(2, |decimals| usize::from(decimals.min(16)))
+                    .map_or(2, usize::from)
             }
             .format(candle.volume)
         ));

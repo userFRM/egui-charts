@@ -12,21 +12,17 @@ use crate::model::{Instrument, percent_change};
 use std::sync::Arc;
 
 /// Instrument decimals, falling back to the decimal places needed to write its minimum tick.
-/// Invalid tick sizes are ignored; explicit decimals take precedence and are capped at 16.
+/// Invalid tick sizes are ignored; explicit decimals take precedence.
 pub fn instrument_price_precision(instrument: &Instrument) -> Option<u8> {
-    instrument
-        .price_decimals
-        .map(|decimals| decimals.min(16))
-        .or_else(|| {
-            let tick = instrument
-                .tick_size
-                .filter(|tick| tick.is_finite() && *tick > 0.0)?;
-            let text = tick.to_string();
-            Some(
-                text.split_once('.')
-                    .map_or(0, |(_, decimals)| decimals.len().min(16) as u8),
-            )
-        })
+    instrument.price_decimals.or_else(|| {
+        let tick = instrument
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0)?;
+        let text = tick.to_string();
+        Some(text.split_once('.').map_or(0, |(_, decimals)| {
+            decimals.len().min(usize::from(u8::MAX)) as u8
+        }))
+    })
 }
 
 /// Trait for custom price formatting on the Y axis.

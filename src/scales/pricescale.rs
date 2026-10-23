@@ -243,15 +243,16 @@ impl PriceScale {
     }
 
     /// Sets the decimals used by price ticks and tags. `None` derives them from the tick step.
-    /// Values above 16 use 16 decimals, the useful precision of an `f64` price.
     pub fn set_price_precision(&mut self, decimals: Option<u8>) {
-        self.price_precision = decimals.map(|decimals| decimals.min(16));
+        self.price_precision = decimals;
     }
 
     /// Locks scale units per bar at the current bar spacing and pane height.
     /// Invalid dimensions leave the scale unlocked. Unlocking keeps the current manual range.
     pub fn set_bar_ratio_locked(&mut self, locked: bool, bar_spacing: f32, height: f32) {
         self.bar_ratio = (locked
+            && self.range.max > self.range.min
+            && (self.range.max - self.range.min).is_finite()
             && bar_spacing.is_finite()
             && bar_spacing > 0.0
             && height.is_finite()
@@ -457,9 +458,9 @@ impl PriceMap {
         }
     }
 
-    /// Sets the price precision for this frame, capped at 16 decimals.
+    /// Sets the price precision for this frame.
     pub fn with_price_precision(mut self, decimals: Option<u8>) -> Self {
-        self.price_precision = decimals.map(|decimals| decimals.min(16));
+        self.price_precision = decimals;
         self
     }
 
@@ -508,7 +509,7 @@ impl PriceMap {
     #[inline]
     pub(crate) fn scale_to_y(&self, value: f64) -> f32 {
         let span = self.range.max - self.range.min;
-        if span.abs() < f64::EPSILON {
+        if span == 0.0 {
             return (self.top + self.bottom) / 2.0;
         }
         // Bounded so that a non-positive price on a log scale stays a finite coordinate off the pane.
@@ -552,6 +553,7 @@ mod tests {
         let cases = [
             (Normal, 0.0, (100.0, 200.0), false, 150.0, 50.0),
             (Normal, 0.0, (100.0, 200.0), false, 120.0, 80.0),
+            (Normal, 0.0, (1e-18, 6e-18), false, 2e-18, 80.0),
             // ln 100 is the mean of ln 10 and ln 1,000.
             (Logarithmic, 0.0, (ln(10.0), ln(1000.0)), false, 100.0, 50.0),
             // 55 is +10% of 50, the top of -10%..+10%.

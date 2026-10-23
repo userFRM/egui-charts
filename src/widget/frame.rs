@@ -22,6 +22,50 @@ impl Chart {
             .format_crosshair(time, self.time_label_seconds())
     }
 
+    fn current_bar_countdown(&self) -> Option<String> {
+        if !self.config.show_countdown || !self.config.show_symbol_last_val {
+            return None;
+        }
+        let last = self.state.data().bars.last()?;
+        let timeframe = self.timeframe?;
+        let now = self
+            .server_time_offset
+            .and_then(|offset| chrono::Utc::now().checked_add_signed(offset))
+            .or_else(|| {
+                self.feed_link
+                    .as_ref()
+                    .and_then(super::feed::FeedLink::server_time)
+            })
+            .or_else(|| self.quote.as_ref().map(|quote| quote.ts))?;
+        let session = renderers::exchange_session(
+            self.instrument(),
+            self.config.session_config.as_ref(),
+            &self.display_timezone(),
+            timeframe,
+        );
+        let close = session.bar_session_close(last.time, timeframe, self.extended_hours);
+        let close = if timeframe.duration_ms() < 86_400_000 {
+            close.and_then(|close| {
+                last.time
+                    .checked_add_signed(chrono::TimeDelta::milliseconds(timeframe.duration_ms()))
+                    .map(|end| close.min(end))
+            })
+        } else {
+            close
+        };
+        let has_session = self
+            .instrument()
+            .and_then(|instrument| instrument.session.as_ref())
+            .is_some_and(|session| {
+                !session.windows.is_empty() || !session.extended_windows.is_empty()
+            })
+            || self.config.session_config.is_some();
+        if self.bar_close_time.is_none() && close.is_none() && has_session {
+            return None;
+        }
+        crate::scales::bar_countdown(last.time, timeframe, now, self.bar_close_time.or(close))
+    }
+
     // Source-bar cadence sets precision even when many elements share one time.
     fn time_label_seconds(&self) -> i64 {
         let bars = &self.state.data().bars;
@@ -238,6 +282,93 @@ impl Chart {
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         self.show_elements();
+        let map = self.last_price_map;
+        let decimals = self
+            .instrument()
+            .and_then(crate::scales::instrument_price_precision)
+            .map_or(2, usize::from);
+        let format_price = |price| {
+            map.transform()
+                .label(map.transform().to_scale(price), decimals)
+        };
+        let mut axis_labels = Vec::new();
+        if let Some(last) = self.state.data().bars.last() {
+            if self.config.show_symbol_last_val {
+                axis_labels.push(format_price(last.close));
+            }
+            if let Some(countdown) = self.current_bar_countdown() {
+                axis_labels.push(countdown);
+            }
+            if self.config.show_volume {
+                axis_labels.push(crate::scales::PriceFormatter::format(
+                    &crate::scales::VolumeFormatter {
+                        precision: self
+                            .instrument()
+                            .and_then(|instrument| instrument.volume_decimals)
+                            .map_or(2, usize::from),
+                    },
+                    last.volume,
+                ));
+            }
+            if self.config.show_high_low {
+                let visible = self.state.visible_data();
+                let high = visible
+                    .iter()
+                    .map(|bar| bar.high)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let low = visible
+                    .iter()
+                    .map(|bar| bar.low)
+                    .fold(f64::INFINITY, f64::min);
+                axis_labels.extend([
+                    format!("High {}", format_price(high)),
+                    format!("Low {}", format_price(low)),
+                ]);
+            }
+        }
+        if let Some(quote) = &self.session_quote {
+            axis_labels.push(format!("{} {}", quote.qualifier, format_price(quote.price)));
+        }
+        if self.config.show_bid_ask
+            && let Some(quote) = &self.quote
+        {
+            axis_labels.extend([
+                format!("Bid {}", format_price(quote.bid)),
+                format!("Ask {}", format_price(quote.ask)),
+            ]);
+        }
+        for study in self
+            .studies
+            .indicators()
+            .iter()
+            .filter(|study| self.config.show_indicator_last_val && study.is_visible())
+        {
+            let values = study.values();
+            let values = match values.last() {
+                Some(crate::studies::IndicatorValue::Single(value)) => std::slice::from_ref(value),
+                Some(crate::studies::IndicatorValue::Multiple(values)) => values,
+                _ => continue,
+            };
+            axis_labels.extend(
+                values
+                    .iter()
+                    .filter(|value| value.is_finite())
+                    .map(|value| {
+                        if study.is_overlay() {
+                            format_price(*value)
+                        } else {
+                            let precision = if matches!(study.name(), "RSI" | "Stochastic") {
+                                2
+                            } else {
+                                decimals
+                            };
+                            format!("{value:.precision$}")
+                        }
+                    }),
+            );
+        }
+        let refs: Vec<_> = axis_labels.iter().map(String::as_str).collect();
+        self.measured_axis_width = rendering::axes::price_axis_width(ui.painter(), &map, &refs);
         self.last_rendered_indicator_panes.clear();
         // Pane studies share the available height and the lowest time axis.
         let has_panes = self
@@ -579,6 +710,15 @@ impl Chart {
         );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
+        if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {
+            self.state.price_scale_mut().set_bar_ratio_locked(
+                self.config.lock_price_to_bar_ratio,
+                bar_spacing,
+                price_rect.height(),
+            );
+        }
+        self.config.lock_price_to_bar_ratio = self.state.price_scale().bar_ratio_locked();
+        self.last_ratio_lock = self.config.lock_price_to_bar_ratio;
         self.state
             .price_scale_mut()
             .update_bar_ratio(bar_spacing, price_rect.height());
@@ -910,21 +1050,32 @@ impl Chart {
             price_rect.left()
         };
         let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
-        let mut tags: Vec<_> = self
-            .price_lines
-            .iter()
-            .map(|line| {
-                rendering::render_price_line(
-                    &painter,
-                    price_rect,
-                    &price_map,
-                    line,
-                    price_rect.min.x,
-                    show_price_axis,
-                    axis_edge,
-                )
-            })
-            .collect();
+        let has_currency = self
+            .instrument()
+            .and_then(|instrument| instrument.currency.as_deref())
+            .is_some_and(|code| !code.is_empty());
+        let mut tags = Vec::new();
+        if has_currency {
+            tags.push(Some(Rect::from_min_size(
+                price_rect.min,
+                egui::vec2(price_rect.width(), 24.0),
+            )));
+        }
+        let mut pending_values = Vec::new();
+        for line in &self.price_lines {
+            rendering::render_price_line(
+                &painter,
+                price_rect,
+                &price_map,
+                line,
+                price_rect.left(),
+                false,
+                axis_edge,
+            );
+            if line.axis_label {
+                pending_values.push((line.price, line.color));
+            }
+        }
 
         if (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
             && let Some(last) = self.state.data().bars.last()
@@ -947,15 +1098,18 @@ impl Chart {
                 } else {
                     0.0
                 });
-            tags.push(rendering::render_price_line(
+            rendering::render_price_line(
                 &painter,
                 price_rect,
                 &price_map,
                 &line,
                 price_rect.left(),
-                show_price_axis,
+                false,
                 axis_edge,
-            ));
+            );
+            if self.config.show_symbol_prev_close {
+                pending_values.push((previous.close, line.color));
+            }
         }
 
         // Last price line & label, from the newest bar even when it is scrolled out of view
@@ -973,18 +1127,13 @@ impl Chart {
                 })
                 .with_style(crate::model::LineStyle::Dotted)
                 .with_axis_label(show_price_axis && self.config.show_symbol_last_val);
-            let countdown = self
-                .quote
-                .as_ref()
-                .filter(|_| self.config.show_countdown)
-                .and_then(|quote| {
-                    let duration = self.timeframe?.duration_ms() / 1000;
-                    let elapsed = quote.ts.signed_duration_since(last.time).num_seconds();
-                    (elapsed >= 0 && elapsed < duration).then(|| {
-                        let remaining = duration - elapsed;
-                        format!("{:02}:{:02}", remaining / 60, remaining % 60)
-                    })
-                });
+            let countdown = self.current_bar_countdown();
+            if countdown.is_some()
+                && (self.server_time_offset.is_some() || self.feed_link.is_some())
+            {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs(1));
+            }
             let quote_tags = rendering::axes::render_quote_tags_with_countdown(
                 &painter,
                 price_rect,
@@ -994,24 +1143,125 @@ impl Chart {
                     .as_ref()
                     .filter(|_| show_price_axis)
                     .map(|quote| (quote, egui::Color32::from_rgb(251, 142, 1))),
-                (show_volume && show_price_axis).then_some((
-                    last.volume,
-                    if last.is_bullish() {
-                        ui.active_theme().chart.volume_up().to_opaque()
-                    } else {
-                        ui.active_theme().chart.volume_down().to_opaque()
-                    },
-                )),
+                (show_volume && show_price_axis)
+                    .then_some((last.volume, egui::Color32::from_rgb(233, 30, 99))),
                 axis_edge,
                 countdown.as_deref(),
                 self.instrument()
                     .and_then(|instrument| instrument.volume_decimals),
+                if has_currency { 24.0 } else { 0.0 },
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
             quote_tags[0]
         } else {
             None
         };
+
+        tags.push(last_price_tag);
+        if show_price_axis {
+            for (value, color) in &pending_values {
+                if price_map
+                    .range()
+                    .contains(price_map.transform().to_scale(*value))
+                {
+                    let label = price_map.transform().label(
+                        price_map.transform().to_scale(*value),
+                        price_map.price_precision().unwrap_or(2),
+                    );
+                    tags.push(rendering::axes::render_axis_value(
+                        &painter,
+                        price_rect,
+                        axis_edge,
+                        price_map.price_to_y(*value),
+                        label,
+                        (rendering::axes::tag_text_color(*color), *color),
+                        &tags,
+                    ));
+                }
+            }
+        }
+        if show_price_axis && self.config.show_indicator_last_val {
+            for study in studies
+                .indicators()
+                .iter()
+                .filter(|study| study.is_overlay())
+            {
+                rendering::axes::render_study_tags(
+                    &painter,
+                    price_rect,
+                    &price_map,
+                    study.as_ref(),
+                    axis_edge,
+                    &mut tags,
+                );
+            }
+        }
+
+        if show_price_axis {
+            let mut values = Vec::new();
+            if self.config.show_high_low {
+                let high = visible_data
+                    .iter()
+                    .map(|bar| bar.high)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let low = visible_data
+                    .iter()
+                    .map(|bar| bar.low)
+                    .fold(f64::INFINITY, f64::min);
+                values.extend([
+                    (high, "High", self.config.bullish_color),
+                    (low, "Low", self.config.bearish_color),
+                ]);
+            }
+            if self.config.show_bid_ask
+                && let Some(quote) = self.quote.as_ref().filter(|quote| {
+                    quote.bid.is_finite()
+                        && quote.ask.is_finite()
+                        && quote.bid <= quote.ask
+                        && quote.spread().is_finite()
+                })
+            {
+                values.extend([
+                    (quote.bid, "Bid", self.config.bearish_color),
+                    (quote.ask, "Ask", self.config.bullish_color),
+                ]);
+            }
+            for (value, name, color) in values {
+                let line = PriceLine::new(value, color)
+                    .with_style(crate::model::LineStyle::Dotted)
+                    .with_axis_label(false);
+                rendering::render_price_line(
+                    &painter,
+                    price_rect,
+                    &price_map,
+                    &line,
+                    price_rect.left(),
+                    false,
+                    axis_edge,
+                );
+                if price_map
+                    .range()
+                    .contains(price_map.transform().to_scale(value))
+                {
+                    let label = format!(
+                        "{name} {}",
+                        price_map.transform().label(
+                            price_map.transform().to_scale(value),
+                            price_map.price_precision().unwrap_or(2)
+                        )
+                    );
+                    tags.push(rendering::axes::render_axis_value(
+                        &painter,
+                        price_rect,
+                        axis_edge,
+                        price_map.price_to_y(value),
+                        label,
+                        (egui::Color32::WHITE, color),
+                        &tags,
+                    ));
+                }
+            }
+        }
 
         let time_labels = painter.add(egui::Shape::Noop);
 
@@ -1659,7 +1909,9 @@ mod tests {
                     })
                     .expect("session tag");
                 assert!(
-                    session_text.pos.x >= plot.left() - chart.config.left_axis_width,
+                    session_text.pos.x
+                        >= plot.left()
+                            - chart.config.left_axis_width.max(chart.measured_axis_width),
                     "session label is clipped on the left"
                 );
                 let close_y = chart.last_price_map.price_to_y(120.0);

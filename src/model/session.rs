@@ -287,41 +287,99 @@ impl ExchangeSessionProvider {
         let Some(session) = &self.session else {
             return false;
         };
-        let local = self.wall_time(time);
-        let contains = |window: &crate::model::SessionWindow| {
-            let overnight = window.close <= window.open && window.open != NaiveTime::MIN;
-            // During a repeated hour the clock alone cannot choose the overnight trading date.
-            [
-                Some(local.date()),
-                local.date().succ_opt().filter(|_| overnight),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|close_date| {
-                if session.holidays.contains(&close_date)
-                    || !window.days.contains(&close_date.weekday())
-                {
-                    return false;
-                }
-                let open_date = if overnight {
-                    close_date.pred_opt().unwrap_or(close_date)
-                } else {
-                    close_date
-                };
-                let end_date = if window.open == window.close && !overnight {
-                    close_date.succ_opt().unwrap_or(close_date)
-                } else {
-                    close_date
-                };
-                let Some(open) = self.instant(open_date.and_time(window.open)) else {
-                    return false;
-                };
-                // The later close retains the full repeated hour in an overnight window.
-                let close = self.close_instant(end_date.and_time(window.close));
-                close.is_some_and(|close| time >= open && time < close)
-            })
-        };
+        let contains =
+            |window: &crate::model::SessionWindow| self.window_close(time, window).is_some();
         session.extended_windows.iter().any(contains) && !session.windows.iter().any(contains)
+    }
+
+    /// Closing instant of the active trading window. Outside trading hours, including holidays,
+    /// returns `None`. Extended windows participate only when requested.
+    pub fn session_close(&self, time: DateTime<Utc>, extended: bool) -> Option<DateTime<Utc>> {
+        let session = self.session.as_ref()?;
+        session
+            .windows
+            .iter()
+            .chain(session.extended_windows.iter().filter(|_| extended))
+            .filter_map(|window| self.window_close(time, window))
+            .max()
+    }
+
+    /// Close of the last trading window in a daily, weekly or monthly bar. Daily and longer
+    /// bars carry their trading date in UTC; intraday bars use their active exchange window.
+    pub fn bar_session_close(
+        &self,
+        open: DateTime<Utc>,
+        timeframe: Timeframe,
+        extended: bool,
+    ) -> Option<DateTime<Utc>> {
+        if timeframe.duration_ms() < 86_400_000 {
+            return self.session_close(open, extended);
+        }
+        let session = self.session.as_ref()?;
+        let mut date = open.date_naive();
+        let end = match timeframe {
+            Timeframe::Day1 => date.succ_opt()?,
+            Timeframe::Week1 => date.checked_add_days(chrono::Days::new(7))?,
+            Timeframe::Month1 => date
+                .with_day(1)?
+                .checked_add_months(chrono::Months::new(1))?,
+            _ => return None,
+        };
+        let mut close = None;
+        while date < end {
+            for window in session
+                .windows
+                .iter()
+                .chain(session.extended_windows.iter().filter(|_| extended))
+            {
+                let overnight = window.close <= window.open && window.open != NaiveTime::MIN;
+                let open_date = if overnight { date.pred_opt()? } else { date };
+                if let Some(start) = self.instant(open_date.and_time(window.open))
+                    && let Some(end) = self.window_close(start, window)
+                {
+                    close = Some(close.map_or(end, |previous: DateTime<Utc>| previous.max(end)));
+                }
+            }
+            date = date.succ_opt()?;
+        }
+        close
+    }
+
+    fn window_close(
+        &self,
+        time: DateTime<Utc>,
+        window: &crate::model::SessionWindow,
+    ) -> Option<DateTime<Utc>> {
+        let session = self.session.as_ref()?;
+        let local = self.wall_time(time);
+        let overnight = window.close <= window.open && window.open != NaiveTime::MIN;
+        [
+            Some(local.date()),
+            local.date().succ_opt().filter(|_| overnight),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|close_date| {
+            if session.holidays.contains(&close_date)
+                || !window.days.contains(&close_date.weekday())
+            {
+                return None;
+            }
+            let open_date = if overnight {
+                close_date.pred_opt()?
+            } else {
+                close_date
+            };
+            let end_date = if window.open == window.close && !overnight {
+                close_date.succ_opt()?
+            } else {
+                close_date
+            };
+            let open = self.instant(open_date.and_time(window.open))?;
+            // The later close retains the full repeated hour in an overnight window.
+            let close = self.close_instant(end_date.and_time(window.close))?;
+            (time >= open && time < close).then_some(close)
+        })
     }
 
     fn period(&self, date: NaiveDate) -> (i32, u32) {

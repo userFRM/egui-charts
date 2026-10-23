@@ -60,6 +60,10 @@ enum Request {
 }
 
 impl FeedLink {
+    pub(super) fn server_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.inbox.server_time(self.subscription?)
+    }
+
     /// A reply for `request`, under a new key.
     fn reply<T: Send + 'static>(&mut self, request: Request) -> Reply<T> {
         self.next_key += 1;
@@ -129,6 +133,8 @@ impl Chart {
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
+            self.bar_close_time = None;
+            self.server_time_offset = None;
             self.legend_badge = None;
             self.legend_statuses.clear();
             self.quote = None;
@@ -147,6 +153,9 @@ impl Chart {
     /// session breaks only. It is also the interval the drawings' per-interval visibility is
     /// checked against.
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
+        if self.timeframe != Some(timeframe) {
+            self.bar_close_time = None;
+        }
         if self.timeframe != Some(timeframe)
             && let Some(link) = &mut self.feed_link
         {

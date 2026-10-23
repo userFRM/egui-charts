@@ -58,6 +58,7 @@ impl SettingsMenu {
         config.show_indicator_labels = self.settings.show_indicator_labels;
         config.show_indicator_last_val = self.settings.show_indicator_last_val;
         config.show_countdown = self.settings.show_countdown;
+        config.lock_price_to_bar_ratio = self.settings.lock_scale;
         config
     }
 
@@ -188,7 +189,7 @@ impl SettingsMenu {
             self.settings.scale_mode = ScaleMode::Auto;
         }
 
-        ui.checkbox(&mut self.settings.lock_scale, "Lock Scale");
+        ui.checkbox(&mut self.settings.lock_scale, "Lock price to bar ratio");
         ui.checkbox(
             &mut self.settings.scale_price_chart_only,
             "Scale Price Chart Only",

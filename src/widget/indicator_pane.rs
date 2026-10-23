@@ -70,6 +70,8 @@ mod indicator_sizing {
 pub struct IndicatorPaneConfig {
     /// Panel height in pixels
     pub height: f32,
+    /// Decimals for the pane ticks and readouts. `None` uses two decimals.
+    pub price_precision: Option<u8>,
     /// Fixed y-axis range (None = auto-scale)
     pub y_range: Option<(f64, f64)>,
     /// Show horizontal zone lines (e.g., RSI 70/30)
@@ -92,6 +94,7 @@ impl Default for IndicatorPaneConfig {
     fn default() -> Self {
         Self {
             height: DESIGN_TOKENS.sizing.panel.bottom_default_height,
+            price_precision: None,
             y_range: None,
             show_zones: false,
             zones: Vec::new(),
@@ -109,6 +112,7 @@ impl IndicatorPaneConfig {
     pub fn rsi() -> Self {
         Self {
             height: indicator_sizing::OSCILLATOR_HEIGHT,
+            price_precision: Some(2),
             y_range: Some((0.0, 100.0)),
             show_zones: true,
             zones: vec![
@@ -128,6 +132,7 @@ impl IndicatorPaneConfig {
     pub fn macd() -> Self {
         Self {
             height: indicator_sizing::MULTI_LINE_HEIGHT,
+            price_precision: None,
             y_range: None, // Auto-scale
             show_zones: true,
             zones: vec![(0.0, DESIGN_TOKENS.semantic.extended.chart_text, "Zero Line")],
@@ -143,6 +148,7 @@ impl IndicatorPaneConfig {
     pub fn stochastic() -> Self {
         Self {
             height: indicator_sizing::OSCILLATOR_HEIGHT,
+            price_precision: Some(2),
             y_range: Some((0.0, 100.0)),
             show_zones: true,
             zones: vec![
@@ -325,7 +331,15 @@ impl IndicatorPane {
         );
 
         // Draw y-axis labels
-        self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max);
+        self.draw_y_axis_labels(
+            painter,
+            rect,
+            chart_rect,
+            y_min,
+            y_max,
+            indicator,
+            Some(crate::scales::PriceScaleId::Right),
+        );
 
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
@@ -411,7 +425,15 @@ impl IndicatorPane {
         );
 
         // Draw y-axis labels
-        self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max);
+        self.draw_y_axis_labels(
+            painter,
+            rect,
+            chart_rect,
+            y_min,
+            y_max,
+            indicator,
+            Some(crate::scales::PriceScaleId::Right),
+        );
 
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
@@ -438,7 +460,15 @@ impl IndicatorPane {
         visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) -> Option<PaneInteraction> {
-        self.show_aligned_interactive_in(ui, indicator, visible_range, coords, None, false)
+        self.show_aligned_interactive_in(
+            ui,
+            indicator,
+            visible_range,
+            coords,
+            None,
+            false,
+            Some(crate::scales::PriceScaleId::Right),
+        )
     }
 
     pub(super) fn show_aligned_interactive_in(
@@ -449,6 +479,7 @@ impl IndicatorPane {
         coords: IndicatorCoordParams,
         plot_x: Option<egui::emath::Rangef>,
         collapsed: bool,
+        axis: Option<crate::scales::PriceScaleId>,
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
             return None;
@@ -530,7 +561,7 @@ impl IndicatorPane {
             );
 
             // Draw y-axis labels
-            self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max);
+            self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, indicator, axis);
         }
 
         // Reserve the legend's close "x" and make it independently clickable so
@@ -917,21 +948,70 @@ impl IndicatorPane {
         chart_rect: Rect,
         y_min: f64,
         y_max: f64,
+        indicator: &dyn Indicator,
+        axis: Option<crate::scales::PriceScaleId>,
     ) {
+        let Some(axis) = axis else {
+            return;
+        };
+        let left = axis == crate::scales::PriceScaleId::Left;
+        let align = if left {
+            egui::Align2::RIGHT_CENTER
+        } else {
+            egui::Align2::LEFT_CENTER
+        };
+        let axis_edge = if left {
+            chart_rect.left()
+        } else {
+            full_rect.right()
+        };
         let text_color = painter.ctx().active_theme().chart.axis_text;
+        let mut tags = Vec::new();
+        if self.config.show_values {
+            let map = crate::scales::PriceMap::new(
+                crate::scales::PriceTransform::default(),
+                crate::scales::PriceRange::new(y_min, y_max),
+                chart_rect.top(),
+                chart_rect.bottom(),
+                false,
+            )
+            .with_price_precision(self.config.price_precision);
+            crate::chart::rendering::axes::render_study_tags(
+                painter, chart_rect, &map, indicator, axis_edge, &mut tags,
+            );
+        }
         let range = y_max - y_min;
         let step = self.calculate_nice_step(range, 5);
-        let label_x = chart_rect.max.x + DESIGN_TOKENS.spacing.sm;
+        let label_x = if left {
+            chart_rect.left() - DESIGN_TOKENS.spacing.sm
+        } else {
+            chart_rect.right() + DESIGN_TOKENS.spacing.sm
+        };
 
         let mut y_val = (y_min / step).ceil() * step;
         while y_val <= y_max {
             let y = self.value_to_y(y_val, chart_rect, y_min, y_max);
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = format!("{y_val:.2}");
+                let label = crate::scales::PriceFormatter::format(
+                    &crate::scales::DefaultPriceFormatter::with_precision(
+                        self.config.price_precision.map_or(2, usize::from),
+                    ),
+                    y_val,
+                );
+                let galley = painter.layout_no_wrap(
+                    label,
+                    crate::chart::rendering::axes::axis_font(painter.ctx()),
+                    text_color,
+                );
+                let bounds = align.anchor_size(Pos2::new(label_x, y), galley.size());
+                if tags.iter().flatten().any(|tag| tag.intersects(bounds)) {
+                    y_val += step;
+                    continue;
+                }
                 painter.text(
                     Pos2::new(label_x, y),
-                    egui::Align2::LEFT_CENTER,
-                    label,
+                    align,
+                    galley.text(),
                     crate::chart::rendering::axes::axis_font(painter.ctx()),
                     text_color,
                 );
@@ -945,6 +1025,7 @@ impl IndicatorPane {
     fn legend_text(&self, indicator: &dyn Indicator) -> String {
         let values = indicator.values();
         let mut legend_parts = Vec::new();
+        let precision = self.config.price_precision.map_or(2, usize::from);
         if self.config.show_name {
             legend_parts.push(indicator.name().to_string());
         }
@@ -956,11 +1037,11 @@ impl IndicatorPane {
         {
             match last_value {
                 IndicatorValue::Single(v) => {
-                    legend_parts.push(format!("{v:.2}"));
+                    legend_parts.push(format!("{v:.precision$}"));
                 }
                 IndicatorValue::Multiple(vals) => {
                     for v in vals {
-                        legend_parts.push(format!("{v:.2}"));
+                        legend_parts.push(format!("{v:.precision$}"));
                     }
                 }
                 IndicatorValue::None => {}

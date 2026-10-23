@@ -127,6 +127,11 @@ impl Chart {
                 _ => IndicatorPaneConfig::default(),
             };
 
+            if config.price_precision.is_none() {
+                config.price_precision = self
+                    .instrument()
+                    .and_then(crate::scales::instrument_price_precision);
+            }
             config.show_name = self.config.show_indicator_labels;
             config.show_values = self.config.show_indicator_last_val;
             config.inputs = if self.config.show_indicator_inputs {
@@ -147,6 +152,13 @@ impl Chart {
                 coords,
                 Some(plot.x_range()),
                 collapsed,
+                if self.config.show_right_axis {
+                    Some(crate::scales::PriceScaleId::Right)
+                } else if self.config.show_left_axis {
+                    Some(crate::scales::PriceScaleId::Left)
+                } else {
+                    None
+                },
             ) {
                 let PaneInteraction {
                     panel_rect,
