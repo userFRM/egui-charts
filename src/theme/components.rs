@@ -194,7 +194,7 @@ impl SettingsDialogStyle {
             tab_text_active: ui.text,
             tab_icon: ui.text_secondary,
             tab_icon_hover: ui.text,
-            tab_icon_active: ui.accent,
+            tab_icon_active: ui.text,
 
             // Content area - use primary panel background
             content_bg: ui.panel_bg,
@@ -206,20 +206,20 @@ impl SettingsDialogStyle {
             input_bg: ui.panel_bg,
             input_bg_hover: ui.btn_bg_hover,
             input_bg_focus: ui.btn_bg_active,
-            input_border: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border),
-            input_border_hover: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border),
+            input_border: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control),
+            input_border_hover: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control),
             input_border_focus: Stroke::new(DESIGN_TOKENS.stroke.thick, ui.accent),
 
             // Controls - Dropdown
             dropdown_bg: ui.panel_bg,
             dropdown_bg_hover: ui.btn_bg_hover,
-            dropdown_border: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border),
+            dropdown_border: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control),
             dropdown_arrow: ui.text_secondary,
 
             // Controls - Checkbox
             checkbox_bg: Color32::TRANSPARENT,
             checkbox_bg_checked: ui.accent,
-            checkbox_border: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border),
+            checkbox_border: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control),
             checkbox_check: ui.accent_text,
 
             // Controls - Color swatch
@@ -235,7 +235,7 @@ impl SettingsDialogStyle {
             btn_secondary_bg: ui.panel_bg,
             btn_secondary_bg_hover: ui.btn_bg_hover,
             btn_secondary_text: ui.text,
-            btn_secondary_border: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border),
+            btn_secondary_border: Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control),
         }
     }
 }

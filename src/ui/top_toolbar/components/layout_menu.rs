@@ -1,6 +1,7 @@
 //! Host-owned named layout actions. No storage or account service is assumed.
 
 use crate::theme::ThemeExt;
+use crate::tokens::DESIGN_TOKENS;
 use egui::Ui;
 
 /// Configuration for layout menu
@@ -78,8 +79,11 @@ impl LayoutMenu {
         let (rect, button) =
             ui.allocate_exact_size(egui::vec2(self.width(ui), 28.0), egui::Sense::click());
         if button.hovered() {
-            ui.painter()
-                .rect_filled(rect, 2.0, ui.visuals().widgets.hovered.bg_fill);
+            ui.painter().rect_filled(
+                rect,
+                DESIGN_TOKENS.rounding.button,
+                ui.visuals().widgets.hovered.bg_fill,
+            );
         }
         ui.painter().text(
             rect.left_center() + egui::vec2(4.0, 0.0),
@@ -101,7 +105,7 @@ impl LayoutMenu {
         button.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Named layouts")
         });
-        crate::styles::focus::draw_focus_ring(ui, &button);
+        crate::styles::focus::draw_focus_ring(ui, &button, DESIGN_TOKENS.rounding.button);
         egui::Popup::menu(&button)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {

@@ -791,6 +791,7 @@ impl DrawingToolbar {
         current_color: [u8; 4],
     ) -> Option<[u8; 4]> {
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(swatch_size), Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
 
         let c =
             Color32::from_rgba_unmultiplied(color_val[0], color_val[1], color_val[2], color_val[3]);
@@ -902,6 +903,11 @@ impl DrawingToolbar {
                                     Vec2::splat(DESIGN_TOKENS.sizing.button_md),
                                     Sense::click(),
                                 );
+                                crate::styles::focus::draw_focus_ring(
+                                    ui,
+                                    &response,
+                                    DESIGN_TOKENS.rounding.sm,
+                                );
 
                                 let bg = if is_sel {
                                     ui.active_theme().ui.accent
@@ -937,6 +943,11 @@ impl DrawingToolbar {
                             let (rect, response) = ui.allocate_exact_size(
                                 Vec2::splat(DESIGN_TOKENS.sizing.button_md),
                                 Sense::click(),
+                            );
+                            crate::styles::focus::draw_focus_ring(
+                                ui,
+                                &response,
+                                DESIGN_TOKENS.rounding.sm,
                             );
                             let bg = if self.state.magnet_mode {
                                 ui.active_theme().ui.accent

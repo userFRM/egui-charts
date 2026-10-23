@@ -5,6 +5,7 @@
 
 use crate::icons::{Icon, icons};
 use crate::styles::icons as icon_sizes;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::ConnectionState;
 use egui::{Color32, Response, RichText, Ui, Vec2, Widget};
@@ -36,11 +37,11 @@ impl<'a> ConnectionStatusIndicator<'a> {
     /// Get color for the current state
     fn state_color(&self, ui: &Ui) -> Color32 {
         match self.state {
-            ConnectionState::Connected => DESIGN_TOKENS.semantic.extended.bullish,
-            ConnectionState::Connecting => DESIGN_TOKENS.semantic.status.caution,
-            ConnectionState::Reconnecting { .. } => DESIGN_TOKENS.semantic.status.caution,
+            ConnectionState::Connected => ui.active_theme().ui.success,
+            ConnectionState::Connecting => ui.visuals().warn_fg_color,
+            ConnectionState::Reconnecting { .. } => ui.visuals().warn_fg_color,
             ConnectionState::Disconnected => ui.visuals().weak_text_color(),
-            ConnectionState::Failed(_) => DESIGN_TOKENS.semantic.extended.bearish,
+            ConnectionState::Failed(_) => ui.visuals().error_fg_color,
         }
     }
 
@@ -109,6 +110,27 @@ mod tests {
 
     #[test]
     fn test_state_icons() {
+        let ctx = egui::Context::default();
+        for (_, theme) in crate::theme::presets() {
+            crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.run_ui(Default::default(), |ui| {
+                for (state, color) in [
+                    (ConnectionState::Connected, theme.ui.success),
+                    (ConnectionState::Connecting, theme.ui.warning),
+                    (
+                        ConnectionState::Reconnecting { attempt: 1 },
+                        theme.ui.warning,
+                    ),
+                    (ConnectionState::Failed("failed".into()), theme.ui.error),
+                ] {
+                    assert_eq!(
+                        ConnectionStatusIndicator::new(&state).state_color(ui),
+                        color
+                    );
+                }
+            })
+            .drop_without_applying_deltas();
+        }
         let connected = ConnectionStatusIndicator::new(&ConnectionState::Connected);
         assert_eq!(connected.state_icon(), &icons::STATUS_CONNECTED);
 

@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 /// Guppy Multiple Moving Average (GMMA)
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Short group periods: 3, 5, 8, 10, 12, 15
@@ -11,7 +11,7 @@ const LONG_PERIODS: [usize; 6] = [30, 35, 40, 45, 50, 60];
 
 #[derive(Clone)]
 pub struct GuppyMA {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -19,7 +19,7 @@ pub struct GuppyMA {
 impl GuppyMA {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 // Short group - shades of green
                 Color32::from_rgb(0, 200, 83),
@@ -41,8 +41,8 @@ impl GuppyMA {
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
             return values;
@@ -108,7 +108,7 @@ impl Indicator for GuppyMA {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

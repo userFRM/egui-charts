@@ -165,6 +165,7 @@ impl PaneControls {
             );
 
             let btn_response = ui.allocate_rect(btn_rect, Sense::click());
+            crate::styles::focus::draw_focus_ring(ui, &btn_response, DESIGN_TOKENS.rounding.sm);
             let is_hovered = btn_response.hovered();
             let was_clicked = btn_response.clicked();
 

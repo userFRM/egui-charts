@@ -2,6 +2,8 @@
 //!
 //! Renders the hierarchical tree of indicators and drawings.
 
+use crate::icons::icons;
+use crate::ui_kit::{IconButton, buttons::ButtonSize};
 use egui::{RichText, ScrollArea, Ui};
 
 use egui::Vec2;
@@ -22,6 +24,8 @@ pub fn render_source_tree(
     state: &mut ObjectTreeState,
 ) -> ObjectTreeAction {
     let mut action = ObjectTreeAction::None;
+
+    state.hovered_id = None;
 
     // Filter sources
     let filter_lower = state.filter_text.to_lowercase();
@@ -51,6 +55,18 @@ fn render_grouped_tree(
     filter: &str,
 ) -> ObjectTreeAction {
     let mut action = ObjectTreeAction::None;
+
+    let mut data_source_count = 0;
+    for item in sources.iter_mut() {
+        if item.source_type != SourceType::DataSource || !matches_filter(item, filter, state) {
+            continue;
+        }
+        data_source_count += 1;
+        let item_action = render_item_row(ui, item, config, state, 0);
+        if !item_action.is_none() {
+            action = item_action;
+        }
+    }
 
     // Count items per type
     let indicator_count = sources
@@ -118,7 +134,7 @@ fn render_grouped_tree(
     }
 
     // Empty state
-    if indicator_count == 0 && drawing_count == 0 && template_count == 0 {
+    if data_source_count + indicator_count + drawing_count + template_count == 0 {
         render_empty_state(ui, state.has_filter());
     }
 
@@ -142,8 +158,17 @@ fn render_group(
     // Group header
     ui.horizontal(|ui| {
         // Expand/collapse button
-        let icon = if is_expanded { "v" } else { ">" };
-        if ui.small_button(icon).clicked() {
+        let icon = if is_expanded {
+            &icons::CHEVRON_DOWN
+        } else {
+            &icons::CHEVRON_RIGHT
+        };
+        if IconButton::new(icon)
+            .size(ButtonSize::SM)
+            .tooltip(format!("Toggle {name}"))
+            .show(ui)
+            .clicked()
+        {
             state.toggle_group(name);
         }
 
@@ -153,13 +178,20 @@ fn render_group(
             .1;
         source_type
             .icon()
-            .as_image(Vec2::splat(DESIGN_TOKENS.sizing.icon_sm))
+            .as_image_tinted(
+                Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
+                ui.visuals().widgets.noninteractive.fg_stroke.color,
+            )
             .paint_at(ui, icon_rect);
         ui.strong_label(name);
 
         // Item count badge
         if config.show_item_counts {
-            ui.hint_label(format!("({count})"));
+            ui.label(
+                RichText::new(format!("({count})"))
+                    .size(11.0)
+                    .color(ui.visuals().weak_text_color()),
+            );
         }
     });
 
@@ -215,7 +247,7 @@ fn render_flat_tree(
 }
 
 /// Check if item matches current filter
-fn matches_filter(item: &SourceItem, filter: &str, state: &ObjectTreeState) -> bool {
+pub(super) fn matches_filter(item: &SourceItem, filter: &str, state: &ObjectTreeState) -> bool {
     // Type filter
     if let Some(filter_type) = state.filter_type
         && item.source_type != filter_type
@@ -264,4 +296,37 @@ fn render_empty_state(ui: &mut Ui, has_filter: bool) {
         }
     });
     ui.space_xl();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn main_series_is_rendered_in_both_views_and_with_a_type_filter() {
+        for grouped in [true, false] {
+            for filtered in [true, false] {
+                let ctx = egui::Context::default();
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let mut state = ObjectTreeState::new();
+                    state.filter_type = filtered.then_some(SourceType::DataSource);
+                    let mut sources = [SourceItem::data_source(1, "SIM · 1D")];
+                    render_source_tree(
+                        ui,
+                        &mut sources,
+                        &ObjectTreeConfig {
+                            group_by_type: grouped,
+                            ..Default::default()
+                        },
+                        &mut state,
+                    );
+                });
+                output.textures_delta.clear();
+                assert!(output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "SIM · 1D")
+                }), "main series missing: grouped={grouped}, filtered={filtered}");
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 }

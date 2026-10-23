@@ -368,6 +368,7 @@ impl RangeSwitcher {
 
         // Allocate space and get response
         let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, self.config.border_radius);
 
         // Determine colors based on state
         let (bg_color, text_color) = if is_sel {

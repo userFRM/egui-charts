@@ -25,7 +25,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -36,7 +36,7 @@ pub struct StochasticRSI {
     stoch_period: usize,
     smooth_k: usize,
     smooth_d: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     k_color: Color32,
     d_color: Color32,
     visible: bool,
@@ -56,7 +56,7 @@ impl StochasticRSI {
             stoch_period: stoch_period.max(1),
             smooth_k: smooth_k.max(1),
             smooth_d: smooth_d.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             k_color: DESIGN_TOKENS.semantic.extended.info,
             d_color: DESIGN_TOKENS.semantic.extended.error,
             visible: true,
@@ -138,8 +138,8 @@ impl StochasticRSI {
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
             return values;
@@ -199,10 +199,10 @@ impl StochasticRSI {
             if k_line[i].is_nan() || d_line[i].is_nan() {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![
+                values.push_lines(&[
                     k_line[i] * 100.0, // Scale to 0-100
                     d_line[i] * 100.0,
-                ]));
+                ]);
             }
         }
 
@@ -218,6 +218,13 @@ impl Default for StochasticRSI {
 }
 
 impl Indicator for StochasticRSI {
+    crate::studies::inputs::study_inputs!(self;
+        rsi_period: length("RSI period", 1, usize::MAX),
+        stoch_period: length("Stoch period", 1, usize::MAX),
+        smooth_k: length("Smooth k", 1, usize::MAX),
+        smooth_d: length("Smooth d", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "StochRSI"
     }
@@ -230,7 +237,7 @@ impl Indicator for StochasticRSI {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

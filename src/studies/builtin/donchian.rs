@@ -25,7 +25,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::stepper::{rolling_max, rolling_min};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -33,7 +33,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct DonchianChannels {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     upper_color: Color32,
     middle_color: Color32,
     lower_color: Color32,
@@ -48,7 +48,7 @@ impl DonchianChannels {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             upper_color: DESIGN_TOKENS.semantic.extended.info, // Blue
             middle_color: DESIGN_TOKENS.semantic.extended.purple, // Purple
             lower_color: DESIGN_TOKENS.semantic.extended.info, // Blue
@@ -74,8 +74,8 @@ impl Default for DonchianChannels {
 
 impl DonchianChannels {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -92,7 +92,7 @@ impl DonchianChannels {
                 let (upper, lower) = (highest[i], lowest[i]);
                 let middle = (upper + lower) / 2.0;
 
-                values.push(IndicatorValue::Multiple(vec![middle, upper, lower]));
+                values.push_lines(&[middle, upper, lower]);
             }
         }
 
@@ -101,6 +101,10 @@ impl DonchianChannels {
 }
 
 impl Indicator for DonchianChannels {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Donchian"
     }
@@ -117,7 +121,7 @@ impl Indicator for DonchianChannels {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

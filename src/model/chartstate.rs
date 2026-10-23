@@ -8,7 +8,7 @@
 /// Combines data with coordinate systems.
 use super::{Bar, BarData, TimeScale};
 use crate::scales::{PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::Indicator;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -353,15 +353,21 @@ impl ChartState {
             .flat_map(|study| {
                 let (values, lines) = (study.values(), study.line_cnt());
                 values
-                    .get(start..end.min(values.len()))
-                    .unwrap_or_default()
+                    .columns()
                     .iter()
-                    .flat_map(move |value| match value {
-                        IndicatorValue::Single(price) => std::slice::from_ref(price),
-                        IndicatorValue::Multiple(prices) => &prices[..prices.len().min(lines)],
-                        IndicatorValue::None => &[],
+                    .enumerate()
+                    .take(lines)
+                    .filter(|(index, _)| study.plot_style(*index).visible)
+                    .flat_map(move |(index, line)| {
+                        line.get(start..end.min(line.len()))
+                            .unwrap_or_default()
+                            .iter()
+                            .copied()
+                            .chain(std::iter::once(0.0).filter(move |_| {
+                                study.plot_style(index).plot_type
+                                    == crate::studies::PlotType::Histogram
+                            }))
                     })
-                    .copied()
             });
         let (min, max) = visible
             .iter()

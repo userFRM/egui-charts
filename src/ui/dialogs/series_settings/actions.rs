@@ -10,5 +10,5 @@ pub enum SeriesSettingsAction {
     /// Cancel changes
     Cancel,
     /// Apply settings to series
-    Apply(SeriesId, SeriesSettings),
+    Apply(SeriesId, Box<SeriesSettings>),
 }

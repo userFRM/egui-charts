@@ -21,7 +21,7 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -33,7 +33,7 @@ use egui::Color32;
 pub struct LSMA {
     period: usize,
     offset: i32, // Future projection offset (can be negative for past)
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -47,7 +47,7 @@ impl LSMA {
         Self {
             period: period.max(1),
             offset: 0,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber
             visible: true,
         }
@@ -111,6 +111,11 @@ impl Default for LSMA {
 }
 
 impl Indicator for LSMA {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        offset: integer("Offset", i32::MIN, i32::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "LSMA"
     }
@@ -137,7 +142,7 @@ impl Indicator for LSMA {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -232,12 +237,12 @@ mod tests {
         lsma.calculate(&data);
 
         assert_eq!(lsma.values.len(), 4);
-        assert!(matches!(lsma.values[0], IndicatorValue::None));
-        assert!(matches!(lsma.values[1], IndicatorValue::None));
+        assert!(matches!(lsma.values.to_rows()[0], IndicatorValue::None));
+        assert!(matches!(lsma.values.to_rows()[1], IndicatorValue::None));
 
         // Third value should be close to 102.0 (uptrend)
-        let IndicatorValue::Single(v) = lsma.values[2] else {
-            panic!("no value: {:?}", lsma.values[2]);
+        let IndicatorValue::Single(v) = lsma.values.to_rows()[2] else {
+            panic!("no value: {:?}", lsma.values.to_rows()[2]);
         };
         assert!((v - 102.0).abs() < 0.01);
     }

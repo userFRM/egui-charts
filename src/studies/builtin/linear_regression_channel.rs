@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::{Bar, PriceSource};
 use crate::studies::math::{LinearFit, Moments};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use std::borrow::Cow;
@@ -17,7 +17,7 @@ use std::borrow::Cow;
 pub struct LinearRegressionChannel {
     period: usize,
     multiplier: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
     source: PriceSource,
@@ -32,7 +32,7 @@ impl LinearRegressionChannel {
         Self {
             period: period.max(2),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.indicators.bb_upper,
                 DESIGN_TOKENS.semantic.indicators.bb_middle,
@@ -74,6 +74,13 @@ impl Default for LinearRegressionChannel {
 }
 
 impl Indicator for LinearRegressionChannel {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 2, usize::MAX),
+        multiplier: number("Multiplier", 0.0, f64::MAX),
+        source: choice("Source", crate::model::PriceSource::all()),
+        extend: toggle("Extend")
+    ; {});
+
     fn name(&self) -> &str {
         "LinReg Channel"
     }
@@ -89,7 +96,7 @@ impl Indicator for LinearRegressionChannel {
     fn update(&mut self, data: &[Bar], _from: usize) {
         self.fit = None;
         let previous = self.values.len().saturating_sub(self.period);
-        self.values[previous..].fill(IndicatorValue::None);
+        self.values.truncate(previous);
         self.values.resize(data.len(), IndicatorValue::None);
         if data.len() < self.period {
             return;
@@ -117,9 +124,12 @@ impl Indicator for LinearRegressionChannel {
         };
         self.fit = Some(fit);
         let offset = self.multiplier * fit.sigma;
-        for (i, value) in self.values[start..].iter_mut().enumerate() {
+        for i in 0..self.period {
             let middle = fit.intercept + fit.slope * i as f64;
-            *value = IndicatorValue::Multiple(vec![middle + offset, middle, middle - offset]);
+            self.values.set(
+                start + i,
+                IndicatorValue::Multiple(vec![middle + offset, middle, middle - offset]),
+            );
         }
     }
 
@@ -141,7 +151,7 @@ impl Indicator for LinearRegressionChannel {
         })
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

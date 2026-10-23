@@ -147,7 +147,15 @@ impl Chart {
                 coords,
                 Some(plot.x_range()),
                 collapsed,
+                if self.config.show_right_axis {
+                    Some(crate::scales::PriceScaleId::Right)
+                } else if self.config.show_left_axis {
+                    Some(crate::scales::PriceScaleId::Left)
+                } else {
+                    None
+                },
             ) {
+                self.measured_axis_width = self.measured_axis_width.max(panel.measured_axis_width);
                 let PaneInteraction {
                     panel_rect,
                     chart_rect,
@@ -159,6 +167,9 @@ impl Chart {
 
                 // A click on the legend's close "x" removes this study.
                 let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
+                if pane_response.double_clicked() {
+                    self.indicator_settings_request = Some(id);
+                }
                 if close_clicked {
                     pending_indicator_remove = Some(id);
                 }

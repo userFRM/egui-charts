@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -17,7 +17,7 @@ use egui::Color32;
 pub struct BalanceOfPower {
     /// Length of the simple average (0 or 1 = no smoothing)
     smooth_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -26,7 +26,7 @@ impl BalanceOfPower {
     pub fn new(smooth_period: usize) -> Self {
         Self {
             smooth_period: smooth_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
             visible: true,
         }
@@ -38,7 +38,7 @@ impl BalanceOfPower {
     }
 
     /// The values over `data`, every bar of which has finite prices.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let raw: Vec<f64> = data
             .iter()
             .map(|bar| {
@@ -69,6 +69,10 @@ impl Default for BalanceOfPower {
 }
 
 impl Indicator for BalanceOfPower {
+    crate::studies::inputs::study_inputs!(self;
+        smooth_period: length("Smooth period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "BoP"
     }
@@ -89,7 +93,7 @@ impl Indicator for BalanceOfPower {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

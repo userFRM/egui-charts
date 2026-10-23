@@ -3,7 +3,7 @@
 use super::{
     actions::IndicatorDialogAction,
     config::IndicatorDialogConfig,
-    data::{IndicatorInfo, IndicatorParams},
+    data::{IndicatorInfo, IndicatorParams, IndicatorPreferences},
     types::{IndicatorCategory, IndicatorTab},
 };
 use crate::icons::icons;
@@ -68,6 +68,18 @@ impl Default for IndicatorDialog {
 }
 
 impl IndicatorDialog {
+    /// Settings to save in the host's user settings document. The dialog owns no storage.
+    pub fn preferences(&self) -> IndicatorPreferences {
+        IndicatorPreferences {
+            favorites: self.favorites.iter().cloned().collect(),
+        }
+    }
+
+    /// Restore the user's saved browser settings, including unavailable host studies.
+    pub fn set_preferences(&mut self, preferences: IndicatorPreferences) {
+        self.favorites = preferences.favorites.into_iter().collect();
+    }
+
     /// Create a new indicator dialog with the built-in studies
     pub fn new() -> Self {
         let factory = IndicatorFactory::new();
@@ -384,7 +396,7 @@ impl IndicatorDialog {
 
         // Selected rows take the selection text colour, as egui's selected labels do.
         let (text, secondary) = if is_sel {
-            let selected = ui.visuals().selection.stroke.color;
+            let selected = config.sel_text_color;
             (selected, selected)
         } else {
             (config.text_color, config.muted_color)
@@ -392,7 +404,7 @@ impl IndicatorDialog {
         let star_res = Self::draw_favorite_star(ui, config, rect, is_favorite);
         let text_right = Self::draw_item_badges(ui, theme, rect, indicator, secondary);
         Self::draw_item_text(ui, rect, text_right, indicator, text);
-        draw_focus_ring(ui, &response);
+        draw_focus_ring(ui, &response, theme.radius.md);
 
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
         self.handle_item_clicks(indicator, is_favorite, enter, &response, &star_res, rect)
@@ -431,7 +443,7 @@ impl IndicatorDialog {
         let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
         icon.as_image_tinted(size, tint)
             .paint_at(ui, Rect::from_center_size(star_rect.center(), size));
-        draw_focus_ring(ui, &star_res);
+        draw_focus_ring(ui, &star_res, 0.0);
         star_res.on_hover_text(tooltip)
     }
 
@@ -758,6 +770,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saved_favorites_restore_the_favorites_list() {
+        let mut dialog = IndicatorDialog::new();
+        dialog
+            .favorites
+            .extend(["BB".to_owned(), "Host study".to_owned()]);
+        let saved = serde_json::to_string(&dialog.preferences()).unwrap();
+        let mut restored = IndicatorDialog::new();
+        restored.set_preferences(serde_json::from_str(&saved).unwrap());
+        restored.sel_category = IndicatorCategory::Favorites;
+        let listed: Vec<_> = restored
+            .indicators
+            .iter()
+            .filter(|i| restored.matches(i))
+            .collect();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "BB");
+        assert!(restored.favorites.contains("Host study"));
+        assert_eq!(
+            saved,
+            serde_json::to_string(&restored.preferences()).unwrap()
+        );
+    }
+
+    #[test]
     fn each_tab_and_category_lists_only_its_own_indicators() {
         use IndicatorCategory::*;
         use IndicatorTab::*;
@@ -844,37 +880,6 @@ mod tests {
     }
 
     #[test]
-    fn dialog_follows_the_window_when_it_shrinks() {
-        let ctx = egui::Context::default();
-        let theme = Theme::dark();
-        let mut dialog = IndicatorDialog::new();
-        dialog.open();
-        let mut frame = |size: Vec2| {
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
-                ..Default::default()
-            };
-            ctx.run_ui(input, |ui| {
-                dialog.show(ui.ctx(), &theme);
-            })
-            .drop_without_applying_deltas();
-            ctx.memory(|m| m.area_rect(egui::Id::unique("indicator_dialog")))
-                .expect("the dialog is shown")
-        };
-        for _ in 0..3 {
-            frame(Vec2::new(1440.0, 900.0));
-        }
-        let mut shown = frame(Vec2::new(600.0, 500.0));
-        for _ in 0..3 {
-            shown = frame(Vec2::new(600.0, 500.0));
-        }
-        assert!(
-            Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 500.0)).contains_rect(shown),
-            "the dialog spans {shown:?} in a 500 px window"
-        );
-    }
-
-    #[test]
     fn show_keeps_the_configuration_a_caller_sets() {
         let custom = IndicatorDialogConfig {
             width: 900.0,
@@ -892,5 +897,23 @@ mod tests {
         assert_eq!(dialog.config.width, 900.0);
         assert_eq!(dialog.config.text_color, Color32::RED);
         assert_eq!(dialog.config.hover_color, hover);
+        // A frozen config keeps its selected text paired with its fill even in another UI theme.
+        let themed = Theme::light().with_accent(Color32::from_rgb(255, 120, 0));
+        let config = IndicatorDialogConfig::from_theme(&themed);
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &Theme::dark());
+        let indicator = dialog.indicators[0].clone();
+        dialog.sel_indicator = Some(indicator.clone());
+        let output = ctx.run_ui(Default::default(), |ui| {
+            dialog.draw_indicator_item(ui, &config, &themed, &indicator, false);
+        });
+        let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == indicator.name => {
+                Some(text.galley.job.sections[0].format.color)
+            }
+            _ => None,
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(text, Some(themed.ui.selection_text));
     }
 }

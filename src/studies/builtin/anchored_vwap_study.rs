@@ -1,5 +1,5 @@
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -9,7 +9,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct AnchoredVWAP {
     anchor_bar: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -18,7 +18,7 @@ impl AnchoredVWAP {
     pub fn new(anchor_bar: usize) -> Self {
         Self {
             anchor_bar,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![DESIGN_TOKENS.semantic.indicators.vwap],
             visible: true,
         }
@@ -37,6 +37,10 @@ impl Default for AnchoredVWAP {
 }
 
 impl Indicator for AnchoredVWAP {
+    crate::studies::inputs::study_inputs!(self;
+        anchor_bar: length("Anchor bar", 0, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "AVWAP"
     }
@@ -80,7 +84,7 @@ impl Indicator for AnchoredVWAP {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

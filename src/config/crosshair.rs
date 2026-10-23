@@ -98,8 +98,8 @@ impl Default for CrosshairOptions {
             vert_line_width: 1.0,
             horz_line_width: 1.0,
             label_visible: true,
-            label_background_color: Color32::BLACK,
-            label_text_color: Color32::WHITE,
+            label_background_color: Color32::PLACEHOLDER,
+            label_text_color: Color32::PLACEHOLDER,
         }
     }
 }

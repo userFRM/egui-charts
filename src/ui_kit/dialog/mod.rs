@@ -96,9 +96,13 @@ impl DialogFrame {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
+            .max_width((max.x + frame.total_margin().sum().x).max(0.0))
             .frame(frame);
         let window = if self.auto_height {
-            window.default_width(inner.x)
+            window
+                .default_width(inner.x)
+                .default_height((max.y + frame.total_margin().sum().y).max(0.0))
+                .max_height((max.y + frame.total_margin().sum().y).max(0.0))
         } else {
             window.fixed_size(inner)
         };
@@ -107,7 +111,9 @@ impl DialogFrame {
         window.show(ctx, |ui| {
             // A non-resizable window shrinks to its content, so hold the preferred size here.
             ui.set_min_size(inner);
+            ui.set_max_width(inner.x);
             if auto_height {
+                ui.set_max_height(max.y.max(0.0));
                 add_contents(ui);
             } else {
                 // The tag lets a `DialogFooter` drawn directly in this Ui sit at the bottom.
@@ -230,21 +236,44 @@ impl DialogFooter {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.lg;
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                let width = std::iter::once(&self.primary_label)
+                    .chain(self.secondary_label.iter())
+                    .map(|label| {
+                        (ui.painter()
+                            .layout_no_wrap(label.clone(), font.clone(), egui::Color32::PLACEHOLDER)
+                            .size()
+                            .x
+                            + 2.0 * DESIGN_TOKENS.spacing.xl)
+                            .max(ButtonSize::MD.pixels())
+                    })
+                    .sum::<f32>()
+                    + if self.secondary_label.is_some() {
+                        DESIGN_TOKENS.spacing.lg
+                    } else {
+                        0.0
+                    };
+                ui.allocate_ui_with_layout(
+                    Vec2::new(width, ButtonSize::MD.pixels()),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        let secondary_clicked = self
+                            .secondary_label
+                            .as_ref()
+                            .is_some_and(|label| Button::new(label).outlined().show(ui).clicked());
+                        let primary =
+                            Button::new(&self.primary_label).enabled(self.primary_enabled);
+                        let primary = if self.danger {
+                            primary.danger()
+                        } else {
+                            primary.primary()
+                        };
+                        let primary_clicked = primary.show(ui).clicked();
 
-                let primary = Button::new(&self.primary_label).enabled(self.primary_enabled);
-                let primary = if self.danger {
-                    primary.danger()
-                } else {
-                    primary.primary()
-                };
-                let primary_clicked = primary.show(ui).clicked();
-
-                let secondary_clicked = self
-                    .secondary_label
-                    .as_ref()
-                    .is_some_and(|label| Button::new(label).outlined().show(ui).clicked());
-
-                (primary_clicked, secondary_clicked)
+                        (primary_clicked, secondary_clicked)
+                    },
+                )
+                .inner
             })
             .inner
         });
@@ -260,6 +289,37 @@ impl DialogFooter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footer_tab_order_follows_the_buttons_from_left_to_right() {
+        let ctx = Context::default();
+        let frame = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    DialogFooter::new("Apply").secondary("Cancel").show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+            ctx.memory(|m| m.focused())
+                .and_then(|id| ctx.read_response(id))
+                .map(|r| r.rect)
+        };
+        frame(vec![]);
+        let tab = || egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let first = frame(vec![tab()]).unwrap();
+        let second = frame(vec![tab()]).unwrap();
+        assert!(first.right() < second.left(), "{first:?}, {second:?}");
+    }
 
     #[test]
     fn footer_sits_at_the_bottom_of_a_fixed_frame_from_the_first_visible_frame() {
@@ -293,5 +353,45 @@ mod tests {
         );
         let inner_bottom = second.0.bottom() - DESIGN_TOKENS.spacing.xxl;
         assert!((second.1.top() + ButtonSize::MD.pixels() - inner_bottom).abs() <= 1.5);
+    }
+
+    #[test]
+    fn auto_height_scroll_body_reaches_the_screen_cap() {
+        let ctx = Context::default();
+        for (width, height) in [(1440.0, 900.0), (320.0, 450.0), (1440.0, 900.0)] {
+            let mut window = egui::Id::NULL;
+            for _ in 0..3 {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(width, height),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        DialogFrame::with_width("scroll", 500.0).show(ui.ctx(), |ui| {
+                            window = ui.layer_id().id;
+                            dialog_header(ui, "Scrolling body");
+                            egui::ScrollArea::vertical()
+                                .max_height(ui.available_height())
+                                .show(ui, |ui| {
+                                    for i in 0..100 {
+                                        ui.label(format!("Row {i}"));
+                                    }
+                                });
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            let rect = ctx.memory(|m| m.area_rect(window)).unwrap();
+            assert!((rect.height() - (height - 48.0)).abs() <= 2.0, "{rect:?}");
+            assert!(rect.top() >= 23.0 && rect.bottom() <= height - 23.0);
+            assert!(
+                rect.left() >= 23.0 && rect.right() <= width - 23.0,
+                "{rect:?}"
+            );
+        }
     }
 }

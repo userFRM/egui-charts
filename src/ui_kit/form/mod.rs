@@ -1,7 +1,7 @@
 //! Form layout components.
 //!
 //! Provides a two-column layout for label + widget form rows: a fixed-width
-//! label column and a right-aligned widget column.
+//! label column and a left-aligned widget column.
 //!
 //! # Example
 //! ```
@@ -61,7 +61,10 @@ impl<'a> FormRow<'a> {
     /// The row is as tall as its content, so consecutive rows stack. The label and the
     /// widget are centred on one line; the description follows below them.
     pub fn show(self, ui: &mut Ui, add_widget: impl FnOnce(&mut Ui)) {
+        let spacing = ui.spacing().item_spacing;
+        ui.spacing_mut().item_spacing.y = DESIGN_TOKENS.spacing.md;
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.lg;
             ui.allocate_ui_with_layout(
                 vec2(self.label_width, ui.spacing().interact_size.y),
                 Layout::left_to_right(Align::Center),
@@ -70,7 +73,7 @@ impl<'a> FormRow<'a> {
                     ui.label(self.label);
                 },
             );
-            ui.with_layout(Layout::right_to_left(Align::Center), add_widget);
+            ui.with_layout(Layout::left_to_right(Align::Center), add_widget);
         });
         if let Some(desc) = self.description {
             ui.label(
@@ -79,6 +82,48 @@ impl<'a> FormRow<'a> {
                     .color(ui.visuals().weak_text_color()),
             );
         }
-        ui.add_space(DESIGN_TOKENS.spacing.sm);
+        ui.spacing_mut().item_spacing = spacing;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_share_the_grid_control_edge_and_pitch() {
+        let ctx = egui::Context::default();
+        for frame in 0..3 {
+            ctx.run_ui(Default::default(), |ui| {
+                let width = 120.0;
+                let mut rows = Vec::new();
+                for control_width in [40.0, 100.0, 40.0] {
+                    FormRow::new("Label").label_width(width).show(ui, |ui| {
+                        rows.push(
+                            ui.allocate_exact_size(vec2(control_width, 24.0), egui::Sense::hover())
+                                .0,
+                        );
+                    });
+                }
+                let mut grid = Vec::new();
+                FormGrid::new("comparison").show(ui, |ui| {
+                    for _ in 0..2 {
+                        ui.add_sized(vec2(width, 24.0), egui::Label::new("Label"));
+                        grid.push(
+                            ui.allocate_exact_size(vec2(40.0, 24.0), egui::Sense::hover())
+                                .0,
+                        );
+                        ui.end_row();
+                    }
+                });
+                if frame < 2 {
+                    return;
+                }
+                assert_eq!(rows[0].left(), rows[1].left());
+                assert_eq!(rows[0].left(), grid[0].left());
+                assert_eq!(rows[1].top() - rows[0].top(), grid[1].top() - grid[0].top());
+            })
+            .drop_without_applying_deltas();
+        }
     }
 }

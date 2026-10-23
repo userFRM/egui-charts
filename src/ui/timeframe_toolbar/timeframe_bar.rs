@@ -69,7 +69,7 @@ impl TimeframeBarConfig {
             height: DESIGN_TOKENS.sizing.toolbar.bottom_height,
             bg_color: Color32::TRANSPARENT, // Let parent Frame show through
             text_color: ui.text_secondary,
-            active_text_color: ui.accent,
+            active_text_color: ui.text,
             active_bg: ui.btn_bg_active,
             hover_bg: ui.btn_bg_hover,
             border_color: ui.border,
@@ -184,6 +184,7 @@ impl TimeframeBar {
             Vec2::splat(DESIGN_TOKENS.sizing.icon_md),
         );
         let date_res = ui.allocate_rect(date_icon_rect, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &date_res, DESIGN_TOKENS.rounding.sm);
         if date_res.hovered() {
             painter.rect_filled(
                 date_icon_rect,
@@ -241,6 +242,7 @@ impl TimeframeBar {
             );
 
             let btn_res = ui.allocate_rect(btn_rect, Sense::click());
+            crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.sm);
             let is_active = *tf == self.active_timeframe;
             let is_hovered = btn_res.hovered();
             let is_pressed = btn_res.is_pointer_button_down_on();
@@ -307,6 +309,7 @@ impl TimeframeBar {
                 Vec2::new(adj_galley.size().x + 12.0, self.config.height - 8.0),
             );
             let adj_res = ui.allocate_rect(adj_button_rect, Sense::click());
+            crate::styles::focus::draw_focus_ring(ui, &adj_res, DESIGN_TOKENS.rounding.sm);
 
             if adj_res.hovered() || self.adj_enabled {
                 painter.rect_filled(

@@ -4,6 +4,7 @@ use super::{EMA, HMA, SMA, SmoothedMA, VWMA, WMA};
 use crate::model::{Bar, PriceSource};
 use crate::studies::{
     CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,
+    IndicatorValues,
 };
 use egui::Color32;
 
@@ -96,7 +97,7 @@ enum Ribbon {
 #[derive(Clone)]
 pub struct MACombination {
     lines: Vec<AverageLine>,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     markers: Vec<IndicatorMarker>,
     pair: Option<(usize, usize)>,
     pub(super) wait_for_all: bool,
@@ -112,7 +113,7 @@ impl MACombination {
         }
         Ok(Self {
             lines,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             markers: Vec::new(),
             pair: Some((0, 1)),
             wait_for_all: false,
@@ -162,6 +163,101 @@ impl MACombination {
 }
 
 impl Indicator for MACombination {
+    fn inputs(&self) -> Vec<crate::studies::StudyInput> {
+        use crate::studies::{InputKind, InputValue, StudyInput};
+        let kinds = [
+            AverageType::Simple,
+            AverageType::Exponential,
+            AverageType::Weighted,
+            AverageType::Smoothed,
+            AverageType::VolumeWeighted,
+            AverageType::Hull,
+        ];
+        let sources = PriceSource::all();
+        self.lines
+            .iter()
+            .enumerate()
+            .flat_map(|(index, line)| {
+                [
+                    StudyInput::new(
+                        format!("period_{index}"),
+                        format!("Length {}", index + 1),
+                        InputValue::Length(line.period),
+                        InputKind::Length(
+                            if line.kind == AverageType::Hull { 2 } else { 1 },
+                            usize::MAX,
+                        ),
+                    ),
+                    StudyInput::new(
+                        format!("kind_{index}"),
+                        format!("Average {}", index + 1),
+                        InputValue::Choice(
+                            kinds.iter().position(|kind| *kind == line.kind).unwrap(),
+                        ),
+                        InputKind::Choice(
+                            kinds.iter().map(|kind| kind.label().to_owned()).collect(),
+                        ),
+                    ),
+                    StudyInput::new(
+                        format!("source_{index}"),
+                        format!("Source {}", index + 1),
+                        InputValue::Choice(
+                            sources
+                                .iter()
+                                .position(|source| *source == line.source)
+                                .unwrap(),
+                        ),
+                        InputKind::Choice(
+                            sources
+                                .iter()
+                                .map(|source| source.label().to_owned())
+                                .collect(),
+                        ),
+                    ),
+                ]
+            })
+            .collect()
+    }
+
+    fn set_input(
+        &mut self,
+        id: &str,
+        value: crate::studies::InputValue,
+    ) -> Result<(), &'static str> {
+        use crate::studies::InputValue;
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or("unknown study input")?;
+        if !schema.accepts(&value) {
+            return Err("study input is outside its accepted values");
+        }
+        let (field, index) = id.rsplit_once('_').ok_or("unknown study input")?;
+        let index: usize = index.parse().map_err(|_| "unknown study input")?;
+        let line = self.lines.get_mut(index).ok_or("unknown study input")?;
+        match (field, value) {
+            ("period", InputValue::Length(period)) => line.period = period,
+            ("kind", InputValue::Choice(kind)) => {
+                line.kind = [
+                    AverageType::Simple,
+                    AverageType::Exponential,
+                    AverageType::Weighted,
+                    AverageType::Smoothed,
+                    AverageType::VolumeWeighted,
+                    AverageType::Hull,
+                ][kind];
+                line.period = line
+                    .period
+                    .max(if line.kind == AverageType::Hull { 2 } else { 1 });
+            }
+            ("source", InputValue::Choice(source)) => line.source = PriceSource::all()[source],
+            _ => return Err("unknown study input"),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "MA Combination"
     }
@@ -193,10 +289,7 @@ impl Indicator for MACombination {
         for i in 0..data.len() {
             let lines: Vec<_> = averages
                 .iter()
-                .map(|average| match average.values()[i] {
-                    IndicatorValue::Single(value) => value,
-                    _ => f64::NAN,
-                })
+                .map(|average| average.values().value(0, i).unwrap_or(f64::NAN))
                 .collect();
             if lines.iter().all(|v| !v.is_finite())
                 || (self.wait_for_all && lines.iter().any(|v| !v.is_finite()))
@@ -229,7 +322,7 @@ impl Indicator for MACombination {
             self.values.push(IndicatorValue::Multiple(lines));
         }
     }
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
     fn colors(&self) -> Vec<Color32> {
@@ -288,6 +381,16 @@ impl Indicator for MACombination {
 macro_rules! impl_ma_preset {
     ($ty:ident, $name:literal, $description:literal) => {
         impl crate::studies::Indicator for $ty {
+            fn inputs(&self) -> Vec<crate::studies::StudyInput> {
+                self.inner.inputs()
+            }
+            fn set_input(
+                &mut self,
+                id: &str,
+                value: crate::studies::InputValue,
+            ) -> Result<(), &'static str> {
+                self.inner.set_input(id, value)
+            }
             fn name(&self) -> &str {
                 $name
             }
@@ -297,7 +400,7 @@ macro_rules! impl_ma_preset {
             fn calculate(&mut self, data: &[crate::model::Bar]) {
                 self.inner.calculate(data);
             }
-            fn values(&self) -> &[crate::studies::IndicatorValue] {
+            fn values(&self) -> &crate::studies::IndicatorValues {
                 self.inner.values()
             }
             fn colors(&self) -> Vec<egui::Color32> {

@@ -2,8 +2,8 @@
 //!
 //! Provides magnetic snapping functionality for drawing tools:
 //! - Off: no snapping
-//! - Weak Magnet: Loose snapping tolerance
-//! - Strong Magnet: Tight snapping tolerance
+//! - Weak Magnet: Snap within a pixel threshold
+//! - Strong Magnet: Nearest OHLC of the bar under the pointer
 //! - OHLC Magnet: Snap to OHLC price values
 
 use crate::icons::icons;
@@ -35,15 +35,13 @@ impl MagnetButton {
                 Some(DrawingToolbarAction::ToggleMagnet)
             })
             .checked(!magnet_on)
-            .add_text_item_with_action(
-                "Weak magnet",
-                "Weak magnetic snapping with loose tolerance",
-                || Some(DrawingToolbarAction::SetMagnetType(MagnetType::Weak)),
-            )
+            .add_text_item_with_action("Weak magnet", "Snap only near chart values", || {
+                Some(DrawingToolbarAction::SetMagnetType(MagnetType::Weak))
+            })
             .checked(is_current(MagnetType::Weak))
             .add_text_item_with_action(
                 "Strong magnet",
-                "Strong magnetic snapping with tight tolerance",
+                "Snap to the nearest bar OHLC value",
                 || Some(DrawingToolbarAction::SetMagnetType(MagnetType::Strong)),
             )
             .checked(is_current(MagnetType::Strong))

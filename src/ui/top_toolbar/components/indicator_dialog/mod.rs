@@ -15,13 +15,15 @@ pub mod actions;
 pub mod config;
 pub mod data;
 pub mod dialog;
+mod settings;
 pub mod templates;
+pub use settings::{IndicatorSettingsDialog, StudyEdit};
 pub mod types;
 
 // Public re-exports
 pub use actions::IndicatorDialogAction;
 pub use config::IndicatorDialogConfig;
-pub use data::{IndicatorInfo, IndicatorParams};
+pub use data::{IndicatorInfo, IndicatorParams, IndicatorPreferences};
 pub use dialog::IndicatorDialog;
 pub use templates::{IndicatorTemplateAction, IndicatorTemplatePanel, IndicatorTemplateState};
 pub use types::{IndicatorCategory, IndicatorTab};

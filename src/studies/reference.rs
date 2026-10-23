@@ -48,6 +48,85 @@ use chrono::{TimeZone, Utc};
 
 const EXPECTED: &str = include_str!("reference/expected.txt");
 
+#[test]
+fn catalogue_input_schemas_round_trip_the_current_calculation() {
+    let bars = fixture();
+    let factory = crate::studies::IndicatorFactory::new();
+    for name in factory.list() {
+        let mut study = factory.create(&name).unwrap();
+        study.calculate(&bars);
+        let before = format!("{:?}", study.values());
+        for input in study.inputs() {
+            assert!(input.accepts(&input.value), "{name}: {}", input.id);
+            study
+                .set_input(&input.id, input.value)
+                .unwrap_or_else(|error| panic!("{name}: {}: {error}", input.id));
+        }
+        study.calculate(&bars);
+        assert_eq!(format!("{:?}", study.values()), before, "{name}");
+    }
+}
+
+#[test]
+fn editing_an_input_invalidates_values_and_preserves_other_inputs() {
+    use crate::studies::InputValue;
+    let bars: Vec<_> = [2.0, 4.0, 8.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), p, p, p, p, 1.0))
+        .collect();
+    let mut study = BollingerBands::new(3, 2.0);
+    study.calculate(&bars);
+    study.set_input("period", InputValue::Length(2)).unwrap();
+    assert!(study.values().is_empty());
+    study.calculate(&bars);
+    assert_eq!(study.values().value(0, 2), Some(10.0));
+    assert!(
+        study
+            .set_input("std_dev", InputValue::Number(f64::NAN))
+            .is_err()
+    );
+    assert_eq!(study.values().value(0, 2), Some(10.0));
+    assert!(study.set_input("period", InputValue::Length(0)).is_err());
+    assert_eq!(
+        study
+            .inputs()
+            .iter()
+            .find(|input| input.id == "std_dev")
+            .unwrap()
+            .value,
+        InputValue::Number(2.0)
+    );
+}
+
+#[test]
+fn bands_store_aligned_columns_through_warmup_and_corrections() {
+    let mut bars: Vec<_> = [2.0, 4.0, 8.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), p, p, p, p, 1.0))
+        .collect();
+    let mut study = BollingerBands::new(2, 2.0);
+    study.calculate(&bars);
+    // Means 3 and 6, population deviations 1 and 2, and two-deviation bands.
+    let expected = [[5.0, 10.0], [3.0, 6.0], [1.0, 2.0]];
+    assert_eq!(study.values().columns().len(), 3);
+    for (column, expected) in study.values().columns().iter().zip(expected) {
+        assert_eq!(column.len(), bars.len());
+        assert!(column[0].is_nan());
+        assert_eq!(column[1..], expected);
+    }
+    bars[2].close = 10.0;
+    study.update(&bars, 2);
+    // The corrected window [4, 10] has mean 7 and population deviation 3.
+    assert_eq!(
+        (0..3)
+            .map(|line| study.values().value(line, 2).unwrap())
+            .collect::<Vec<_>>(),
+        [13.0, 7.0, 1.0]
+    );
+}
+
 /// 150 bars of a seeded 64-bit LCG walk in whole ticks of 0.25, so every price is exact in binary:
 /// rising to bar 74, falling after, a random opening offset on bars ending in 5 (so the true range
 /// exceeds the bar range on some of them), flat on bars 110 to 114.
@@ -416,7 +495,7 @@ fn staple_studies_match_published_definitions() {
         let idx = studies.iter().position(|(n, _, _)| *n == name);
         let idx = idx.unwrap_or_else(|| panic!("{name} has expected values but is not built"));
         checked_lines[idx] += 1;
-        let values = studies[idx].1.values();
+        let values = studies[idx].1.values().to_rows();
         assert_eq!(
             values.len(),
             studies[idx].2.len(),
@@ -433,7 +512,7 @@ fn staple_studies_match_published_definitions() {
             .zip(values)
             .enumerate()
             .filter_map(|(bar, (token, value))| {
-                let actual = line_value(value, line);
+                let actual = line_value(&value, line);
                 let want = (*token != "-").then(|| token.parse::<f64>().unwrap());
                 let ok = match (want, actual) {
                     (None, None) => true,
@@ -474,6 +553,7 @@ fn regression_channel_refits_the_last_n_bars_on_update() {
     assert!(
         study
             .values()
+            .to_rows()
             .iter()
             .all(|v| matches!(v, IndicatorValue::None))
     );
@@ -489,7 +569,7 @@ fn regression_channel_refits_the_last_n_bars_on_update() {
         }
         study.update(&bars[..len], len - 1);
         assert_eq!(study.values().len(), len);
-        for (i, value) in study.values().iter().enumerate() {
+        for (i, value) in study.values().to_rows().iter().enumerate() {
             if i < len - 3 {
                 assert!(matches!(value, IndicatorValue::None));
                 continue;
@@ -509,7 +589,7 @@ fn regression_channel_refits_the_last_n_bars_on_update() {
         LinearRegressionChannel::new(3, 2.0).with_source(crate::model::PriceSource::Open);
     open.calculate(&bars);
     // Opens remain [2,4,2] in the trailing window after the close was corrected to 6.
-    let IndicatorValue::Multiple(lines) = &open.values()[3] else {
+    let IndicatorValue::Multiple(lines) = &open.values().to_rows()[3] else {
         panic!("missing open fit")
     };
     assert!((lines[1] - 8.0 / 3.0).abs() < 1e-12);

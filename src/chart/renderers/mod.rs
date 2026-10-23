@@ -7,6 +7,7 @@
 //! These functions are called directly by the chart widget and the modern
 //! rendering layer in [`rendering`](super::rendering).
 
+mod axis_currency;
 mod bar;
 mod candle;
 mod context;
@@ -18,6 +19,7 @@ mod session_breaks;
 mod tooltip;
 mod volume;
 
+pub use axis_currency::render_axis_currency;
 pub use bar::render_ohlc_bar;
 pub use candle::render_candle;
 pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
@@ -26,6 +28,7 @@ pub use crosshair::render_crosshair_full;
 #[cfg(feature = "icons")]
 pub(crate) use crosshair::snap_to_nearest_ohlc;
 pub use indicator::IndicatorRenderer;
+pub(crate) use indicator::paint_study_plot;
 pub use labels::{
     Legend, LegendStatus, QuoteSide, render_price_labels, render_price_labels_at_pos,
     render_time_labels,

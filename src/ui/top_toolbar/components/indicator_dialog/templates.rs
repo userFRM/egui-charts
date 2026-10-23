@@ -197,6 +197,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
                 self.state.show_save_form = true;
                 self.state.save_name.clear();
                 self.state.save_description.clear();
+                ui.data_mut(|d| d.insert_temp(ui.scope_id().with("focus_template_name"), true));
             }
             return action;
         }
@@ -219,7 +220,10 @@ impl<'a> IndicatorTemplatePanel<'a> {
         let name_response = ui.text_edit_singleline(&mut self.state.save_name);
 
         // Auto-focus the name field when save form opens
-        if !name_response.has_focus() {
+        if ui
+            .data_mut(|d| d.remove_temp::<bool>(ui.scope_id().with("focus_template_name")))
+            .unwrap_or(false)
+        {
             name_response.request_focus();
         }
 
@@ -249,7 +253,10 @@ impl<'a> IndicatorTemplatePanel<'a> {
         });
 
         // Enter key to confirm
-        if ui.input(|i| i.key_pressed(egui::Key::Enter)) && can_save {
+        if (name_response.has_focus() || ui.memory(|m| m.had_focus_last_frame(name_response.id)))
+            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+            && can_save
+        {
             action = IndicatorTemplateAction::Save {
                 name: self.state.save_name.trim().to_string(),
                 description: self.state.save_description.trim().to_string(),
@@ -322,6 +329,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
         let item_height = DESIGN_TOKENS.sizing.button_lg;
         let desired_size = Vec2::new(ui.available_width() - DESIGN_TOKENS.spacing.lg, item_height);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
 
         let is_selected = self
             .state
@@ -456,5 +464,54 @@ impl<'a> IndicatorTemplatePanel<'a> {
         });
 
         action
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_fields_release_focus_and_keyboard_cancel_does_not_save() {
+        let ctx = egui::Context::default();
+        let mut state = IndicatorTemplateState {
+            show_save_form: true,
+            save_name: "Example".into(),
+            ..Default::default()
+        };
+        let mut frame = |key: Option<egui::Key>| {
+            let mut action = IndicatorTemplateAction::None;
+            ctx.run_ui(
+                egui::RawInput {
+                    events: key
+                        .map(|key| egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        })
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+                |ui| {
+                    action = IndicatorTemplatePanel::new(&mut state, "Example").draw_save_form(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+            (action, ctx.memory(|m| m.focused()))
+        };
+        frame(None);
+        let name = frame(Some(egui::Key::Tab)).1;
+        let description = frame(Some(egui::Key::Tab)).1;
+        assert_ne!(name, description);
+        frame(Some(egui::Key::Tab));
+        frame(Some(egui::Key::Tab));
+        assert!(matches!(
+            frame(Some(egui::Key::Enter)).0,
+            IndicatorTemplateAction::None
+        ));
+        assert!(!state.show_save_form);
     }
 }

@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 /// Moving Average Envelopes
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -10,7 +10,7 @@ pub struct Envelopes {
     period: usize,
     percent: f64,
     ma_type: String,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -22,7 +22,7 @@ impl Envelopes {
             period: period.max(1),
             percent: clamp_param(percent, 0.0, f64::MAX),
             ma_type: ma_type.to_string(),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Upper
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - Middle
@@ -70,6 +70,12 @@ impl Envelopes {
 }
 
 impl Indicator for Envelopes {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        percent: number("Percent", 0.0, f64::MAX),
+        ma_type: choice("Average", ["SMA".to_owned(), "EMA".to_owned()])
+    ; {});
+
     fn name(&self) -> &str {
         "Envelopes"
     }
@@ -97,8 +103,7 @@ impl Indicator for Envelopes {
                 Some(ma) => {
                     let upper = ma * (1.0 + multiplier);
                     let lower = ma * (1.0 - multiplier);
-                    self.values
-                        .push(IndicatorValue::Multiple(vec![upper, *ma, lower]));
+                    self.values.push_lines(&[upper, *ma, lower]);
                 }
                 None => {
                     self.values.push(IndicatorValue::None);
@@ -107,7 +112,7 @@ impl Indicator for Envelopes {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

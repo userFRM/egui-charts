@@ -53,7 +53,7 @@ impl HandleService {
     ///
     /// Handle layouts vary by tool type:
     /// - **Two-point tools** (TrendLine, Fibonacci, etc.): Start, End, and Middle handles
-    /// - **Rectangle**: Four corner handles (TopLeft, TopRight, BottomLeft, BottomRight)
+    /// - **Rectangle**: Four corner handles and a Middle handle
     /// - **Single-point tools** (HorizontalLine, VerticalLine): One Start handle
     /// - **Multi-point tools**: Indexed handles at each point plus a centroid Middle handle
     pub fn get_handles(drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
@@ -82,6 +82,7 @@ impl HandleService {
                     handles.push((HandlePos::TopRight, Pos2::new(p2.x, p1.y)));
                     handles.push((HandlePos::BottomLeft, Pos2::new(p1.x, p2.y)));
                     handles.push((HandlePos::BottomRight, p2));
+                    handles.push((HandlePos::Middle, p1 + (p2 - p1) / 2.0));
                 }
             }
             DrawingToolType::HorizontalLine => {
@@ -163,6 +164,23 @@ impl HandleService {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
+        if handle == HandlePos::Middle {
+            if let Some((_, center)) = Self::get_handles(drawing)
+                .into_iter()
+                .find(|(h, _)| *h == handle)
+            {
+                let bars = x_to_bar(new_pos.x) - x_to_bar(center.x);
+                let price = y_to_price(new_pos.y) - y_to_price(center.y);
+                for point in &mut drawing.points {
+                    *point += new_pos - center;
+                }
+                for point in &mut drawing.chart_points {
+                    point.bar_idx += bars;
+                    point.price += price;
+                }
+            }
+            return;
+        }
         match drawing.tool_type {
             DrawingToolType::TrendLine
             | DrawingToolType::Measure
@@ -225,24 +243,6 @@ impl HandleService {
                 if drawing.chart_points.len() >= 2 {
                     drawing.chart_points[1].bar_idx = x_to_bar(new_pos.x);
                     drawing.chart_points[1].price = y_to_price(new_pos.y);
-                }
-            }
-            HandlePos::Middle if drawing.points.len() >= 2 => {
-                // Move entire drawing
-                let curr_mid = Pos2::new(
-                    (drawing.points[0].x + drawing.points[1].x) / 2.0,
-                    (drawing.points[0].y + drawing.points[1].y) / 2.0,
-                );
-                let delta = Pos2::new(new_pos.x - curr_mid.x, new_pos.y - curr_mid.y);
-                drawing.points[0].x += delta.x;
-                drawing.points[0].y += delta.y;
-                drawing.points[1].x += delta.x;
-                drawing.points[1].y += delta.y;
-                if drawing.chart_points.len() >= 2 {
-                    drawing.chart_points[0].bar_idx = x_to_bar(drawing.points[0].x);
-                    drawing.chart_points[0].price = y_to_price(drawing.points[0].y);
-                    drawing.chart_points[1].bar_idx = x_to_bar(drawing.points[1].x);
-                    drawing.chart_points[1].price = y_to_price(drawing.points[1].y);
                 }
             }
             _ => {}
@@ -321,24 +321,6 @@ impl HandleService {
                 drawing.chart_points[last].bar_idx = x_to_bar(new_pos.x);
                 drawing.chart_points[last].price = y_to_price(new_pos.y);
             }
-            HandlePos::Middle
-                // Move entire drawing by centroid delta
-                if !drawing.points.is_empty() && drawing.points.len() == drawing.chart_points.len()
-                => {
-                    let cx: f32 = drawing.points.iter().map(|p| p.x).sum::<f32>()
-                        / drawing.points.len() as f32;
-                    let cy: f32 = drawing.points.iter().map(|p| p.y).sum::<f32>()
-                        / drawing.points.len() as f32;
-                    let delta_x = new_pos.x - cx;
-                    let delta_y = new_pos.y - cy;
-
-                    for i in 0..drawing.points.len() {
-                        drawing.points[i].x += delta_x;
-                        drawing.points[i].y += delta_y;
-                        drawing.chart_points[i].bar_idx = x_to_bar(drawing.points[i].x);
-                        drawing.chart_points[i].price = y_to_price(drawing.points[i].y);
-                    }
-                }
             _ => {}
         }
     }
@@ -429,6 +411,7 @@ mod tests {
                     (TopRight, pos2(200.0, 100.0)),
                     (BottomLeft, pos2(100.0, 300.0)),
                     (BottomRight, pos2(200.0, 300.0)),
+                    (Middle, pos2(150.0, 200.0)),
                 ],
             ),
             (
@@ -446,6 +429,16 @@ mod tests {
                 ],
             ),
             (
+                DrawingToolType::FibonacciChannel,
+                vec![pos2(0.0, 0.0), pos2(30.0, 0.0), pos2(0.0, 60.0)],
+                vec![
+                    (Point(0), pos2(0.0, 0.0)),
+                    (Point(1), pos2(30.0, 0.0)),
+                    (Point(2), pos2(0.0, 60.0)),
+                    (Middle, pos2(10.0, 20.0)),
+                ],
+            ),
+            (
                 DrawingToolType::Triangle,
                 vec![pos2(0.0, 0.0), pos2(30.0, 0.0), pos2(0.0, 60.0)],
                 vec![
@@ -459,6 +452,153 @@ mod tests {
         for (tool, points, expected) in cases {
             let drawing = create_test_drawing(tool, points);
             assert_eq!(HandleService::get_handles(&drawing), expected, "{tool:?}");
+        }
+        // Renderer control counts, including generated position stops and freehand samples.
+        let anchor_counts: &[(&[DrawingToolType], usize)] = &[
+            (
+                &[
+                    DrawingToolType::CrossCursor,
+                    DrawingToolType::DotCursor,
+                    DrawingToolType::ArrowCursor,
+                    DrawingToolType::Eraser,
+                ],
+                0,
+            ),
+            (
+                &[
+                    DrawingToolType::HorizontalLine,
+                    DrawingToolType::HorizontalRay,
+                    DrawingToolType::VerticalLine,
+                    DrawingToolType::CrossLine,
+                    DrawingToolType::TextLabel,
+                    DrawingToolType::AnchoredText,
+                    DrawingToolType::Note,
+                    DrawingToolType::AnchoredNote,
+                    DrawingToolType::PriceLabel,
+                    DrawingToolType::FlagNote,
+                    DrawingToolType::ArrowMarkUp,
+                    DrawingToolType::ArrowMarkDown,
+                    DrawingToolType::AnchoredVWAP,
+                    DrawingToolType::AnchoredVolumeProfile,
+                    DrawingToolType::Table,
+                    DrawingToolType::Comment,
+                    DrawingToolType::Signpost,
+                    DrawingToolType::FontIcon,
+                    DrawingToolType::Tweet,
+                    DrawingToolType::Idea,
+                ],
+                1,
+            ),
+            (
+                &[
+                    DrawingToolType::TrendLine,
+                    DrawingToolType::Ray,
+                    DrawingToolType::InfoLine,
+                    DrawingToolType::ExtendedLine,
+                    DrawingToolType::TrendAngle,
+                    DrawingToolType::RegressionTrend,
+                    DrawingToolType::FibonacciRetracement,
+                    DrawingToolType::FibonacciTimeZones,
+                    DrawingToolType::FibonacciSpeedFan,
+                    DrawingToolType::FibonacciCircles,
+                    DrawingToolType::FibonacciSpiral,
+                    DrawingToolType::FibonacciSpeedResistanceArcs,
+                    DrawingToolType::GannBox,
+                    DrawingToolType::GannSquare,
+                    DrawingToolType::GannFixed,
+                    DrawingToolType::GannFan,
+                    DrawingToolType::CyclicLines,
+                    DrawingToolType::TimeCycles,
+                    DrawingToolType::SineLine,
+                    DrawingToolType::Forecast,
+                    DrawingToolType::FixedRangeVolumeProfile,
+                    DrawingToolType::Measure,
+                    DrawingToolType::PriceRange,
+                    DrawingToolType::DateRange,
+                    DrawingToolType::DateAndPriceRange,
+                    DrawingToolType::ArrowMarker,
+                    DrawingToolType::Arrow,
+                    DrawingToolType::Rect,
+                    DrawingToolType::Circle,
+                    DrawingToolType::Ellipse,
+                    DrawingToolType::PriceNote,
+                    DrawingToolType::Callout,
+                    DrawingToolType::Image,
+                ],
+                2,
+            ),
+            (
+                &[
+                    DrawingToolType::ParallelChannel,
+                    DrawingToolType::FlatTopBottom,
+                    DrawingToolType::DisjointChannel,
+                    DrawingToolType::Pitchfork,
+                    DrawingToolType::SchiffPitchfork,
+                    DrawingToolType::ModifiedSchiffPitchfork,
+                    DrawingToolType::InsidePitchfork,
+                    DrawingToolType::FibonacciExtension,
+                    DrawingToolType::FibonacciChannel,
+                    DrawingToolType::FibonacciWedge,
+                    DrawingToolType::TrendBasedFibTime,
+                    DrawingToolType::Pitchfan,
+                    DrawingToolType::Triangle,
+                    DrawingToolType::RotatedRect,
+                    DrawingToolType::Arc,
+                    DrawingToolType::Curve,
+                    DrawingToolType::ProjectionTool,
+                    DrawingToolType::BarsPattern,
+                    DrawingToolType::GhostFeed,
+                    DrawingToolType::ElliottDoubleCombo,
+                    DrawingToolType::LongPos,
+                    DrawingToolType::ShortPos,
+                ],
+                3,
+            ),
+            (
+                &[
+                    DrawingToolType::ABCDPattern,
+                    DrawingToolType::ElliottCorrection,
+                    DrawingToolType::TrianglePattern,
+                    DrawingToolType::DoubleCurve,
+                ],
+                4,
+            ),
+            (
+                &[
+                    DrawingToolType::XABCDPattern,
+                    DrawingToolType::CypherPattern,
+                    DrawingToolType::ElliottTriangle,
+                    DrawingToolType::ElliottTripleCombo,
+                    DrawingToolType::Brush,
+                    DrawingToolType::Highlighter,
+                    DrawingToolType::Polyline,
+                    DrawingToolType::Path,
+                ],
+                5,
+            ),
+            (&[DrawingToolType::ElliottImpulse], 6),
+            (
+                &[
+                    DrawingToolType::HeadAndShoulders,
+                    DrawingToolType::ThreeDrivesPattern,
+                ],
+                7,
+            ),
+        ];
+        for &(tools, count) in anchor_counts {
+            for &tool in tools {
+                let points: Vec<_> = (0..count)
+                    .map(|i| pos2(i as f32 * 30.0, i as f32 * 20.0))
+                    .collect();
+                let drawing = create_test_drawing(tool, points.clone());
+                let handles = HandleService::get_handles(&drawing);
+                for point in points {
+                    assert!(
+                        handles.iter().any(|(_, p)| *p == point),
+                        "{tool:?}: no handle at {point:?}"
+                    );
+                }
+            }
         }
     }
 

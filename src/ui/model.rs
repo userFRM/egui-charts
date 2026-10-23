@@ -1,6 +1,6 @@
 //! Domain model shared by the application UI components.
 //!
-//! Connection, layout, replay, alert, and template types consumed across the
+//! Connection, layout, replay, and template types consumed across the
 //! toolbars, panels, and dialogs of the `ui` feature.
 
 use chrono::{DateTime, Utc};
@@ -125,130 +125,6 @@ impl ReplayProgress {
         } else {
             self.bars_played as f64 / self.total_bars as f64
         }
-    }
-}
-
-// =============================================================================
-// Alerts
-// =============================================================================
-
-/// Alert status
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AlertStatus {
-    Active,
-    Triggered,
-    Disabled,
-    Expired,
-}
-
-/// Price alert condition
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AlertCondition {
-    CrossesAbove,
-    CrossesBelow,
-    Above,
-    Below,
-}
-
-impl AlertCondition {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::CrossesAbove => "Crosses Above",
-            Self::CrossesBelow => "Crosses Below",
-            Self::Above => "Above",
-            Self::Below => "Below",
-        }
-    }
-}
-
-/// Indicator alert condition
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndicatorCondition {
-    CrossAbove,
-    CrossBelow,
-    Above,
-    Below,
-}
-
-impl IndicatorCondition {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::CrossAbove => "Crosses Above",
-            Self::CrossBelow => "Crosses Below",
-            Self::Above => "Above",
-            Self::Below => "Below",
-        }
-    }
-}
-
-/// A price alert
-#[derive(Debug, Clone)]
-pub struct PriceAlert {
-    pub id: usize,
-    pub symbol: String,
-    pub target_price: f64,
-    pub condition: AlertCondition,
-    pub status: AlertStatus,
-    pub message: Option<String>,
-    pub repeating: bool,
-}
-
-/// An indicator-based alert
-#[derive(Debug, Clone)]
-pub struct IndicatorAlert {
-    pub id: usize,
-    pub indicator_a: String,
-    pub indicator_b: Option<String>,
-    pub threshold: Option<f64>,
-    pub condition: IndicatorCondition,
-    pub symbol: Option<String>,
-    pub status: AlertStatus,
-}
-
-/// A volume spike alert
-#[derive(Debug, Clone)]
-pub struct VolumeAlert {
-    pub id: usize,
-    pub symbol: String,
-    pub spike_multiplier: f64,
-    pub lookback_periods: usize,
-    pub status: AlertStatus,
-}
-
-/// A calendar/economic event alert
-#[derive(Debug, Clone)]
-pub struct EventAlert {
-    pub id: usize,
-    pub event_type: String,
-    pub minutes_before: u32,
-    pub min_impact: String,
-    pub status: AlertStatus,
-}
-
-/// Manages all alert types
-#[derive(Debug, Clone, Default)]
-pub struct AlertManager {
-    price_alerts: Vec<PriceAlert>,
-    indicator_alerts: Vec<IndicatorAlert>,
-    volume_alerts: Vec<VolumeAlert>,
-    event_alerts: Vec<EventAlert>,
-}
-
-impl AlertManager {
-    pub fn price_alerts(&self) -> &[PriceAlert] {
-        &self.price_alerts
-    }
-
-    pub fn indicator_alerts(&self) -> &[IndicatorAlert] {
-        &self.indicator_alerts
-    }
-
-    pub fn volume_alerts(&self) -> &[VolumeAlert] {
-        &self.volume_alerts
-    }
-
-    pub fn event_alerts(&self) -> &[EventAlert] {
-        &self.event_alerts
     }
 }
 

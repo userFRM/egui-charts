@@ -1,7 +1,7 @@
 //! Table rendering
 
 use crate::drawings::domain::Drawing;
-use crate::styles::{stroke, typography};
+use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -21,9 +21,25 @@ impl Drawing {
         );
 
         // Table configuration
-        let cell_width = DESIGN_TOKENS.sizing.annotation.table_cell_width;
-        let cell_height = DESIGN_TOKENS.sizing.annotation.table_cell_height;
-        let header_height = DESIGN_TOKENS.sizing.annotation.table_header_height;
+        let font = self.annotation_font();
+        let text_size = painter
+            .layout_no_wrap("Column A".into(), font.clone(), color)
+            .size();
+        let cell_width = DESIGN_TOKENS
+            .sizing
+            .annotation
+            .table_cell_width
+            .max(text_size.x + 2.0 * DESIGN_TOKENS.spacing.sm);
+        let cell_height = DESIGN_TOKENS
+            .sizing
+            .annotation
+            .table_cell_height
+            .max(text_size.y + 2.0 * DESIGN_TOKENS.spacing.xs);
+        let header_height = DESIGN_TOKENS
+            .sizing
+            .annotation
+            .table_header_height
+            .max(cell_height);
         let rows = 4; // Including header
         let cols = 3;
 
@@ -78,7 +94,6 @@ impl Drawing {
         }
 
         // Header text
-        let header_font = egui::FontId::proportional(typography::SM);
         let headers = ["Column A", "Column B", "Column C"];
         for (j, header) in headers.iter().enumerate() {
             painter.text(
@@ -88,13 +103,12 @@ impl Drawing {
                 ),
                 egui::Align2::CENTER_CENTER,
                 *header,
-                header_font.clone(),
+                font.clone(),
                 Color32::WHITE,
             );
         }
 
         // Sample data cells
-        let cell_font = egui::FontId::proportional(typography::XS);
         let cell_text_color = DESIGN_TOKENS.semantic.extended.chart_text;
 
         for i in 1..rows {
@@ -123,7 +137,7 @@ impl Drawing {
                     Pos2::new(cell_x, cell_y),
                     egui::Align2::CENTER_CENTER,
                     format!("R{}C{}", i, j + 1),
-                    cell_font.clone(),
+                    font.clone(),
                     cell_text_color,
                 );
             }

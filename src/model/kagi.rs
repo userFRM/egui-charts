@@ -14,6 +14,7 @@
 //!
 //! Use [`to_kagi_lines`] to transform a slice of [`Bar`]s.
 
+use super::PriceBasedSource;
 use crate::model::{Bar, PriceBuilder};
 use chrono::{DateTime, Utc};
 
@@ -66,12 +67,15 @@ impl KagiLine {
 pub struct KagiConfig {
     /// Reversal amount - price movement needed to create a new line
     pub reversal_amount: f64,
+    /// Price input; high/low gives continuation priority when a bar crosses both thresholds.
+    pub source: PriceBasedSource,
 }
 
 impl Default for KagiConfig {
     fn default() -> Self {
         Self {
             reversal_amount: 1.0,
+            source: PriceBasedSource::Close,
         }
     }
 }
@@ -79,21 +83,27 @@ impl Default for KagiConfig {
 impl KagiConfig {
     /// Create a Kagi config with an explicit reversal amount in price units.
     pub fn new(reversal_amount: f64) -> Self {
-        Self { reversal_amount }
+        Self {
+            reversal_amount,
+            source: PriceBasedSource::Close,
+        }
     }
 
     /// Calculate reversal amount from ATR (Avg True Range)
     pub fn from_atr(bars: &[Bar], period: usize, multiplier: f64) -> Self {
-        let atr = calculate_atr(bars, period);
         Self {
-            reversal_amount: atr * multiplier,
+            reversal_amount: super::BoxSizeMethod::Atr { period, multiplier }
+                .resolve(0.0, bars)
+                .unwrap_or(f64::NAN),
+            source: PriceBasedSource::Close,
         }
     }
 
     /// Calculate reversal amount as percentage of price
     pub fn from_percentage(base_price: f64, percentage: f64) -> Self {
         Self {
-            reversal_amount: base_price * (percentage / 100.0),
+            reversal_amount: base_price.abs() * (percentage / 100.0),
+            source: PriceBasedSource::Close,
         }
     }
 }
@@ -110,7 +120,7 @@ pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
         return Vec::new();
     }
 
-    let mut builder = KagiBuilder::new(reversal);
+    let mut builder = KagiBuilder::new(reversal, config.source);
     for bar in bars {
         builder.push(bar);
     }
@@ -152,14 +162,16 @@ impl KagiState {
 #[derive(Clone)]
 pub(crate) struct KagiBuilder {
     reversal: f64,
+    source: PriceBasedSource,
     state: Option<KagiState>,
     lines: Vec<KagiLine>,
 }
 
 impl KagiBuilder {
-    pub(crate) fn new(reversal: f64) -> Self {
+    pub(crate) fn new(reversal: f64, source: PriceBasedSource) -> Self {
         Self {
             reversal,
+            source,
             state: None,
             lines: Vec::new(),
         }
@@ -184,7 +196,23 @@ impl PriceBuilder for KagiBuilder {
             return;
         };
         st.last_ts = bar.time;
-        let price = bar.close;
+        let price = match self.source {
+            PriceBasedSource::Close => bar.close,
+            PriceBasedSource::HighLow if st.line_direction_up => {
+                if bar.high > st.curr_price {
+                    bar.high
+                } else {
+                    bar.low
+                }
+            }
+            PriceBasedSource::HighLow => {
+                if bar.low < st.curr_price {
+                    bar.low
+                } else {
+                    bar.high
+                }
+            }
+        };
 
         // Check for continuation or reversal
         if st.line_direction_up {
@@ -250,33 +278,6 @@ impl PriceBuilder for KagiBuilder {
         lines.drain(..lines.len().saturating_sub(MAX_LINES));
         lines
     }
-}
-
-/// Calculate Avg True Range for automatic reversal sizing
-fn calculate_atr(bars: &[Bar], period: usize) -> f64 {
-    if bars.len() < period {
-        // Fallback to simple range
-        let sum: f64 = bars.iter().map(|b| b.high - b.low).sum();
-        return sum / bars.len() as f64;
-    }
-
-    let mut true_ranges = Vec::new();
-
-    for i in 1..bars.len() {
-        let high_low = bars[i].high - bars[i].low;
-        let high_close_prev = (bars[i].high - bars[i - 1].close).abs();
-        let low_close_prev = (bars[i].low - bars[i - 1].close).abs();
-
-        let true_range = high_low.max(high_close_prev).max(low_close_prev);
-        true_ranges.push(true_range);
-    }
-
-    // Simple moving avg of true ranges
-    let sum: f64 = true_ranges
-        .iter()
-        .skip(true_ranges.len().saturating_sub(period))
-        .sum();
-    sum / period.min(true_ranges.len()) as f64
 }
 
 #[cfg(test)]

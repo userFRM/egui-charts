@@ -386,7 +386,7 @@ impl DatePicker {
                             FontId::proportional(theme.text.body),
                             text,
                         );
-                        draw_focus_ring(ui, &response);
+                        draw_focus_ring(ui, &response, theme.radius.sm);
 
                         if response.clicked() {
                             picked = Some(date);
