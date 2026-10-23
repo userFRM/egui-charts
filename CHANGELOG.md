@@ -352,6 +352,7 @@ All notable changes to this project are documented in this file. The format is b
 - `ChartBuilder::price_chart` hides the horizontal and vertical grid lines; it used to clear a flag the chart does not read.
 - While bars stream, studies that do not update incrementally are recalculated at most four times a second, so `Chart::indicators` can return values up to 0.25 s old; they catch up within 0.25 s of the last change. Incremental studies update every frame, and a series replaced with `set_data` updates every study at once.
 - While the view is scrolled back, new bars no longer move the visible bars.
+- `Exportable::export_png` takes no arguments, since the export has no size or background options. Migration: `export_png(w, h, transparent)` becomes `export_png()`.
 
 ### Removed
 
@@ -415,6 +416,7 @@ All notable changes to this project are documented in this file. The format is b
 - The series context menu's Add order, Add financial metric, Security info, Metrics, Paste, Table view, Visual order, Move to, Pin to scale, Add to watchlist and Add text note entries with their `SeriesContextMenuAction` variants, which nothing implemented. The menu offers Add alert, Add indicator, Copy price and Settings.
 - The drawing context menu's Copy entry and `DrawingContextMenuAction::Copy`: there is no drawing clipboard. Migration: match `Clone` to duplicate a drawing.
 - `MenuItem::submenu` and `MenuItem::is_submenu`, with the `ContextMenuSizingTokens::submenu_arrow_font_size` token of their arrow: no menu row opens a submenu.
+- `ExportConfig::{include_title, include_timestamp, include_watermark, width, height, transparent_background}` and the export dialog's checkboxes and size options for them, which no export applied, and `ExportFormat::Svg` with `Exportable::export_svg`, which nothing rendered. Migration: build `ExportConfig { format }`; an image export has the size of the chart on screen.
 
 ## [0.2.0] - 2026-06-04
 

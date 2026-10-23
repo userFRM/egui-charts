@@ -1,8 +1,8 @@
 //! Chart export functionality for screenshots and saving charts
 //!
 //! This module provides widgets and traits for exporting charts to multiple formats:
-//! - PNG images (with optional transparency)
-//! - SVG vector graphics
+//! - PNG images
+//! - CSV of the bar data
 //! - Clipboard copy
 //!
 //! # Example
@@ -39,8 +39,6 @@ use std::path::PathBuf;
 pub enum ExportFormat {
     /// PNG raster image format
     Png,
-    /// SVG vector graphics format
-    Svg,
     /// Copy to system clipboard
     Clipboard,
     /// CSV export of the bar data (time and OHLCV)
@@ -52,7 +50,6 @@ impl ExportFormat {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Png => "PNG",
-            Self::Svg => "SVG",
             Self::Clipboard => "Clipboard",
             Self::Csv => "CSV",
         }
@@ -62,7 +59,6 @@ impl ExportFormat {
     pub fn file_extension(&self) -> Option<&'static str> {
         match self {
             Self::Png => Some("png"),
-            Self::Svg => Some("svg"),
             Self::Clipboard => None,
             Self::Csv => Some("csv"),
         }
@@ -102,52 +98,26 @@ pub enum ExportResponse {
 ///
 /// let config = ExportConfig {
 ///     format: ExportFormat::Png,
-///     include_title: true,
-///     include_timestamp: true,
-///     include_watermark: false,
-///     width: Some(1920),
-///     height: Some(1080),
-///     transparent_background: false,
 /// };
 /// ```
 #[derive(Debug, Clone)]
 pub struct ExportConfig {
-    /// Export format (PNG, SVG, or Clipboard)
+    /// Export format (PNG, CSV or Clipboard)
     pub format: ExportFormat,
-    /// Include chart title in the export
-    pub include_title: bool,
-    /// Include ts in the export
-    pub include_timestamp: bool,
-    /// Include watermark in the export
-    pub include_watermark: bool,
-    /// Export width in pixels (None = use current chart size)
-    pub width: Option<u32>,
-    /// Export height in pixels (None = use current chart size)
-    pub height: Option<u32>,
-    /// Use transparent background (PNG only, ignored for other formats)
-    pub transparent_background: bool,
 }
 
 impl Default for ExportConfig {
     fn default() -> Self {
         Self {
             format: ExportFormat::Png,
-            include_title: true,
-            include_timestamp: true,
-            include_watermark: false,
-            width: None,
-            height: None,
-            transparent_background: false,
         }
     }
 }
 
 /// Export dialog for configuring and executing chart exports
 ///
-/// This dialog provides a full UI for configuring export options including:
-/// - Format selection (PNG, SVG, Clipboard)
-/// - Size configuration
-/// - Export options (title, ts, watermark)
+/// The dialog offers:
+/// - Format selection (PNG, CSV, Clipboard)
 /// - File save path entry
 ///
 /// The dialog only collects the request; the host performs the export. Use
@@ -213,7 +183,6 @@ impl ExportDialog {
             config: ExportConfig::default(),
             formats: vec![
                 ExportFormat::Png,
-                ExportFormat::Svg,
                 ExportFormat::Csv,
                 ExportFormat::Clipboard,
             ],
@@ -297,7 +266,6 @@ impl ExportDialog {
             .show(ctx, |ui| {
                 self.draw_format_selection(ui);
                 self.draw_export_options(ui);
-                self.draw_size_options(ui);
                 self.draw_save_path(ui);
                 self.draw_status(ui);
                 response = self.draw_action_buttons(ui);
@@ -319,52 +287,11 @@ impl ExportDialog {
         ui.separator();
     }
 
-    fn draw_export_options(&mut self, ui: &mut egui::Ui) {
+    fn draw_export_options(&self, ui: &mut egui::Ui) {
         if self.config.format.is_data_format() {
-            // CSV data export has no image-specific options
             ui.label("Exports the bar data: time, open, high, low, close, and volume.");
             ui.separator();
-            return;
         }
-
-        ui.checkbox(&mut self.config.include_title, "Include title");
-        ui.checkbox(&mut self.config.include_timestamp, "Include ts");
-        ui.checkbox(&mut self.config.include_watermark, "Include watermark");
-
-        if self.config.format == ExportFormat::Png {
-            ui.checkbox(
-                &mut self.config.transparent_background,
-                "Transparent background",
-            );
-        }
-        ui.separator();
-    }
-
-    fn draw_size_options(&mut self, ui: &mut egui::Ui) {
-        if self.config.format.is_data_format() {
-            // CSV data export has no size options
-            return;
-        }
-
-        ui.label("Export Size:");
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut self.config.width, None, "Current size");
-            if ui.radio(self.config.width.is_some(), "Custom").clicked() {
-                self.config.width = Some(1920);
-                self.config.height = Some(1080);
-            }
-        });
-
-        if let Some(width) = &mut self.config.width {
-            ui.horizontal(|ui| {
-                ui.label("Width:");
-                ui.add(egui::DragValue::new(width).range(100..=7680));
-                ui.label("Height:");
-                let height = self.config.height.get_or_insert(1080);
-                ui.add(egui::DragValue::new(height).range(100..=4320));
-            });
-        }
-        ui.separator();
     }
 
     fn draw_save_path(&mut self, ui: &mut egui::Ui) {
@@ -506,13 +433,9 @@ impl ExportButton {
 ///                 // Render chart to PNG bytes
 ///                 Ok(vec![])  // Replace with actual PNG bytes
 ///             }
-///             ExportFormat::Svg => {
-///                 // Render chart to SVG bytes
-///                 Ok(vec![])  // Replace with actual SVG bytes
-///             }
 ///             ExportFormat::Clipboard => {
 ///                 // Same as PNG
-///                 self.export_png(1920, 1080, false)
+///                 self.export_png()
 ///             }
 ///             ExportFormat::Csv => {
 ///                 // Export bar data as CSV bytes
@@ -527,7 +450,7 @@ pub trait Exportable {
     ///
     /// # Arguments
     ///
-    /// * `config` - Export configuration specifying format, size, and options
+    /// * `config` - Export configuration specifying the format
     ///
     /// # Returns
     ///
@@ -543,27 +466,9 @@ pub trait Exportable {
     fn export(&self, config: &ExportConfig) -> Result<Vec<u8>, String>;
 
     /// Convenience method to export as PNG
-    ///
-    /// # Arguments
-    ///
-    /// * `width` - Image width in pixels
-    /// * `height` - Image height in pixels
-    /// * `transparent` - Whether to use a transparent background
-    fn export_png(&self, width: u32, height: u32, transparent: bool) -> Result<Vec<u8>, String> {
+    fn export_png(&self) -> Result<Vec<u8>, String> {
         self.export(&ExportConfig {
             format: ExportFormat::Png,
-            width: Some(width),
-            height: Some(height),
-            transparent_background: transparent,
-            ..Default::default()
-        })
-    }
-
-    /// Convenience method to export as SVG
-    fn export_svg(&self) -> Result<Vec<u8>, String> {
-        self.export(&ExportConfig {
-            format: ExportFormat::Svg,
-            ..Default::default()
         })
     }
 }
@@ -571,61 +476,6 @@ pub trait Exportable {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_export_format_as_str() {
-        assert_eq!(ExportFormat::Png.as_str(), "PNG");
-        assert_eq!(ExportFormat::Svg.as_str(), "SVG");
-        assert_eq!(ExportFormat::Clipboard.as_str(), "Clipboard");
-        assert_eq!(ExportFormat::Csv.as_str(), "CSV");
-    }
-
-    #[test]
-    fn test_export_format_file_extension() {
-        assert_eq!(ExportFormat::Png.file_extension(), Some("png"));
-        assert_eq!(ExportFormat::Svg.file_extension(), Some("svg"));
-        assert_eq!(ExportFormat::Clipboard.file_extension(), None);
-        assert_eq!(ExportFormat::Csv.file_extension(), Some("csv"));
-    }
-
-    #[test]
-    fn test_export_format_is_data_format() {
-        assert!(!ExportFormat::Png.is_data_format());
-        assert!(!ExportFormat::Svg.is_data_format());
-        assert!(!ExportFormat::Clipboard.is_data_format());
-        assert!(ExportFormat::Csv.is_data_format());
-    }
-
-    #[test]
-    fn test_export_config_default() {
-        let config = ExportConfig::default();
-        assert_eq!(config.format, ExportFormat::Png);
-        assert!(config.include_title);
-        assert!(config.include_timestamp);
-        assert!(!config.include_watermark);
-        assert_eq!(config.width, None);
-        assert_eq!(config.height, None);
-        assert!(!config.transparent_background);
-    }
-
-    #[test]
-    fn test_export_dialog_creation() {
-        let dialog = ExportDialog::new();
-        assert!(!dialog.is_open());
-        assert_eq!(dialog.config.format, ExportFormat::Png);
-    }
-
-    #[test]
-    fn test_export_dialog_open_close() {
-        let mut dialog = ExportDialog::new();
-        assert!(!dialog.is_open());
-
-        dialog.open();
-        assert!(dialog.is_open());
-
-        dialog.close();
-        assert!(!dialog.is_open());
-    }
 
     #[test]
     fn restricting_formats_selects_an_offered_format() {

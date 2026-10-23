@@ -69,7 +69,7 @@ enum SidePanel {
 }
 
 /// Export formats the demo can perform. The browser build has no file system
-/// access, so it offers only the clipboard. SVG rendering is not implemented.
+/// access, so it offers only the clipboard.
 #[cfg(not(target_arch = "wasm32"))]
 const EXPORT_FORMATS: &[ExportFormat] = &[
     ExportFormat::Png,
@@ -539,7 +539,6 @@ impl DemoApp {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
-            ExportFormat::Svg => unreachable!("SVG is not in EXPORT_FORMATS"),
         };
         self.request_screenshot(ctx, target);
     }
@@ -693,7 +692,7 @@ impl DemoApp {
             TopToolbarAction::OpenIndicatorTemplates => {
                 self.indicator_dialog.open_tab(IndicatorTab::Profiles)
             }
-            // Save routes through the export dialog (PNG / SVG / CSV of the view).
+            // Save routes through the export dialog (PNG / CSV of the view).
             TopToolbarAction::Save => self.export_dialog.open(),
             // Light/dark toggle is a real, cheap visual change.
             TopToolbarAction::ThemeToggle => self.toggle_theme(),

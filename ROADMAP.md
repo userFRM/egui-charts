@@ -442,11 +442,11 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [ ] Alert notification popup (defined, never shown)
 
 ### Export
-- [x] Export dialog UI (format selection, size options, path input)
-- [x] `Exportable` trait defined (`export`, `export_png`, `export_svg`)
+- [x] Export dialog UI (format selection, path input)
+- [x] `Exportable` trait defined (`export`, `export_png`)
 - [ ] No `Exportable` implementation in-crate (host must implement)
 - [ ] Save path is typed by hand (no native file dialog)
-- [ ] No actual PNG/SVG rendering logic
+- [ ] No PNG rendering logic in-crate (the host captures the chart)
 
 ### Other UI
 - [x] Context menu: entries with icons, shortcuts, disabled state, click-outside close
