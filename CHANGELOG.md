@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Snapshot offers image download in a compact menu beneath its trigger. Opening the menu leaves capture to an explicit download choice.
+
 - Chart-type menu rows use a single 14 px name beside each icon, neutral selection and separators between type families.
 
 - The interval menu groups full interval names in 32 px rows with trailing favourite marks and neutral selection, retaining custom interval entry and model selection.
