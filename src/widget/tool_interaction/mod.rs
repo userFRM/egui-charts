@@ -177,7 +177,11 @@ impl Chart {
         drawing_manager: &DrawingManager,
         cursor_modes: &CursorModeState,
     ) {
-        selection::render_eraser_highlight(painter, drawing_manager, cursor_modes);
+        selection::render_eraser_highlight(
+            &painter.with_clip_rect(self.get_rendered_price_rect()),
+            drawing_manager,
+            cursor_modes,
+        );
     }
 }
 

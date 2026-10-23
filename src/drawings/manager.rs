@@ -933,6 +933,7 @@ impl DrawingManager {
 
     /// Render all drawings against the chart's bars and coordinate mapping
     pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
+        let painter = &painter.with_clip_rect(price_rect);
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
             if drawing.is_visible_on_timeframe(&self.curr_timeframe) {

@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Drawing bodies, previews, selected handles and eraser highlights are clipped to the price pane and the caller's clip rectangle. Patterns projected past the pane edge no longer paint across the time axis or other panes. The chart's separate axis labels keep their own painters. ([#653](https://github.com/userFRM/egui-charts/issues/653))
+
 - Selection handles follow the drawing's visibility on the current interval, so a selected drawing hidden by its interval settings leaves no handles behind. Chart interval synchronization, drawing rendering and hit filtering were already applied. ([#140](https://github.com/userFRM/egui-charts/issues/140))
 
 - Selected drawings move from a body grab while retaining the pointer offset. Every anchor moves by the same bar and price delta, including on logarithmic scales, with one undo step and one host update per gesture. Rectangles also have a centre handle, and body grabs suppress chart panning. ([#741](https://github.com/userFRM/egui-charts/issues/741))

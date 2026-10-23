@@ -348,6 +348,7 @@ impl Drawing {
             return;
         }
 
+        let painter = &painter.with_clip_rect(rect);
         let color = self.color32();
         let stroke = self.stroke();
 
@@ -518,4 +519,58 @@ pub(crate) fn sample_bars() -> Vec<Bar> {
         Bar::new(time, o, h, l, c, v)
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::DrawingManager;
+    use egui::{Context, Pos2, RawInput, Shape};
+
+    /// A pattern's projected target and selection handles can cross the pane edge;
+    /// their paint commands retain the pane's clip, intersected with the caller's clip.
+    #[test]
+    fn drawings_and_handles_keep_the_pane_clip() {
+        let ctx = Context::default();
+        let pane = Rect::from_min_max(Pos2::new(30.0, 30.0), Pos2::new(300.0, 250.0));
+        let parent = Rect::from_min_max(Pos2::new(50.0, 10.0), Pos2::new(400.0, 400.0));
+        let mut manager = DrawingManager::new();
+        let mut pattern = Drawing::new(7, DrawingToolType::HeadAndShoulders);
+        pattern.points = [
+            (40., 200.),
+            (80., 150.),
+            (120., 200.),
+            (160., 100.),
+            (200., 200.),
+            (240., 150.),
+            (280., 260.),
+        ]
+        .map(|(x, y)| Pos2::new(x, y))
+        .to_vec();
+        manager.drawings.push(pattern);
+        manager.select(7);
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            let view = ChartView {
+                instrument: None,
+                bars: &[],
+                revision: 0,
+                bar_to_x: &|x| x,
+                price_to_y: &|p| p as f32,
+            };
+            manager.render_all(&ui.painter().with_clip_rect(parent), pane, &view);
+        });
+        let shapes = output.shapes.clone();
+        output.drop_without_applying_deltas();
+        let painted: Vec<_> = shapes
+            .iter()
+            .filter(|s| !matches!(s.shape, Shape::Noop))
+            .collect();
+        assert!(!painted.is_empty());
+        assert!(
+            painted
+                .iter()
+                .all(|s| s.clip_rect == pane.intersect(parent)),
+            "drawing or handle escaped its pane"
+        );
+    }
 }
