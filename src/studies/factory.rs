@@ -175,7 +175,6 @@ impl IndicatorFactory {
                 Envelopes,
                 PercentB,
                 OhlcVolatility,
-                VolatilityIndex,
                 ZeroTrendVol,
                 CommoditySelectionIndex,
             ],
@@ -203,8 +202,6 @@ impl IndicatorFactory {
                 ZigZag,
             ],
             "Statistics" => [
-                CorrelationCoefficient,
-                CorrelationLogReturns,
                 LinearRegression,
                 LinearRegressionSlope,
                 StandardError,
@@ -220,10 +217,7 @@ impl IndicatorFactory {
                 OHLC4,
             ],
             "Breadth and spread" => [
-                AdvanceDeclineLine,
                 Week52HighLow,
-                SpreadStudy,
-                RatioStudy,
             ],
         );
     }
@@ -491,7 +485,6 @@ mod tests {
             Box::new(PercentB::new(l(0), x(2.0))),
             Box::new(CloseToCloseVol::new(l(0))),
             Box::new(OhlcVolatility::new(l(0))),
-            Box::new(VolatilityIndex::new(l(0))),
             Box::new(ZeroTrendVol::new(l(0))),
             Box::new(
                 CommoditySelectionIndex::new(l(0))
@@ -520,8 +513,6 @@ mod tests {
             Box::new(PivotPoints::new(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
             Box::new(PriceChannel::new(l(0))),
-            Box::new(CorrelationCoefficient::new(l(0))),
-            Box::new(CorrelationLogReturns::new(l(0))),
             Box::new(LinearRegression::new(l(0))),
             Box::new(LinearRegressionSlope::new(l(0))),
             Box::new(StandardError::new(l(0))),
@@ -535,10 +526,7 @@ mod tests {
             Box::new(HL2::new()),
             Box::new(HLC3::new()),
             Box::new(OHLC4::new()),
-            Box::new(AdvanceDeclineLine::new()),
             Box::new(Week52HighLow::new(l(0))),
-            Box::new(SpreadStudy::new()),
-            Box::new(RatioStudy::new()),
         ]
     }
 

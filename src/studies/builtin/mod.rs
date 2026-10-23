@@ -41,7 +41,7 @@
 //! [`PivotPoints`], [`ZigZag`], [`PriceChannel`]
 //!
 //! ## Statistics
-//! [`CorrelationCoefficient`], [`LinearRegression`], [`StandardError`],
+//! [`LinearRegression`], [`StandardError`],
 //! [`RankCorrelationIndex`], [`MajorityRule`]
 
 use crate::model::Bar;
@@ -140,7 +140,6 @@ mod squeeze_momentum;
 
 // Fourth batch - Statistics and Price variants
 mod accumulation_swing;
-mod correlation;
 mod linear_regression;
 mod percent_b;
 mod price_channel;
@@ -178,7 +177,6 @@ mod vol_profile_visible;
 // Eighth batch - Volatility indicators
 mod close_to_close_vol;
 mod ohlc_volatility;
-mod volatility_index;
 mod zero_trend_vol;
 
 // Ninth batch - Moving average variants and cross indicators
@@ -192,21 +190,17 @@ mod ma_multiple;
 mod smoothed_ma;
 
 // Tenth batch - Statistics indicators
-mod correlation_log;
 mod majority_rule;
 mod rank_correlation;
 mod standard_error;
 mod standard_error_bands;
 
 // Tenth batch - Breadth & Price indicators
-mod advance_decline;
 mod anchored_vwap_study;
 mod week52_highlow;
 
 // Tenth batch - Other indicators
 mod bbw;
-mod ratio_study;
-mod spread_study;
 
 // Re-exports - Original indicators
 pub use bollinger_bands::BollingerBands;
@@ -302,7 +296,6 @@ pub use squeeze_momentum::SqueezeMomentum;
 
 // Re-exports - Fourth batch (Statistics and Price variants)
 pub use accumulation_swing::AccumulationSwingIndex;
-pub use correlation::CorrelationCoefficient;
 pub use linear_regression::{LinearRegression, LinearRegressionSlope};
 pub use percent_b::PercentB;
 pub use price_channel::PriceChannel;
@@ -340,7 +333,6 @@ pub use vol_profile_visible::VolProfileVisible;
 // Re-exports - Eighth batch (Volatility indicators)
 pub use close_to_close_vol::CloseToCloseVol;
 pub use ohlc_volatility::OhlcVolatility;
-pub use volatility_index::VolatilityIndex;
 pub use zero_trend_vol::ZeroTrendVol;
 
 // Re-exports - Ninth batch (Moving average variants and cross indicators)
@@ -354,21 +346,17 @@ pub use ma_multiple::MultipleMA;
 pub use smoothed_ma::SmoothedMA;
 
 // Re-exports - Tenth batch (Statistics)
-pub use correlation_log::CorrelationLogReturns;
 pub use majority_rule::MajorityRule;
 pub use rank_correlation::RankCorrelationIndex;
 pub use standard_error::StandardError;
 pub use standard_error_bands::StandardErrorBands;
 
 // Re-exports - Tenth batch (Breadth & Price)
-pub use advance_decline::AdvanceDeclineLine;
 pub use anchored_vwap_study::AnchoredVWAP;
 pub use week52_highlow::Week52HighLow;
 
 // Re-exports - Tenth batch (Other)
 pub use bbw::BollingerBandsWidth;
-pub use ratio_study::RatioStudy;
-pub use spread_study::SpreadStudy;
 
 /// A float parameter clamped into `min..=max`, NaN to `min`, the way constructors
 /// raise a length of 0 to 1.

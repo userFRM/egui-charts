@@ -156,7 +156,7 @@ Heikin Ashi, Baseline, Kagi and Point and Figure on the same sample data. `Chart
   <img alt="Ichimoku Cloud over candlesticks, with Stochastic and ADX in their own panes" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/studies-light@2x.png" width="880">
 </picture>
 
-A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 123 indicator names, each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Six more types are built directly instead of registered: five compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
+A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 117 indicator names, each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Six more types are built directly instead of registered: five compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
 
 | Group | Examples |
 |---|---|
@@ -166,7 +166,7 @@ A chart computes its studies, updates them as its bars change and draws them: ov
 | Volatility | Bollinger Bands, ATR, Keltner Channels, Donchian Channels, Historical Volatility, Chandelier Exit |
 | Volume | OBV, VWAP, MFI, A/D, Chaikin Money Flow, Klinger Oscillator, Volume Profile |
 | Support and resistance | Pivot Points, ZigZag |
-| Statistics | Linear Regression, Standard Error, Correlation, Rank Correlation |
+| Statistics | Linear Regression, Standard Error, Rank Correlation |
 
 ```rust
 use egui_charts::studies::{BollingerBands, RSI, SMA};

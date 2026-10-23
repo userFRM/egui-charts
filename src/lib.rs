@@ -49,7 +49,7 @@
 //! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
 //! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays |
 //! | **Drawing tools** | [`drawings`] | 94 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
-//! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 123 indicator names in `IndicatorFactory` |
+//! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 117 indicator names in `IndicatorFactory` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
