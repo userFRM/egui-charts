@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `Chart::set_legend_badge` and `set_legend_statuses` pass host metadata to the in-pane legend. The demo identifies generated data with a SIM status.
+
 - `icons::COMPARE_ADD` and `icons::LAYOUT_SINGLE` provide a circled plus for comparison series and a single outlined chart pane for layout controls.
 - Demo toolbar host slots expose quick search, a Trade intent notice and Publish through the existing export dialog. The chart uses its rounded container background.
 

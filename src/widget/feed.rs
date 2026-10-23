@@ -128,6 +128,8 @@ impl Chart {
         if symbol != self.symbol {
             self.pending_scroll_time = None;
             self.legend_instrument = None;
+            self.legend_badge = None;
+            self.legend_statuses.clear();
             self.quote = None;
             self.quote_action = None;
             self.session_quote = None;

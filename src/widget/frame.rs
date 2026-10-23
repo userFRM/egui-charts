@@ -1121,7 +1121,18 @@ impl Chart {
             if let Some(bar) = self.state.shown().get(selected) {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
+                let statuses: Vec<_> = self
+                    .legend_statuses
+                    .iter()
+                    .map(|(text, color, background)| super::LegendStatus {
+                        text,
+                        color: *color,
+                        background: *background,
+                    })
+                    .collect();
                 legend.instrument = self.instrument();
+                legend.badge = self.legend_badge.clone();
+                legend.statuses = &statuses;
                 legend.quote = self.quote.as_ref();
                 legend.previous_close = selected
                     .checked_sub(1)

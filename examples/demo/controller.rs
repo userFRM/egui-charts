@@ -353,6 +353,12 @@ impl DemoApp {
                 .with_price_decimals(2),
         ));
         self.chart
+            .set_legend_statuses(&[egui_charts::widget::LegendStatus {
+                text: "SIM",
+                color: egui::Color32::from_rgb(38, 166, 154),
+                background: egui::Color32::TRANSPARENT,
+            }]);
+        self.chart
             .set_quote(self.bars.last().map(|bar| egui_charts::model::Level1Quote {
                 // The frozen quote is fifteen seconds before this synthetic bar closes.
                 ts: bar.time

@@ -117,6 +117,8 @@ impl Chart {
             zoom_just_applied: false,
             symbol: String::new(),
             legend_instrument: None,
+            legend_badge: None,
+            legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,
             session_quote: None,

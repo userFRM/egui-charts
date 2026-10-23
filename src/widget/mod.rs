@@ -262,6 +262,8 @@ pub struct Chart {
     pub(crate) symbol: String,
     /// Metadata supplied directly by a host without a feed.
     legend_instrument: Option<crate::model::Instrument>,
+    legend_badge: Option<egui::ImageSource<'static>>,
+    legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
@@ -423,6 +425,19 @@ impl Chart {
             .instrument()
             .and_then(|instrument| instrument.price_decimals);
         self.state.price_scale_mut().set_price_precision(precision);
+    }
+
+    /// Supplies a host-owned instrument image for the legend. `None` hides it.
+    pub fn set_legend_badge(&mut self, badge: Option<egui::ImageSource<'static>>) {
+        self.legend_badge = badge;
+    }
+
+    /// Supplies status marks and their host-defined meaning and colours.
+    pub fn set_legend_statuses(&mut self, statuses: &[LegendStatus<'_>]) {
+        self.legend_statuses = statuses
+            .iter()
+            .map(|status| (status.text.to_owned(), status.color, status.background))
+            .collect();
     }
 
     /// Supplies the current bid and ask, independently of the hovered historical bar.
