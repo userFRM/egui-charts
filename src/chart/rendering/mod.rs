@@ -12,7 +12,7 @@ pub mod overlays;
 
 // Re-export rendering functions
 pub use super::renderers::{render_price_labels, render_time_labels, render_tooltip_with_options};
-pub use axes::render_last_price_line;
+pub use axes::render_price_line;
 pub use candles::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
     render_chart_type,

@@ -280,6 +280,8 @@ pub struct Chart {
     // =========================================================================
     /// Bar marks (annotations on chart bars, e.g., trade signals); see [`Chart::set_markers`].
     pub(crate) marks: Vec<crate::model::Marker>,
+    /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
+    price_lines: Vec<crate::model::PriceLine>,
 
     // =========================================================================
     // Selection State

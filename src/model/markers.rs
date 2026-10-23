@@ -199,3 +199,62 @@ impl LineStyle {
         &[LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted]
     }
 }
+
+/// A horizontal line at a price on a series' scale, with an optional title and a price axis label.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PriceLine {
+    /// Price in the series' units.
+    pub price: f64,
+    /// Colour of the line, title and axis tag.
+    pub color: Color32,
+    /// Width in points. Default 1.0.
+    pub width: f32,
+    /// Default [`LineStyle::Dashed`].
+    pub style: LineStyle,
+    /// Drawn at the left end of the line, above it.
+    pub title: Option<String>,
+    /// Price label on the axis, on a tag in the line's colour. Default true.
+    pub axis_label: bool,
+}
+
+impl PriceLine {
+    /// Creates a dashed price line with an axis label.
+    pub fn new(price: f64, color: Color32) -> Self {
+        Self {
+            price,
+            color,
+            width: 1.0,
+            style: LineStyle::Dashed,
+            title: None,
+            axis_label: true,
+        }
+    }
+
+    /// Sets the width in points.
+    #[must_use]
+    pub fn with_width(mut self, width: f32) -> Self {
+        self.width = width;
+        self
+    }
+
+    /// Sets the line style.
+    #[must_use]
+    pub fn with_style(mut self, style: LineStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// Sets the title drawn just above the line's left end.
+    #[must_use]
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Sets whether to draw the price axis label.
+    #[must_use]
+    pub fn with_axis_label(mut self, show: bool) -> Self {
+        self.axis_label = show;
+        self
+    }
+}

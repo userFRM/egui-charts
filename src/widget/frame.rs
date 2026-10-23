@@ -5,6 +5,7 @@ use super::{Chart, RightClickTarget};
 use crate::chart::renderers::{self, ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
+use crate::model::PriceLine;
 use crate::scales::TimeFormatterBuilder;
 use crate::styles::{sizing, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -690,18 +691,38 @@ impl Chart {
         // The axis labels go at these depths, painted once the crosshair's tags are placed
         let price_labels = painter.add(egui::Shape::Noop);
 
+        let mut tags: Vec<_> = self
+            .price_lines
+            .iter()
+            .map(|line| {
+                rendering::render_price_line(
+                    &painter,
+                    price_rect,
+                    &price_map,
+                    line,
+                    price_rect.min.x,
+                    self.config.show_right_axis,
+                    rect.max.x,
+                )
+            })
+            .collect();
+
         // Last price line & label, from the newest bar even when it is scrolled out of view
         let last_price_tag = if self.config.show_symbol_last_val
             && let Some(last) = self.state.data().bars.last()
         {
-            rendering::render_last_price_line(
+            let color = if last.close >= last.open {
+                self.config.bullish_color
+            } else {
+                self.config.bearish_color
+            };
+            let line = PriceLine::new(last.close, color).with_width(DESIGN_TOKENS.stroke.hairline);
+            rendering::render_price_line(
                 &painter,
                 price_rect,
                 &price_map,
-                last.close,
-                last.open,
-                self.config.bullish_color,
-                self.config.bearish_color,
+                &line,
+                price_rect.min.x,
                 self.config.show_right_axis,
                 rect.max.x,
             )
@@ -876,7 +897,7 @@ impl Chart {
         }
 
         // Draw the axis labels, leaving out those the tags overlap
-        let tags = [last_price_tag, crosshair_tags[0], crosshair_tags[1]];
+        tags.extend([last_price_tag, crosshair_tags[0], crosshair_tags[1]]);
         if self.config.show_right_axis {
             rendering::render_price_labels(&price_ctx, &price_map, &colors, &tags, price_labels);
         }

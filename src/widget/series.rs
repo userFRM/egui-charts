@@ -4,7 +4,7 @@
 use super::{Chart, ChartElementId, SeriesId};
 use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
-use crate::model::{Bar, BarClock, BarData, Marker};
+use crate::model::{Bar, BarClock, BarData, Marker, PriceLine};
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
@@ -70,6 +70,16 @@ impl Chart {
     pub fn set_markers(&mut self, series: SeriesId, markers: Vec<Marker>) {
         if holds_bars(series, "set_markers") {
             self.marks = markers;
+        }
+    }
+
+    /// Replaces the price lines drawn on the scale of `series`.
+    ///
+    /// Only [`SeriesId::MAIN`] has price lines; another id is ignored with a warning. The price
+    /// scale does not fit to them: a line whose price is off the scale or not finite is not drawn.
+    pub fn set_price_lines(&mut self, series: SeriesId, lines: Vec<PriceLine>) {
+        if holds_bars(series, "set_price_lines") {
+            self.price_lines = lines;
         }
     }
 

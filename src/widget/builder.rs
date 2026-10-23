@@ -131,6 +131,7 @@ impl Chart {
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Vec::new(),
+            price_lines: Vec::new(),
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,

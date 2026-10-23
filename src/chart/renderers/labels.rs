@@ -12,7 +12,8 @@ use egui::layers::ShapeIdx;
 use egui::{Color32, FontId, Pos2, Rect, Shape};
 
 /// Paints the price labels on the right side into `slot`, using smart tick mark generation and
-/// leaving out the labels the `tags` (the last price and crosshair labels) would cut through.
+/// leaving out the labels the `tags` (the price line, last price and crosshair tags) would cut
+/// through.
 pub fn render_price_labels(
     context: &RenderContext,
     price_scale: &PriceMap,

@@ -5,6 +5,7 @@
 //!
 //! - Generates 200 synthetic OHLCV bars resembling realistic price action
 //! - Creates a `Chart` widget directly with synthetic data
+//! - Marks an entry price with a price line
 //! - Renders the chart inside an `eframe` window with the dark theme
 //!
 //! Run with:
@@ -14,9 +15,9 @@
 
 use chrono::{Duration, Utc};
 use egui_charts::ChartType;
-use egui_charts::model::{Bar, BarData, Timeframe};
+use egui_charts::model::{Bar, BarData, PriceLine, Timeframe};
 use egui_charts::theme::Theme;
-use egui_charts::widget::Chart;
+use egui_charts::widget::{Chart, SeriesId};
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -39,6 +40,8 @@ impl BasicChartApp {
     fn new() -> Self {
         // Generate synthetic candlestick data
         let bars = generate_synthetic_bars(200, 100.0);
+        // Bar 150 is inside the 100 visible bars, so the line is on screen.
+        let entry = PriceLine::new(bars[150].close, Theme::dark().ui.accent).with_title("Entry");
         let data = BarData::from_bars(bars);
 
         // Create the chart widget with data
@@ -47,6 +50,7 @@ impl BasicChartApp {
         chart.set_visible_bars(100);
         chart.set_symbol("SYNTH");
         chart.set_timeframe(Timeframe::Hour1);
+        chart.set_price_lines(SeriesId::MAIN, vec![entry]);
 
         Self { chart }
     }
