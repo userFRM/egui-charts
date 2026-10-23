@@ -4,6 +4,7 @@ use crate::theme::Theme;
 use egui::Color32;
 
 /// Configuration for the indicator dialog
+#[derive(Debug, Clone)]
 pub struct IndicatorDialogConfig {
     pub width: f32,
     pub height: f32,
@@ -26,9 +27,9 @@ impl IndicatorDialogConfig {
             bg_color: ui.panel_bg,
             sidebar_color: ui.panel_bg_secondary,
             text_color: ui.text,
-            muted_color: ui.text_muted,
+            muted_color: ui.text_secondary,
             hover_color: ui.btn_bg_hover,
-            sel_color: ui.accent,
+            sel_color: ui.selection_bg,
             favorite_color: ui.warning, // Gold/yellow for favorites
         }
     }

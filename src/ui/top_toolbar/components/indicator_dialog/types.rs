@@ -34,6 +34,12 @@ impl IndicatorTab {
     }
 }
 
+impl crate::ui_kit::tab_bar::TabLabel for IndicatorTab {
+    fn tab_label(&self) -> &str {
+        self.name()
+    }
+}
+
 /// Indicator categories for filtering the indicator list
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndicatorCategory {
@@ -72,10 +78,10 @@ impl IndicatorCategory {
     pub fn icon(&self) -> &'static crate::icons::Icon {
         use crate::icons::icons as embedded_icons;
         match self {
-            IndicatorCategory::Favorites => &embedded_icons::EMOJI_ICON,
-            IndicatorCategory::BuiltIns => &embedded_icons::EMOJI_ICON,
-            IndicatorCategory::Community => &embedded_icons::EMOJI_ICON,
-            IndicatorCategory::Premium => &embedded_icons::EMOJI_ICON,
+            IndicatorCategory::Favorites => &embedded_icons::STAR_EMPTY,
+            IndicatorCategory::BuiltIns => &embedded_icons::INDICATORS,
+            IndicatorCategory::Community => &embedded_icons::USERS,
+            IndicatorCategory::Premium => &embedded_icons::CROWN,
         }
     }
 }

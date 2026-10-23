@@ -12,6 +12,7 @@ pub struct Modal {
     id: Id,
     title: String,
     width: Option<f32>,
+    height: Option<f32>,
     min_height: Option<f32>,
     closable: bool,
     dim_background: bool,
@@ -24,6 +25,7 @@ impl Modal {
             id: Id::unique(id),
             title: title.into(),
             width: None,
+            height: None,
             min_height: None,
             closable: true,
             dim_background: true,
@@ -33,6 +35,14 @@ impl Modal {
     /// Set the outer width of the modal, including its 16 px padding
     pub fn width(mut self, width: f32) -> Self {
         self.width = Some(width);
+        self
+    }
+
+    /// Set the outer height of the modal, including its 16 px padding, for content that fills
+    /// the modal, such as a list in a scroll area. The modal keeps 24 px free above and below it
+    /// in the window and follows the window when it shrinks. Overrides [`Self::min_height`].
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = Some(height);
         self
     }
 
@@ -70,10 +80,13 @@ impl Modal {
         }
 
         let frame = dialog_frame(&ctx.global_style());
+        let screen_height = ctx.content_rect().height() - 2.0 * DESIGN_TOKENS.spacing.xxxl;
+        let height = self.height.map(|height| height.min(screen_height));
         let size = egui::vec2(
             self.width
                 .unwrap_or(DESIGN_TOKENS.sizing.dialog.default_width),
-            self.min_height
+            height
+                .or(self.min_height)
                 .unwrap_or(DESIGN_TOKENS.sizing.dialog.default_min_height),
         ) - frame.total_margin().sum();
         let backdrop = if self.dim_background {
@@ -89,6 +102,10 @@ impl Modal {
             .show(ctx, |ui| {
                 ui.set_width(size.x);
                 ui.set_min_height(size.y);
+                if height.is_some() {
+                    // The area offers its last size, which filling content would otherwise keep.
+                    ui.set_max_height(size.y);
+                }
                 close_clicked = title_row(ui, &self.title, self.closable);
                 add_contents(ui)
             });

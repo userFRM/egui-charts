@@ -3,17 +3,30 @@
 use super::{
     actions::IndicatorDialogAction,
     config::IndicatorDialogConfig,
-    data::{IndicatorInfo, IndicatorParams},
+    data::{ConfiguredIndicator, IndicatorInfo, IndicatorParams},
     types::{IndicatorCategory, IndicatorTab, IndicatorType},
 };
-use crate::ext::UiExt;
+use crate::icons::icons;
 use crate::studies::*;
-use crate::styles::typography;
+use crate::styles::focus::draw_focus_ring;
 use crate::theme::Theme;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::dialog::{centred_title, titled_window_size};
-use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Ui, Vec2, Window};
+use crate::ui_kit::dialog::DialogFooter;
+use crate::ui_kit::filter::FilterWidget;
+use crate::ui_kit::modal::Modal;
+use crate::ui_kit::sidebar_layout::{SidebarLayout, SidebarTab};
+use crate::ui_kit::tab_bar::TabBar;
+use crate::ui_kit::{EmptyState, FormGrid};
+use egui::text::{LayoutJob, TextWrapping};
+use egui::{
+    Align2, Color32, FontId, Key, Modifiers, Pos2, Rect, Response, RichText, Role, Sense, Stroke,
+    StrokeKind, Ui, Vec2, WidgetInfo,
+};
+use std::cell::Cell;
 use std::collections::HashSet;
+
+/// Width of the category sidebar.
+const SIDEBAR_WIDTH: f32 = 140.0;
 
 /// Indicator Dialog
 ///
@@ -21,8 +34,12 @@ use std::collections::HashSet;
 pub struct IndicatorDialog {
     /// Is dialog open
     pub is_open: bool,
-    /// Search query
-    search_query: String,
+    /// Search field and query
+    search: FilterWidget,
+    /// Focus the search field on the next frame
+    focus_search: bool,
+    /// Move the focus from the search field to the first row this frame
+    focus_first_row: bool,
     /// Active tab
     active_tab: IndicatorTab,
     /// Selected category
@@ -52,7 +69,9 @@ impl IndicatorDialog {
     pub fn new() -> Self {
         Self {
             is_open: false,
-            search_query: String::new(),
+            search: FilterWidget::new().placeholder("Search indicators"),
+            focus_search: false,
+            focus_first_row: false,
             active_tab: IndicatorTab::Indicators,
             sel_category: IndicatorCategory::BuiltIns,
             sel_indicator: None,
@@ -76,10 +95,11 @@ impl IndicatorDialog {
         self
     }
 
-    /// Open the dialog
+    /// Open the dialog with the search field focused
     pub fn open(&mut self) {
         self.is_open = true;
-        self.search_query.clear();
+        self.search.clear();
+        self.focus_search = true;
         self.sel_indicator = None;
         self.show_config = false;
     }
@@ -107,195 +127,118 @@ impl IndicatorDialog {
 
     /// Show the dialog with live theme colors
     pub fn show(&mut self, ctx: &egui::Context, theme: &Theme) -> IndicatorDialogAction {
-        let mut action = IndicatorDialogAction::None;
-
         if !self.is_open {
-            return action;
+            return IndicatorDialogAction::None;
         }
 
         // Update config from theme each frame for live color updates
         self.config = IndicatorDialogConfig::from_theme(theme);
+        let config = self.config.clone();
 
-        let mut is_open = self.is_open;
-
-        // fixed dialog size
-        let (dialog_width, dialog_height) = (self.config.width, self.config.height);
-
-        // Show modal overlay to block interactions behind the dialog
-        egui::Area::new(egui::Id::unique("indicator_dialog_overlay"))
-            .order(egui::Order::Foreground)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ctx, |ui| {
-                // Use content_rect for overlay (respects safe areas on iOS)
-                let screen = ui.ctx().content_rect();
-                ui.painter()
-                    .rect_filled(screen, 0.0, DESIGN_TOKENS.semantic.modal.overlay_bg);
-            });
-
-        // Corner radius - desktop style
-        let corner_radius = DESIGN_TOKENS.rounding.lg;
-        let frame = egui::Frame::window(&ctx.global_style())
-            .fill(self.config.bg_color)
-            .corner_radius(corner_radius as u8);
-
-        Window::new(centred_title(ctx, "Indicators"))
-            .open(&mut is_open)
-            .resizable(false)
-            .collapsible(false)
-            .order(egui::Order::Foreground)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(titled_window_size(
-                ctx,
-                &frame,
-                Vec2::new(dialog_width, dialog_height),
-            ))
-            .frame(frame)
-            .show(ctx, |ui| {
-                action = self.draw_content(ui);
-            });
-
-        self.is_open = is_open;
-        if !is_open {
-            action = IndicatorDialogAction::Close;
+        // Escape clears a search before it closes the dialog.
+        if !self.search.is_empty() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            self.search.clear();
         }
 
+        let mut is_open = true;
+        let action = Modal::new("indicator_dialog", "Indicators")
+            .width(config.width)
+            .height(config.height)
+            .show(ctx, &mut is_open, |ui| {
+                self.draw_content(ui, &config, theme)
+            })
+            .map_or(IndicatorDialogAction::None, |shown| shown.inner);
+
+        if !is_open {
+            self.close();
+            return IndicatorDialogAction::Close;
+        }
         action
     }
-    fn draw_content(&mut self, ui: &mut Ui) -> IndicatorDialogAction {
+
+    fn draw_content(
+        &mut self,
+        ui: &mut Ui,
+        config: &IndicatorDialogConfig,
+        theme: &Theme,
+    ) -> IndicatorDialogAction {
+        let search = self.search.show(ui).response;
+        if std::mem::take(&mut self.focus_search) {
+            search.request_focus();
+        }
+        self.focus_first_row = search.has_focus() && ui.input(|i| i.key_pressed(Key::ArrowDown));
+        ui.add_space(theme.spacing.lg);
+
+        TabBar::new(IndicatorTab::all(), &mut self.active_tab).show(ui);
+
+        // Profiles and patterns have no categories.
+        if self.active_tab != IndicatorTab::Indicators {
+            self.draw_empty_state(ui);
+            return IndicatorDialogAction::None;
+        }
+
         let mut action = IndicatorDialogAction::None;
-
-        // Search bar
-        ui.horizontal(|ui| {
-            ui.space_lg();
-            ui.label("Search:");
-            let _res = ui.add(
-                egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("Search indicators...")
-                    .desired_width(self.config.width - 50.0),
-            );
-        });
-
-        ui.space_lg();
-
-        // Tabs
-        ui.horizontal(|ui| {
-            for tab in IndicatorTab::all() {
-                let is_active = self.active_tab == *tab;
-                let response = ui.selectable_label(is_active, tab.name());
-                if response.clicked() {
-                    self.active_tab = *tab;
-                }
-            }
-        });
-
-        ui.space_sm();
-        ui.separator();
-
-        // Main content
-        ui.horizontal(|ui| {
-            // Left sidebar - categories
-            ui.vertical(|ui| {
-                ui.set_width(140.0);
-                ui.space_lg();
-
-                for category in IndicatorCategory::all() {
-                    let is_active = self.sel_category == *category;
-                    let response = self.draw_category_item(ui, *category, is_active);
-                    if response.clicked() {
-                        self.sel_category = *category;
+        // The sidebar runs before the list, so the list shows a category clicked this frame.
+        let category = Cell::new(self.sel_category);
+        SidebarLayout::new(SIDEBAR_WIDTH).show(
+            ui,
+            |ui| {
+                for item in IndicatorCategory::all() {
+                    if SidebarTab::new(item.name(), category.get() == *item)
+                        .icon(item.icon())
+                        .show(ui)
+                    {
+                        category.set(*item);
                     }
                 }
-            });
+            },
+            |ui| {
+                self.sel_category = category.get();
+                action = self.draw_results(ui, config, theme);
+            },
+        );
+        action
+    }
 
-            ui.separator();
-
-            // Middle - indicator list
+    /// The indicator list, with the configuration panel beside it once a row is selected.
+    fn draw_results(
+        &mut self,
+        ui: &mut Ui,
+        config: &IndicatorDialogConfig,
+        theme: &Theme,
+    ) -> IndicatorDialogAction {
+        // The list keeps its place in the layout when the panel opens, so it keeps its scroll
+        // offset and the focused row. A click on a row opens the panel from the next frame,
+        // so the list and the panel are never wider than the dialog.
+        let show_config = self.show_config;
+        let mut action = IndicatorDialogAction::None;
+        ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                let list_width = if self.show_config {
-                    self.config.width - 420.0 // More space for config panel
-                } else {
-                    ui.available_width()
-                };
-                ui.set_width(list_width);
-                action = self.draw_indicator_list(ui);
+                if show_config {
+                    ui.set_width(config.width - 420.0);
+                }
+                action = self.draw_indicator_list(ui, config, theme);
             });
-
-            // Right - configuration panel (if showing)
-            if self.show_config {
+            if show_config {
                 ui.separator();
                 ui.vertical(|ui| {
-                    ui.set_width(ui.available_width()); // The rest of the dialog
-                    if let Some(a) = self.draw_config_panel(ui) {
+                    if let Some(a) = self.draw_config_panel(ui, config, theme) {
                         action = a;
                     }
                 });
             }
         });
-
         action
-    }
-
-    fn draw_category_item(
-        &self,
-        ui: &mut Ui,
-        category: IndicatorCategory,
-        is_active: bool,
-    ) -> Response {
-        let desired_size = Vec2::new(
-            DESIGN_TOKENS.sizing.dialog.indicator_item_width,
-            DESIGN_TOKENS.sizing.button_md,
-        );
-        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
-
-        let bg_color = if is_active {
-            self.config.sel_color
-        } else if response.hovered() {
-            self.config.hover_color
-        } else {
-            Color32::TRANSPARENT
-        };
-
-        ui.painter()
-            .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg_color);
-
-        // Icon (render SVG)
-        let icon = category.icon();
-        let icon_rect = egui::Rect::from_center_size(
-            Pos2::new(
-                rect.min.x + DESIGN_TOKENS.spacing.xl + DESIGN_TOKENS.spacing.md,
-                rect.center().y,
-            ),
-            egui::Vec2::splat(DESIGN_TOKENS.sizing.icon_14),
-        );
-        icon.as_image(egui::Vec2::splat(DESIGN_TOKENS.sizing.icon_14))
-            .paint_at(ui, icon_rect);
-
-        // Name
-        ui.painter().text(
-            Pos2::new(rect.min.x + 32.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            category.name(),
-            egui::FontId::proportional(typography::MD),
-            if is_active {
-                DESIGN_TOKENS.semantic.ui.text_light
-            } else {
-                self.config.text_color
-            },
-        );
-
-        response
     }
 
     /// Whether `ind` belongs to the active tab and category and matches the search.
     fn matches(&self, ind: &IndicatorInfo) -> bool {
-        if !self.search_query.is_empty() {
-            let query = self.search_query.to_lowercase();
-            if !ind.name.to_lowercase().contains(&query)
-                && !ind.desc.to_lowercase().contains(&query)
-                && !ind.id.to_lowercase().contains(&query)
-            {
-                return false;
-            }
+        let searched = [&ind.name, &ind.desc, &ind.id]
+            .iter()
+            .any(|text| self.search.matches(text));
+        if !searched {
+            return false;
         }
 
         match (self.active_tab, self.sel_category) {
@@ -310,47 +253,71 @@ impl IndicatorDialog {
         }
     }
 
-    fn draw_indicator_list(&mut self, ui: &mut Ui) -> IndicatorDialogAction {
-        let mut action = IndicatorDialogAction::None;
-
+    fn draw_indicator_list(
+        &mut self,
+        ui: &mut Ui,
+        config: &IndicatorDialogConfig,
+        theme: &Theme,
+    ) -> IndicatorDialogAction {
         let filtered: Vec<IndicatorInfo> = self
             .indicators
             .iter()
             .filter(|ind| self.matches(ind))
             .cloned()
             .collect();
+        if filtered.is_empty() {
+            self.draw_empty_state(ui);
+            return IndicatorDialogAction::None;
+        }
 
-        let is_empty = filtered.is_empty();
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.space_lg();
-
-            for indicator in &filtered {
-                if let Some(a) = self.draw_indicator_item(ui, indicator) {
-                    action = a;
+        let mut action = IndicatorDialogAction::None;
+        // The scroll bar takes its own gutter, so it never covers the badges.
+        ui.spacing_mut().scroll.floating = false;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // Room above the first row and below the last for the focus ring.
+                let ring = DESIGN_TOKENS.spacing.xs;
+                ui.add_space(ring);
+                for (i, indicator) in filtered.iter().enumerate() {
+                    if let Some(a) = self.draw_indicator_item(ui, config, theme, indicator, i == 0)
+                    {
+                        action = a;
+                    }
                 }
-            }
-
-            if is_empty {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(DESIGN_TOKENS.spacing.section_lg);
-                    ui.label(RichText::new("No indicators found").color(self.config.muted_color));
-                });
-            }
-        });
-
+                ui.add_space(ring);
+            });
         action
+    }
+
+    /// The empty state for the active search, tab or category.
+    fn draw_empty_state(&self, ui: &mut Ui) {
+        let query = self.search.query();
+        let no_match = format!("No indicators match \"{query}\"");
+        let state = match (self.active_tab, self.sel_category) {
+            (IndicatorTab::Profiles, _) => EmptyState::new("No saved profiles"),
+            (IndicatorTab::Patterns, _) => EmptyState::new("Nothing here yet"),
+            _ if !query.is_empty() => EmptyState::new(&no_match)
+                .description("Check the spelling or try another category."),
+            (IndicatorTab::Indicators, IndicatorCategory::Favorites) => {
+                EmptyState::new("No favorites yet")
+                    .icon(&icons::STAR_EMPTY)
+                    .description("Star an indicator to keep it here.")
+            }
+            _ => EmptyState::new("Nothing here yet"),
+        };
+        state.fill_height().show(ui);
     }
 
     fn draw_indicator_item(
         &mut self,
         ui: &mut Ui,
+        config: &IndicatorDialogConfig,
+        theme: &Theme,
         indicator: &IndicatorInfo,
+        is_first: bool,
     ) -> Option<IndicatorDialogAction> {
-        let desired_size = Vec2::new(
-            ui.available_width() - DESIGN_TOKENS.spacing.xxl,
-            DESIGN_TOKENS.sizing.button_lg,
-        );
+        let desired_size = Vec2::new(ui.available_width(), DESIGN_TOKENS.sizing.button_lg);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
 
         let is_favorite = self.favorites.contains(&indicator.id);
@@ -358,112 +325,153 @@ impl IndicatorDialog {
             .sel_indicator
             .as_ref()
             .is_some_and(|s| s.id == indicator.id);
-
-        self.draw_item_background(ui, rect, &response, is_sel);
-        let star_res = self.draw_favorite_star(ui, rect, is_favorite);
-        self.draw_item_text(ui, rect, indicator);
-        Self::draw_item_badges(ui, rect, indicator);
-
-        self.handle_item_clicks(indicator, is_favorite, &response, &star_res, rect)
-    }
-
-    fn draw_item_background(&self, ui: &mut Ui, rect: Rect, response: &Response, is_sel: bool) {
-        if response.hovered() || is_sel {
-            let bg = if is_sel {
-                self.config.sel_color.gamma_multiply(0.5)
-            } else {
-                self.config.hover_color
-            };
-            ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg);
+        response.widget_info(|| {
+            WidgetInfo::selected(Role::Button, ui.is_enabled(), is_sel, &indicator.name)
+        });
+        if is_first && self.focus_first_row {
+            response.request_focus();
         }
-    }
+        if response.gained_focus() {
+            response.scroll_to_me(None);
+        }
 
-    fn draw_favorite_star(&self, ui: &mut Ui, rect: Rect, is_favorite: bool) -> Response {
-        let star_rect = Rect::from_min_size(
-            Pos2::new(rect.min.x + DESIGN_TOKENS.spacing.sm, rect.min.y),
-            Vec2::new(DESIGN_TOKENS.sizing.button_sm, rect.height()),
-        );
-        let star_res = ui.allocate_rect(star_rect, Sense::click());
-
-        let star_color = if is_favorite {
-            self.config.favorite_color
-        } else if star_res.hovered() {
-            ui.visuals().text_color()
+        let fill = if is_sel {
+            config.sel_color
+        } else if response.hovered() {
+            config.hover_color
         } else {
-            ui.visuals().weak_text_color()
+            Color32::TRANSPARENT
         };
+        ui.painter().rect_filled(rect, theme.radius.md, fill);
 
-        ui.painter().text(
-            star_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            if is_favorite { "*" } else { "o" },
-            egui::FontId::proportional(typography::MD),
-            star_color,
-        );
-        star_res
+        // Selected rows take the selection text colour, as egui's selected labels do.
+        let (text, secondary) = if is_sel {
+            let selected = ui.visuals().selection.stroke.color;
+            (selected, selected)
+        } else {
+            (config.text_color, config.muted_color)
+        };
+        let star_res = Self::draw_favorite_star(ui, config, rect, is_favorite);
+        let text_right = Self::draw_item_badges(ui, theme, rect, indicator, secondary);
+        Self::draw_item_text(ui, theme, rect, text_right, indicator, text, secondary);
+        draw_focus_ring(ui, &response);
+
+        let enter = ui.input(|i| i.key_pressed(Key::Enter));
+        self.handle_item_clicks(indicator, is_favorite, enter, &response, &star_res, rect)
     }
 
-    fn draw_item_text(&self, ui: &mut Ui, rect: Rect, indicator: &IndicatorInfo) {
-        ui.painter().text(
-            Pos2::new(
-                rect.min.x + DESIGN_TOKENS.sizing.button_md,
-                rect.min.y + DESIGN_TOKENS.spacing.xl,
-            ),
-            egui::Align2::LEFT_CENTER,
-            &indicator.name,
-            egui::FontId::proportional(typography::MD),
-            self.config.text_color,
-        );
-        ui.painter().text(
-            Pos2::new(
-                rect.min.x + DESIGN_TOKENS.sizing.button_md,
-                rect.min.y + DESIGN_TOKENS.sizing.button_sm,
-            ),
-            egui::Align2::LEFT_CENTER,
-            &indicator.desc,
-            egui::FontId::proportional(typography::XS),
-            self.config.muted_color,
-        );
+    /// The favourite toggle at the left of a row.
+    fn star_rect(row: Rect) -> Rect {
+        Rect::from_min_size(
+            Pos2::new(row.min.x + DESIGN_TOKENS.spacing.sm, row.min.y),
+            Vec2::new(DESIGN_TOKENS.sizing.button_sm, row.height()),
+        )
     }
 
-    fn draw_item_badges(ui: &mut Ui, rect: Rect, indicator: &IndicatorInfo) {
-        let mut badge_x = rect.right() - DESIGN_TOKENS.spacing.lg;
-        if indicator.is_premium {
-            badge_x -= DESIGN_TOKENS.sizing.button_lg;
-            ui.painter().text(
-                Pos2::new(badge_x, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                "PREMIUM",
-                egui::FontId::proportional(typography::XS),
-                DESIGN_TOKENS.semantic.extended.favorite_gold,
+    fn draw_favorite_star(
+        ui: &mut Ui,
+        config: &IndicatorDialogConfig,
+        rect: Rect,
+        is_favorite: bool,
+    ) -> Response {
+        let star_rect = Self::star_rect(rect);
+        let star_res = ui.allocate_rect(star_rect, Sense::click());
+        let tooltip = if is_favorite {
+            "Remove from favorites"
+        } else {
+            "Add to favorites"
+        };
+        star_res.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), tooltip));
+
+        let (icon, tint) = if is_favorite {
+            (&icons::STAR_FILLED, config.favorite_color)
+        } else if star_res.hovered() {
+            (&icons::STAR_EMPTY, ui.visuals().text_color())
+        } else {
+            (&icons::STAR_EMPTY, ui.visuals().weak_text_color())
+        };
+        let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
+        icon.as_image_tinted(size, tint)
+            .paint_at(ui, Rect::from_center_size(star_rect.center(), size));
+        draw_focus_ring(ui, &star_res);
+        star_res.on_hover_text(tooltip)
+    }
+
+    /// The name over the description, centred as a block on the row and cut off before `right`.
+    fn draw_item_text(
+        ui: &Ui,
+        theme: &Theme,
+        rect: Rect,
+        right: f32,
+        indicator: &IndicatorInfo,
+        text: Color32,
+        secondary: Color32,
+    ) {
+        let painter = ui.painter();
+        let x = rect.min.x + DESIGN_TOKENS.sizing.button_md;
+        let line = |s: &str, size: f32, color: Color32| {
+            let mut job =
+                LayoutJob::simple_singleline(s.to_owned(), FontId::proportional(size), color);
+            job.wrap = TextWrapping::truncate_at_width(right - x);
+            painter.layout_job(job)
+        };
+        let name = line(&indicator.name, theme.text.body, text);
+        let desc = line(&indicator.desc, theme.text.small, secondary);
+        let gap = theme.spacing.xs;
+        let top = rect.center().y - (name.size().y + gap + desc.size().y) / 2.0;
+        let desc_top = top + name.size().y + gap;
+        painter.galley(Pos2::new(x, top), name, text);
+        painter.galley(Pos2::new(x, desc_top), desc, secondary);
+    }
+
+    /// Outlined badges, right-aligned inside the row padding. Returns where the row text must end.
+    fn draw_item_badges(
+        ui: &Ui,
+        theme: &Theme,
+        rect: Rect,
+        indicator: &IndicatorInfo,
+        color: Color32,
+    ) -> f32 {
+        let painter = ui.painter();
+        let pad = Vec2::new(theme.spacing.sm, theme.spacing.xs);
+        let mut right = rect.right() - theme.spacing.lg;
+        for (shown, label) in [
+            (indicator.is_premium, "PREMIUM"),
+            (indicator.is_overlay, "OVERLAY"),
+        ] {
+            if !shown {
+                continue;
+            }
+            let galley = painter.layout_no_wrap(
+                label.to_owned(),
+                FontId::proportional(theme.text.small),
+                color,
             );
-        }
-        if indicator.is_overlay {
-            badge_x -= DESIGN_TOKENS.sizing.button_lg;
-            ui.painter().text(
-                Pos2::new(badge_x, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                "OVERLAY",
-                egui::FontId::proportional(typography::XS),
-                DESIGN_TOKENS.semantic.extended.info_light,
+            let badge = Align2::RIGHT_CENTER.align_size_within_rect(
+                galley.size() + 2.0 * pad,
+                Rect::from_x_y_ranges(rect.left()..=right, rect.y_range()),
             );
+            painter.rect_stroke(
+                badge,
+                theme.radius.sm,
+                Stroke::new(DESIGN_TOKENS.stroke.hairline, theme.ui.border),
+                StrokeKind::Inside,
+            );
+            painter.galley(badge.min + pad, galley, color);
+            right = badge.left() - theme.spacing.sm;
         }
+        right
     }
 
     fn handle_item_clicks(
         &mut self,
         indicator: &IndicatorInfo,
         is_favorite: bool,
+        enter: bool,
         response: &Response,
         star_res: &Response,
         rect: Rect,
     ) -> Option<IndicatorDialogAction> {
-        let star_rect = Rect::from_min_size(
-            Pos2::new(rect.min.x + DESIGN_TOKENS.spacing.sm, rect.min.y),
-            Vec2::new(DESIGN_TOKENS.sizing.button_sm, rect.height()),
-        );
-
         if star_res.clicked() {
             if is_favorite {
                 self.favorites.remove(&indicator.id);
@@ -473,89 +481,139 @@ impl IndicatorDialog {
             return Some(IndicatorDialogAction::ToggleFavorite(indicator.id.clone()));
         }
 
-        if response.clicked() && !star_rect.contains(response.hover_pos().unwrap_or_default()) {
-            self.sel_indicator = Some(indicator.clone());
-            self.show_config = true;
-            self.params = IndicatorParams::default();
+        let on_star = Self::star_rect(rect).contains(response.hover_pos().unwrap_or_default());
+        if response.clicked() && !on_star {
+            let is_sel = self
+                .sel_indicator
+                .as_ref()
+                .is_some_and(|s| s.id == indicator.id);
+            // Enter on the selected row adds it; a click on another row selects it with fresh
+            // parameters, and any other click keeps the parameters being edited.
+            if is_sel && enter {
+                return self.add_selected();
+            }
+            if !is_sel {
+                self.sel_indicator = Some(indicator.clone());
+                self.show_config = true;
+                self.params = IndicatorParams::default();
+            }
         }
         None
     }
 
-    fn draw_config_panel(&mut self, ui: &mut Ui) -> Option<IndicatorDialogAction> {
+    /// Add the selected indicator with its parameters and close the dialog.
+    fn add_selected(&mut self) -> Option<IndicatorDialogAction> {
+        let indicator_type = self.sel_indicator.as_ref()?.indicator_type?;
+        let params = self.params.clone();
+        self.close();
+        Some(IndicatorDialogAction::AddConfiguredIndicator(
+            ConfiguredIndicator {
+                indicator_type,
+                params,
+            },
+        ))
+    }
+
+    fn draw_config_panel(
+        &mut self,
+        ui: &mut Ui,
+        config: &IndicatorDialogConfig,
+        theme: &Theme,
+    ) -> Option<IndicatorDialogAction> {
         let indicator = self.sel_indicator.as_ref()?;
-        let indicator_name = indicator.name.clone();
+        ui.label(
+            RichText::new(&indicator.name)
+                .size(theme.text.title)
+                .strong(),
+        );
         let indicator_type = indicator.indicator_type;
+        ui.add_space(theme.spacing.lg);
 
-        self.draw_config_header(ui, &indicator_name);
-        self.draw_indicator_params(ui, indicator_type);
-        self.draw_config_buttons(ui, indicator_type)
+        FormGrid::new("indicator_params").show(ui, |ui| {
+            self.draw_indicator_params(ui, config, theme, indicator_type);
+        });
+
+        let (add, back) = DialogFooter::new("Add")
+            .secondary("Back")
+            .primary_enabled(indicator_type.is_some())
+            .show(ui);
+        if back {
+            self.sel_indicator = None;
+            self.show_config = false;
+        }
+        if add {
+            return self.add_selected();
+        }
+        None
     }
 
-    fn draw_config_header(&self, ui: &mut Ui, name: &str) {
-        ui.space_lg();
-        ui.strong_label(name);
-        ui.space_sm();
-        ui.separator();
-        ui.space_lg();
-    }
-
-    fn draw_indicator_params(&mut self, ui: &mut Ui, indicator_type: Option<IndicatorType>) {
-        let muted = self.config.muted_color;
-        let Some(ind_type) = indicator_type else {
-            ui.label(RichText::new("No params").color(muted));
-            return;
-        };
-
-        match ind_type {
-            IndicatorType::SMA | IndicatorType::EMA | IndicatorType::WMA | IndicatorType::VWMA => {
-                Self::draw_int_param(ui, "Period:", &mut self.params.period, 1..=500);
+    fn draw_indicator_params(
+        &mut self,
+        ui: &mut Ui,
+        config: &IndicatorDialogConfig,
+        theme: &Theme,
+        indicator_type: Option<IndicatorType>,
+    ) {
+        let p = &mut self.params;
+        match indicator_type {
+            Some(
+                IndicatorType::SMA
+                | IndicatorType::EMA
+                | IndicatorType::WMA
+                | IndicatorType::VWMA
+                | IndicatorType::KeltnerChannels
+                | IndicatorType::DonchianChannels
+                | IndicatorType::Aroon,
+            ) => {
+                Self::draw_int_param(ui, "Period", &mut p.period, 1..=500);
             }
-            IndicatorType::BollingerBands => {
-                Self::draw_int_param(ui, "Period:", &mut self.params.period, 1..=500);
-                Self::draw_float_param(ui, "Std Dev:", &mut self.params.bb_std_dev, 0.1..=5.0, 0.1);
+            Some(IndicatorType::BollingerBands) => {
+                Self::draw_int_param(ui, "Period", &mut p.period, 1..=500);
+                Self::draw_float_param(ui, "Std Dev", &mut p.bb_std_dev, 0.1..=5.0, 0.1);
             }
-            IndicatorType::RSI
-            | IndicatorType::CCI
-            | IndicatorType::ATR
-            | IndicatorType::ADX
-            | IndicatorType::MFI
-            | IndicatorType::WilliamsR
-            | IndicatorType::ROC
-            | IndicatorType::Momentum
-            | IndicatorType::ChaikinMoneyFlow => {
-                Self::draw_int_param(ui, "Period:", &mut self.params.period, 2..=500);
+            Some(
+                IndicatorType::RSI
+                | IndicatorType::CCI
+                | IndicatorType::ATR
+                | IndicatorType::ADX
+                | IndicatorType::MFI
+                | IndicatorType::WilliamsR
+                | IndicatorType::ROC
+                | IndicatorType::Momentum
+                | IndicatorType::ChaikinMoneyFlow,
+            ) => {
+                Self::draw_int_param(ui, "Period", &mut p.period, 2..=500);
             }
-            IndicatorType::MACD => {
-                Self::draw_int_param(ui, "Fast:", &mut self.params.macd_fast, 1..=500);
-                Self::draw_int_param(ui, "Slow:", &mut self.params.macd_slow, 1..=500);
-                Self::draw_int_param(ui, "Signal:", &mut self.params.macd_signal, 1..=500);
+            Some(IndicatorType::MACD) => {
+                Self::draw_int_param(ui, "Fast", &mut p.macd_fast, 1..=500);
+                Self::draw_int_param(ui, "Slow", &mut p.macd_slow, 1..=500);
+                Self::draw_int_param(ui, "Signal", &mut p.macd_signal, 1..=500);
             }
-            IndicatorType::Stochastic => {
-                Self::draw_int_param(ui, "%K Period:", &mut self.params.stoch_k, 1..=500);
-                Self::draw_int_param(ui, "%D Period:", &mut self.params.stoch_d, 1..=500);
+            Some(IndicatorType::Stochastic) => {
+                Self::draw_int_param(ui, "%K Period", &mut p.stoch_k, 1..=500);
+                Self::draw_int_param(ui, "%D Period", &mut p.stoch_d, 1..=500);
             }
-            IndicatorType::SuperTrend => {
-                Self::draw_int_param(ui, "Period:", &mut self.params.period, 1..=500);
+            Some(IndicatorType::SuperTrend) => {
+                Self::draw_int_param(ui, "Period", &mut p.period, 1..=500);
                 Self::draw_float_param(
                     ui,
-                    "Multiplier:",
-                    &mut self.params.supertrend_multiplier,
+                    "Multiplier",
+                    &mut p.supertrend_multiplier,
                     0.1..=10.0,
                     0.1,
                 );
             }
-            IndicatorType::KeltnerChannels
-            | IndicatorType::DonchianChannels
-            | IndicatorType::Aroon => {
-                Self::draw_int_param(ui, "Period:", &mut self.params.period, 1..=500);
+            Some(IndicatorType::IchimokuCloud) => {
+                Self::draw_int_param(ui, "Tenkan", &mut p.ichimoku_tenkan, 1..=500);
+                Self::draw_int_param(ui, "Kijun", &mut p.ichimoku_kijun, 1..=500);
+                Self::draw_int_param(ui, "Senkou", &mut p.ichimoku_senkou, 1..=500);
             }
-            IndicatorType::IchimokuCloud => {
-                Self::draw_int_param(ui, "Tenkan:", &mut self.params.ichimoku_tenkan, 1..=500);
-                Self::draw_int_param(ui, "Kijun:", &mut self.params.ichimoku_kijun, 1..=500);
-                Self::draw_int_param(ui, "Senkou:", &mut self.params.ichimoku_senkou, 1..=500);
-            }
-            _ => {
-                ui.label(RichText::new("No params").color(muted));
+            None | Some(IndicatorType::OBV | IndicatorType::VWAP | IndicatorType::ParabolicSAR) => {
+                ui.label(
+                    RichText::new("This indicator has no settings.")
+                        .size(theme.text.small)
+                        .color(config.muted_color),
+                );
             }
         }
     }
@@ -566,10 +624,9 @@ impl IndicatorDialog {
         value: &mut usize,
         range: std::ops::RangeInclusive<usize>,
     ) {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            ui.add(egui::DragValue::new(value).range(range));
-        });
+        ui.label(label);
+        ui.add(egui::DragValue::new(value).range(range));
+        ui.end_row();
     }
 
     fn draw_float_param(
@@ -579,45 +636,9 @@ impl IndicatorDialog {
         range: std::ops::RangeInclusive<f64>,
         speed: f64,
     ) {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            ui.add(egui::DragValue::new(value).range(range).speed(speed));
-        });
-    }
-
-    fn draw_config_buttons(
-        &mut self,
-        ui: &mut Ui,
-        indicator_type: Option<IndicatorType>,
-    ) -> Option<IndicatorDialogAction> {
-        ui.space_xxl();
-        ui.separator();
-        ui.space_lg();
-
-        let mut result = None;
-        ui.horizontal(|ui| {
-            if ui.button("Add").clicked() {
-                // Return configured indicator with type and params
-                if let Some(ind_type) = indicator_type {
-                    result = Some(IndicatorDialogAction::AddConfiguredIndicator(
-                        super::data::ConfiguredIndicator {
-                            indicator_type: ind_type,
-                            params: self.params.clone(),
-                        },
-                    ));
-                }
-            }
-            if ui.button("Cancel").clicked() {
-                result = Some(IndicatorDialogAction::None);
-            }
-        });
-
-        if result.is_some() {
-            self.is_open = false;
-            self.sel_indicator = None;
-            self.show_config = false;
-        }
-        result
+        ui.label(label);
+        ui.add(egui::DragValue::new(value).range(range).speed(speed));
+        ui.end_row();
     }
 
     /// Create an indicator instance from current params
@@ -711,6 +732,37 @@ mod tests {
             let expected = if all { dialog.indicators.len() } else { 0 };
             assert_eq!(listed, expected, "{tab:?} / {category:?}");
         }
+    }
+
+    #[test]
+    fn dialog_follows_the_window_when_it_shrinks() {
+        let ctx = egui::Context::default();
+        let theme = Theme::dark();
+        let mut dialog = IndicatorDialog::new();
+        dialog.open();
+        let mut frame = |height: f32| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, height))),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                dialog.show(ui.ctx(), &theme);
+            })
+            .drop_without_applying_deltas();
+            ctx.memory(|m| m.area_rect(egui::Id::unique("indicator_dialog")))
+                .expect("the dialog is shown")
+        };
+        for _ in 0..3 {
+            frame(900.0);
+        }
+        let mut shown = frame(500.0);
+        for _ in 0..3 {
+            shown = frame(500.0);
+        }
+        assert!(
+            shown.top() >= 0.0 && shown.bottom() <= 500.0,
+            "the dialog spans {shown:?} in a 500 px window"
+        );
     }
 
     #[test]
