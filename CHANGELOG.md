@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Object tree shortcuts leave focused widgets and open popups alone, and consume handled keys so a chart cannot also act on them. ([#527](https://github.com/userFRM/egui-charts/issues/527))
+
 - The grouped object tree shows data sources above its groups and honours the Data Source filter, so the main series agrees with the flat view and object count. ([#526](https://github.com/userFRM/egui-charts/issues/526))
 
 - The demo keeps the right rail selection in step with the open panel, including panels opened from menus and the shortcuts dialog closing. `WidgetBar::active_icon` documents the host synchronisation contract. ([#528](https://github.com/userFRM/egui-charts/issues/528))
