@@ -505,21 +505,22 @@ mod tests {
 
     #[test]
     fn visible_clock_schedules_the_next_whole_second() {
+        use chrono::Timelike;
         use std::time::Duration;
         for visible in [true, false] {
             let ctx = egui::Context::default();
             let mut toolbar = TimeframeToolbar::new();
             toolbar.set_control_visible(Control::TimeZone, visible);
             for frame in 0..5 {
-                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                     toolbar.show(ui);
                 });
+                output.textures_delta.clear();
                 if frame == 4 {
                     let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
-                    let expected = Duration::from_nanos(
-                        1_000_000_000
-                            - u64::from(toolbar.state.curr_time.unwrap().timestamp_subsec_nanos()),
-                    );
+                    let now = toolbar.state.curr_time.unwrap();
+                    let boundary = now.with_nanosecond(0).unwrap() + chrono::Duration::seconds(1);
+                    let expected = (boundary - now).to_std().unwrap();
                     assert_eq!(delay, if visible { expected } else { Duration::MAX });
                 }
                 output.drop_without_applying_deltas();
@@ -536,10 +537,14 @@ mod tests {
                 let mut toolbar =
                     TimeframeToolbar::with_config(TimeframeToolbarConfig::from_theme(&theme));
                 toolbar.state.date_picker_open = active;
-                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut calendar = egui::Rect::NOTHING;
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                     toolbar.text_btn(ui, "ADJ", "Dividend adjustment", active);
-                    toolbar.icon_button_calendar(ui, "Go to");
+                    calendar = toolbar.icon_button_calendar(ui, "Go to").rect;
                 });
+                output.textures_delta.clear();
+                assert_eq!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Rect(rect) if rect.rect == calendar && rect.fill == toolbar.config.active_bg)), active);
                 let label = output
                     .shapes
                     .iter()
