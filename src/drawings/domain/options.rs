@@ -7,6 +7,7 @@
 //! the volume profile, regression trend and position drawings
 //! ([`VolumeProfileConfig`], [`RegressionTrendConfig`], [`PositionSize`]).
 
+pub use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ops::RangeInclusive;
@@ -35,33 +36,6 @@ pub enum HandlePos {
     /// Indexed anchor point for multi-point drawings (e.g., `Point(2)` is the
     /// third point in an XABCD pattern).
     Point(usize),
-}
-
-/// Line style for drawing strokes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
-pub enum LineStyle {
-    #[default]
-    Solid,
-    Dashed,
-    Dotted,
-}
-
-impl LineStyle {
-    /// Get the dash pattern for rendering
-    /// Returns (dash_len, gap_len) or None for solid
-    #[inline]
-    pub fn dash_pattern(&self) -> Option<(f32, f32)> {
-        match self {
-            LineStyle::Solid => None,
-            LineStyle::Dashed => Some((8.0, 4.0)),
-            LineStyle::Dotted => Some((2.0, 3.0)),
-        }
-    }
-
-    /// All available line styles
-    pub fn all() -> &'static [LineStyle] {
-        &[LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted]
-    }
 }
 
 /// Arrow/arrowhead style for line drawings
@@ -537,13 +511,6 @@ mod tests {
         for deviations in [0.0, -1.0, 10.5, f64::INFINITY, f64::NAN] {
             assert!(RegressionTrendConfig::new(deviations).is_none());
         }
-    }
-
-    #[test]
-    fn test_line_style_dash_pattern() {
-        assert!(LineStyle::Solid.dash_pattern().is_none());
-        assert!(LineStyle::Dashed.dash_pattern().is_some());
-        assert!(LineStyle::Dotted.dash_pattern().is_some());
     }
 
     #[test]

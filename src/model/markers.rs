@@ -172,3 +172,30 @@ impl Marker {
             .with_text(text)
     }
 }
+
+/// Line style of drawings and price lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
+pub enum LineStyle {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+impl LineStyle {
+    /// Get the dash pattern for rendering
+    /// Returns (dash_len, gap_len) or None for solid
+    #[inline]
+    pub fn dash_pattern(&self) -> Option<(f32, f32)> {
+        match self {
+            LineStyle::Solid => None,
+            LineStyle::Dashed => Some((8.0, 4.0)),
+            LineStyle::Dotted => Some((2.0, 3.0)),
+        }
+    }
+
+    /// All available line styles
+    pub fn all() -> &'static [LineStyle] {
+        &[LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted]
+    }
+}
