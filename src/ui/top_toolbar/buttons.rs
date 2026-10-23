@@ -72,7 +72,7 @@ impl<'a> ToolbarIconButton<'a> {
         }
 
         response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.tooltip));
-        response.on_hover_text(self.tooltip)
+        toolbar_tooltip(response, self.tooltip, None)
     }
 }
 
@@ -163,7 +163,19 @@ impl<'a> IconTextButton<'a> {
         }
 
         response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.label));
-        response.on_hover_text(self.label)
+        toolbar_tooltip(
+            response,
+            if self.label == "Alert" {
+                "Create alert"
+            } else {
+                self.label
+            },
+            match self.label {
+                "Indicators" => crate::config::KeyboardAction::OpenIndicatorSearch.shortcut(),
+                "Alert" => crate::config::KeyboardAction::CreateAlert.shortcut(),
+                _ => None,
+            },
+        )
     }
 }
 
@@ -229,7 +241,7 @@ impl TextButton {
         );
 
         if let Some(tooltip) = self.tooltip {
-            response.on_hover_text(tooltip)
+            toolbar_tooltip(response, tooltip, None)
         } else {
             response
         }
@@ -332,7 +344,7 @@ impl<'a> TextIconButton<'a> {
         }
 
         response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.tooltip));
-        response.on_hover_text(self.tooltip)
+        toolbar_tooltip(response, self.tooltip, None)
     }
 }
 
@@ -450,6 +462,74 @@ impl Trigger<'_> {
         }
 
         response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &self.name));
-        response
+        toolbar_tooltip(response, &self.name, None)
     }
+}
+
+/// Attach a compact toolbar tooltip, with optional platform-specific shortcut chips.
+///
+/// Uses the normal hover delay and stays below the trigger while there is room.
+pub fn toolbar_tooltip(
+    response: Response,
+    text: &str,
+    shortcut: Option<egui::KeyboardShortcut>,
+) -> Response {
+    let fill = Color32::from_gray(28);
+    egui::Popup::from_response(&response)
+        .id(response.id.with("toolbar_tooltip"))
+        .kind(egui::PopupKind::Tooltip)
+        .align(egui::RectAlign::BOTTOM)
+        .gap(10.0)
+        .sense(Sense::hover())
+        .interactable(false)
+        .open(response.enabled() && egui::Tooltip::should_show_tooltip(&response, false))
+        .frame(
+            egui::Frame::new()
+                .fill(fill)
+                .corner_radius(3)
+                .inner_margin(egui::Margin::symmetric(8, 4)),
+        )
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(text)
+                        .size(12.0)
+                        .color(Color32::from_gray(240)),
+                );
+                if let Some(shortcut) = shortcut {
+                    ui.add_space(4.0);
+                    for (index, key) in ui.ctx().format_shortcut(&shortcut).split('+').enumerate() {
+                        if index > 0 {
+                            ui.label(egui::RichText::new("+").size(12.0).color(Color32::WHITE));
+                        }
+                        egui::Frame::new()
+                            .fill(Color32::from_gray(80))
+                            .corner_radius(2)
+                            .inner_margin(egui::Margin::symmetric(4, 0))
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(key).size(12.0).color(Color32::WHITE));
+                            });
+                    }
+                }
+            });
+            let x = response
+                .rect
+                .center()
+                .x
+                .clamp(ui.min_rect().left(), ui.min_rect().right());
+            let y = ui.min_rect().top() - 4.0;
+            ui.painter()
+                .with_clip_rect(egui::Rect::EVERYTHING)
+                .add(egui::Shape::convex_polygon(
+                    vec![
+                        egui::pos2(x - 5.0, y),
+                        egui::pos2(x, y - 5.0),
+                        egui::pos2(x + 5.0, y),
+                    ],
+                    fill,
+                    egui::Stroke::NONE,
+                ));
+        });
+    response
 }

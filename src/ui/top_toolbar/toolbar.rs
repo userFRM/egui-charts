@@ -120,7 +120,7 @@ impl Slot {
             ),
             S::Compare => (
                 &embedded_icons::COMPARE_ADD,
-                "Compare or Add Symbol",
+                "Compare symbols",
                 A::OpenCompare,
             ),
             S::Indicators => (&embedded_icons::INDICATORS, "Indicators", A::OpenIndicators),
@@ -140,10 +140,10 @@ impl Slot {
             ),
             S::Layouts => (
                 &embedded_icons::LAYOUT_SINGLE,
-                "Manage Layouts",
+                "Chart layout",
                 A::Layout(LayoutAction::OpenMenu),
             ),
-            S::Save => (&embedded_icons::DATABASE, "Save Chart", A::Save),
+            S::Save => (&embedded_icons::DATABASE, "Save chart", A::Save),
             S::QuickSearch => (
                 &embedded_icons::QUICK_SEARCH,
                 "Quick Search",
@@ -155,11 +155,7 @@ impl Slot {
                 "Fullscreen",
                 A::ToggleFullscreen,
             ),
-            S::Screenshot => (
-                &embedded_icons::CAMERA,
-                "Take Screenshot",
-                A::TakeScreenshot,
-            ),
+            S::Screenshot => (&embedded_icons::CAMERA, "Snapshot", A::TakeScreenshot),
             S::Interval | S::ChartType => return None,
         })
     }
@@ -535,14 +531,14 @@ impl TopToolbar {
         Trigger {
             icon: Some(&embedded_icons::CHART_CANDLES),
             label: symbol.to_owned(),
-            name: format!("Symbol search: {symbol}"),
+            name: "Symbol search".to_owned(),
             min_width: 128.0,
             filled: true,
         }
     }
 
     fn save_button(config: &TopToolbarConfig) -> TextIconButton<'static> {
-        TextIconButton::new("Save", &embedded_icons::CHEVRON_DOWN, "Save Chart", config)
+        TextIconButton::new("Save", &embedded_icons::CHEVRON_DOWN, "Save chart", config)
     }
 }
 

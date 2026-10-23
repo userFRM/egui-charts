@@ -148,7 +148,7 @@ impl ChartTypeSelector {
         Trigger {
             icon: Some(self.current.icon()),
             label: String::new(),
-            name: format!("Chart type: {label}"),
+            name: label.to_owned(),
             min_width: self.config.btn_width.max(40.0),
             filled: false,
         }

@@ -393,7 +393,7 @@ impl TimeframeSelector {
         let label = self.current.display();
         Trigger {
             icon: None,
-            name: format!("Interval: {label}"),
+            name: self.current.display_long(),
             label,
             min_width: self.config.btn_width.max(44.0),
             filled: false,
