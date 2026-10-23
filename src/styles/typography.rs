@@ -46,6 +46,24 @@ pub const HERO: f32 = 22.0;
 // Semantic Aliases
 // =============================================================================
 
+/// In-pane chart title font size
+pub const CHART_TITLE: f32 = XXL;
+
+/// Toolbar label font size
+pub const TOOLBAR: f32 = LG;
+
+/// OHLC and supplementary legend row font size
+pub const OHLC: f32 = MD;
+
+/// Price and time axis label font size
+pub const AXIS: f32 = SM_MD;
+
+/// Price tag font size
+pub const PRICE_TAG: f32 = SM_MD;
+
+/// Bottom range and status bar font size
+pub const BOTTOM_BAR: f32 = LG;
+
 /// Button label font size
 pub const BUTTON: f32 = MD;
 
