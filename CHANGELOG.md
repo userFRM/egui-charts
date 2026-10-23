@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- `Chart::visible_bars` now applies the requested initial bar spacing on the first frame, matching `set_visible_bars`.
+
 ### Added
 
 - `Drawing::pitchfork` stores per-level colour, visibility and line style, with mirrored levels at 0, 0.5, 1 and 1.5 and filled bands by default. Hidden levels remove both adjacent bands. Old drawings use the defaults. Parallel channels support `channel_midline`, `fill_color`, `extend_left` and `extend_right`, with selection following the lines and filled area. Migration: `Drawing` struct literals set `pitchfork` and `channel_midline`, or use `Drawing::new`.
