@@ -81,8 +81,8 @@ impl Drawing {
         self.draw_fork(painter, chart_rect);
     }
 
-    /// The pitchfork's lines as drawn: the median and its parallels to the right
-    /// edge of `rect`, then the lines between anchors the tool draws. `None`
+    /// The pitchfork's median and parallels towards the pane edge in their
+    /// direction, then the construction links. `None`
     /// below three anchors.
     fn pitchfork_base_lines(&self, rect: Rect) -> Option<Vec<[Pos2; 2]>> {
         let &[p0, p1, p2, ..] = self.points.as_slice() else {
@@ -317,15 +317,9 @@ pub(super) fn pitchfan_lines(
         .collect()
 }
 
-/// A pitchfork's median from `origin` through `through` to the right edge of
-/// `rect`, and its parallels from `p1` and `p2`, as long.
-pub(super) fn fork_lines(
-    origin: Pos2,
-    through: Pos2,
-    p1: Pos2,
-    p2: Pos2,
-    rect: Rect,
-) -> [[Pos2; 2]; 3] {
+/// A pitchfork's median from `origin` through `through`, extended towards the
+/// pane edge, and its parallels from `p1` and `p2`.
+fn fork_lines(origin: Pos2, through: Pos2, p1: Pos2, p2: Pos2, rect: Rect) -> [[Pos2; 2]; 3] {
     let direction = through - origin;
     [origin, p1, p2].map(|start| [start, super::lines::ray_end(start, start + direction, rect)])
 }

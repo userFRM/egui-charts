@@ -392,6 +392,25 @@ impl DrawingStorage {
                         if let Some(field) = drawing.non_finite_field() {
                             return Err(serde::de::Error::custom(format!("non-finite {field}")));
                         }
+                        // Earlier placements stored fewer anchors. Keep their endpoints and
+                        // supply editable controls before checking the current construction.
+                        use DrawingToolType as T;
+                        match (tool, drawing.points.as_slice()) {
+                            (T::PriceNote | T::ArrowMarker, [a]) => {
+                                drawing.points.push(a.clone());
+                            }
+                            (T::RotatedRect, [a, b]) => {
+                                drawing.points =
+                                    vec![a.clone(), StoredCoord::new(b.ts_ms, a.price), b.clone()];
+                            }
+                            (T::DoubleCurve, [a, b]) => {
+                                drawing.points = vec![a.clone(), a.clone(), b.clone(), b.clone()];
+                            }
+                            (T::FibonacciWedge | T::Pitchfan, [a, b]) => {
+                                drawing.points.push(StoredCoord::new(b.ts_ms, a.price));
+                            }
+                            _ => {}
+                        }
                         if let Some((needed, anchors)) = drawing.missing_anchors() {
                             return Err(serde::de::Error::custom(format!(
                                 "{tool} needs {needed} anchors, has {anchors}"
@@ -839,6 +858,36 @@ mod tests {
                 format!("{:?}", restore(stored, want.id)),
                 format!("{want:?}")
             );
+        }
+
+        // Settings from a file saved before the new fields and placement counts.
+        for (tool, count, restored_count) in [
+            (DrawingToolType::PriceNote, 1, 2),
+            (DrawingToolType::ArrowMarker, 1, 2),
+            (DrawingToolType::RotatedRect, 2, 3),
+            (DrawingToolType::DoubleCurve, 2, 4),
+            (DrawingToolType::FibonacciWedge, 2, 3),
+            (DrawingToolType::Pitchfan, 2, 3),
+            (DrawingToolType::BarsPattern, 2, 2),
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            records[0]["drawing"]["tool_type"] = serde_json::to_value(tool).unwrap();
+            records[0]["points"].as_array_mut().unwrap().truncate(count);
+            let original = records[0]["points"].as_array().unwrap().clone();
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            let points = &loaded.drawings[0].points;
+            assert_eq!(points.len(), restored_count, "{tool:?}");
+            let points = serde_json::to_value(points).unwrap();
+            for anchor in original {
+                assert!(points.as_array().unwrap().contains(&anchor), "{tool:?}");
+            }
+            let (again, skipped) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(again.drawings[0].points.len(), restored_count);
         }
 
         let mut first = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);

@@ -272,7 +272,10 @@ impl Drawing {
 
         for (i, window) in zone_positions.windows(2).enumerate() {
             if i % 2 == 0 {
-                let zone_rect = Rect::from_x_y_ranges(window[0]..=window[1], chart_rect.y_range());
+                let zone_rect = Rect::from_x_y_ranges(
+                    window[0].min(window[1])..=window[0].max(window[1]),
+                    chart_rect.y_range(),
+                );
                 painter.rect_filled(zone_rect, 0.0, fill_color);
             }
         }
@@ -637,6 +640,7 @@ impl Drawing {
         let dx = p2.x - p1.x;
         let fib_ratios = [0.0, 0.382, 0.5, 0.618, 1.0, 1.618, 2.618];
 
+        let mut labels = Vec::<Rect>::new();
         for &ratio in &fib_ratios {
             let origin = self.points.get(2).unwrap_or(&p1);
             let x = origin.x + dx * ratio;
@@ -645,13 +649,19 @@ impl Drawing {
                 chart_rect.y_range(),
                 Stroke::new(stroke::HAIRLINE, color),
             );
-            painter.text(
-                Pos2::new(x, chart_rect.min.y + typography::XS),
-                egui::Align2::CENTER_TOP,
+            let galley = painter.layout_no_wrap(
                 format!("{:.1}%", ratio * 100.0),
                 egui::FontId::proportional(typography::XS),
                 color,
             );
+            let rect = egui::Align2::CENTER_TOP.anchor_size(
+                Pos2::new(x, chart_rect.min.y + typography::XS),
+                galley.size(),
+            );
+            if !labels.iter().any(|r| r.intersects(rect.expand(2.0))) {
+                painter.galley(rect.min, galley, color);
+                labels.push(rect);
+            }
         }
     }
 }
@@ -935,6 +945,20 @@ mod tests {
         if got != want {
             wrong.push(format!("time zones: got {got:?}, want {want:?}"));
         }
+
+        // A leftward zone still fills a non-empty rectangle between consecutive times.
+        let mut zones = Drawing::new(0, crate::drawings::DrawingToolType::FibonacciTimeZones);
+        zones.points = vec![Pos2::new(200.0, 100.0), Pos2::new(190.0, 100.0)];
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            zones.render_fibonacci_time_zones(ui.painter(), rect);
+        });
+        let filled = output.shapes.iter().any(|s| {
+            matches!(&s.shape,
+            egui::Shape::Rect(r) if r.rect.min.x == 190.0 && r.rect.max.x == 200.0
+                && r.rect.height() == rect.height())
+        });
+        output.drop_without_applying_deltas();
+        assert!(filled);
 
         // Golden spiral through the second anchor, its radius growing by phi
         // (1.618034) every quarter turn.

@@ -27,8 +27,8 @@ fn gann_fan_line_y(start: Pos2, end: Pos2, ratio: f32, x: f32) -> f32 {
 /// moves N price units per M time units.
 pub(super) const GANN_FAN_RATIOS: [f32; 9] = [8.0, 4.0, 3.0, 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 0.125];
 
-/// The Gann fan's lines from `start` to the right edge of `rect`, then the
-/// line to `end`.
+/// The Gann fan's lines from `start` towards the edge on `end`'s side, then
+/// the line to `end`.
 pub(super) fn gann_fan_lines(start: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2]> {
     let x = if end.x < start.x {
         rect.min.x
@@ -42,7 +42,7 @@ pub(super) fn gann_fan_lines(start: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2
         .collect()
 }
 
-/// The corner opposite `start` of a Gann square or fixed Gann box: towards
+/// The corner opposite `start` of a flexible Gann square: towards
 /// `end`, as wide and high as the larger of the two distances between them.
 pub(super) fn gann_square_corner(start: Pos2, end: Pos2) -> Pos2 {
     let size = (end.x - start.x).abs().max((end.y - start.y).abs());
@@ -140,6 +140,7 @@ impl Drawing {
             ("1×8", DESIGN_TOKENS.semantic.extended.bullish), // Strongest support
         ];
 
+        let mut labels = Vec::<Rect>::new();
         for (angle_ratio, (label, angle_color)) in GANN_FAN_RATIOS.iter().zip(&styles) {
             let end_y = gann_fan_line_y(start, end, *angle_ratio, edge);
 
@@ -186,6 +187,10 @@ impl Drawing {
                         ),
                         egui::Vec2::new(gann_label_width, gann_label_height),
                     );
+                    if labels.iter().any(|r| r.intersects(label_rect.expand(2.0))) {
+                        continue;
+                    }
+                    labels.push(label_rect);
                     painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
                     painter.text(
                         label_rect.center(),
@@ -419,6 +424,7 @@ impl Drawing {
             .chart_axis_bg
             .gamma_multiply(0.8);
 
+        let mut labels = Vec::<Rect>::new();
         for level in self
             .gann
             .clone()
@@ -429,11 +435,12 @@ impl Drawing {
         {
             let y = p1.y + (p2.y - p1.y) * level;
             let label_pos = Pos2::new(rect.min.x - 25.0, y);
-            painter.rect_filled(
-                Rect::from_center_size(label_pos, egui::vec2(32.0, typography::MD)),
-                DESIGN_TOKENS.rounding.sm,
-                label_bg,
-            );
+            let label_rect = Rect::from_center_size(label_pos, egui::vec2(32.0, typography::MD));
+            if labels.iter().any(|r| r.intersects(label_rect.expand(2.0))) {
+                continue;
+            }
+            labels.push(label_rect);
+            painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             let percentage = format!("{:.2}", level * 100.0);
             painter.text(
                 label_pos,

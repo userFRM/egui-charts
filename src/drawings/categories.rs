@@ -112,8 +112,8 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
                 "GANN",
                 vec![
                     DrawingToolType::GannBox,
-                    DrawingToolType::GannFixed,
                     DrawingToolType::GannSquare,
+                    DrawingToolType::GannFixed,
                     DrawingToolType::GannFan,
                 ],
             ),
@@ -208,7 +208,7 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
             ),
         ],
         "Text/Annotations" => vec![(
-            "TEXT & TEXT",
+            "TEXT & NOTES",
             vec![
                 DrawingToolType::TextLabel,
                 DrawingToolType::AnchoredText,

@@ -138,11 +138,7 @@ impl DrawingToolType {
     /// geometry anchors; the other multi-point tools can draw partial paths.
     pub(crate) fn anchors_needed(&self) -> usize {
         match self {
-            Self::ParallelChannel
-            | Self::RotatedRect
-            | Self::FibonacciWedge
-            | Self::Pitchfan
-            | Self::BarsPattern => 3,
+            Self::ParallelChannel | Self::RotatedRect | Self::FibonacciWedge | Self::Pitchfan => 3,
             Self::DoubleCurve => 4,
             Self::Triangle
             | Self::FlatTopBottom

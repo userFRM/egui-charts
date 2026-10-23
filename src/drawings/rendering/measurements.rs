@@ -156,8 +156,11 @@ impl Drawing {
 
             // Draw background (solid color matching direction: red for down, blue for up)
             let padding = egui::vec2(8.0, 6.0);
-            let box_rect =
-                egui::Rect::from_min_size(Pos2::new(box_x, box_y), text_size + padding * 2.0);
+            let size = text_size + padding * 2.0;
+            let clip = painter.clip_rect();
+            let pos = Pos2::new(box_x, box_y).clamp(clip.min, clip.max - size.min(clip.size()));
+            let (box_x, box_y) = (pos.x, pos.y);
+            let box_rect = egui::Rect::from_min_size(pos, size);
             painter.rect_filled(box_rect, DESIGN_TOKENS.rounding.md, base_color);
 
             // Draw text with padding
@@ -399,7 +402,10 @@ impl Drawing {
         };
 
         let padding = egui::vec2(8.0, 6.0);
-        let box_rect = Rect::from_min_size(box_pos, text_size + padding * 2.0);
+        let size = text_size + padding * 2.0;
+        let clip = painter.clip_rect();
+        let box_pos = box_pos.clamp(clip.min, clip.max - size.min(clip.size()));
+        let box_rect = Rect::from_min_size(box_pos, size);
         painter.rect_filled(box_rect, DESIGN_TOKENS.rounding.md, bg_color);
 
         // Draw text

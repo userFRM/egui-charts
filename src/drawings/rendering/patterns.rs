@@ -129,8 +129,7 @@ impl Drawing {
         [from, to]: [usize; 2],
         ratio: Option<f64>,
     ) {
-        let (Some(&a), Some(&b), Some(ratio)) = (self.points.get(from), self.points.get(to), ratio)
-        else {
+        let (Some(&a), Some(&b)) = (self.points.get(from), self.points.get(to)) else {
             return;
         };
         super::utils::draw_dashed_line(
@@ -141,13 +140,26 @@ impl Drawing {
             DESIGN_TOKENS.spacing.sm,
             DESIGN_TOKENS.spacing.xs + DESIGN_TOKENS.spacing.hairline,
         );
-        painter.text(
-            a.lerp(b, 0.5),
-            egui::Align2::CENTER_BOTTOM,
+        let Some(ratio) = ratio else {
+            return;
+        };
+        let galley = painter.layout_no_wrap(
             format!("{ratio:.3}"),
             egui::FontId::proportional(typography::XS),
             color,
         );
+        let at = |t| egui::Align2::CENTER_BOTTOM.anchor_size(a.lerp(b, t), galley.size());
+        let rect = [0.5, 0.4, 0.6, 0.3, 0.7]
+            .into_iter()
+            .map(at)
+            .find(|r| {
+                !self
+                    .points
+                    .iter()
+                    .any(|p| r.intersects(Rect::from_center_size(*p, egui::vec2(24.0, 48.0))))
+            })
+            .unwrap_or_else(|| at(0.5));
+        painter.galley(rect.min, galley, color);
     }
 
     /// Render Cypher Pattern - Similar to XABCD with Cypher-specific ratios
@@ -826,7 +838,7 @@ mod tests {
             }
             drawing
         };
-        // [B retracement, C extension, D retracement/extension, ABCD]. Cypher measures
+        // [B retracement, C extension, D retracement/extension, AD/XA or CD/AB]. Cypher measures
         // C against XA and D against XC; XABCD measures D against BC. ABCD uses the
         // first four anchors as A, B, C, D.
         use DrawingToolType::{CypherPattern, XABCDPattern};
@@ -843,13 +855,13 @@ mod tests {
                     Some(61.8 / 100.0),
                     Some(38.2 / 61.8),
                     Some(97.8 / 38.2),
-                    Some(38.2 / 100.0),
+                    Some(121.4 / 100.0),
                 ],
             ),
             (
                 XABCDPattern,
                 &[100.0, 150.0, 125.0, 175.0],
-                [Some(25.0 / 50.0), Some(2.0), None, Some(1.0)],
+                [Some(25.0 / 50.0), Some(2.0), None, None],
             ),
             (
                 XABCDPattern,
@@ -859,17 +871,17 @@ mod tests {
             (
                 CypherPattern,
                 &[100.0, 200.0, 150.0, 227.2, 127.2208],
-                [Some(0.5), Some(1.272), Some(0.786), Some(0.772)],
+                [Some(0.5), Some(1.272), Some(0.786), None],
             ),
             (
                 CypherPattern,
                 &[300.0, 200.0, 250.0, 172.8, 272.7792],
-                [Some(0.5), Some(1.272), Some(0.786), Some(0.772)],
+                [Some(0.5), Some(1.272), Some(0.786), None],
             ),
             (
                 CypherPattern,
                 &[100.0, 200.0, 150.0, 227.2],
-                [Some(0.5), Some(1.272), None, Some(0.772)],
+                [Some(0.5), Some(1.272), None, None],
             ),
             (
                 CypherPattern,
@@ -879,7 +891,7 @@ mod tests {
             (
                 CypherPattern,
                 &[100.0, 200.0, 150.0, 100.0, 120.0],
-                [Some(0.5), Some(0.0), None, Some(0.5)],
+                [Some(0.5), Some(0.0), None, None],
             ),
         ];
         for (tool, prices, expected) in cases {
@@ -906,17 +918,23 @@ mod tests {
                 })
                 .collect();
             output.drop_without_applying_deltas();
-            for ratio in [b, c, d].into_iter().flatten().chain(
-                (tool == XABCDPattern)
-                    .then(|| drawing.leg_ratio([1, 4], [0, 1]))
-                    .flatten(),
-            ) {
+            for ratio in expected[..3]
+                .iter()
+                .copied()
+                .flatten()
+                .chain((tool == XABCDPattern).then_some(expected[3]).flatten())
+            {
                 assert!(
                     labels.contains(&format!("{ratio:.3}")),
                     "{tool:?}: {labels:?}"
                 );
             }
-            for (actual, expected) in [b, c, d, drawing.abcd_ratio()].into_iter().zip(expected) {
+            let placement = match tool {
+                XABCDPattern => drawing.leg_ratio([1, 4], [0, 1]),
+                DrawingToolType::ABCDPattern => drawing.abcd_ratio(),
+                _ => None,
+            };
+            for (actual, expected) in [b, c, d, placement].into_iter().zip(expected) {
                 match (actual, expected) {
                     (Some(a), Some(e)) => {
                         assert!((a - e).abs() < 1e-6, "{tool:?} {prices:?}: {a} != {e}")

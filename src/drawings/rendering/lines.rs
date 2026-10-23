@@ -623,17 +623,19 @@ impl Drawing {
 }
 
 /// Where a ray from `start` through `end` leaves `rect`: on the side `end` is
-/// towards, or at the top or bottom when it is vertical.
+/// towards, or at the top or bottom when it is vertical. Keep the defining
+/// segment when its endpoint is already beyond that edge, so panning never reverses it.
 pub(super) fn ray_end(start: Pos2, end: Pos2, rect: Rect) -> Pos2 {
     let (dx, dy) = (end.x - start.x, end.y - start.y);
     if dx.abs() > 1e-6 {
         let edge = if dx > 0.0 { rect.max.x } else { rect.min.x };
-        let t = (edge - start.x) / dx;
-        Pos2::new(edge, start.y + t * dy)
-    } else if dy > 0.0 {
-        Pos2::new(start.x, rect.max.y)
+        let t = ((edge - start.x) / dx).max(1.0);
+        start + (end - start) * t
+    } else if dy.abs() > 1e-6 {
+        let edge = if dy > 0.0 { rect.max.y } else { rect.min.y };
+        start + (end - start) * ((edge - start.y) / dy).max(1.0)
     } else {
-        Pos2::new(start.x, rect.min.y)
+        start
     }
 }
 
@@ -703,6 +705,21 @@ mod tests {
                     .then(|| format!("through ({x}, {y}): got {got:?}, want ({want_x}, {want_y})"))
             })
             .collect();
+        for (end, rect, want) in [
+            (
+                Pos2::new(600.0, 150.0),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 600.0)),
+                Pos2::new(600.0, 150.0),
+            ),
+            (
+                Pos2::new(500.0, 300.0),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 50.0)),
+                Pos2::new(500.0, 300.0),
+            ),
+            (start, rect, start),
+        ] {
+            assert_eq!(ray_end(start, end, rect), want);
+        }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 }

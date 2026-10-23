@@ -61,14 +61,10 @@ impl Drawing {
             } else {
                 b.x >= a.x
             };
-            let (before, after) = if forward {
-                (left, right)
-            } else {
-                (right, left)
-            };
+            let (a, b) = if forward { (a, b) } else { (b, a) };
             [
-                if self.extend_left { before } else { a },
-                if self.extend_right { after } else { b },
+                if self.extend_left { left } else { a },
+                if self.extend_right { right } else { b },
             ]
         };
         let (base, other) = (extend(a, b), extend(c, d));
@@ -729,6 +725,23 @@ mod tests {
             hit.hit_test(Pos2::new(80.0, 45.0), &[restored.clone()], "1m"),
             Some(1)
         );
+        // Left and right are chart directions, independent of anchor order.
+        for reverse in [false, true] {
+            if reverse {
+                restored.points.swap(0, 1);
+            }
+            for (left, right, xs) in [
+                (true, false, [0.0, 30.0]),
+                (false, true, [10.0, 100.0]),
+                (false, false, [10.0, 30.0]),
+            ] {
+                restored.extend_left = left;
+                restored.extend_right = right;
+                for [a, b] in restored.outline(rect).unwrap().lines {
+                    assert_eq!([a.x, b.x], xs);
+                }
+            }
+        }
         restored.fill_color = None;
         assert!(restored.outline(rect).unwrap().areas.is_empty());
     }

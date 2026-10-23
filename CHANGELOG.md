@@ -93,6 +93,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Measurement boxes stay inside the pane when their anchors approach an edge. Gann and trend-time labels omit collisions in small drawings, and harmonic ratio labels move along their comparison chords to avoid anchors.
+- Parallel channel extensions follow chart left and right even when the anchors were placed right to left. Rays retain their direction when panned beyond the pane, and leftward Fibonacci time zones keep their fills. Drawing rail menus use the same available entries as drawing categories.
+
 - Pitchforks without custom level settings retain the drawing colour and the existing tine width. Fixed Gann grids without custom divisions retain their quarter grid.
 
 - Three-anchor projections add the first price and bar leg at the third anchor before mapping to screen coordinates, so logarithmic charts preserve the measured move. The target label shows the projected price.
@@ -100,11 +103,11 @@ All notable changes to this project are documented in this file. The format is b
 - Gann grid percentages suppress floating-point tails, the fixed-ratio label sizes to its text, and pitchfan labels sit at the visible ray ends where they have room.
 
 - Drawing placement collects the construction anchors: three for extensions, trend-based time, wedges, pitchfans, arcs, rotated rectangles, projections and channels; four for triangle patterns; seven for three drives; three and five for double and triple Elliott combinations. Price notes and arrow markers take two points. Positions place entry, target and stop in one click, with independent editable anchors. Extensions project the price leg from the third anchor and trend-based time projects its bar interval there.
-- Rotated rectangles use a sloping base and perpendicular width, Curve has a placed quadratic control, Double curve has two placed cubic controls, arcs pass through a third control, and pitchfan rays pass through Fibonacci fractions of the second-to-third anchor span. Table, Image, X post, Idea and Ghost feed stay loadable but are removed from tool menus until their content is implemented. Migration: new Curve and Double curve placements collect three and four anchors. Saved rotated rectangles, wedges and pitchfans need three anchors, and double curves four; incomplete records are reported by the loader.
+- Rotated rectangles use a sloping base and perpendicular width, Curve has a placed quadratic control, Double curve has two placed cubic controls, arcs pass through a third control, and pitchfan rays pass through Fibonacci fractions of the second-to-third anchor span. Table, Image, X post, Idea and Ghost feed stay loadable but are removed from tool menus until their content is implemented. Migration: new Curve and Double curve placements collect three and four anchors. Older saved placements still load: rotated rectangles gain their axis-aligned corner, double curves gain endpoint controls, wedges and pitchfans gain a boundary at the second time and first price, and one-point notes and markers gain a coincident second anchor. The added controls can be dragged after loading.
 
 - Fibonacci speed resistance fans include the time fan, ratio grid and quarter arcs in the anchor direction, and selection follows them. A three-anchor Fib wedge draws circular ratio arcs between its two trend rays, using the first trend radius and the signed shorter sweep.
 
-- Measuring tools count signed ticks and pips from `Instrument::tick_size` and the new optional `pip_size` (`with_pip_size`). Unknown, non-positive and non-finite sizes are omitted. `Chart` passes its host or feed instrument to drawings. Migration: `ChartView` literals set `instrument` (`None` when unknown).
+- Measuring tools count signed ticks and pips from `Instrument::tick_size` and the new optional `pip_size` (`with_pip_size`). Unknown, non-positive and non-finite sizes are omitted. `Chart` passes its host or feed instrument to drawings. Migration: `ChartView` literals set `instrument` (`None` when unknown); `Instrument` literals set `pip_size: None` or use `Instrument::new`.
 
 - Gann fans follow the signed anchor direction and retain their steep rays when they leave through the pane's top or bottom. Fixed Gann squares keep their anchor-defined price-per-bar ratio through zoom. `Drawing::gann` (`GannConfig`) sets independent price and time grid fractions on boxes and squares; levels count from the first anchor. Migration: `Drawing` struct literals set `gann`, or use `Drawing::new`. Saved grid and pitchfork settings reject non-finite values.
 

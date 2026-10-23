@@ -236,6 +236,11 @@ mod tests {
             }
         }
         for category in crate::drawings::categories::CATEGORY_ORDER {
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                crate::ui::drawing_toolbar::data::get_category_sections(category),
+                crate::drawings::categories::get_category_sections(category),
+            );
             for (_, tools) in crate::drawings::categories::get_category_sections(category) {
                 for tool in tools {
                     assert!(
