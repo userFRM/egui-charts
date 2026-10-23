@@ -75,13 +75,8 @@ impl AlertDialog {
         self.storage = Some(storage);
     }
 
-    /// Open a fresh price alert. Prefer [`open_at`](Self::open_at) when a last price is available.
-    pub fn open(&mut self, symbol: String) {
-        self.open_at(symbol, 0.0);
-    }
-
     /// Open a fresh price alert at the last or hovered price, discarding earlier cancelled edits.
-    pub fn open_at(&mut self, symbol: String, price: f64) {
+    pub fn open(&mut self, symbol: String, price: f64) {
         self.edit(Alert::new(symbol, AlertCondition::Crossing(price)));
     }
 
@@ -540,7 +535,7 @@ mod tests {
             });
             let mut dialog = AlertDialog::new();
             dialog.set_storage(Arc::new(Store::default()));
-            dialog.open_at("SAMPLE".into(), 100.0);
+            dialog.open("SAMPLE".into(), 100.0);
             dialog
                 .watchlists
                 .push(("list".into(), "A long host watchlist name".repeat(4)));
@@ -620,7 +615,7 @@ mod tests {
         let mut dialog = AlertDialog::new();
         dialog.set_storage(store.clone());
         dialog.poll(&ctx);
-        dialog.open_at("EURUSD".into(), 1.125);
+        dialog.open("EURUSD".into(), 1.125);
         dialog.alert.name = "Breakout".into();
         dialog.alert.frequency = AlertFrequency::OncePerBarClose;
         dialog.preset_name = "Close".into();
@@ -636,7 +631,7 @@ mod tests {
         restored.poll(&ctx);
         assert!(!restored.loaded);
         assert!(restored.error.is_some());
-        restored.open_at("AAPL".into(), 123.0);
+        restored.open("AAPL".into(), 123.0);
         assert_eq!(restored.alert.condition, AlertCondition::Crossing(123.0));
         assert!(restored.alert.name.is_empty());
     }

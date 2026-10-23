@@ -509,7 +509,7 @@ impl DemoApp {
         let price = price
             .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
             .unwrap_or(0.0);
-        self.alert_dialog.open_at(self.state.symbol.clone(), price);
+        self.alert_dialog.open(self.state.symbol.clone(), price);
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
