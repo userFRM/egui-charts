@@ -4,6 +4,7 @@
 //! arrows, and polylines.
 
 use crate::drawings::domain::Drawing;
+use crate::model::Bar;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
@@ -186,6 +187,7 @@ impl Drawing {
         painter: &egui::Painter,
         color: Color32,
         stroke: Stroke,
+        bars: &[Bar],
     ) {
         if self.points.len() >= 2 {
             let start = self.points[0];
@@ -251,19 +253,6 @@ impl Drawing {
                 );
             }
 
-            // Calculate distance and slope for info display
-            let distance = (dx * dx + dy * dy).sqrt();
-            let slope = if dx.abs() > 0.001 {
-                dy / dx
-            } else {
-                f32::INFINITY
-            };
-            let slope_display = if slope.is_finite() {
-                format!("{slope:.3}")
-            } else {
-                "∞".to_string()
-            };
-
             // Draw angle label with background box
             let label_angle = angle_rad / 2.0;
             let label_distance = arc_radius + DESIGN_TOKENS.spacing.section_lg;
@@ -320,7 +309,7 @@ impl Drawing {
                 mid_point.y + info_offset * perpendicular_angle.sin(),
             );
 
-            let info_text = format!("d: {distance:.0}px  m: {slope_display}");
+            let info_text = self.measurement_label(bars).unwrap_or_default();
             let info_font = egui::FontId::proportional(typography::XS);
             let muted_color =
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180);
@@ -389,53 +378,39 @@ impl Drawing {
                 DESIGN_TOKENS.rounding.md,
             );
 
-            // Draw price range label (right side)
-            let height = (rect.max.y - rect.min.y).abs();
-            let width = (rect.max.x - rect.min.x).abs();
+            // Width in bars below, height in price on the right
+            let height = rect.height();
+            let width = rect.width();
+            let [width_label, height_label] =
+                <[String; 2]>::try_from(self.size_labels(&|_| 0.0)).unwrap_or_default();
             let label_bg = DESIGN_TOKENS
                 .semantic
                 .extended
                 .chart_axis_bg
                 .gamma_multiply(0.8);
-            let label_font = egui::FontId::proportional(typography::XS);
 
             // Width label (bottom center)
             if width > 50.0 {
                 let width_label_pos = Pos2::new(rect.center().x, rect.max.y + typography::XS);
-                let width_rect = Rect::from_center_size(
-                    width_label_pos,
-                    egui::Vec2::new(
-                        DESIGN_TOKENS.sizing.technical_labels.line_arc_radius,
-                        DESIGN_TOKENS.sizing.technical_labels.gann_label_height,
-                    ),
-                );
-                painter.rect_filled(width_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-                painter.text(
-                    width_label_pos,
+                super::measurements::boxed_label(
+                    painter,
                     egui::Align2::CENTER_CENTER,
-                    format!("{width:.0}px"),
-                    label_font.clone(),
+                    width_label_pos,
+                    width_label,
                     middle_color,
+                    label_bg,
                 );
             }
 
             // Height label (right center)
             if height > 50.0 {
-                let height_label_pos = Pos2::new(rect.max.x + typography::LG, rect.center().y);
-                let height_rect = Rect::from_center_size(
-                    height_label_pos,
-                    egui::Vec2::new(
-                        DESIGN_TOKENS.sizing.technical_labels.line_arc_radius,
-                        DESIGN_TOKENS.sizing.technical_labels.gann_label_height,
-                    ),
-                );
-                painter.rect_filled(height_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-                painter.text(
-                    height_label_pos,
-                    egui::Align2::CENTER_CENTER,
-                    format!("{height:.0}px"),
-                    label_font,
+                super::measurements::boxed_label(
+                    painter,
+                    egui::Align2::LEFT_CENTER,
+                    Pos2::new(rect.max.x + typography::XS, rect.center().y),
+                    height_label,
                     middle_color,
+                    label_bg,
                 );
             }
 

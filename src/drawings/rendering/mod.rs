@@ -159,7 +159,9 @@ impl Drawing {
             }
             DrawingToolType::VerticalLine => self.render_vertical_line(painter, rect, stroke),
             DrawingToolType::CrossLine => self.render_cross_line(painter, rect, color, stroke),
-            DrawingToolType::TrendAngle => self.render_trend_angle(painter, color, stroke),
+            DrawingToolType::TrendAngle => {
+                self.render_trend_angle(painter, color, stroke, view.bars)
+            }
             DrawingToolType::InfoLine => self.render_info_line(painter, view),
 
             // Shapes (8 tools)
@@ -201,8 +203,8 @@ impl Drawing {
             // Channels (4 tools)
             DrawingToolType::ParallelChannel => self.render_parallel_channel(painter),
             DrawingToolType::RegressionTrend => self.render_regression_trend(painter, view),
-            DrawingToolType::FlatTopBottom => self.render_flat_top_bottom(painter),
-            DrawingToolType::DisjointChannel => self.render_disjoint_channel(painter),
+            DrawingToolType::FlatTopBottom => self.render_flat_top_bottom(painter, view),
+            DrawingToolType::DisjointChannel => self.render_disjoint_channel(painter, view),
 
             // Patterns (6 tools)
             DrawingToolType::XABCDPattern => self.render_xabcd_pattern(painter),

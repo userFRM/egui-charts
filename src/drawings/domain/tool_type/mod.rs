@@ -96,9 +96,10 @@ pub enum DrawingToolType {
     ParallelChannel,
     /// Linear regression channel with standard deviation bands.
     RegressionTrend,
-    /// Two horizontal lines marking a flat consolidation zone.
+    /// A trend line through the first two anchors and a horizontal line at the third anchor's price.
     FlatTopBottom,
-    /// Two non-parallel trend lines forming a converging/diverging channel.
+    /// Two parallel trend lines: the first two anchors set the first line, and the third anchor sets
+    /// where the second line starts, at any time.
     DisjointChannel,
 
     // ============ PITCHFORKS (4 tools) ============

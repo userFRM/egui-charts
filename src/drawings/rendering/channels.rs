@@ -180,7 +180,7 @@ impl Drawing {
     }
 
     /// Render Flat Top/Bottom - Trend line with horizontal support/resistance
-    pub(crate) fn render_flat_top_bottom(&self, painter: &egui::Painter) {
+    pub(crate) fn render_flat_top_bottom(&self, painter: &egui::Painter, view: &ChartView) {
         if self.points.len() < 3 {
             let color = Color32::from_rgba_unmultiplied(
                 self.color[0],
@@ -304,7 +304,6 @@ impl Drawing {
         );
 
         // Height measurement between lines
-        let height_diff = (p3.y - (p1.y + p2.y) / 2.0).abs();
         let mid_x = (p1.x + p2.x) / 2.0;
         let mid_trend_y = (p1.y + p2.y) / 2.0;
 
@@ -332,7 +331,7 @@ impl Drawing {
         painter.text(
             height_label_pos,
             egui::Align2::LEFT_CENTER,
-            format!("{height_diff:.0}px"),
+            self.size_labels(view.price_to_y).concat(),
             egui::FontId::proportional(typography::XS),
             measure_color,
         );
@@ -359,7 +358,7 @@ impl Drawing {
     }
 
     /// Render Disjoint Channel - Two parallel channel segments with connector
-    pub(crate) fn render_disjoint_channel(&self, painter: &egui::Painter) {
+    pub(crate) fn render_disjoint_channel(&self, painter: &egui::Painter, view: &ChartView) {
         if self.points.len() < 3 {
             let color = Color32::from_rgba_unmultiplied(
                 self.color[0],
@@ -451,7 +450,6 @@ impl Drawing {
 
         // Draw width measurement
         if line_length > 20.0 {
-            let channel_width = ((p3.x - p1.x).powi(2) + (p3.y - p1.y).powi(2)).sqrt();
             let mid_connector = Pos2::new((mid1.x + mid2.x) / 2.0, (mid1.y + mid2.y) / 2.0);
 
             // Label background
@@ -460,22 +458,13 @@ impl Drawing {
                 .extended
                 .chart_axis_bg
                 .gamma_multiply(0.8);
-            let label_rect = Rect::from_center_size(
-                mid_connector,
-                egui::Vec2::new(
-                    DESIGN_TOKENS.sizing.technical_labels.line_label_width
-                        + DESIGN_TOKENS.spacing.lg,
-                    typography::XXL,
-                ),
-            );
-            painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-
-            painter.text(
-                mid_connector,
+            super::measurements::boxed_label(
+                painter,
                 egui::Align2::CENTER_CENTER,
-                format!("{channel_width:.0}px"),
-                egui::FontId::proportional(typography::XS),
+                mid_connector,
+                self.size_labels(view.price_to_y).concat(),
                 connector_color,
+                label_bg,
             );
         }
 
