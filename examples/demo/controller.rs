@@ -546,8 +546,14 @@ impl DemoApp {
     }
 
     fn go_to_date(&mut self, date: chrono::NaiveDate) {
-        self.chart
-            .scroll_to_time(date.and_hms_opt(0, 0, 0).unwrap().and_utc());
+        let start = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let target = self
+            .bars
+            .iter()
+            .find(|bar| bar.time >= start)
+            .or_else(|| self.bars.last())
+            .map_or(start, |bar| bar.time);
+        self.chart.scroll_to_time(target);
     }
 
     fn run_export(
@@ -1080,19 +1086,98 @@ impl DemoApp {
             .show(ui, |ui| {
                 let action = self.timeframe_toolbar.show(ui);
                 self.handle_timeframe_toolbar(action);
+                self.show_timeframe_menus(ui.ctx());
             });
     }
 
     fn handle_timeframe_toolbar(&mut self, action: TimeframeToolbarAction) {
         match action {
             TimeframeToolbarAction::DateRangeChanged(range) => {
-                let visible = visible_bars_for_range(range, self.bars.len());
-                self.chart.set_visible_bars(visible);
+                let visible = visible_bars_for_range(range, &self.bars);
+                let width = self.chart.get_rendered_price_rect().width();
+                // Include the latest slot in the scale's exclusive data range.
+                let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
+                self.chart.disable_tracking_mode();
+                self.chart.apply_synced_time_scale(spacing, 0.5);
             }
             TimeframeToolbarAction::OpenDatePicker => self.date_picker.open(),
-            // Time zone, session and dividend adjustment have no backing in the
-            // demo's synthetic single-session UTC series.
-            _ => {}
+            TimeframeToolbarAction::OpenTimezoneMenu => {
+                self.timeframe_toolbar.state.timezone_menu_open = true;
+            }
+            TimeframeToolbarAction::OpenSessionMenu => {
+                self.timeframe_toolbar.state.session_menu_open = true;
+            }
+            TimeframeToolbarAction::AdjustDividendsToggled(adjusted) => {
+                self.timeframe_toolbar.state.adjust_for_dividends = adjusted;
+                self.stop_replay();
+                self.apply_session();
+            }
+            TimeframeToolbarAction::None => {}
+        }
+    }
+
+    fn show_timeframe_menus(&mut self, ctx: &egui::Context) {
+        if self.timeframe_toolbar.state.session_menu_open {
+            let mut open = true;
+            egui::Window::new("Synthetic session")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    for session in [SessionType::RTH, SessionType::ETH, SessionType::Full24x7] {
+                        if ui
+                            .selectable_label(
+                                self.timeframe_toolbar.state.session_type == session,
+                                session.tooltip(),
+                            )
+                            .clicked()
+                        {
+                            self.timeframe_toolbar.set_session(session);
+                            self.timeframe_toolbar.state.session_menu_open = false;
+                            self.stop_replay();
+                            self.apply_session();
+                        }
+                    }
+                    ui.label(
+                        "SAMPLE: weekdays, regular 14:30–21:00 UTC; extended 08:30–21:00 UTC.",
+                    );
+                });
+            self.timeframe_toolbar.state.session_menu_open &= open;
+        }
+        if self.timeframe_toolbar.state.timezone_menu_open {
+            let mut open = true;
+            egui::Window::new("Chart timezone")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    for (label, timezone) in [
+                        ("UTC", egui_charts::config::TimezoneMode::Utc),
+                        (
+                            "America/New_York",
+                            egui_charts::config::TimezoneMode::nyse(),
+                        ),
+                    ] {
+                        if ui
+                            .selectable_label(
+                                self.chart.chart_options().time_scale.timezone == timezone,
+                                label,
+                            )
+                            .clicked()
+                        {
+                            let mut options = self.chart.chart_options().clone();
+                            options.time_scale.timezone = timezone;
+                            // Preserve the current pan and zoom when applying display options.
+                            let (spacing, offset) = self.chart.get_time_scale_state();
+                            let chart =
+                                std::mem::replace(&mut self.chart, Chart::new(BarData::new()));
+                            self.chart = chart.with_chart_options(options);
+                            self.chart.apply_synced_time_scale(spacing, offset);
+                            self.timeframe_toolbar.state.timezone_menu_open = false;
+                        }
+                    }
+                });
+            self.timeframe_toolbar.state.timezone_menu_open &= open;
         }
     }
 

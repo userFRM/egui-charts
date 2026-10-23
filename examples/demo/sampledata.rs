@@ -286,25 +286,30 @@ pub fn session_bars(
         .collect()
 }
 
-/// Map a bottom-toolbar `DateRange` preset to a visible-bar count, so the
-/// preset actually re-zooms the chart's visible window.
+/// Count the supplied bars in a lookback ending at the latest fixture timestamp.
+/// Session gaps and the selected interval determine the count, including YTD.
 pub fn visible_bars_for_range(
     range: egui_charts::ui::timeframe_toolbar::DateRange,
-    total: usize,
+    bars: &[Bar],
 ) -> usize {
+    use chrono::{Datelike, Duration, Months, TimeZone, Utc};
     use egui_charts::ui::timeframe_toolbar::DateRange;
-    let want = match range {
-        DateRange::Day1 => 24,
-        DateRange::Day5 => 60,
-        DateRange::Month1 => 120,
-        DateRange::Month3 => 240,
-        DateRange::Month6 => 320,
-        DateRange::YTD => 400,
-        DateRange::Year1 => 440,
-        DateRange::Year5 => 480,
-        DateRange::All => total,
+    let Some(last) = bars.last() else {
+        return 0;
     };
-    want.clamp(10, total.max(10))
+    let end = last.time;
+    let start = match range {
+        DateRange::Day1 => Some(end - Duration::days(1)),
+        DateRange::Day5 => Some(end - Duration::days(5)),
+        DateRange::Month1 => end.checked_sub_months(Months::new(1)),
+        DateRange::Month3 => end.checked_sub_months(Months::new(3)),
+        DateRange::Month6 => end.checked_sub_months(Months::new(6)),
+        DateRange::YTD => Utc.with_ymd_and_hms(end.year(), 1, 1, 0, 0, 0).single(),
+        DateRange::Year1 => end.checked_sub_months(Months::new(12)),
+        DateRange::Year5 => end.checked_sub_months(Months::new(60)),
+        DateRange::All => None,
+    };
+    bars.len() - start.map_or(0, |start| bars.partition_point(|bar| bar.time < start))
 }
 
 /// Deterministic pseudo-random f64 in `[0, 1)` from two seeds, without the `rand` crate.
@@ -328,8 +333,7 @@ mod tests {
             let bars = generate_sample_bars("SAMPLE", 600, timeframe);
             let repeated = generate_sample_bars("SAMPLE", 600, timeframe);
             assert_eq!(bars.len(), 600);
-            assert_eq!(bars[0].time, repeated[0].time);
-            assert_eq!(bars[599].close, repeated[599].close);
+            assert_eq!(bars, repeated);
             assert!(bars.iter().all(|b| (680.0..790.0).contains(&b.close)));
             assert!(
                 bars.iter()
@@ -345,12 +349,9 @@ mod tests {
         }
         assert_eq!(DemoSymbol::find("SAMPLE").exchange, "Synthetic");
 
-        use egui_charts::ui::timeframe_toolbar::SessionType;
+        use egui_charts::ui::timeframe_toolbar::{DateRange, SessionType};
         let source = generate_sample_bars("SAMPLE", 600, Timeframe::Hour1);
-        let unchanged: Vec<_> = source
-            .iter()
-            .map(|b| (b.time, b.open, b.high, b.low, b.close, b.volume))
-            .collect();
+        let unchanged = source.clone();
         let regular = session_bars("SAMPLE", &source, SessionType::RTH, false);
         assert!(regular.len() < source.len());
         assert!(regular.iter().all(|b| b.time.hour() >= 14));
@@ -371,13 +372,21 @@ mod tests {
                 assert!(adjusted.high >= adjusted.open.max(adjusted.close));
             }
         }
-        assert_eq!(
-            source
-                .iter()
-                .map(|b| (b.time, b.open, b.high, b.low, b.close, b.volume))
-                .collect::<Vec<_>>(),
-            unchanged
-        );
+        assert_eq!(source, unchanged);
+        for (range, count) in [
+            (DateRange::Day1, 7),
+            (DateRange::Day5, 22),
+            (DateRange::Month1, 141),
+            (DateRange::Month3, regular.len()),
+            (DateRange::Month6, regular.len()),
+            (DateRange::YTD, regular.len()),
+            (DateRange::Year1, regular.len()),
+            (DateRange::Year5, regular.len()),
+            (DateRange::All, regular.len()),
+        ] {
+            assert_eq!(visible_bars_for_range(range, &regular), count, "{range:?}");
+        }
+        assert_eq!(visible_bars_for_range(DateRange::All, &[]), 0);
         let daily = generate_sample_bars("SAMPLE", 600, Timeframe::Day1);
         assert_eq!(
             session_bars("SAMPLE", &daily, SessionType::RTH, false).len(),
