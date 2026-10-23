@@ -343,6 +343,11 @@ fn staple_studies_match_published_definitions() {
         ),
         ("RVI-hand", Box::new(RelativeVigorIndex::new(2)), vigor),
         (
+            "Rank-flat-hand",
+            Box::new(RankCorrelationIndex::new(4)),
+            flat[..4].to_vec(),
+        ),
+        (
             "Rank-ties-hand",
             Box::new(RankCorrelationIndex::new(4)),
             ties,
