@@ -243,6 +243,8 @@ pub mod icons {
     pub const SUCCESS: Icon = crate::icon_from_path!("ui/success.svg");
     pub const WARNING: Icon = crate::icon_from_path!("ui/warning.svg");
     pub const STATUS_ERROR: Icon = crate::icon_from_path!("ui/error.svg");
+    /// Stacked layers for the widget bar object panel.
+    pub const WIDGET_BAR_LAYERS: Icon = crate::icon_from_path!("ui/widget-bar-layers.svg");
     pub const OBJECT_TREE: Icon = crate::icon_from_path!("ui/object-tree.svg");
     pub const EYE: Icon = crate::icon_from_path!("ui/eye.svg");
     pub const EYE_HIDE: Icon = crate::icon_from_path!("ui/eye-off.svg");
@@ -253,6 +255,10 @@ pub mod icons {
     pub const MOVE_VERTICAL: Icon = crate::icon_from_path!("ui/move-vertical.svg");
     pub const PERCENT: Icon = crate::icon_from_path!("ui/percent.svg");
     pub const ROTATE_CCW: Icon = crate::icon_from_path!("ui/rotate-ccw.svg");
+    /// Pencil and lock for keeping the drawing tool active.
+    pub const DRAWING_KEEP: Icon = crate::icon_from_path!("ui/drawing-keep.svg");
+    /// Upright horseshoe magnet for the drawing rail.
+    pub const DRAWING_MAGNET: Icon = crate::icon_from_path!("ui/drawing-magnet.svg");
     pub const MAGNET: Icon = crate::icon_from_path!("ui/magnet.svg");
     pub const TRASH: Icon = crate::icon_from_path!("ui/trash.svg");
     pub const DUPLICATE: Icon = crate::icon_from_path!("ui/duplicate.svg");

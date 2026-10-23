@@ -154,11 +154,11 @@ pub fn draw_icon_button_padded(
 ///
 /// Layout:
 /// - Outer rect: 52×38px
-/// - Inner hover rect: 9px horizontal margin, 2px vertical margin
-/// - Inner rounding: 6px
+/// - Inner hover rect: 8.5px horizontal margin, 1.5px vertical margin
+/// - Inner rounding: 5px
 /// - Icon: 28×28 centered in outer rect
 ///
-/// A selected button is filled with the accent colour and its icon uses the accent text colour.
+/// A selected tool has a neutral fill; a latched utility uses contrasting ink and fill.
 /// The tooltip opens to the right of the bar, so it never covers the next button.
 ///
 /// # Arguments
@@ -172,8 +172,23 @@ pub fn draw_icon_button_padded(
 ///
 /// The egui Response for click handling.
 pub fn draw_tool_button(ui: &mut Ui, icon: &Icon, tooltip: &str, is_selected: bool) -> Response {
+    draw_rail_button(ui, icon, tooltip, is_selected, false)
+}
+
+/// Draw a utility whose latched state is distinct from the selected drawing tool.
+pub(crate) fn draw_latched_button(ui: &mut Ui, icon: &Icon, tooltip: &str, on: bool) -> Response {
+    draw_rail_button(ui, icon, tooltip, on, true)
+}
+
+fn draw_rail_button(
+    ui: &mut Ui,
+    icon: &Icon,
+    tooltip: &str,
+    is_selected: bool,
+    latched: bool,
+) -> Response {
     let tokens = &DESIGN_TOKENS.sizing.toolbar;
-    let margin = Vec2::new(tokens.hover_margin_h, tokens.hover_margin_v);
+    let margin = Vec2::new(tokens.hover_margin_h - 0.5, tokens.hover_margin_v - 0.5);
 
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(tokens.button_width, tokens.button_height),
@@ -185,32 +200,45 @@ pub fn draw_tool_button(ui: &mut Ui, icon: &Icon, tooltip: &str, is_selected: bo
         let theme = ui.active_theme();
         let inner_rect = rect.shrink2(margin);
 
-        // Background only on hover or selected
+        let selected_fill = if latched {
+            if theme.dark {
+                theme.ui.text
+            } else {
+                Color32::from_gray(26)
+            }
+        } else if theme.dark {
+            theme.ui.btn_bg_active
+        } else {
+            Color32::from_gray(235)
+        };
+        let selected_ink = if latched {
+            if theme.dark {
+                theme.ui.panel_bg
+            } else {
+                Color32::WHITE
+            }
+        } else {
+            theme.ui.text
+        };
         let bg = match (is_selected, response.hovered()) {
-            (true, true) => Some(theme.ui.accent_hover),
-            (true, false) => Some(theme.ui.accent),
+            (true, _) => Some(selected_fill),
             (false, true) => Some(ui.visuals().widgets.hovered.bg_fill),
             (false, false) => None,
         };
         if let Some(bg) = bg {
-            ui.painter()
-                .rect_filled(inner_rect, tokens.inner_rounding, bg);
+            ui.painter().rect_filled(inner_rect, 5.0, bg);
         }
         // The inner rect keeps all four sides of the ring inside the bar.
-        // On the accent fill the ring takes the accent text colour and sits inside the fill, so
-        // it shows whatever the bar's colour is.
+        // A latched utility's ring follows its contrasting ink.
         if response.has_focus() {
             let (ring, ring_rect) = if is_selected {
-                (
-                    theme.ui.accent_text,
-                    inner_rect.shrink(DESIGN_TOKENS.stroke.thick),
-                )
+                (selected_ink, inner_rect.shrink(DESIGN_TOKENS.stroke.thick))
             } else {
                 (crate::styles::focus::focus_ring_color(ui), inner_rect)
             };
             ui.painter().rect_stroke(
                 ring_rect,
-                tokens.inner_rounding,
+                5.0,
                 Stroke::new(DESIGN_TOKENS.stroke.thick, ring),
                 StrokeKind::Inside,
             );
@@ -221,7 +249,7 @@ pub fn draw_tool_button(ui: &mut Ui, icon: &Icon, tooltip: &str, is_selected: bo
         let icon_color = if !ui.is_enabled() {
             theme.ui.text_disabled
         } else if is_selected {
-            theme.ui.accent_text
+            selected_ink
         } else {
             theme.ui.text
         };
