@@ -105,6 +105,7 @@ impl Chart {
             },
             from_ticks: BTreeSet::new(),
             studies: IndicatorRegistry::new(),
+            main_series_visible: true,
             study_ids: Vec::new(),
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),

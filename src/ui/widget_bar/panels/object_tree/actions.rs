@@ -1,7 +1,6 @@
 //! Actions emitted by the Object Tree panel
 //!
-//! These actions should be handled by the parent component to
-//! affect the actual chart state.
+//! Apply chart operations with `ObjectTreePanel::apply_to_chart`; the host handles dialog intents.
 
 /// Actions that can be performed on objects in the tree
 #[derive(Clone, Debug, PartialEq, Default)]

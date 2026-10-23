@@ -86,6 +86,7 @@ impl ChartGridSelector {
             DESIGN_TOKENS.sizing.button_md,
         );
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
 
         // Background
         let bg_color = if self.is_open || response.hovered() {
@@ -201,6 +202,7 @@ impl ChartGridSelector {
             );
 
             let item_response = ui.allocate_rect(item_rect, Sense::click());
+            crate::styles::focus::draw_focus_ring(ui, &item_response, DESIGN_TOKENS.rounding.sm);
 
             // Highlight current or hovered
             if is_current || item_response.hovered() {

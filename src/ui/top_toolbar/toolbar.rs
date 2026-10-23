@@ -277,16 +277,25 @@ impl TopToolbar {
                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                 menu,
             );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.horizontal(actions);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), self.config.height),
+            let width_id = ui.scope_id().with("host_actions_width");
+            let actions_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
+            let action = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(
+                        (ui.available_width() - actions_width).max(0.0),
+                        self.config.height,
+                    ),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| self.show_contents_desktop(ui, app_state.active_symbol()),
                 )
-                .inner
-            })
-            .inner
+                .inner;
+            ui.add_space((ui.available_width() - actions_width).max(0.0));
+            let width = ui.horizontal(actions).response.rect.width();
+            if (width - actions_width).abs() > 0.5 {
+                ui.data_mut(|d| d.insert_temp(width_id, width));
+                ui.ctx().request_discard("Host actions changed width");
+            }
+            action
         })
         .inner
     }
@@ -496,6 +505,7 @@ impl TopToolbar {
                     response.id.with("save_menu"),
                     egui::Sense::click(),
                 );
+                crate::styles::focus::draw_focus_ring(ui, &arrow, self.config.rounding);
                 egui::Popup::menu(&arrow)
                     .align(egui::RectAlign::BOTTOM_START)
                     .align_alternatives(&[])
@@ -715,29 +725,39 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut toolbar = TopToolbar::new();
                 toolbar.timeframe_selector.current = Timeframe::new(1, TimeframeUnit::Hour);
-                let mut host_rect = Rect::NOTHING;
-                let mut output = ctx.run_ui(
-                    RawInput {
-                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 50.0))),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        toolbar.show_with_slots(
-                            ui,
-                            &State,
-                            |ui| {
-                                IconButton::new(&embedded_icons::MENU).show(ui);
-                            },
-                            |ui| {
-                                host_rect = crate::ui_kit::buttons::Button::new(host_label)
-                                    .ghost()
-                                    .show(ui)
-                                    .rect;
-                            },
-                        );
-                        assert!(ui.min_rect().right() <= width, "controls exceed the strip");
-                    },
-                );
+                let mut frame = |events| {
+                    let mut host_rect = Rect::NOTHING;
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 50.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            toolbar.show_with_slots(
+                                ui,
+                                &State,
+                                |ui| {
+                                    IconButton::new(&embedded_icons::MENU).show(ui);
+                                },
+                                |ui| {
+                                    host_rect = crate::ui_kit::buttons::Button::new(host_label)
+                                        .ghost()
+                                        .show(ui)
+                                        .rect;
+                                },
+                            );
+                            if !ui.ctx().will_discard() {
+                                assert!(
+                                    ui.min_rect().right() <= width,
+                                    "controls exceed the strip"
+                                );
+                            }
+                        },
+                    );
+                    (output, host_rect)
+                };
+                let (mut output, host_rect) = frame(vec![]);
                 output.textures_delta.clear();
                 let mut interval = false;
                 for shape in &output.shapes {
@@ -770,6 +790,38 @@ mod tests {
                 }
                 output.drop_without_applying_deltas();
                 assert!(interval);
+                let mut previous = None;
+                let mut reached_host = false;
+                for index in 0..30 {
+                    let (output, host_rect) = frame(vec![Event::Key {
+                        key: egui::Key::Tab,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }]);
+                    let focused = ctx
+                        .memory(|m| m.focused())
+                        .and_then(|id| ctx.read_response(id))
+                        .unwrap()
+                        .rect;
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Rect(r) if r.rect == focused.expand(2.0) && r.stroke.width == 2.0)), "focused control has no ring: {focused:?}");
+                    output.drop_without_applying_deltas();
+                    if let Some(center) = previous {
+                        assert!(
+                            focused.center().x >= center,
+                            "Tab moved backwards: {focused:?}"
+                        );
+                    }
+                    previous = Some(focused.center().x);
+                    if focused == host_rect {
+                        assert!(index > 1, "host actions preceded built-in controls");
+                        reached_host = true;
+                        break;
+                    }
+                }
+                assert!(reached_host);
             }
         }
     }

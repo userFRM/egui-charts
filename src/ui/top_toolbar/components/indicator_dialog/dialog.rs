@@ -396,7 +396,7 @@ impl IndicatorDialog {
 
         // Selected rows take the selection text colour, as egui's selected labels do.
         let (text, secondary) = if is_sel {
-            let selected = ui.visuals().selection.stroke.color;
+            let selected = config.sel_text_color;
             (selected, selected)
         } else {
             (config.text_color, config.muted_color)
@@ -404,7 +404,7 @@ impl IndicatorDialog {
         let star_res = Self::draw_favorite_star(ui, config, rect, is_favorite);
         let text_right = Self::draw_item_badges(ui, theme, rect, indicator, secondary);
         Self::draw_item_text(ui, rect, text_right, indicator, text);
-        draw_focus_ring(ui, &response);
+        draw_focus_ring(ui, &response, theme.radius.md);
 
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
         self.handle_item_clicks(indicator, is_favorite, enter, &response, &star_res, rect)
@@ -443,7 +443,7 @@ impl IndicatorDialog {
         let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
         icon.as_image_tinted(size, tint)
             .paint_at(ui, Rect::from_center_size(star_rect.center(), size));
-        draw_focus_ring(ui, &star_res);
+        draw_focus_ring(ui, &star_res, 0.0);
         star_res.on_hover_text(tooltip)
     }
 
@@ -897,5 +897,23 @@ mod tests {
         assert_eq!(dialog.config.width, 900.0);
         assert_eq!(dialog.config.text_color, Color32::RED);
         assert_eq!(dialog.config.hover_color, hover);
+        // A frozen config keeps its selected text paired with its fill even in another UI theme.
+        let themed = Theme::light().with_accent(Color32::from_rgb(255, 120, 0));
+        let config = IndicatorDialogConfig::from_theme(&themed);
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &Theme::dark());
+        let indicator = dialog.indicators[0].clone();
+        dialog.sel_indicator = Some(indicator.clone());
+        let output = ctx.run_ui(Default::default(), |ui| {
+            dialog.draw_indicator_item(ui, &config, &themed, &indicator, false);
+        });
+        let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == indicator.name => {
+                Some(text.galley.job.sections[0].format.color)
+            }
+            _ => None,
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(text, Some(themed.ui.selection_text));
     }
 }

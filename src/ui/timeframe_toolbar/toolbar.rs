@@ -305,7 +305,7 @@ impl TimeframeToolbar {
             text_color,
         );
 
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tooltip)
         });
@@ -360,7 +360,7 @@ impl TimeframeToolbar {
             text_color,
         );
 
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tooltip)
         });
@@ -396,7 +396,7 @@ impl TimeframeToolbar {
             .as_image_tinted(Vec2::splat(icon_size), icon_color)
             .paint_at(ui, icon_rect);
 
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tooltip)
         });

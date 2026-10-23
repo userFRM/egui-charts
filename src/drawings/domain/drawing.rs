@@ -50,6 +50,9 @@ pub struct Drawing {
     /// User notes, saved with the drawing and restored from its stored record
     #[serde(skip)]
     pub notes: Option<String>,
+    /// Optional object-tree name, saved with the drawing.
+    #[serde(default)]
+    pub label: Option<String>,
     /// Type of drawing tool
     pub tool_type: DrawingToolType,
     /// Screen coordinates (updated each frame from chart_points)
@@ -129,6 +132,7 @@ impl Drawing {
             stored_id: None,
             created_at: None,
             notes: None,
+            label: None,
             tool_type,
             points: Vec::new(),
             chart_points: Vec::new(),
@@ -147,7 +151,14 @@ impl Drawing {
             extend_left: false,
             extend_right: false,
             arrow_start_style: ArrowStyle::None,
-            arrow_end_style: ArrowStyle::Arrow,
+            arrow_end_style: if matches!(
+                tool_type,
+                DrawingToolType::Arrow | DrawingToolType::ArrowMarker
+            ) {
+                ArrowStyle::Arrow
+            } else {
+                ArrowStyle::None
+            },
             timeframe_visibility: TimeframeVisibility::all(),
             position_size: None,
             fib_config: None,

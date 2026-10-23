@@ -22,6 +22,7 @@ use crate::model::{
     Bar, SpanCache, TPOColorMode, TPOConfig, TPODisplayMode, TPOProfile, derive_tick_size,
     to_tpo_profiles,
 };
+use crate::theme::{ChartColors, ThemeExt, readable_color};
 use crate::tokens::DESIGN_TOKENS;
 
 /// Target number of price rows when auto-deriving the TPO bin (tick) size.
@@ -304,6 +305,7 @@ fn draw_session_profile(
         return;
     }
 
+    let chart = painter.ctx().active_theme().chart;
     let tick_size = profile.tick_size;
     let column_width = PERIOD_COLUMN_PX;
     let use_letters = column_width >= LETTER_MIN_COLUMN_PX
@@ -352,7 +354,14 @@ fn draw_session_profile(
             let x = anchor_x + col as f32 * column_width + column_width * 0.5;
             max_right = max_right.max(x + column_width * 0.5);
 
-            let color = letter_color(render_config, config, letter.period_idx, price, profile);
+            let color = letter_color(
+                render_config,
+                config,
+                letter.period_idx,
+                price,
+                profile,
+                &chart,
+            );
 
             if use_letters {
                 painter.text(
@@ -429,8 +438,9 @@ fn letter_color(
     period_idx: usize,
     price: f64,
     profile: &TPOProfile,
+    chart: &ChartColors,
 ) -> Color32 {
-    match config.color_mode {
+    let color = match config.color_mode {
         TPOColorMode::ByPeriod => render_config.color_for_period(period_idx),
         TPOColorMode::Solid => render_config.default_letter_color,
         TPOColorMode::ByValueArea => {
@@ -448,7 +458,13 @@ fn letter_color(
                 render_config.default_letter_color
             }
         }
-    }
+    };
+    readable_color(
+        color,
+        chart.axis_text,
+        &[chart.bg, chart.bg.blend(render_config.value_area_color)],
+        4.5,
+    )
 }
 
 #[cfg(test)]
@@ -497,6 +513,39 @@ mod tests {
         let color_wrap = config.color_for_period(num_colors);
 
         assert_eq!(color_0, color_wrap);
+        let model = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let profile = to_tpo_profiles(&create_test_bars(), &model).remove(0);
+        for (name, theme) in crate::theme::presets() {
+            for mode in [
+                TPOColorMode::ByPeriod,
+                TPOColorMode::Solid,
+                TPOColorMode::ByValueArea,
+                TPOColorMode::ByInitialBalance,
+            ] {
+                let model = TPOConfig {
+                    color_mode: mode,
+                    ..model.clone()
+                };
+                for period in 0..num_colors {
+                    for price in [98.0, 103.0, 108.0] {
+                        let color =
+                            letter_color(&config, &model, period, price, &profile, &theme.chart);
+                        for bg in [
+                            theme.chart.bg,
+                            theme.chart.bg.blend(config.value_area_color),
+                        ] {
+                            assert!(
+                                crate::theme::contrast(color, bg) >= 4.5,
+                                "{name}: {mode:?}, period {period}, price {price}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

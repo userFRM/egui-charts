@@ -4,7 +4,7 @@
 
 use egui::{Context, Id, Ui};
 
-use crate::tokens::DESIGN_TOKENS;
+use crate::theme::ThemeExt;
 use crate::ui_kit::dialog::dialog_frame;
 
 /// Manages modal open/close state
@@ -102,7 +102,7 @@ impl<T> ModalHandler<T> {
 
         let response = egui::Modal::new(self.id)
             .frame(dialog_frame(&ctx.global_style()))
-            .backdrop_color(DESIGN_TOKENS.semantic.modal.overlay_bg)
+            .backdrop_color(ctx.active_theme().ui.modal_overlay)
             .show(ctx, |ui| add_contents(ui, self.payload.as_mut()));
         if response.should_close() {
             self.close();
@@ -125,6 +125,71 @@ impl ModalHandler<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modal_backdrops_follow_the_active_theme() {
+        use crate::theme::{Theme, apply_to_egui};
+        use crate::ui_kit::{command_palette::CommandPalette, modal::Modal};
+        use egui::{Color32, Pos2, RawInput, Rect, Shape, Vec2};
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 900.0));
+        for (theme, alpha) in [
+            (Theme::dark(), 180),
+            (Theme::light(), 96),
+            (Theme::high_contrast(), 0),
+        ] {
+            for surface in 0..3 {
+                let ctx = Context::default();
+                apply_to_egui(&ctx, &theme);
+                ctx.all_styles_mut(|style| style.animation_time = 0.0);
+                let mut handler = ModalHandler::new(("backdrop", surface));
+                handler.open();
+                let mut palette = CommandPalette::new(Vec::new());
+                for frame in 0..3 {
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ui| match surface {
+                            0 => {
+                                Modal::new("backdrop", "Modal")
+                                    .show(ui.ctx(), &mut true, |ui| ui.label("Content"));
+                            }
+                            1 => {
+                                handler.show_simple(ui.ctx(), |ui| ui.label("Content"));
+                            }
+                            _ => {
+                                palette.show(ui.ctx(), &mut true);
+                            }
+                        },
+                    );
+                    let fills: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            Shape::Rect(rect)
+                                if rect.rect == screen
+                                    && rect.fill.a() > 0
+                                    && rect.fill.a() < 255 =>
+                            {
+                                Some(rect.fill)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    let expected = if alpha == 0 {
+                        vec![]
+                    } else {
+                        vec![Color32::from_black_alpha(alpha)]
+                    };
+                    if frame == 2 {
+                        assert_eq!(fills, expected, "dark: {}, surface: {surface}", theme.dark);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_modal_handler_lifecycle() {

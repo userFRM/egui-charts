@@ -105,7 +105,7 @@ impl<'a> IconButton<'a> {
 
         let button_size = Vec2::splat(self.size.pixels());
         let (rect, response) = ui.allocate_exact_size(button_size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
 
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
@@ -123,10 +123,8 @@ impl<'a> IconButton<'a> {
 
             let icon_color = if self.selected {
                 variant.fg_color(ui)
-            } else if hovered || pressed {
-                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
+                ui.style().interact(&response).fg_stroke.color
             };
             let icon_size = Vec2::splat(self.size.icon_pixels(self.icon_scale));
             self.icon
