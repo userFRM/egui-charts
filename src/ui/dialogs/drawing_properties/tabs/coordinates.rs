@@ -32,6 +32,9 @@ impl CoordinatesTab {
         }
 
         for (i, point) in state.points.iter_mut().enumerate() {
+            if i > 0 {
+                ui.space_sm();
+            }
             ui.group(|ui| {
                 ui.strong(format!("Point {}", i + 1));
                 ui.space_sm();
@@ -39,14 +42,14 @@ impl CoordinatesTab {
                 FormGrid::new(format!("coord_grid_{i}"))
                     .spacing(DESIGN_TOKENS.spacing.lg, DESIGN_TOKENS.spacing.sm)
                     .show(ui, |ui| {
-                        ui.label("Price:");
+                        ui.label("Price");
                         ui.add(
                             egui::TextEdit::singleline(&mut point.price)
                                 .desired_width(DESIGN_TOKENS.sizing.dialog.input_width),
                         );
                         ui.end_row();
 
-                        ui.label("Date:");
+                        ui.label("Date");
                         ui.add(
                             egui::TextEdit::singleline(&mut point.date)
                                 .desired_width(DESIGN_TOKENS.sizing.dialog.input_width)
@@ -54,7 +57,7 @@ impl CoordinatesTab {
                         );
                         ui.end_row();
 
-                        ui.label("Time:");
+                        ui.label("Time");
                         ui.add(
                             egui::TextEdit::singleline(&mut point.time)
                                 .desired_width(DESIGN_TOKENS.sizing.dialog.input_width)
@@ -63,7 +66,6 @@ impl CoordinatesTab {
                         ui.end_row();
                     });
             });
-            ui.space_sm();
         }
     }
 }

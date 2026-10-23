@@ -21,7 +21,7 @@ impl VisibilityTab {
 
         if !props.visible_all_timeframes {
             ui.space_lg();
-            ui.label("Select timeframes:");
+            ui.label("Timeframes");
             ui.space_sm();
 
             FormGrid::new("timeframes_grid")

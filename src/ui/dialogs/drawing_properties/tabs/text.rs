@@ -19,7 +19,7 @@ impl TextTab {
 
         FormGrid::new("text_grid").show(ui, |ui| {
             // Label text
-            ui.label("Label:");
+            ui.label("Label");
             ui.add(
                 egui::TextEdit::multiline(&mut props.label)
                     .desired_width(DESIGN_TOKENS.sizing.dialog.input_width * 2.0)
@@ -28,7 +28,7 @@ impl TextTab {
             ui.end_row();
 
             // Font size
-            ui.label("Font Size:");
+            ui.label("Font size");
             ui.combo_select(
                 "font_size",
                 &mut props.font_size,

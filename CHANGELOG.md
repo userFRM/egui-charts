@@ -51,6 +51,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `DrawingPropertiesDialog` sizes its default frame to its tallest tab and uses the kit footer, with Apply as the only filled button and Delete and Clone as icon buttons, the kit colour picker, and line width swatches with a 1 to 10 px stepper; labels are in sentence case. Escape cancels the dialog and Enter applies it unless an open popup, colour picker or focused field takes the key.
 - The time axis no longer panics when a bar is stamped near the end of the representable date range, such as a millisecond timestamp read as seconds or `DateTime::<Utc>::MAX_UTC`: times it would extrapolate past the range are left out, and `TickMarkGenerator::generate_marks` stops at the last mark that fits.
 - The alert dialog and the alerts panel accept only a finite price or threshold, a multiplier above 0 and a lookback of at least one bar, keep Create disabled until the form is valid, and the dialog names the field to fix; an indicator alert set to compare with a threshold no longer loses an unreadable one.
 - A magnifier tooltip with a zoom of 0, a NaN or infinite zoom, or a lens larger than the plot no longer freezes or garbles the chart on hover: the zoom is drawn within 0.1 to 100 (NaN as 0.1), the lens is at most as large as the plot's smaller side, and only the bars on screen are drawn in it.

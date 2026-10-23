@@ -1,14 +1,17 @@
 //! Drawing properties dialog - modal popup for editing drawing properties.
 
-use egui::{Context, Ui, Vec2};
+use egui::{Context, Event, Key, Modifiers, Ui, Vec2};
 
 use super::actions::{DrawingId, DrawingPropertiesAction, DrawingProps};
 use super::config::DrawingPropertiesConfig;
 use super::tabs::{
     CoordinatesState, CoordinatesTab, PropertiesTab, StyleTab, TextTab, VisibilityTab,
 };
-use crate::ext::UiExt;
-use crate::ui_kit::dialog::{DialogFrame, dialog_header};
+use crate::icons::icons;
+use crate::theme::ThemeExt;
+use crate::ui_kit::ColorPickerState;
+use crate::ui_kit::buttons::Button;
+use crate::ui_kit::dialog::{DialogFooter, DialogFrame, dialog_header};
 use crate::ui_kit::tab_bar::TabBar;
 
 /// Drawing properties dialog
@@ -85,71 +88,96 @@ impl DrawingPropertiesDialog {
     }
 
     fn render_contents(&mut self, ui: &mut Ui) -> DrawingPropertiesAction {
-        let mut action = DrawingPropertiesAction::None;
+        let ctx = ui.ctx().clone();
+        // Read before the body: a combo popup closes itself on the Escape it receives there.
+        let popup_open = egui::Popup::is_any_open(&ctx);
+        let state_id = ui.scope_id().with("keyboard_and_pickers");
+        let mut state: UiState = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
 
-        // Title bar
-        if dialog_header(ui, &self.drawing_name) {
-            action = DrawingPropertiesAction::Cancel;
-            self.is_open = false;
-        }
-        ui.separator();
-
-        // Tabs
-        ui.space_sm();
+        let mut cancel = dialog_header(ui, &self.drawing_name);
         TabBar::new(&PropertiesTab::all(), &mut self.active_tab).show(ui);
 
-        // Content area
+        // Vertical auto-shrink stays on: a full-height body would push the pinned footer out.
         egui::ScrollArea::vertical()
-            .max_height(self.config.height - 180.0)
+            .auto_shrink([false, true])
+            .max_height((ui.available_height() - FOOTER_HEIGHT).max(0.0))
             .show(ui, |ui| match self.active_tab {
-                PropertiesTab::Style => StyleTab::show(ui, &mut self.props),
+                PropertiesTab::Style => StyleTab::show(ui, &mut self.props, &mut state.pickers),
                 PropertiesTab::Coordinates => CoordinatesTab::show(ui, &mut self.coordinates),
                 PropertiesTab::Visibility => VisibilityTab::show(ui, &mut self.props),
                 PropertiesTab::Text => TextTab::show(ui, &mut self.props),
             });
 
-        // Footer with buttons
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-            ui.space_lg();
-            ui.horizontal(|ui| {
-                ui.space_lg();
-
-                // Delete button
-                if ui.danger_button("Delete").clicked()
-                    && let Some(id) = self.drawing_id
-                {
-                    action = DrawingPropertiesAction::Delete(id);
-                    self.is_open = false;
-                }
-
-                // Clone button
-                if ui.button("Clone").clicked()
-                    && let Some(id) = self.drawing_id
-                {
-                    action = DrawingPropertiesAction::Clone(id);
-                }
-
-                ui.right_aligned(|ui| {
-                    ui.space_lg();
-
-                    // Apply button (primary)
-                    if ui.primary_button("Apply").clicked()
-                        && let Some(id) = self.drawing_id
-                    {
-                        action = DrawingPropertiesAction::Apply(id, self.props.clone());
-                        self.is_open = false;
-                    }
-
-                    // Cancel button
-                    if ui.button("Cancel").clicked() {
-                        action = DrawingPropertiesAction::Cancel;
-                        self.is_open = false;
-                    }
-                });
+        let mut delete = false;
+        let mut clone = false;
+        let (mut apply, cancel_clicked) = DialogFooter::new("Apply")
+            .secondary("Cancel")
+            .show_with_left(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.lg;
+                delete = Button::icon_and_text(&icons::TRASH, "Delete")
+                    .ghost()
+                    .show(ui)
+                    .clicked();
+                clone = Button::icon_and_text(&icons::DUPLICATE, "Clone")
+                    .ghost()
+                    .show(ui)
+                    .clicked();
             });
-            ui.separator();
-        });
+        cancel |= cancel_clicked;
 
+        // An open popup, colour picker or focused field takes Escape and Enter first. egui clears
+        // the focus on Escape before this frame runs, so the focus is read from the previous frame.
+        // Only a fresh press acts: the repeats of a key held after it closed a popup, picker or
+        // field must not go on to cancel or apply the dialog.
+        let consume = |key| {
+            ctx.input_mut(|i| {
+                let fresh = i.events.iter().any(|e| {
+                    matches!(e, Event::Key { key: k, pressed: true, repeat: false, modifiers, .. }
+                        if *k == key && modifiers.is_none())
+                });
+                fresh && i.consume_key(Modifiers::NONE, key)
+            })
+        };
+        if state.pickers.iter().any(|p| p.is_open) {
+            if consume(Key::Escape) {
+                state.pickers.iter_mut().for_each(|p| p.is_open = false);
+            }
+        } else if !popup_open && !state.had_focus {
+            cancel |= consume(Key::Escape);
+            apply |= !cancel && consume(Key::Enter);
+        }
+        state.had_focus = ctx.memory(|m| m.focused()).is_some();
+
+        let action = match self.drawing_id {
+            Some(id) if delete => DrawingPropertiesAction::Delete(id),
+            Some(id) if apply => DrawingPropertiesAction::Apply(id, self.props.clone()),
+            _ if cancel => DrawingPropertiesAction::Cancel,
+            Some(id) if clone => DrawingPropertiesAction::Clone(id),
+            _ => DrawingPropertiesAction::None,
+        };
+        // Clone keeps the dialog open; a closed dialog starts with fresh state next time.
+        if matches!(
+            action,
+            DrawingPropertiesAction::None | DrawingPropertiesAction::Clone(_)
+        ) {
+            ui.data_mut(|d| d.insert_temp(state_id, state));
+        } else {
+            self.is_open = false;
+            ui.data_mut(|d| d.remove::<UiState>(state_id));
+        }
         action
     }
+}
+
+/// Height of the `DialogFooter` block below the body: two `spacing.lg` gaps, the rule and a
+/// `ButtonSize::MD` row, with their item spacing.
+const FOOTER_HEIGHT: f32 = 60.0;
+
+/// Dialog state kept in egui memory, so the public struct keeps its fields.
+#[derive(Clone, Default)]
+struct UiState {
+    /// Colour and fill colour pickers of the Style tab.
+    pickers: [ColorPickerState; 2],
+    /// Whether a widget had keyboard focus at the end of the previous frame.
+    had_focus: bool,
 }

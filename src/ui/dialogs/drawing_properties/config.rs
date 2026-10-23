@@ -2,6 +2,9 @@
 
 use crate::tokens::DESIGN_TOKENS;
 
+/// Content height that fits the tallest tab (Coordinates) above the footer.
+const HEIGHT: f32 = 346.0;
+
 /// Configuration for the drawing properties dialog
 #[derive(Clone, Debug)]
 pub struct DrawingPropertiesConfig {
@@ -25,7 +28,7 @@ impl Default for DrawingPropertiesConfig {
     fn default() -> Self {
         Self {
             width: DESIGN_TOKENS.sizing.dialog.default_width,
-            height: DESIGN_TOKENS.sizing.dialog.properties_height,
+            height: HEIGHT,
             tab_height: DESIGN_TOKENS.sizing.settings_dialog.tab_height,
             content_padding: DESIGN_TOKENS.spacing.lg,
             row_spacing: DESIGN_TOKENS.spacing.md,
