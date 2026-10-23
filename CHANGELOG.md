@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Object tree headers use shared icon buttons, the search field and type selector share a 28 px row, and the 11 px footer stays at the panel bottom. The Data Window separates Time and Interval and formats prices and absolute change at `DataWindowInfo::price_decimals` when supplied. The demo passes instrument precision alongside its existing chart-formatted time and previous close. Migration: add `price_decimals` to `DataWindowInfo` literals or use `..Default::default()`. ([#301](https://github.com/userFRM/egui-charts/issues/301))
+
 - Object tree rows open native context menus with menu rows, sentence case labels and ellipses. Menus stay within the window and close on Escape or any outside click. Migration: `ObjectTreeState` no longer exposes `context_menu_open`, `context_menu_pos`, `context_menu_target`, `open_context_menu` or `close_context_menu`; egui owns popup state. ([#530](https://github.com/userFRM/egui-charts/issues/530))
 
 - Object tree selections use the active theme's selection fill and text; hover state clears when the pointer leaves a row. Long names end with an ellipsis 4 px before the row buttons, with the full name in the row tooltip. ([#529](https://github.com/userFRM/egui-charts/issues/529), [#532](https://github.com/userFRM/egui-charts/issues/532))
