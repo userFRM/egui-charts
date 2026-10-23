@@ -479,7 +479,7 @@ pub fn toolbar_tooltip(
         .id(response.id.with("toolbar_tooltip"))
         .kind(egui::PopupKind::Tooltip)
         .align(egui::RectAlign::BOTTOM)
-        .gap(10.0)
+        .gap(8.0)
         .sense(Sense::hover())
         .interactable(false)
         .open(response.enabled() && egui::Tooltip::should_show_tooltip(&response, false))
@@ -491,6 +491,7 @@ pub fn toolbar_tooltip(
         )
         .show(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().interact_size.y = 15.0;
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(text)
