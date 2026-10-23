@@ -633,6 +633,15 @@ impl Chart {
         &mut self.config
     }
 
+    /// Apply a theme to this chart and to the UI in `ctx`, without changing data or pan and zoom.
+    ///
+    /// Other charts sharing the context keep their configured series colours until updated.
+    pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
+        self.config = theme.apply_to_config(self.config.clone());
+        crate::theme::apply_to_egui(ctx, theme);
+        ctx.request_repaint();
+    }
+
     /// The chart's visual configuration.
     pub fn config(&self) -> &ChartConfig {
         &self.config

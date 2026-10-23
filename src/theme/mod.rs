@@ -575,6 +575,40 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn chart_theme_changes_keep_data_and_viewport_and_refresh_overlays() {
+        use crate::{
+            chart::selection::SeriesId,
+            model::{Bar, BarData},
+            widget::Chart,
+        };
+        let bars = vec![Bar::new(
+            chrono::DateTime::UNIX_EPOCH,
+            1.0,
+            2.0,
+            1.0,
+            2.0,
+            10.0,
+        )];
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let ctx = egui::Context::default();
+        let offset = chart.state().time_scale().right_offset();
+        for (_, theme) in presets() {
+            chart.set_theme(&ctx, &theme);
+            assert_eq!(chart.bars(SeriesId::MAIN), bars);
+            assert_eq!(chart.state().time_scale().right_offset(), offset);
+            assert_eq!(chart.config().background_color, theme.chart.bg);
+            let crosshair = chart.chart_options().crosshair.resolved(&ctx);
+            assert_eq!(
+                crosshair.label_background_color,
+                theme.chart.crosshair_label_bg
+            );
+            assert_eq!(crosshair.label_text_color, theme.chart.crosshair_label_text);
+            let tooltip = chart.chart_options().tooltip.resolved(&ctx);
+            assert_eq!(tooltip.background_color, theme.chart.bg_tooltip);
+        }
+    }
+
     #[cfg(feature = "serde")]
     #[test]
     fn partial_light_palettes_are_rejected_instead_of_mixing_presets() {

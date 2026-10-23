@@ -216,6 +216,25 @@ impl SettingsDialog {
             return action;
         }
 
+        let mut resolved = false;
+        for settings in [&mut self.settings, &mut self.original_settings] {
+            let basic = &mut settings.chart_basic_styles;
+            for (color, themed) in [
+                (&mut basic.background_color, theme.chart.bg),
+                (&mut basic.background_gradient_top, theme.chart.bg),
+                (&mut basic.background_gradient_bottom, theme.chart.bg_axis),
+            ] {
+                if *color == Color32::PLACEHOLDER {
+                    *color = themed;
+                    resolved = true;
+                }
+            }
+            settings.sync_legacy_fields();
+        }
+        if resolved {
+            self.update_color_pickers_from_settings();
+        }
+
         let mut is_open = self.is_open;
         let mut style = SettingsDialogStyle::from_theme(theme);
         style.sidebar_bg = theme.ui.panel_bg;
@@ -769,6 +788,14 @@ mod tests {
             }]);
             assert!(matches!(action, SettingsAction::Cancel));
             assert!(!dialog.is_open);
+            assert_eq!(
+                dialog.settings.chart_basic_styles.background_color,
+                theme.chart.bg
+            );
+            assert_eq!(
+                dialog.color_picker_states.background.sel_color,
+                theme.chart.bg
+            );
         }
     }
     #[test]

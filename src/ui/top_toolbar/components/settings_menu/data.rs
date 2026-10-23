@@ -73,6 +73,7 @@ impl Default for StatusLineOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartBasicStylesSettings {
     pub background_type: BackgroundType,
+    /// `Color32::PLACEHOLDER` takes the chart background when the dialog opens.
     pub background_color: Color32,
     pub background_gradient_top: Color32,
     pub background_gradient_bottom: Color32,
@@ -82,9 +83,9 @@ impl Default for ChartBasicStylesSettings {
     fn default() -> Self {
         Self {
             background_type: BackgroundType::Solid,
-            background_color: DESIGN_TOKENS.semantic.extended.chart_bg,
-            background_gradient_top: DESIGN_TOKENS.semantic.extended.chart_bg,
-            background_gradient_bottom: DESIGN_TOKENS.semantic.extended.chart_axis_bg,
+            background_color: Color32::PLACEHOLDER,
+            background_gradient_top: Color32::PLACEHOLDER,
+            background_gradient_bottom: Color32::PLACEHOLDER,
         }
     }
 }

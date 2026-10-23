@@ -362,7 +362,7 @@ pub fn crosshair_price_action(ui: &mut egui::Ui, tag: Rect, price: f64) -> Optio
         ui.scope_id().with("crosshair_price_action"),
         egui::Sense::click(),
     );
-    let foreground = Color32::WHITE;
+    let foreground = ui.ctx().active_theme().chart.crosshair_label_text;
     ui.painter().line_segment(
         [cell.right_top(), cell.right_bottom()],
         Stroke::new(0.5, foreground),
@@ -675,6 +675,18 @@ mod tests {
         let ctx = Context::default();
         let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
         let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
+        for (_, theme) in crate::theme::presets() {
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                crosshair_price_action(ui, tag, 704.64);
+            });
+            let color = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            assert_eq!(color, Some(theme.chart.crosshair_label_text));
+        }
         let mut actions = Vec::new();
         for (pos, expected) in [
             (Pos2::new(110.0, 110.0), "add"),

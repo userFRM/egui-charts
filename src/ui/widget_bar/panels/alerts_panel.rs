@@ -25,7 +25,7 @@ pub struct AlertsPanelConfig {
     pub show_event_alerts: bool,
     /// Max height of the panel
     pub max_height: f32,
-    /// Colors
+    /// Status colours; `Color32::PLACEHOLDER` follows the active theme.
     pub active_color: Color32,
     pub triggered_color: Color32,
     pub disabled_color: Color32,
@@ -40,10 +40,10 @@ impl Default for AlertsPanelConfig {
             show_volume_alerts: true,
             show_event_alerts: true,
             max_height: 400.0,
-            active_color: DESIGN_TOKENS.semantic.extended.success,
-            triggered_color: DESIGN_TOKENS.semantic.extended.warning,
-            disabled_color: DESIGN_TOKENS.semantic.extended.disabled,
-            expired_color: DESIGN_TOKENS.semantic.extended.error,
+            active_color: Color32::PLACEHOLDER,
+            triggered_color: Color32::PLACEHOLDER,
+            disabled_color: Color32::PLACEHOLDER,
+            expired_color: Color32::PLACEHOLDER,
         }
     }
 }
@@ -262,7 +262,7 @@ impl AlertsPanel {
                     ui.label(
                         RichText::new(format!("{active_cnt} active"))
                             .small()
-                            .color(self.config.active_color),
+                            .color(self.status_color(ui, AlertStatus::Active)),
                     );
                 });
 
@@ -386,7 +386,7 @@ impl AlertsPanel {
     }
 
     fn render_price_alert(&self, ui: &mut Ui, alert: &PriceAlert) -> AlertPanelAction {
-        let status_color = self.status_color(alert.status);
+        let status_color = self.status_color(ui, alert.status);
         let description = format!(
             "{}: {} {:.2}",
             alert.symbol,
@@ -496,7 +496,7 @@ impl AlertsPanel {
     }
 
     fn render_indicator_alert(&self, ui: &mut Ui, alert: &IndicatorAlert) -> AlertPanelAction {
-        let status_color = self.status_color(alert.status);
+        let status_color = self.status_color(ui, alert.status);
         let description = Self::format_indicator_description(alert);
         let symbol_text = alert.symbol.clone();
         let weak_color = ui.visuals().weak_text_color();
@@ -617,7 +617,7 @@ impl AlertsPanel {
     }
 
     fn render_volume_alert(&self, ui: &mut Ui, alert: &VolumeAlert) -> AlertPanelAction {
-        let status_color = self.status_color(alert.status);
+        let status_color = self.status_color(ui, alert.status);
         let description = format!(
             "{}: Volume > {:.1}x avg ({})",
             alert.symbol, alert.spike_multiplier, alert.lookback_periods
@@ -670,7 +670,7 @@ impl AlertsPanel {
     }
 
     fn render_event_alert(&self, ui: &mut Ui, alert: &EventAlert) -> AlertPanelAction {
-        let status_color = self.status_color(alert.status);
+        let status_color = self.status_color(ui, alert.status);
         let description = format!(
             "{}: {} min before ({})",
             alert.event_type, alert.minutes_before, alert.min_impact
@@ -692,12 +692,18 @@ impl AlertsPanel {
         action
     }
 
-    fn status_color(&self, status: AlertStatus) -> Color32 {
-        match status {
-            AlertStatus::Active => self.config.active_color,
-            AlertStatus::Triggered => self.config.triggered_color,
-            AlertStatus::Disabled => self.config.disabled_color,
-            AlertStatus::Expired => self.config.expired_color,
+    fn status_color(&self, ui: &Ui, status: AlertStatus) -> Color32 {
+        let theme = ui.active_theme();
+        let (configured, themed) = match status {
+            AlertStatus::Active => (self.config.active_color, theme.ui.success),
+            AlertStatus::Triggered => (self.config.triggered_color, theme.ui.warning),
+            AlertStatus::Disabled => (self.config.disabled_color, theme.ui.text_disabled),
+            AlertStatus::Expired => (self.config.expired_color, theme.ui.error),
+        };
+        if configured == Color32::PLACEHOLDER {
+            themed
+        } else {
+            configured
         }
     }
 
@@ -886,5 +892,30 @@ impl AlertNotification {
                     });
                 });
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_alert_status_colours_follow_theme_changes() {
+        let panel = AlertsPanel::default();
+        let ctx = egui::Context::default();
+        for (_, theme) in crate::theme::presets() {
+            crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.run_ui(Default::default(), |ui| {
+                for (status, expected) in [
+                    (AlertStatus::Active, theme.ui.success),
+                    (AlertStatus::Triggered, theme.ui.warning),
+                    (AlertStatus::Disabled, theme.ui.text_disabled),
+                    (AlertStatus::Expired, theme.ui.error),
+                ] {
+                    assert_eq!(panel.status_color(ui, status), expected);
+                }
+            })
+            .drop_without_applying_deltas();
+        }
     }
 }

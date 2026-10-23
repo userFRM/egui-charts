@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `Chart::set_theme(ctx, theme)` updates chart colours and the context theme while retaining data and viewport. Crosshair labels and their add controls use the active theme's colour pair, rectangle measurements use its axis colour pair, connection and alert statuses follow its semantic colours, and TPO letters retain at least 4.5:1 contrast on both the plot and value-area shading. The settings dialog resolves default background swatches from the theme instead of a fixed dark fill. Explicit crosshair, background and alert colours remain overrides. ([#275](https://github.com/userFRM/egui-charts/issues/275))
+
 - Selected indicator rows take both their fill and text from `IndicatorDialogConfig`, including when the configuration was frozen from another theme. The default follows the active selection pair. Migration: add `sel_text_color` to configuration literals or use `..Default::default()`. ([#437](https://github.com/userFRM/egui-charts/issues/437))
 
 - Modal dialogs, modal handlers and the command palette read `UiColors::modal_overlay` from the active theme. Light dialogs dim white panels to 159 rather than 75; high contrast uses its window outline without dimming. Migration: add `modal_overlay` to colour literals and saved palettes, or construct colours from a preset. ([#585](https://github.com/userFRM/egui-charts/issues/585))
