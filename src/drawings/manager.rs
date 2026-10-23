@@ -288,6 +288,11 @@ impl DrawingManager {
 
     // === History delegation ===
 
+    /// Exchange the standalone history with a chart user action's drawing commands.
+    pub(crate) fn swap_history(&mut self, history: &mut HistoryService) {
+        std::mem::swap(&mut self.history, history);
+    }
+
     /// Undoes the last drawing operation. Returns `true` if an operation was undone.
     pub fn undo(&mut self) -> bool {
         self.step_history(HistoryService::undo)

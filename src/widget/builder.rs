@@ -114,6 +114,7 @@ impl Chart {
             // 0 and 1 are the main and volume series.
             next_series: 2,
             drawings: DrawingManager::new(),
+            history: super::history::ChartHistory::default(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
             zoom_just_applied: false,

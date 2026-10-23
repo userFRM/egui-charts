@@ -12,7 +12,7 @@ use egui::Key;
 use std::fmt;
 
 /// Global keyboard shortcut configuration.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KeyboardOptions {
     /// Enable keyboard shortcuts
     pub enabled: bool,

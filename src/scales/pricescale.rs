@@ -55,7 +55,7 @@ impl FromStr for PriceScaleMode {
 }
 
 /// A min/max price range, used throughout the scale engine.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PriceRange {
     /// Minimum price in the range.
     pub min: f64,
@@ -82,7 +82,7 @@ impl PriceRange {
 
 /// Top and bottom margins for the price scale, expressed as fractions of the
 /// visible data range.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PriceScaleMargins {
     /// Top margin as a fraction of the data range (0.0 to 1.0)
     pub top: f64,
@@ -145,7 +145,7 @@ impl fmt::Display for PriceScaleId {
 }
 
 /// Configuration options for a [`PriceScale`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PriceScaleOptions {
     /// Price scale mode
     pub mode: PriceScaleMode,

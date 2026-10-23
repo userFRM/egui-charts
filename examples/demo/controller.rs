@@ -304,6 +304,31 @@ impl DemoApp {
         self.notice = Some((msg.into(), 0.0));
     }
 
+    pub(super) fn user_action<R>(&mut self, edit: impl FnOnce(&mut Self) -> R) -> R {
+        self.chart.begin_user_action();
+        let result = edit(self);
+        self.chart.end_user_action();
+        result
+    }
+
+    fn sync_chart_history(&mut self) {
+        if !self.chart.take_history_changed() {
+            return;
+        }
+        self.state.chart_type = self.chart.chart_type();
+        let timezone = &self.chart.chart_options().time_scale.timezone;
+        let name = timezone
+            .to_tz()
+            .map_or_else(|| "UTC".to_owned(), |zone| zone.name().to_owned());
+        let clock_changed = self.timeframe_toolbar.state.timezone != name;
+        self.timeframe_toolbar.set_timezone(name);
+        if let Some(tf) = self.chart.timeframe()
+            && (tf != self.state.timeframe || clock_changed)
+        {
+            self.switch_timeframe(tf);
+        }
+    }
+
     // --- data helpers ------------------------------------------------------
 
     fn switch_timeframe(&mut self, tf: Timeframe) {
@@ -507,6 +532,21 @@ impl DemoApp {
         settings.chart_basic_styles.background_color = config.background_color;
         settings.grid_lines.horizontal_color = config.grid_color;
         settings.grid_lines.vertical_color = config.grid_color;
+        use egui_charts::config::NavigationButtons;
+        use egui_charts::ui::top_toolbar::components::settings_menu::types::{
+            ButtonVisibility, GridLinesMode,
+        };
+        settings.grid_lines.mode = match (config.show_horizontal_grid, config.show_vertical_grid) {
+            (true, true) => GridLinesMode::Both,
+            (true, false) => GridLinesMode::Horizontal,
+            (false, true) => GridLinesMode::Vertical,
+            (false, false) => GridLinesMode::None,
+        };
+        settings.btns.navigation = match config.navigation_buttons {
+            NavigationButtons::Always => ButtonVisibility::AlwaysVisible,
+            NavigationButtons::OnHover => ButtonVisibility::VisibleOnMouseOver,
+            NavigationButtons::Never => ButtonVisibility::Hidden,
+        };
         settings.status_line.show_symbol = config.show_symbol_labels;
         settings.status_line.title_as_description = config.title_as_description;
         settings.status_line.show_quote_boxes = config.show_quote_boxes;
@@ -592,12 +632,15 @@ impl DemoApp {
         if let IndicatorDialogAction::AddIndicator(study) =
             self.indicator_dialog.show(ctx, &self.theme)
         {
+            self.chart.begin_user_action();
             let inputs = self.indicator_dialog.input_summary(study.name());
             let id = self.chart.add_indicator(study);
             self.chart.set_indicator_inputs(id, inputs);
+            self.chart.end_user_action();
         }
 
         if let Some(edit) = self.indicator_settings.show(ctx, &self.theme) {
+            self.chart.begin_user_action();
             let result = self
                 .chart
                 .indicator_mut(edit.id)
@@ -635,30 +678,12 @@ impl DemoApp {
                 }
                 Err(error) => self.notify(error),
             }
+            self.chart.end_user_action();
         }
 
         // Chart settings.
         match self.settings_dialog.show(ctx, &self.theme) {
-            SettingsAction::Apply(state) => {
-                self.settings_state = state.clone();
-                apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
-                let scale = self.chart.price_scale_mut();
-                let mode = if state.scales_and_lines.log_scale {
-                    egui_charts::scales::PriceScaleMode::Logarithmic
-                } else if state.scales_and_lines.percentage_scale {
-                    egui_charts::scales::PriceScaleMode::Percentage
-                } else {
-                    egui_charts::scales::PriceScaleMode::Normal
-                };
-                scale.options_mut().mode = mode;
-                scale.options_mut().invert_scale = state.scales_and_lines.invert_scale;
-                if state.scales_and_lines.auto_scale {
-                    scale.reset();
-                } else {
-                    let range = scale.range();
-                    scale.set_range(range.min, range.max);
-                }
-            }
+            SettingsAction::Apply(state) => self.apply_chart_settings(state),
             SettingsAction::Cancel => {}
             _ => {}
         }
@@ -680,7 +705,8 @@ impl DemoApp {
         // Series settings.
         match self.series_settings.show(ctx) {
             SeriesSettingsAction::Apply(_id, settings) => {
-                self.chart.apply_series_settings(&settings);
+                self.chart
+                    .user_action(|chart| chart.apply_series_settings(&settings));
             }
             SeriesSettingsAction::None | SeriesSettingsAction::Cancel => {}
         }
@@ -689,7 +715,8 @@ impl DemoApp {
         match self.drawing_props.show(ctx) {
             DrawingPropertiesAction::Apply(id, props) => self.apply_drawing_props(id, props),
             DrawingPropertiesAction::Delete(id) => {
-                self.chart.drawings_mut().delete_drawing(id.0);
+                self.chart
+                    .user_action(|chart| chart.drawings_mut().delete_drawing(id.0));
             }
             DrawingPropertiesAction::Clone(id) => self.clone_drawing(id.0),
             DrawingPropertiesAction::Cancel | DrawingPropertiesAction::None => {}
@@ -715,6 +742,29 @@ impl DemoApp {
         }
     }
 
+    fn apply_chart_settings(&mut self, state: ChartSettingsState) {
+        self.chart.begin_user_action();
+        self.settings_state = state.clone();
+        apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
+        let scale = self.chart.price_scale_mut();
+        let mode = if state.scales_and_lines.log_scale {
+            egui_charts::scales::PriceScaleMode::Logarithmic
+        } else if state.scales_and_lines.percentage_scale {
+            egui_charts::scales::PriceScaleMode::Percentage
+        } else {
+            egui_charts::scales::PriceScaleMode::Normal
+        };
+        scale.options_mut().mode = mode;
+        scale.options_mut().invert_scale = state.scales_and_lines.invert_scale;
+        if state.scales_and_lines.auto_scale {
+            scale.reset();
+        } else {
+            let range = scale.range();
+            scale.set_range(range.min, range.max);
+        }
+        self.chart.end_user_action();
+    }
+
     fn remove_all_indicators(&mut self) {
         let chart = &mut self.chart;
         let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
@@ -724,6 +774,10 @@ impl DemoApp {
     }
 
     fn apply_drawing_props(&mut self, id: DrawingId, props: DrawingProps) {
+        self.user_action(|app| app.apply_drawing_props_edit(id, props));
+    }
+
+    fn apply_drawing_props_edit(&mut self, id: DrawingId, props: DrawingProps) {
         self.chart.drawings_mut().edit_drawing(id.0, |drawing| {
             drawing.color = props.color.to_srgba_unmultiplied();
             drawing.stroke_width = props.line_width;
@@ -749,6 +803,10 @@ impl DemoApp {
     }
 
     fn clone_drawing(&mut self, id: usize) {
+        self.user_action(|app| app.clone_drawing_edit(id));
+    }
+
+    fn clone_drawing_edit(&mut self, id: usize) {
         let dm = self.chart.drawings_mut();
         if let Some(src) = dm.drawings.iter().find(|d| d.id == id).cloned() {
             let mut copy = src;
@@ -868,7 +926,8 @@ impl eframe::App for DemoApp {
         // A colour picker drag ends, as one edit, when the pointer is released.
         if self.colour_drag && !ctx.input(|i| i.pointer.any_down()) {
             self.colour_drag = false;
-            self.chart.drawings_mut().end_drag_handle();
+            self.chart
+                .user_action(|chart| chart.drawings_mut().end_drag_handle());
         }
 
         let panel_bg = ui.style().visuals.panel_fill;
@@ -914,9 +973,8 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        let drawings = self.chart.drawings();
-        self.top_toolbar.state.can_undo = drawings.can_undo();
-        self.top_toolbar.state.can_redo = drawings.can_redo();
+        self.top_toolbar.state.can_undo = self.chart.can_undo();
+        self.top_toolbar.state.can_redo = self.chart.can_redo();
         egui::Panel::top("toolbar")
             .exact_size(42.0)
             .show_separator_line(false)
@@ -1046,6 +1104,24 @@ impl DemoApp {
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
+            TopToolbarAction::Undo => {
+                self.chart.undo();
+                self.sync_chart_history();
+                return;
+            }
+            TopToolbarAction::Redo => {
+                self.chart.redo();
+                self.sync_chart_history();
+                return;
+            }
+            _ => {}
+        }
+
+        self.user_action(|app| app.handle_top_toolbar_edit(ctx, action));
+    }
+
+    fn handle_top_toolbar_edit(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
+        match action {
             TopToolbarAction::ChartStyleSelected(name) => {
                 if let Some(ct) = chart_type_from_name(&name) {
                     self.state.chart_type = ct;
@@ -1073,12 +1149,7 @@ impl DemoApp {
                 let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
             }
-            TopToolbarAction::Undo => {
-                self.chart.drawings_mut().undo();
-            }
-            TopToolbarAction::Redo => {
-                self.chart.drawings_mut().redo();
-            }
+            TopToolbarAction::Undo | TopToolbarAction::Redo => {}
             TopToolbarAction::SaveIndicatorTemplate => {
                 let name = format!("Study set {}", self.indicator_templates.len() + 1);
                 let studies = self
@@ -1174,6 +1245,10 @@ impl DemoApp {
     }
 
     pub(crate) fn handle_drawing_toolbar(&mut self, action: DrawingToolbarAction) {
+        self.user_action(|app| app.handle_drawing_toolbar_edit(action));
+    }
+
+    fn handle_drawing_toolbar_edit(&mut self, action: DrawingToolbarAction) {
         // Variants that touch the indicator registry (not the drawing manager)
         // or surface a notice are handled first, before the `dm` borrow.
         match action {
@@ -1395,6 +1470,10 @@ impl DemoApp {
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
+        self.user_action(|app| app.handle_object_tree_edit(action, sources));
+    }
+
+    fn handle_object_tree_edit(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
         match action {
             ObjectTreeAction::ToggleVisibility(id) => {
                 let chart = &mut self.chart;
@@ -1592,7 +1671,9 @@ impl DemoApp {
                             .selectable_label(self.timeframe_toolbar.state.timezone == label, label)
                             .clicked()
                         {
-                            apply_timezone(&mut self.chart, &mut self.timeframe_toolbar, label);
+                            self.user_action(|app| {
+                                apply_timezone(&mut app.chart, &mut app.timeframe_toolbar, label)
+                            });
                             self.timeframe_toolbar.state.timezone_menu_open = false;
                         }
                     }
@@ -1687,6 +1768,10 @@ impl DemoApp {
     }
 
     fn handle_chart_context(&mut self, action: ContextMenuAction) {
+        self.user_action(|app| app.handle_chart_context_edit(action));
+    }
+
+    fn handle_chart_context_edit(&mut self, action: ContextMenuAction) {
         match action {
             ContextMenuAction::OpenSettings => {
                 self.open_chart_settings_dialog();
@@ -1718,6 +1803,10 @@ impl DemoApp {
     }
 
     fn handle_drawing_context(&mut self, action: DrawingContextMenuAction) {
+        self.user_action(|app| app.handle_drawing_context_edit(action));
+    }
+
+    fn handle_drawing_context_edit(&mut self, action: DrawingContextMenuAction) {
         // The library selects the right-clicked drawing, so the selected id is
         // the menu's target.
         let Some(id) = self.chart.drawings().sel_drawing() else {
@@ -1805,6 +1894,7 @@ impl DemoApp {
         use egui_charts::config::KeyboardAction as A;
         use egui_charts::widget::ShortcutRequest;
         self.chart.dispatch_shortcuts(ctx);
+        self.sync_chart_history();
         for request in self.chart.take_shortcut_requests() {
             match request {
                 ShortcutRequest::PasteDrawing(text) => {
@@ -1868,6 +1958,10 @@ impl DemoApp {
 
     // The demo keeps a session clipboard; hosts can decode their persistent drawing format instead.
     fn paste_drawing(&mut self) {
+        self.user_action(|app| app.paste_drawing_edit());
+    }
+
+    fn paste_drawing_edit(&mut self) {
         if let Some((_, mut drawing)) = self.copied_drawing.clone() {
             drawing.stored_id = None;
             drawing.created_at = None;
@@ -2254,6 +2348,89 @@ mod tests {
         assert_eq!(app.state.timeframe, Timeframe::Min15);
         assert_eq!(app.state.timeframe.duration_ms(), 900_000);
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min15));
+        let original = app.chart.config().background_color;
+        let mut settings = app.settings_state.clone();
+        settings.chart_basic_styles.background_color = egui::Color32::RED;
+        settings.scales_and_lines.invert_scale = true;
+        settings.timezone = "America/New_York".into();
+        app.apply_chart_settings(settings.clone());
+        app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Hour1));
+        settings.chart_basic_styles.background_color = egui::Color32::BLUE;
+        app.apply_chart_settings(settings);
+        for (action, timeframe, color, inverted, timezone) in [
+            (
+                TopToolbarAction::Undo,
+                Timeframe::Hour1,
+                egui::Color32::RED,
+                true,
+                "America/New_York",
+            ),
+            (
+                TopToolbarAction::Undo,
+                Timeframe::Min15,
+                egui::Color32::RED,
+                true,
+                "America/New_York",
+            ),
+            (
+                TopToolbarAction::Undo,
+                Timeframe::Min15,
+                original,
+                false,
+                "UTC",
+            ),
+            (
+                TopToolbarAction::Undo,
+                Timeframe::Min1,
+                original,
+                false,
+                "UTC",
+            ),
+            (
+                TopToolbarAction::Redo,
+                Timeframe::Min15,
+                original,
+                false,
+                "UTC",
+            ),
+            (
+                TopToolbarAction::Redo,
+                Timeframe::Min15,
+                egui::Color32::RED,
+                true,
+                "America/New_York",
+            ),
+            (
+                TopToolbarAction::Redo,
+                Timeframe::Hour1,
+                egui::Color32::RED,
+                true,
+                "America/New_York",
+            ),
+            (
+                TopToolbarAction::Redo,
+                Timeframe::Hour1,
+                egui::Color32::BLUE,
+                true,
+                "America/New_York",
+            ),
+        ] {
+            app.handle_top_toolbar(&ctx, action);
+            assert_eq!(app.state.timeframe, timeframe);
+            assert_eq!(app.chart.timeframe(), Some(timeframe));
+            assert_eq!(app.timeframe_toolbar.state.timeframe, timeframe);
+            assert_eq!(app.chart.config().background_color, color);
+            assert_eq!(
+                app.chart.state().price_scale().options().invert_scale,
+                inverted
+            );
+            assert_eq!(app.timeframe_toolbar.state.timezone, timezone);
+            let bars = app.chart.bars(SeriesId::MAIN);
+            assert_eq!(
+                (bars[bars.len() - 1].time - bars[bars.len() - 2].time).num_milliseconds(),
+                timeframe.duration_ms()
+            );
+        }
     }
 
     /// Quick search executes catalogue entries as well as opening settings.
@@ -2268,6 +2445,14 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
+            if query == "RSI" {
+                app.chart.user_action(|chart| {
+                    let dm = chart.drawings_mut();
+                    let tool = egui_charts::drawings::DrawingToolType::TrendLine;
+                    dm.start_drawing_with_coords(tool, egui::pos2(10.0, 100.0), |x| x, f64::from);
+                    dm.add_point_with_coords(egui::pos2(20.0, 120.0), |x| x, f64::from);
+                });
+            }
             let key = |key, modifiers| Event::Key {
                 key,
                 physical_key: None,
@@ -2313,12 +2498,35 @@ mod tests {
                 .drop_without_applying_deltas();
             }
             match query {
-                "RSI" => assert!(
-                    app.chart
+                "RSI" => {
+                    let id = app
+                        .chart
                         .indicators()
-                        .any(|(_, study)| study.name() == "RSI"),
-                    "query {query}, same frame {same_frame}"
-                ),
+                        .find(|(_, study)| study.name() == "RSI")
+                        .expect("palette adds RSI")
+                        .0;
+                    for (action, studies, drawings, can_undo, can_redo) in [
+                        (TopToolbarAction::Undo, 0, 1, true, true),
+                        (TopToolbarAction::Redo, 1, 1, true, false),
+                        (TopToolbarAction::Undo, 0, 1, true, true),
+                        (TopToolbarAction::Undo, 0, 0, false, true),
+                        (TopToolbarAction::Redo, 0, 1, true, true),
+                        (TopToolbarAction::Redo, 1, 1, true, false),
+                    ] {
+                        app.handle_top_toolbar(&ctx, action);
+                        assert_eq!(app.chart.indicators().count(), studies);
+                        assert_eq!(app.chart.drawings().drawings.len(), drawings);
+                        if studies == 1 {
+                            assert_eq!(app.chart.indicators().next().unwrap().0, id);
+                        }
+                        ctx.run_ui(RawInput::default(), |ui| {
+                            app.show_top_toolbar(ui, egui::Color32::BLACK)
+                        })
+                        .drop_without_applying_deltas();
+                        assert_eq!(app.top_toolbar.state.can_undo, can_undo);
+                        assert_eq!(app.top_toolbar.state.can_redo, can_redo);
+                    }
+                }
                 "Trend Line" => assert_eq!(
                     app.chart.drawings().active_tool,
                     Some(egui_charts::drawings::DrawingToolType::TrendLine)

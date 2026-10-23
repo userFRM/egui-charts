@@ -334,9 +334,9 @@ mod tests {
                     "drag: magnet {magnet}, price {price}, visible {visible}: {after:?}"
                 );
                 assert!(chart.drawings().dragging_handle.is_none());
-                assert!(chart.drawings_mut().undo());
+                assert!(chart.undo());
                 assert_eq!(chart.drawings().drawings[0].chart_points[0], before);
-                assert!(chart.drawings_mut().redo());
+                assert!(chart.redo());
                 assert_eq!(chart.drawings().drawings[0].chart_points[0], after);
             }
         }

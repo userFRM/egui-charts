@@ -5,7 +5,7 @@
 //! mobile OS list scrolling.
 
 /// Kinetic scroll animation parameters.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KineticScrollOptions {
     /// Enable kinetic scrolling (inertial scrolling)
     /// Default: false (chart stops immediately on release)

@@ -47,6 +47,10 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
 
 impl DemoApp {
     pub(super) fn execute_search_command(&mut self, ctx: &egui::Context, id: &str) {
+        self.user_action(|app| app.execute_search_edit(ctx, id));
+    }
+
+    fn execute_search_edit(&mut self, ctx: &egui::Context, id: &str) {
         if let Some(name) = id.strip_prefix("tool:") {
             if let Some(tool) = DrawingToolType::all()
                 .iter()

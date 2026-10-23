@@ -256,7 +256,7 @@ impl Chart {
 
         // The panes reflow on the next frame.
         if let Some(id) = pending_indicator_remove {
-            self.remove_series(id);
+            self.user_action(|chart| chart.remove_series(id));
         }
 
         ui.allocate_space(egui::vec2(available.width(), axis_height));

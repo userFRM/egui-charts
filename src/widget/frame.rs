@@ -1025,6 +1025,7 @@ impl Chart {
             // Clone/extract values before mutable borrow of self
             let timescale = self.state.time_scale().clone();
 
+            let drawing_history = self.history.start_drawing_action(&mut self.drawings);
             // Temporarily take cursor_modes and the drawings to avoid borrow conflict
             let mut cursor_modes = std::mem::take(&mut self.cursor_modes);
             let mut drawings = std::mem::take(&mut self.drawings);
@@ -1046,6 +1047,8 @@ impl Chart {
             // Put them back
             self.drawings = drawings;
             self.cursor_modes = cursor_modes;
+            self.history
+                .finish_drawing_action(&mut self.drawings, drawing_history);
         }
 
         if !time_based

@@ -273,6 +273,18 @@ impl super::Chart {
     }
 
     fn apply_keyboard_action(&mut self, action: KeyboardAction, chart_rect: egui::Rect) {
+        match action {
+            KeyboardAction::Undo => {
+                self.undo();
+            }
+            KeyboardAction::Redo => {
+                self.redo();
+            }
+            _ => self.user_action(|chart| chart.apply_keyboard_edit(action, chart_rect)),
+        }
+    }
+
+    fn apply_keyboard_edit(&mut self, action: KeyboardAction, chart_rect: egui::Rect) {
         use crate::scales::PriceScaleMode;
         use KeyboardAction as A;
         match action {
@@ -361,12 +373,6 @@ impl super::Chart {
             A::ToggleVolume => self.config.show_volume = !self.config.show_volume,
             A::DrawingTool(tool) => self.drawings.set_active_tool(Some(tool)),
             A::ToggleDrawings => self.drawings.toggle_visibility_all(),
-            A::Undo => {
-                self.drawings.undo();
-            }
-            A::Redo => {
-                self.drawings.redo();
-            }
             A::CompleteDrawing => {
                 if self.drawings.active_tool.is_some_and(|tool| {
                     tool.interaction_mode() == crate::drawings::DrawingInteractionMode::MultiPoint

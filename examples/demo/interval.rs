@@ -36,7 +36,7 @@ impl super::DemoApp {
             };
             match value.parse::<Timeframe>() {
                 Ok(timeframe) => {
-                    self.switch_timeframe(timeframe);
+                    self.user_action(|app| app.switch_timeframe(timeframe));
                     return;
                 }
                 Err(error) => self.notify(error),

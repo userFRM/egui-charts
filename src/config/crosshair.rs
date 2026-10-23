@@ -46,7 +46,7 @@ pub enum CrosshairLineStyle {
 }
 
 /// Crosshair options
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CrosshairOptions {
     /// Crosshair mode
     pub mode: CrosshairMode,

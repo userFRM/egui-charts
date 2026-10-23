@@ -127,6 +127,7 @@ use crate::chart::state;
 
 pub mod builder;
 mod feed;
+mod history;
 pub mod keyboard;
 pub use keyboard::{ShortcutMap, ShortcutRequest};
 mod frame;
@@ -192,6 +193,12 @@ pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 ///
 /// # Architecture
 ///
+/// User drawing interactions and shortcuts share [`Chart::undo`] / [`Chart::redo`] with
+/// host toolbar, menu and dialog edits wrapped in [`Chart::user_action`]. Direct programmatic
+/// setters and feed/data updates do not enter this history. Use [`Chart::can_undo`] and
+/// [`Chart::can_redo`] for toolbar availability, and [`Chart::take_history_changed`] to
+/// synchronize host controls and data after restoring an interval or settings.
+///
 /// `Chart` owns a [`ChartState`] (data + coordinate systems) and a
 /// [`ChartConfig`] (visual styling). Rendering is delegated to specialized
 /// modules in `crate::chart::rendering`, while interaction logic lives in
@@ -204,6 +211,7 @@ pub struct Chart {
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
     pub(crate) keyboard: keyboard::KeyboardState,
+    history: history::ChartHistory,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)
@@ -632,7 +640,8 @@ impl Chart {
     ///
     /// Use this to apply settings produced by a dialog in place, e.g.
     /// `settings.apply_to_config(chart.config_mut())`, without rebuilding the
-    /// whole [`ChartConfig`]. Changes take effect on the next rendered frame.
+    /// whole [`ChartConfig`]. Changes take effect on the next rendered frame. Wrap a host UI
+    /// submission in [`Self::user_action`] to include it in chart history.
     pub fn config_mut(&mut self) -> &mut ChartConfig {
         &mut self.config
     }
@@ -672,7 +681,8 @@ impl Chart {
     }
 
     /// The chart's drawings and drawing tools, to set the active tool or to save and load the
-    /// drawings.
+    /// drawings. Direct host edits do not enter chart history; wrap UI-originated edits in
+    /// [`Self::user_action`]. The manager's own history is for standalone drawing use.
     pub fn drawings_mut(&mut self) -> &mut DrawingManager {
         &mut self.drawings
     }

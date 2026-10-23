@@ -155,7 +155,7 @@ impl SessionConfig {
 /// overlay, and the real-time navigation button.
 ///
 /// Defaults follow a common dark-theme charting palette.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChartConfig {
     /// Color for bullish (up) bars/candles body
     pub bullish_color: Color32,
