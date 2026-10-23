@@ -508,5 +508,12 @@ mod tests {
             .sum();
         output.drop_without_applying_deltas();
         assert_eq!(ink, 22.0, "dash phase must survive short segments");
+        let mut reset = chart.series_settings();
+        reset.reset_to_default();
+        assert_eq!(
+            reset.chart_type,
+            ChartType::Line,
+            "reset must keep the dialog's active type"
+        );
     }
 }

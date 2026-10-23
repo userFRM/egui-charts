@@ -119,6 +119,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Resetting series settings keeps the active chart type in the dialog, so its style controls remain visible.
+
 - Dashed and dotted series retain their pattern when zooming out makes individual segments shorter than one point.
 
 - The Area chart uses a blue 2 pt line and a vertical fill fading from 45% opacity at the highest visible point to transparent at the plot bottom, behind the volume overlay. Panning and zooming move the gradient with the visible range. ([#735](https://github.com/userFRM/egui-charts/issues/735))

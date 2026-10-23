@@ -132,9 +132,12 @@ impl SeriesSettings {
         self.bearish_wick_color.unwrap_or(self.bearish_color)
     }
 
-    /// Reset to default colors
+    /// Reset settings to defaults, keeping the active chart type for dialog context.
     pub fn reset_to_default(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            chart_type: self.chart_type,
+            ..Self::default()
+        };
     }
 
     /// Compute the line value for a bar based on the configured price source.
