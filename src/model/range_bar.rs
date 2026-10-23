@@ -209,30 +209,23 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
 /// Convert OHLC bars to range bars (approximation). A bar's volume that would make its range bar's
 /// volume overflow is left out.
 ///
+/// Returns no bars when the range size is not a positive finite number.
+///
 /// # Safety Limits
+/// - When the bars move by more than two million range sizes, the range bars are built from the
+///   latest bar after which they move at most that much
 /// - At most the newest 5,000 range bars
-/// - Auto-adjusts range size if too small relative to price range
 pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<RangeBar> {
-    if data.is_empty() {
-        return Vec::new();
-    }
-
-    // Calculate price range to validate range size
-    let (min_price, max_price) = data.iter().fold((f64::MAX, f64::MIN), |(min, max), bar| {
-        (min.min(bar.low), max.max(bar.high))
-    });
-    let price_range = max_price - min_price;
-
-    // Calculate range size (potentially using ATR)
-    let base_range_size = if config.use_atr && data.len() >= config.atr_period {
+    // The range size, from ATR when the config asks for it
+    let range_size = if config.use_atr && data.len() >= config.atr_period {
         calculate_atr(data, config.atr_period) * config.atr_multiplier
     } else {
         config.range_size
     };
-
-    // Auto-adjust range size if it would create too many bars
-    let min_range_size = price_range / 200.0;
-    let range_size = base_range_size.max(min_range_size).max(0.0001);
+    if data.is_empty() || !(range_size > 0.0 && range_size.is_finite()) {
+        return Vec::new();
+    }
+    let data = &data[work_start(data, range_size)..];
 
     let mut bars: Vec<RangeBar> = Vec::new();
     const MAX_BARS: usize = 5_000;
@@ -258,19 +251,20 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
             curr_bar.high = curr_bar.high.max(price);
             curr_bar.low = curr_bar.low.min(price);
 
-            // Check if range is exceeded (with iteration limit)
-            let mut iterations = 0;
-            const MAX_ITERATIONS: usize = 100;
-
-            while curr_bar.range() >= range_size && iterations < MAX_ITERATIONS {
-                iterations += 1;
-
+            while curr_bar.range() >= range_size {
                 // Complete the bar
                 if curr_bar.high - curr_bar.open >= range_size {
+                    // A size below the precision of the price moves nothing
+                    if curr_bar.low + range_size == curr_bar.low {
+                        break;
+                    }
                     // Closed up
                     curr_bar.close = curr_bar.low + range_size;
                     curr_bar.high = curr_bar.close;
                 } else {
+                    if curr_bar.high - range_size == curr_bar.high {
+                        break;
+                    }
                     // Closed down
                     curr_bar.close = curr_bar.high - range_size;
                     curr_bar.low = curr_bar.close;
@@ -319,6 +313,26 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
 fn add_volume(volume: f64, added: f64) -> f64 {
     let sum = volume + added;
     if sum.is_finite() { sum } else { volume }
+}
+
+/// Index of the bar to build from so that the range bars move at most `MAX_WORK` range sizes.
+/// Bar `i` costs its path through open, high, low and close in sizes plus 4; the returned bar
+/// only seeds the state, and its own range is split at the next bar's first price.
+pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
+    let mut total = 0.0;
+    for i in (1..bars.len()).rev() {
+        let (b, prev) = (&bars[i], &bars[i - 1]);
+        total += ((b.open - prev.close).abs()
+            + (b.high - b.open).abs()
+            + (b.high - b.low)
+            + (b.close - b.low).abs())
+            / size
+            + 4.0;
+        if total + (prev.high - prev.low) / size > super::MAX_WORK {
+            return i;
+        }
+    }
+    0
 }
 
 /// Calculate ATR for range size

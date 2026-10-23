@@ -100,23 +100,15 @@ impl KagiConfig {
 
 /// Transform bars into Kagi lines
 ///
+/// Returns no lines when the reversal amount is not a positive finite number.
+///
 /// # Safety Limits
 /// - At most the newest 10,000 lines
-/// - Auto-adjusts reversal amount if too small relative to price range
 pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
-    if bars.is_empty() {
+    let reversal = config.reversal_amount;
+    if bars.is_empty() || !(reversal > 0.0 && reversal.is_finite()) {
         return Vec::new();
     }
-
-    // Calculate price range to validate reversal amount
-    let (min_price, max_price) = bars.iter().fold((f64::MAX, f64::MIN), |(min, max), bar| {
-        (min.min(bar.low), max.max(bar.high))
-    });
-    let price_range = max_price - min_price;
-
-    // Auto-adjust reversal amount if it would create too many lines
-    let min_reversal = price_range / 500.0;
-    let reversal = config.reversal_amount.max(min_reversal).max(0.0001);
 
     let mut lines = Vec::new();
     const MAX_LINES: usize = 10_000;

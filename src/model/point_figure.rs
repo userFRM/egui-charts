@@ -124,30 +124,21 @@ impl PnfColumn {
 
 /// Convert bar data to Point and Figure columns
 ///
+/// Returns no columns when the box size is not a positive finite number or the reversal is zero
+/// boxes.
+///
 /// # Safety Limits
 /// - At most the newest 5,000 columns
-/// - Auto-adjusts box size if too small relative to price range
 pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn> {
-    if data.is_empty() {
-        return Vec::new();
-    }
-
-    // Calculate price range to validate box size
-    let (min_price, max_price) = data.iter().fold((f64::MAX, f64::MIN), |(min, max), bar| {
-        (min.min(bar.low), max.max(bar.high))
-    });
-    let price_range = max_price - min_price;
-
-    // Calculate box size (potentially using ATR)
-    let base_box_size = if config.use_atr && data.len() >= config.atr_period {
+    // The box size, from ATR when the config asks for it
+    let box_size = if config.use_atr && data.len() >= config.atr_period {
         calculate_atr(data, config.atr_period)
     } else {
         config.box_size
     };
-
-    // Auto-adjust box size if it would create too many boxes
-    let min_box_size = price_range / 500.0;
-    let box_size = base_box_size.max(min_box_size).max(0.0001);
+    if data.is_empty() || !(box_size > 0.0 && box_size.is_finite()) || config.reversal_boxes == 0 {
+        return Vec::new();
+    }
 
     let reversal_amount = box_size * config.reversal_boxes as f64;
     let mut columns: Vec<PnfColumn> = Vec::new();

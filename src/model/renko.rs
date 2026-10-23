@@ -87,24 +87,18 @@ impl RenkoConfig {
 /// brick's close, and reverses it when a close reaches one brick beyond the
 /// last brick's open, so a reversal needs a two-brick move.
 ///
+/// Returns no bricks when the brick size is not a positive finite number.
+///
 /// # Safety Limits
+/// - When the bars move by more than two million brick sizes, the bricks are built from the latest
+///   bar after which they move at most that much
 /// - At most the newest 10,000 bricks
-/// - Auto-adjusts brick size if too small relative to price range
 pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
-    if bars.is_empty() {
+    let brick_size = config.brick_size;
+    if bars.is_empty() || !(brick_size > 0.0 && brick_size.is_finite()) {
         return Vec::new();
     }
-
-    // Calculate price range to validate brick size
-    let (min_price, max_price) = bars.iter().fold((f64::MAX, f64::MIN), |(min, max), bar| {
-        (min.min(bar.low), max.max(bar.high))
-    });
-    let price_range = max_price - min_price;
-
-    // Auto-adjust brick size if it would create too many bricks
-    // Aim for roughly 50-200 bricks maximum for visible data
-    let min_brick_size = price_range / 200.0;
-    let brick_size = config.brick_size.max(min_brick_size).max(0.0001); // Prevent zero/negative
+    let bars = &bars[work_start(bars, brick_size)..];
 
     let mut bricks = Vec::new();
     const MAX_BRICKS: usize = 10_000;
@@ -154,6 +148,19 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
 
     bricks.drain(..bricks.len().saturating_sub(MAX_BRICKS));
     bricks
+}
+
+/// Index of the bar to build from so that the bricks move at most `MAX_WORK` brick sizes. Bar
+/// `i` costs its close-to-close move in sizes plus 2; the returned bar only seeds the state.
+pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
+    let mut total = 0.0;
+    for i in (1..bars.len()).rev() {
+        total += (bars[i].close - bars[i - 1].close).abs() / size + 2.0;
+        if total > super::MAX_WORK {
+            return i;
+        }
+    }
+    0
 }
 
 /// Calculate Avg True Range for automatic brick sizing
