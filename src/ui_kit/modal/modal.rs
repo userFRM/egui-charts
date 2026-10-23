@@ -16,10 +16,11 @@ pub struct Modal {
     min_height: Option<f32>,
     closable: bool,
     dim_background: bool,
+    rounding: Option<f32>,
 }
 
 impl Modal {
-    /// Create a new modal with the given title
+    /// Create a new modal with the given title. An empty title leaves the header to the content.
     pub fn new(id: impl std::hash::Hash + std::fmt::Debug, title: impl Into<String>) -> Self {
         Self {
             id: Id::unique(id),
@@ -29,6 +30,7 @@ impl Modal {
             min_height: None,
             closable: true,
             dim_background: true,
+            rounding: None,
         }
     }
 
@@ -58,6 +60,12 @@ impl Modal {
         self
     }
 
+    /// Override the corner radius, leaving the theme's radius as the default.
+    pub fn rounding(mut self, rounding: f32) -> Self {
+        self.rounding = Some(rounding);
+        self
+    }
+
     /// Set whether to dim the background
     pub fn dim_background(mut self, dim: bool) -> Self {
         self.dim_background = dim;
@@ -79,7 +87,10 @@ impl Modal {
             return None;
         }
 
-        let frame = dialog_frame(&ctx.global_style());
+        let mut frame = dialog_frame(&ctx.global_style());
+        if let Some(rounding) = self.rounding {
+            frame = frame.corner_radius(rounding);
+        }
         let screen_height = ctx.content_rect().height() - 2.0 * DESIGN_TOKENS.spacing.xxxl;
         let height = self.height.map(|height| height.min(screen_height));
         let size = egui::vec2(
@@ -106,7 +117,9 @@ impl Modal {
                     // The area offers its last size, which filling content would otherwise keep.
                     ui.set_max_height(size.y);
                 }
-                close_clicked = title_row(ui, &self.title, self.closable);
+                if !self.title.is_empty() {
+                    close_clicked = title_row(ui, &self.title, self.closable);
+                }
                 add_contents(ui)
             });
 

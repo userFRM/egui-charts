@@ -20,9 +20,11 @@ use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 /// Marks the content Ui of a fixed-height [`DialogFrame`].
 const FIXED_HEIGHT_TAG: &str = "egui_charts::dialog_frame::fixed_height";
 
-/// The dialog surface: the theme's window fill, border, radius and shadow, padded 16 px.
+/// The dialog surface: the theme's panel fill, window border, radius and shadow, padded 16 px.
 pub(crate) fn dialog_frame(style: &Style) -> Frame {
-    Frame::window(style).inner_margin(DESIGN_TOKENS.spacing.xxl)
+    Frame::window(style)
+        .fill(style.visuals.panel_fill)
+        .inner_margin(DESIGN_TOKENS.spacing.xxl)
 }
 
 /// The height of the heading row, which egui gives a window's title and its buttons.

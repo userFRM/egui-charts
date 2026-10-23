@@ -44,11 +44,15 @@
 //! ```
 
 use crate::ext::UiExt;
+use crate::icons::icons;
 use crate::model::Symbol;
 use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
+use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::dialog::{centred_title, titled_window_size};
+use crate::ui_kit::modal::Modal;
 use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2, Window};
 
 // =============================================================================
@@ -236,49 +240,58 @@ impl SymbolSearchDialog {
         let mut sel_symbol = None;
         let mut should_close = false;
 
-        let frame = egui::Frame::window(&ctx.global_style());
-        // Centred horizontally like the crate's other dialogs, but movable. The top edge is the
-        // pivot, so the window grows downwards as its content changes instead of around its centre.
-        let r = ctx.content_rect();
-        egui::Window::new("Symbol Search")
-            .collapsible(false)
-            .resizable(false)
-            // The content size it had before egui 0.35: 400 px wide and egui's default height.
-            .default_size(titled_window_size(ctx, &frame, Vec2::new(400.0, 420.0)))
-            .pivot(egui::Align2::CENTER_TOP)
-            .default_pos(egui::pos2(r.center().x, r.top() + r.height() * 0.2))
-            .show(ctx, |ui| {
-                // Search input
+        let mut open = true;
+        Modal::new("symbol_search", "")
+            .width(840.0)
+            .height(680.0)
+            .rounding(20.0)
+            .dim_background(false)
+            .show(ctx, &mut open, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Search:");
-                    let response = ui.text_edit_singleline(&mut self.search_query);
-
-                    // Auto-focus on open
-                    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    let theme = ui.active_theme();
+                    ui.add(
+                        icons::QUICK_SEARCH
+                            .as_image_tinted(Vec2::splat(24.0), theme.ui.text_secondary),
+                    );
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut self.search_query)
+                            .font(egui::FontId::proportional(16.0))
+                            .hint_text(RichText::new("Search symbols").size(16.0))
+                            .frame(egui::Frame::NONE)
+                            .desired_width((ui.available_width() - 40.0).max(0.0)),
+                    );
+                    if IconButton::new(&icons::CLOSE)
+                        .tooltip("Close")
+                        .show(ui)
+                        .clicked()
+                    {
                         should_close = true;
                     }
-
                     if response.changed() || self.filtered_symbols.is_empty() {
                         self.update_filtered_symbols(all_symbols);
                     }
-
-                    // Request focus on first frame
                     if self.search_query.is_empty() && !response.has_focus() {
                         response.request_focus();
                     }
                 });
-
-                ui.separator();
+                ui.add_space(16.0);
+                ui.label(RichText::new("All symbols").size(14.0).strong());
+                ui.add_space(16.0);
 
                 // Results list
                 egui::ScrollArea::vertical()
-                    .max_height(400.0)
+                    .max_height(ui.available_height())
                     .show(ui, |ui| {
                         if self.filtered_symbols.is_empty() {
                             if self.search_query.len() < self.config.min_search_len {
                                 ui.label(format!(
-                                    "Type at least {} characters to search",
-                                    self.config.min_search_len
+                                    "Type at least {} {} to search",
+                                    self.config.min_search_len,
+                                    if self.config.min_search_len == 1 {
+                                        "character"
+                                    } else {
+                                        "characters"
+                                    }
                                 ));
                             } else {
                                 ui.label("No symbols found");
@@ -317,19 +330,9 @@ impl SymbolSearchDialog {
                         should_close = true;
                     }
                 });
-
-                // Footer with hint
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Up/Down Navigate");
-                    ui.separator();
-                    ui.label("Enter Select");
-                    ui.separator();
-                    ui.label("Esc Close");
-                });
             });
 
-        if should_close {
+        if should_close || !open {
             self.close();
         }
 
@@ -358,44 +361,42 @@ impl SymbolSearchDialog {
     }
 
     fn render_symbol_item(&self, ui: &mut Ui, symbol: &Symbol, is_sel: bool) -> Response {
-        let frame = if is_sel {
-            egui::Frame::default()
-                .fill(ui.visuals().selection.bg_fill)
-                .inner_margin(DESIGN_TOKENS.spacing.sm)
-        } else {
-            egui::Frame::default().inner_margin(DESIGN_TOKENS.spacing.sm)
-        };
-
-        frame
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                // Strong and weak text ignore `override_text_color`, so a selected row sets both colours.
-                let (name_color, desc_color) = if is_sel {
-                    let on_selected = ui.visuals().selection.stroke.color;
-                    (on_selected, on_selected)
-                } else {
-                    (
-                        ui.visuals().strong_text_color(),
-                        ui.visuals().weak_text_color(),
-                    )
-                };
-
-                ui.horizontal(|ui| {
-                    // Symbol name (bold)
-                    ui.label(egui::RichText::new(&symbol.name).strong().color(name_color));
-                });
-
-                // Description
-                if self.config.show_description && !symbol.display_name.is_empty() {
-                    ui.label(
-                        egui::RichText::new(&symbol.display_name)
-                            .small()
-                            .color(desc_color),
-                    );
-                }
-            })
-            .response
-            .interact(egui::Sense::click())
+        let theme = ui.active_theme();
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 56.0), Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_sel, &symbol.name)
+        });
+        if is_sel || response.hovered() {
+            ui.painter().rect_filled(rect, 4.0, theme.ui.btn_bg_hover);
+        }
+        let center = Pos2::new(rect.left() + 22.0, rect.center().y);
+        ui.painter()
+            .circle_filled(center, 18.0, theme.ui.btn_bg_hover);
+        ui.painter().text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            symbol.name.chars().next().unwrap_or('?'),
+            egui::FontId::proportional(16.0),
+            theme.ui.text,
+        );
+        ui.painter().text(
+            Pos2::new(rect.left() + 48.0, rect.center().y - 10.0),
+            egui::Align2::LEFT_CENTER,
+            &symbol.name,
+            egui::FontId::proportional(16.0),
+            theme.ui.text,
+        );
+        if self.config.show_description {
+            ui.painter().text(
+                Pos2::new(rect.left() + 48.0, rect.center().y + 10.0),
+                egui::Align2::LEFT_CENTER,
+                &symbol.display_name,
+                egui::FontId::proportional(12.0),
+                theme.ui.text_secondary,
+            );
+        }
+        response
     }
 }
 
@@ -830,14 +831,46 @@ mod tests {
 
     #[test]
     fn test_symbol_search_open_close() {
-        let mut dialog = SymbolSearchDialog::new();
-        assert!(!dialog.is_open());
-
-        dialog.open();
-        assert!(dialog.is_open());
-
-        dialog.close();
-        assert!(!dialog.is_open());
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut dialog = SymbolSearchDialog::new();
+            assert!(!dialog.is_open());
+            dialog.open();
+            let mut frame = |events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let _ = dialog.show(ui.ctx(), &create_test_symbols());
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            frame(vec![]);
+            frame(vec![]);
+            let pos = egui::pos2(10.0, 850.0);
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+            }
+            assert!(!dialog.is_open(), "a backdrop click closes symbol search");
+            dialog.open();
+            assert!(dialog.is_open());
+            dialog.close();
+            assert!(!dialog.is_open());
+        }
     }
 
     #[test]
