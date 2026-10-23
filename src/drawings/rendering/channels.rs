@@ -55,15 +55,10 @@ impl Drawing {
         let &[p1, p2, p3, ..] = self.points.as_slice() else {
             return None;
         };
-        let d = p2 - p1;
-        if d.length_sq() < 1e-6 {
+        if (p2 - p1).length_sq() < 1e-6 {
             return None;
         }
-        let offset = if d.x.abs() < 1e-3 {
-            egui::vec2(p3.x - p1.x, 0.0)
-        } else {
-            egui::vec2(0.0, p3.y - (p1.y + (p3.x - p1.x) * d.y / d.x))
-        };
+        let offset = offset_onto(p1, p2, p3);
         Some([p1 + offset, p2 + offset])
     }
 
@@ -600,6 +595,18 @@ impl Moments {
             r_squared: if flat { 1.0 } else { 1.0 - residual / self.syy },
             correlation: (!flat).then(|| self.sxy / (self.sxx * self.syy).sqrt()),
         })
+    }
+}
+
+/// The move that carries the line through `p1` and `p2` onto `p3`: straight up
+/// or down, so the moved line is as far in price at every bar, or sideways for
+/// a vertical line.
+pub(super) fn offset_onto(p1: Pos2, p2: Pos2, p3: Pos2) -> egui::Vec2 {
+    let d = p2 - p1;
+    if d.x.abs() < 1e-3 {
+        egui::vec2(p3.x - p1.x, 0.0)
+    } else {
+        egui::vec2(0.0, p3.y - (p1.y + (p3.x - p1.x) * d.y / d.x))
     }
 }
 

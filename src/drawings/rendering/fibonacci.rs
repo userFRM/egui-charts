@@ -707,13 +707,12 @@ impl Drawing {
 }
 
 /// The line of a Fibonacci channel level: the base line from `start` to `end`
-/// moved `level` times the channel width towards `width_point`, on whichever
-/// side of the base line that point lies.
+/// moved `level` times the way onto `width_point`, straight up or down as the
+/// parallel channel's second line is, so each level is as far in price from the
+/// base at every bar.
 fn fib_channel_level_line(start: Pos2, end: Pos2, width_point: Pos2, level: f32) -> [Pos2; 2] {
-    let d = end - start;
-    let perp = egui::vec2(-d.y, d.x) / d.length();
-    let width = (width_point - start).dot(perp);
-    [start, end].map(|p| p + perp * width * level)
+    let offset = super::channels::offset_onto(start, end, width_point) * level;
+    [start + offset, end + offset]
 }
 
 /// A point of a speed resistance arc of `radius` around `end`, `angle`
@@ -786,13 +785,46 @@ mod tests {
         let mut wrong = Vec::new();
 
         // Channel along y = 100 with its width point 40 px above: level 1 runs
-        // through the width point, level 0.5 halfway.
-        let (start, end) = (Pos2::new(0.0, 100.0), Pos2::new(100.0, 100.0));
-        for (level, y) in [(1.0, 60.0), (0.5, 80.0)] {
-            let got = fib_channel_level_line(start, end, Pos2::new(50.0, 60.0), level);
-            let want = [Pos2::new(0.0, y), Pos2::new(100.0, y)];
+        // through the width point, level 0.5 halfway. Along y = 100 - x the base
+        // is at 50 below the width point (50, 20), 30 px under it: the levels move
+        // straight up, by 30 for level 1 and 15 for level 0.5.
+        for (start, end, width_point, level, want) in [
+            (
+                (0.0, 100.0),
+                (100.0, 100.0),
+                (50.0, 60.0),
+                1.0,
+                [(0.0, 60.0), (100.0, 60.0)],
+            ),
+            (
+                (0.0, 100.0),
+                (100.0, 100.0),
+                (50.0, 60.0),
+                0.5,
+                [(0.0, 80.0), (100.0, 80.0)],
+            ),
+            (
+                (0.0, 100.0),
+                (100.0, 0.0),
+                (50.0, 20.0),
+                1.0,
+                [(0.0, 70.0), (100.0, -30.0)],
+            ),
+            (
+                (0.0, 100.0),
+                (100.0, 0.0),
+                (50.0, 20.0),
+                0.5,
+                [(0.0, 85.0), (100.0, -15.0)],
+            ),
+        ] {
+            let [start, end, width_point] = [start, end, width_point].map(Pos2::from);
+            let got = fib_channel_level_line(start, end, width_point, level);
+            let want = want.map(Pos2::from);
             if !(near(got[0], want[0]) && near(got[1], want[1])) {
-                wrong.push(format!("channel level {level}: got {got:?}, want {want:?}"));
+                wrong.push(format!(
+                    "channel {start:?} to {end:?} level {level}: got {got:?}, want {want:?}"
+                ));
             }
         }
 
