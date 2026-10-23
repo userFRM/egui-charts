@@ -73,6 +73,7 @@ All notable changes to this project are documented in this file. The format is b
 ### Fixed
 
 - The export dialog stays open to show success with the file path or an error, and prevents duplicate requests while an export is pending. The demo reports file write results and offers PNG and CSV downloads in the browser. Image exports capture a frame after closing the dialog and report the result in a notice.
+- Drawing magnet mode snaps placed anchors and dragged handles to nearby OHLC and visible overlay-study values, keeping each value paired with its bar. Targets follow the current pan, zoom and price scale within `DrawingManagerOptions::magnet_distance` (15 logical points by default). Hidden overlays and the drawing being dragged are excluded; undo and redo retain the snapped data coordinates.
 - Drawing rail selection uses a neutral fill, distinct from the magnet's contrasting latched fill. Its rules are 36 px wide and light-theme rules use a neutral grey. Drawing templates remain available in the Hide flyout instead of taking a utility row. Keep Drawing shows a pencil and lock, and the visibility menu uses an open eye. The right widget bar defaults to 45 px with 28 px icon grids; hosts should size its outer panel from `WidgetBarConfig::width`.
 
 - The drawing bar uses a 28 px icon grid and a 38 px button pitch, with 33 by 1 px #4a4a4a separators inset 9 px left and 10 px right. Resting icons use the theme's primary text colour, now #dbdbdb in the dark preset. Hover and selected fills stay 34 by 34 px.
