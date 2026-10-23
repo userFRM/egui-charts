@@ -2,7 +2,7 @@
 //!
 //! Includes: XABCD, Cypher, Head & Shoulders, ABCD, Triangle, and Three Drives patterns.
 
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -130,7 +130,7 @@ impl Drawing {
     /// Draw Fibonacci ratio labels for harmonic patterns
     fn draw_harmonic_ratios(&self, painter: &egui::Painter, color: Color32) {
         let ratio_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 180);
-        let [xab, bcd] = self.xabcd_ratios();
+        let [xab, xac, d] = self.harmonic_ratios();
 
         if self.points.len() >= 3
             && let Some(xab_ratio) = xab
@@ -149,17 +149,32 @@ impl Drawing {
             );
         }
 
-        if self.points.len() >= 5
-            && let Some(bcd_ratio) = bcd
+        if self.points.len() >= 4
+            && let Some(xac_ratio) = xac
         {
-            let mid_bd = Pos2::new(
-                (self.points[2].x + self.points[4].x) / 2.0,
-                (self.points[2].y + self.points[4].y) / 2.0,
-            );
+            let mid_xc = self.points[0].lerp(self.points[3], 0.5);
             painter.text(
-                Pos2::new(mid_bd.x + DESIGN_TOKENS.spacing.xxxl, mid_bd.y),
+                Pos2::new(mid_xc.x - DESIGN_TOKENS.spacing.xxxl, mid_xc.y),
+                egui::Align2::RIGHT_CENTER,
+                format!("{xac_ratio:.3}"),
+                egui::FontId::proportional(typography::XS),
+                ratio_color,
+            );
+        }
+
+        if self.points.len() >= 5
+            && let Some(d_ratio) = d
+        {
+            let from = if self.tool_type == DrawingToolType::CypherPattern {
+                0
+            } else {
+                2
+            };
+            let mid_d = self.points[from].lerp(self.points[4], 0.5);
+            painter.text(
+                Pos2::new(mid_d.x + DESIGN_TOKENS.spacing.xxxl, mid_d.y),
                 egui::Align2::LEFT_CENTER,
-                format!("{bcd_ratio:.3}"),
+                format!("{d_ratio:.3}"),
                 egui::FontId::proportional(typography::XS),
                 ratio_color,
             );
@@ -769,12 +784,18 @@ impl Drawing {
         head_and_shoulders_neckline(&self.points, extend)
     }
 
-    /// Price ratios of an XABCD pattern: B's retracement of XA (`|B - A| / |A - X|`) and D's
-    /// extension of BC (`|D - C| / |C - B|`).
-    fn xabcd_ratios(&self) -> [Option<f64>; 2] {
+    /// B's price retracement of XA, Cypher's C extension of XA, and D's price
+    /// retracement of XC for Cypher or extension of BC for XABCD.
+    fn harmonic_ratios(&self) -> [Option<f64>; 3] {
+        let cypher = self.tool_type == DrawingToolType::CypherPattern;
         [
             self.leg_ratio([1, 2], [0, 1]),
-            self.leg_ratio([3, 4], [2, 3]),
+            if cypher {
+                self.leg_ratio([0, 3], [0, 1])
+            } else {
+                None
+            },
+            self.leg_ratio([3, 4], if cypher { [0, 3] } else { [2, 3] }),
         ]
     }
 
@@ -839,8 +860,8 @@ mod tests {
     #[test]
     fn pattern_ratios_are_measured_in_price() {
         // Screen y is 1000 / price, a non-linear scale on which screen ratios differ from price ratios.
-        let pattern = |prices: &[f64]| {
-            let mut drawing = Drawing::new(0, DrawingToolType::XABCDPattern);
+        let pattern = |tool, prices: &[f64]| {
+            let mut drawing = Drawing::new(0, tool);
             for (i, &price) in prices.iter().enumerate() {
                 let x = 10.0 * i as f32;
                 drawing.chart_points.push(ChartPoint::new(x, price));
@@ -848,26 +869,66 @@ mod tests {
             }
             drawing
         };
-        // [XAB, BCD, ABCD]: |B - A| / |A - X|, |D - C| / |C - B| and |D - C| / |B - A|, with the
-        // first anchor as X for the harmonic ratios and as A for ABCD.
-        let cases: [(&[f64], [Option<f64>; 3]); 3] = [
+        // [B retracement, C extension, D retracement/extension, ABCD]. Cypher measures
+        // C against XA and D against XC; XABCD measures D against BC. ABCD uses the
+        // first four anchors as A, B, C, D.
+        use DrawingToolType::{CypherPattern, XABCDPattern};
+        let cases = [
             (
-                &[100.0, 200.0, 138.2, 176.4, 78.6],
-                [Some(61.8 / 100.0), Some(97.8 / 38.2), Some(38.2 / 100.0)],
+                XABCDPattern,
+                &[100.0, 200.0, 138.2, 176.4, 78.6][..],
+                [
+                    Some(61.8 / 100.0),
+                    None,
+                    Some(97.8 / 38.2),
+                    Some(38.2 / 100.0),
+                ],
             ),
             (
+                XABCDPattern,
                 &[100.0, 150.0, 125.0, 175.0],
-                [Some(25.0 / 50.0), None, Some(1.0)],
+                [Some(25.0 / 50.0), None, None, Some(1.0)],
             ),
-            (&[100.0, 100.0, 138.2, 176.4], [None, None, None]),
+            (
+                XABCDPattern,
+                &[100.0, 100.0, 138.2, 176.4],
+                [None, None, None, None],
+            ),
+            (
+                CypherPattern,
+                &[100.0, 200.0, 150.0, 227.2, 127.2208],
+                [Some(0.5), Some(1.272), Some(0.786), Some(0.772)],
+            ),
+            (
+                CypherPattern,
+                &[300.0, 200.0, 250.0, 172.8, 272.7792],
+                [Some(0.5), Some(1.272), Some(0.786), Some(0.772)],
+            ),
+            (
+                CypherPattern,
+                &[100.0, 200.0, 150.0, 227.2],
+                [Some(0.5), Some(1.272), None, Some(0.772)],
+            ),
+            (
+                CypherPattern,
+                &[100.0, 100.0, 125.0, 150.0, 110.7],
+                [None, None, Some(0.786), None],
+            ),
+            (
+                CypherPattern,
+                &[100.0, 200.0, 150.0, 100.0, 120.0],
+                [Some(0.5), Some(0.0), None, Some(0.5)],
+            ),
         ];
-        for (prices, expected) in cases {
-            let drawing = pattern(prices);
-            let [xab, bcd] = drawing.xabcd_ratios();
-            for (actual, expected) in [xab, bcd, drawing.abcd_ratio()].into_iter().zip(expected) {
+        for (tool, prices, expected) in cases {
+            let drawing = pattern(tool, prices);
+            let [b, c, d] = drawing.harmonic_ratios();
+            for (actual, expected) in [b, c, d, drawing.abcd_ratio()].into_iter().zip(expected) {
                 match (actual, expected) {
-                    (Some(a), Some(e)) => assert!((a - e).abs() < 1e-6, "{prices:?}: {a} != {e}"),
-                    _ => assert_eq!(actual, expected, "{prices:?}"),
+                    (Some(a), Some(e)) => {
+                        assert!((a - e).abs() < 1e-6, "{tool:?} {prices:?}: {a} != {e}")
+                    }
+                    _ => assert_eq!(actual, expected, "{tool:?} {prices:?}"),
                 }
             }
         }
