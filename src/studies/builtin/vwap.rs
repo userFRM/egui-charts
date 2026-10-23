@@ -125,9 +125,11 @@ impl VolumeWeightedAvgPrice {
         self
     }
 
-    /// The exchange time zone, in which trading days are counted. A bar counts on the
-    /// exchange date of its timestamp, so a daily bar stamped at UTC midnight falls on
-    /// the previous date west of UTC.
+    /// The exchange time zone, in which trading days are counted. A bar shorter than a
+    /// day counts on the exchange date of its timestamp. A bar of a day or longer, which
+    /// a feed stamps inside its UTC period ([`HistoryPage::bars`](crate::data::HistoryPage::bars)),
+    /// counts on its UTC date; bars are taken to be a day or longer when no two
+    /// consecutive bars share a UTC date.
     pub fn with_time_zone(mut self, time_zone: TimezoneId) -> Self {
         self.time_zone = time_zone;
         self
@@ -180,6 +182,12 @@ impl Indicator for VolumeWeightedAvgPrice {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
         let zone = self.time_zone.tz();
+        // A feed stamps a bar of a day or longer inside its UTC period, so it counts on its
+        // UTC date. The interval is read from the bars: a chart holds at most one such bar
+        // per UTC date, so no two consecutive bars on one UTC date means daily or longer.
+        let daily = data
+            .windows(2)
+            .all(|w| w[0].time.date_naive() != w[1].time.date_naive());
         let mut period = None;
         let (mut volume, mut tp_volume, mut tp2_volume) = (0.0, 0.0, 0.0);
 
@@ -192,10 +200,12 @@ impl Indicator for VolumeWeightedAvgPrice {
                 self.values.push(IndicatorValue::None);
                 continue;
             }
-            let current = Some(
-                self.anchor
-                    .period(trading_day(bar.time, zone, &self.windows)),
-            );
+            let day = if daily {
+                bar.time.date_naive()
+            } else {
+                trading_day(bar.time, zone, &self.windows)
+            };
+            let current = Some(self.anchor.period(day));
             if current != period {
                 period = current;
                 (volume, tp_volume, tp2_volume) = (0.0, 0.0, 0.0);
@@ -365,7 +375,7 @@ mod tests {
                 ],
             },
             Case {
-                // Sunday 17:00, the day daylight saving starts, opens Monday's session.
+                // Intraday bars: Sunday 17:00, the day daylight saving starts, opens Monday's session.
                 name: "Chicago week",
                 zone: Some("America/Chicago"),
                 window: Some((17, 16)),
@@ -375,7 +385,69 @@ mod tests {
                     ("2026-03-05 15:00", [101.0, 99.0, 100.0, 1000.0]),
                     ("2026-03-06 15:00", [102.0, 100.0, 101.0, 1200.0]),
                     ("2026-03-08 17:00", [99.0, 97.0, 98.0, 900.0]),
+                    ("2026-03-08 18:00", [100.0, 98.0, 99.0, 600.0]),
                     ("2026-03-09 17:00", [100.0, 98.0, 99.0, 1100.0]),
+                ],
+                want: &[
+                    &[100.0],
+                    &[100.54545454545455],
+                    &[98.0],
+                    &[98.4],
+                    &[98.65384615384616],
+                ],
+            },
+            Case {
+                // Daily bars at 00:00 UTC on Thu 4, Fri 5, Mon 8 and Tue 9 January, 19:00 the
+                // evening before in New York: the week restarts on the Monday bar.
+                name: "New York daily bars at UTC midnight, week",
+                zone: Some("America/New_York"),
+                window: None,
+                anchor: VwapAnchor::Week,
+                bands: &[],
+                bars: &[
+                    ("2024-01-03 19:00", [101.0, 99.0, 100.0, 1000.0]),
+                    ("2024-01-04 19:00", [102.0, 100.0, 101.0, 1200.0]),
+                    ("2024-01-07 19:00", [99.0, 97.0, 98.0, 900.0]),
+                    ("2024-01-08 19:00", [100.0, 98.0, 99.0, 1100.0]),
+                ],
+                want: &[&[100.0], &[100.54545454545455], &[98.0], &[98.55]],
+            },
+            Case {
+                // The forming daily bar pushed with its trade time: Tuesday's last push at
+                // 20:59 UTC, then Wednesday's first at 14:30 UTC, after daily bars at 00:00 UTC.
+                name: "New York daily bars with live stamps, week",
+                zone: Some("America/New_York"),
+                window: None,
+                anchor: VwapAnchor::Week,
+                bands: &[],
+                bars: &[
+                    ("2024-01-03 19:00", [101.0, 99.0, 100.0, 1000.0]),
+                    ("2024-01-04 19:00", [102.0, 100.0, 101.0, 1200.0]),
+                    ("2024-01-07 19:00", [99.0, 97.0, 98.0, 900.0]),
+                    ("2024-01-09 15:59", [100.0, 98.0, 99.0, 1100.0]),
+                    ("2024-01-10 09:30", [101.0, 99.0, 100.0, 800.0]),
+                ],
+                want: &[
+                    &[100.0],
+                    &[100.54545454545455],
+                    &[98.0],
+                    &[98.55],
+                    &[98.96428571428571],
+                ],
+            },
+            Case {
+                // Daily bars at 23:00 UTC on 30 and 31 January and 1 and 2 February, 08:00 the
+                // next morning in Tokyo: the month restarts on the 1 February bar.
+                name: "Tokyo daily bars before UTC midnight, month",
+                zone: Some("Asia/Tokyo"),
+                window: None,
+                anchor: VwapAnchor::Month,
+                bands: &[],
+                bars: &[
+                    ("2024-01-31 08:00", [101.0, 99.0, 100.0, 1000.0]),
+                    ("2024-02-01 08:00", [102.0, 100.0, 101.0, 1200.0]),
+                    ("2024-02-02 08:00", [99.0, 97.0, 98.0, 900.0]),
+                    ("2024-02-03 08:00", [100.0, 98.0, 99.0, 1100.0]),
                 ],
                 want: &[&[100.0], &[100.54545454545455], &[98.0], &[98.55]],
             },
@@ -394,7 +466,7 @@ mod tests {
                 want: &[&[100.0], &[100.54545454545455], &[98.0], &[98.55]],
             },
             Case {
-                // A 24-hour session from 00:00 to 00:00 keeps each bar on its own date.
+                // Intraday bars in a 24-hour session from 00:00 to 00:00: each keeps its own date.
                 name: "UTC month with a 24-hour session",
                 zone: None,
                 window: Some((0, 0)),
@@ -404,9 +476,16 @@ mod tests {
                     ("2026-01-30 12:00", [101.0, 99.0, 100.0, 1000.0]),
                     ("2026-01-31 12:00", [102.0, 100.0, 101.0, 1200.0]),
                     ("2026-02-01 12:00", [99.0, 97.0, 98.0, 900.0]),
+                    ("2026-02-01 13:00", [100.0, 98.0, 99.0, 600.0]),
                     ("2026-02-02 12:00", [100.0, 98.0, 99.0, 1100.0]),
                 ],
-                want: &[&[100.0], &[100.54545454545455], &[98.0], &[98.55]],
+                want: &[
+                    &[100.0],
+                    &[100.54545454545455],
+                    &[98.0],
+                    &[98.4],
+                    &[98.65384615384616],
+                ],
             },
             Case {
                 // The second day opens on a bar without volume: its typical price.
