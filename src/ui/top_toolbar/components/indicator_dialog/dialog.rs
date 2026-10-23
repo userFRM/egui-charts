@@ -26,7 +26,7 @@ use std::cell::Cell;
 use std::collections::HashSet;
 
 /// Width of the category sidebar.
-const SIDEBAR_WIDTH: f32 = 200.0;
+const SIDEBAR_WIDTH: f32 = 228.0;
 
 /// Indicator Dialog
 ///
@@ -313,6 +313,7 @@ impl IndicatorDialog {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 // Room above the first row and below the last for the focus ring.
                 let ring = DESIGN_TOKENS.spacing.xs;
                 ui.add_space(ring);
@@ -354,7 +355,7 @@ impl IndicatorDialog {
         indicator: &IndicatorInfo,
         is_first: bool,
     ) -> Option<IndicatorDialogAction> {
-        let desired_size = Vec2::new(ui.available_width(), DESIGN_TOKENS.sizing.button_lg);
+        let desired_size = Vec2::new(ui.available_width(), 32.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
 
         let is_favorite = self.favorites.contains(&indicator.id);
@@ -848,9 +849,9 @@ mod tests {
         let theme = Theme::dark();
         let mut dialog = IndicatorDialog::new();
         dialog.open();
-        let mut frame = |height: f32| {
+        let mut frame = |size: Vec2| {
             let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, height))),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                 ..Default::default()
             };
             ctx.run_ui(input, |ui| {
@@ -861,14 +862,14 @@ mod tests {
                 .expect("the dialog is shown")
         };
         for _ in 0..3 {
-            frame(900.0);
+            frame(Vec2::new(1440.0, 900.0));
         }
-        let mut shown = frame(500.0);
+        let mut shown = frame(Vec2::new(600.0, 500.0));
         for _ in 0..3 {
-            shown = frame(500.0);
+            shown = frame(Vec2::new(600.0, 500.0));
         }
         assert!(
-            shown.top() >= 0.0 && shown.bottom() <= 500.0,
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 500.0)).contains_rect(shown),
             "the dialog spans {shown:?} in a 500 px window"
         );
     }
