@@ -193,6 +193,7 @@ impl DemoApp {
         chart.config_mut().volume_baseline_inset = 0.0;
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
+        chart.config_mut().skip_background = true;
         chart.set_symbol("SAMPLE (synthetic)");
         chart.set_timeframe(timeframe);
 
@@ -741,8 +742,37 @@ impl DemoApp {
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| {
-                let action = self.top_toolbar.show_with_state(ui, &self.state);
+                use egui_charts::icons::icons;
+                use egui_charts::ui_kit::buttons::IconButton;
+                let mut menu_action = TopToolbarAction::None;
+                let mut search = false;
+                let mut trade = false;
+                let mut publish = false;
+                let action = self.top_toolbar.show_with_slots(ui, &self.state, |ui| {
+                    let response = IconButton::new(&icons::MENU).tooltip("Menu").show(ui);
+                    egui::Popup::menu(&response).show(|ui| {
+                        for (label, action) in [
+                            ("Quick search", TopToolbarAction::OpenSymbolSearch),
+                            ("Switch theme", TopToolbarAction::ThemeToggle),
+                        ] {
+                            if ui.button(label).clicked() {
+                                menu_action = action;
+                                ui.close();
+                            }
+                        }
+                    });
+                }, |ui| {
+                    search = IconButton::new(&icons::QUICK_SEARCH).tooltip("Quick search").show(ui).clicked();
+                    trade = ui.add(egui::Button::new("Trade").corner_radius(16)).clicked();
+                    ui.add_space(8.0);
+                    publish = ui.add(egui::Button::new("Publish").corner_radius(16)).clicked();
+                    ui.add_space(8.0);
+                });
                 self.handle_top_toolbar(ui.ctx(), action);
+                self.handle_top_toolbar(ui.ctx(), menu_action);
+                if search { self.symbol_search.open(); }
+                if trade { self.notify("Connect a trading account to place orders; the demo uses synthetic data"); }
+                if publish { self.export_dialog.open(); }
             });
     }
 
@@ -1541,6 +1571,7 @@ fn browser_download(bytes: &[u8], path: &std::path::Path) -> Result<(), String> 
 
 fn panel_frame(bg: egui::Color32) -> egui::Frame {
     egui::Frame::new()
+        .corner_radius(4)
         .fill(bg)
         .stroke(egui::Stroke::NONE)
         .inner_margin(egui::Margin::ZERO)

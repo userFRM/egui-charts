@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Demo toolbar host slots expose quick search, a Trade intent notice and Publish through the existing export dialog. The chart uses its rounded container background.
+
 - The demo exposes the existing Data Window as a host entry in the right rail and reads the hovered bar. `show_data_window` is exported for hosts that display it independently of the object tree.
 
 - `Chart::set_session_quote` and `set_events` connect independent session prices and event badges to the chart. `take_event_click` and `take_scale_settings_request` route clicks to the host; the price-tag add cell opens the existing context menu. Current close tags include a countdown when a supplied quote belongs to that bar, and volume has its own tag at the pane bottom.
