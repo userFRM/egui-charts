@@ -32,6 +32,7 @@ pub fn render_crosshair_full(
     axis_right: f32,
     last_price_tag: Option<Rect>,
     formatter: &dyn TimeFormatter,
+    bar_seconds: i64,
 ) -> [Option<Rect>; 2] {
     // Arrow style = no crosshair at all (just standard mouse cursor)
     if style == CrosshairStyle::Arrow {
@@ -157,12 +158,6 @@ pub fn render_crosshair_full(
     );
 
     let time_tag = bar.map(|(_, candle)| {
-        let bar_seconds = visible_data.get(1).map_or(1, |next| {
-            next.time
-                .signed_duration_since(visible_data[0].time)
-                .num_seconds()
-                .abs()
-        });
         paint_axis_tag(
             context.painter,
             Pos2::new(actual_pos.x, chart_bottom + TIME_LABEL_GAP),

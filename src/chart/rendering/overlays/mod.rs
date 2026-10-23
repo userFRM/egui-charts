@@ -30,6 +30,7 @@ pub fn render_crosshair_with_options(
     axis_right: f32,
     last_price_tag: Option<Rect>,
     formatter: &dyn TimeFormatter,
+    bar_seconds: i64,
 ) -> [Option<Rect>; 2] {
     let options = options.resolved(price_ctx.painter.ctx());
     crate::chart::renderers::render_crosshair_full(
@@ -49,5 +50,6 @@ pub fn render_crosshair_with_options(
         axis_right,
         last_price_tag,
         formatter,
+        bar_seconds,
     )
 }

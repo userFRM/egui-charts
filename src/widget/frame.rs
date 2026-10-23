@@ -817,6 +817,7 @@ impl Chart {
                     visible_data,
                     sizing::chart::PADDING,
                     self.config.text_color,
+                    self.chart_type.supports_volume(),
                 );
             }
         }
@@ -892,6 +893,20 @@ impl Chart {
             );
         }
 
+        // Source-bar cadence sets precision even when many elements share one time.
+        let bars = &self.state.data().bars;
+        let first = &visible_data[0];
+        let last = &visible_data[visible_data.len() - 1];
+        let end = bars.partition_point(|bar| bar.time <= last.time);
+        let at = bars
+            .partition_point(|bar| bar.time < first.time)
+            .min(end.saturating_sub(2));
+        let bar_seconds = if end >= 2 {
+            (bars[at + 1].time - bars[at].time).num_seconds().abs()
+        } else {
+            1
+        };
+
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
         // while a context menu is open, so the crosshair, its labels and the tooltip wait until
         // the menu closes.
@@ -915,13 +930,15 @@ impl Chart {
                     rect.max.x,
                     last_price_tag,
                     formatter.as_ref(),
+                    bar_seconds,
                 );
 
                 // Draw the OHLC/value readout for the bar under the cursor, matching
                 // the bar the crosshair snaps to. Resolve via the shared coordinate
                 // mapping so the readout and the crosshair never disagree, and skip
                 // it when the cursor is in the empty scroll margin past the data.
-                let tooltip_options = &self.chart_options.tooltip;
+                let mut tooltip_options = self.chart_options.tooltip.clone();
+                tooltip_options.show_volume &= self.chart_type.supports_volume();
                 if tooltip_options.enabled
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
                 {
@@ -930,7 +947,7 @@ impl Chart {
                         &price_ctx,
                         hover_pos,
                         candle,
-                        tooltip_options,
+                        &tooltip_options,
                         &price_map,
                         &coords,
                         visible_data,
@@ -962,6 +979,7 @@ impl Chart {
                             rect.max.x,
                             last_price_tag,
                             formatter.as_ref(),
+                            bar_seconds,
                         );
                     }
                 }
@@ -1045,19 +1063,50 @@ mod tests {
     /// 3 Jan 2024 and bar 51 is 4 Jan 2024; 0.7 of a bar past the centre of bar 50 is nearer to 51.
     #[test]
     fn crosshair_time_label_names_the_nearest_bar() {
-        // (pointer over the chart, index another chart reports, expected time label)
+        use crate::model::{ChartType, ChartTypeParams};
+        let mut highs = vec![120.0; 100];
+        highs[99] = 3120.0;
+        // (type, highs, element index, pointer over chart, synced index, expected label)
         for case in [
-            (true, None, "Jan 04, 2024"),
-            (false, Some(50.7), "Jan 04, 2024"),
+            (
+                ChartType::Candles,
+                &[200.0][..],
+                50,
+                true,
+                None,
+                "Jan 04, 2024",
+            ),
+            (
+                ChartType::Candles,
+                &[200.0][..],
+                50,
+                false,
+                Some(50.7),
+                "Jan 04, 2024",
+            ),
+            // Bar 99 alone completes 300 bricks, all dated 21 February 2024.
+            (
+                ChartType::Renko,
+                highs.as_slice(),
+                250,
+                true,
+                None,
+                "Feb 21, 2024",
+            ),
         ] {
-            let (pointer, synced, expected) = case;
+            let (kind, highs, index, pointer, synced, expected) = case;
             let ctx = egui::Context::default();
-            let mut chart = chart(&[100.0], &[200.0]);
+            let mut chart = chart(&[100.0], highs);
+            chart.set_chart_type(kind);
+            chart.set_chart_type_params(ChartTypeParams {
+                renko_brick_size: 10.0,
+                ..Default::default()
+            });
             chart.set_synced_crosshair_bar_idx(synced);
             frame(&ctx, &mut chart, 0.0, Vec::new());
             let map = chart.get_chart_mapping();
             let hover = Pos2::new(
-                map.idx_to_x(50) + 0.7 * map.bar_spacing,
+                map.idx_to_x(index) + 0.7 * map.bar_spacing,
                 map.rect.center().y,
             );
             let events = || {

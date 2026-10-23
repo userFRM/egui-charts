@@ -296,6 +296,7 @@ pub fn render_ohlc_info(
     visible_data: &[Bar],
     padding: f32,
     text_color: Color32,
+    show_volume: bool,
 ) {
     if visible_data.is_empty() {
         return;
@@ -303,14 +304,17 @@ pub fn render_ohlc_info(
 
     let candle = &visible_data[visible_data.len() - 1];
 
-    let info = format!(
-        "open: {}  close: {}  high: {}  low: {}  volume: {:.2}",
+    let mut info = format!(
+        "open: {}  close: {}  high: {}  low: {}",
         format_price(candle.open),
         format_price(candle.close),
         format_price(candle.high),
-        format_price(candle.low),
-        candle.volume
+        format_price(candle.low)
     );
+
+    if show_volume {
+        info.push_str(&format!("  volume: {:.2}", candle.volume));
+    }
 
     painter.text(
         Pos2::new(rect.min.x + padding, rect.min.y + 10.0),
