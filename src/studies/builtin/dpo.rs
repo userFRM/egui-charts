@@ -88,10 +88,7 @@ impl Indicator for DetrendedPriceOscillator {
             }
         }
 
-        // Pad the end with None values since we're using forward-looking SMA
-        let valid_cnt = usize::from(!self.values.columns().is_empty());
-
-        if valid_cnt == 0 {
+        if self.values.columns().is_empty() {
             // Alternative calculation: look backward instead of forward
             self.values.clear();
 

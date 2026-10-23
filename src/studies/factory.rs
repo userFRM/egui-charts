@@ -932,7 +932,7 @@ mod tests {
         ];
         let values = |study: &mut Box<dyn Indicator>, bars: &[Bar]| {
             catch_unwind(AssertUnwindSafe(|| study.calculate(bars))).ok()?;
-            Some(study.values().to_rows().to_vec())
+            Some(study.values().to_rows())
         };
         let parts = |v: &IndicatorValue| match v {
             IndicatorValue::Single(x) => vec![*x],

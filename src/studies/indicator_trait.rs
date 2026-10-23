@@ -2,7 +2,7 @@
 //!
 //! This module defines the [`Indicator`] trait that every technical indicator
 //! (built-in or custom) must implement, as well as the [`IndicatorValue`]
-//! enum used to represent computed output at each bar.
+//! row format used to construct or export column-wise output.
 
 use crate::model::Bar;
 use crate::studies::IndicatorValues;
@@ -295,8 +295,7 @@ pub trait Indicator: Send {
         true
     }
 
-    /// The number of lines this indicator plots, and the number of entries in
-    /// each [`IndicatorValue::Multiple`] it emits. Renderers draw lines
+    /// The number of output columns this indicator plots. Renderers draw lines
     /// `0..line_cnt()`.
     ///
     /// For example, SMA returns `1`, MACD returns `3` (MACD line, signal,
