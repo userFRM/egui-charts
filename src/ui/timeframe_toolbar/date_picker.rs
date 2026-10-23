@@ -1,67 +1,45 @@
-//! Date Picker / Go To
+//! Go to date picker
 //!
-//! A date picker dialog with calendar for navigating to specific dates.
-use crate::ext::UiExt;
-use crate::styles::typography;
-use crate::theme::{Theme, ThemeExt, follow_active_theme, theme_derived};
-use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::dialog::{centred_title, titled_window_size};
-use chrono::{Datelike, NaiveDate};
-use egui::{Color32, Sense, Stroke, StrokeKind, Ui, Vec2, Window};
+//! A modal dialog with a date field and a month calendar for moving the chart to a date or a
+//! range of dates.
+use crate::icons::icons;
+use crate::styles::focus::draw_focus_ring;
+use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
+use crate::ui_kit::dialog::DialogFooter;
+use crate::ui_kit::modal::Modal;
+use chrono::{Datelike, Days, Months, NaiveDate};
+use egui::text::CCursorRange;
+use egui::{
+    Align, Align2, FontId, Key, Label, Layout, Modifiers, RichText, Role, Sense, Stroke,
+    StrokeKind, TextEdit, Ui, Vec2, WidgetInfo,
+};
 
-/// Configuration for date picker
-#[derive(Debug, Clone)]
-pub struct DatePickerConfig {
-    pub width: f32,
-    pub height: f32,
-    pub bg_color: Color32,
-    pub text_color: Color32,
-    pub muted_color: Color32,
-    pub hover_color: Color32,
-    pub sel_color: Color32,
-    pub today_color: Color32,
+/// Side of a day cell.
+const CELL: f32 = 32.0;
+/// Height of the line under the date field and of the weekday row.
+const LINE: f32 = 16.0;
+/// Format of the date field.
+const DATE_FORMAT: &str = "%Y-%m-%d";
+
+/// Today in UTC, the time zone the chart shows times in by default.
+fn today() -> NaiveDate {
+    chrono::Utc::now().date_naive()
 }
 
-impl DatePickerConfig {
-    /// Create config from `theme`
-    pub fn from_theme(theme: &Theme) -> Self {
-        let ui = &theme.ui;
-        Self {
-            width: DESIGN_TOKENS.sizing.toolbar.right_panel_width,
-            height: 350.0, // Date picker specific height
-            bg_color: ui.panel_bg,
-            text_color: ui.text,
-            muted_color: ui.text_muted,
-            hover_color: ui.btn_bg_hover,
-            sel_color: ui.accent,
-            today_color: ui.success, // Green for today indicator
-        }
-    }
+/// The date in `text`, if it is a valid date between the years 1 and 9999.
+fn parse_date(text: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(text.trim(), DATE_FORMAT)
+        .ok()
+        .filter(|date| (1..=9999).contains(&date.year()))
 }
-
-impl Default for DatePickerConfig {
-    fn default() -> Self {
-        // Default uses light UI chrome theme
-        Self::from_theme(&Theme::dark())
-    }
-}
-
-theme_derived!(DatePickerConfig {
-    width,
-    height,
-    bg_color,
-    text_color,
-    muted_color,
-    hover_color,
-    sel_color,
-    today_color
-});
 
 /// Action from date picker
 #[derive(Debug, Clone, PartialEq)]
 pub enum DatePickerAction {
     None,
     GoToDate(NaiveDate),
+    /// The first and the last day of the range, both included.
     SetRange(NaiveDate, NaiveDate),
     Cancel,
 }
@@ -82,10 +60,8 @@ pub struct DatePicker {
     range_start: Option<NaiveDate>,
     /// Range end date
     range_end: Option<NaiveDate>,
-    /// Configuration
-    config: DatePickerConfig,
-    /// Theme and config `config` was last derived from; `None` when the caller supplied it.
-    config_theme: Option<(Theme, DatePickerConfig)>,
+    /// Focus the date field on the next frame the dialog is drawn.
+    focus_field: bool,
 }
 
 impl Default for DatePicker {
@@ -96,25 +72,27 @@ impl Default for DatePicker {
 
 impl DatePicker {
     pub fn new() -> Self {
-        let today = chrono::Local::now().date_naive();
+        let today = today();
         Self {
             is_open: false,
             sel_date: today,
             displayed_month: today,
-            date_input: today.format("%Y-%m-%d").to_string(),
+            date_input: today.format(DATE_FORMAT).to_string(),
             custom_range_mode: false,
             range_start: None,
             range_end: None,
-            config: DatePickerConfig::default(),
-            config_theme: Some((Theme::dark(), DatePickerConfig::default())),
+            focus_field: false,
         }
     }
 
     /// Open the date picker
     pub fn open(&mut self) {
         self.is_open = true;
-        self.date_input = self.sel_date.format("%Y-%m-%d").to_string();
+        self.date_input = self.sel_date.format(DATE_FORMAT).to_string();
         self.displayed_month = self.sel_date;
+        self.range_start = None;
+        self.range_end = None;
+        self.focus_field = true;
     }
 
     /// Close the date picker
@@ -124,301 +102,299 @@ impl DatePicker {
 
     /// Show the date picker dialog
     pub fn show(&mut self, ctx: &egui::Context) -> DatePickerAction {
-        follow_active_theme(
-            ctx,
-            &mut self.config_theme,
-            &mut self.config,
-            DatePickerConfig::from_theme,
-        );
-        let mut action = DatePickerAction::None;
+        let theme = ctx.active_theme();
+        let grid_width = 7.0 * CELL + 6.0 * theme.spacing.sm;
+        // `Modal::width` is the outer width: the padding and the frame's stroke on both sides.
+        let stroke = ctx.global_style().visuals.window_stroke.width;
+        let width = grid_width + 2.0 * (theme.spacing.xxl + stroke);
 
-        if !self.is_open {
-            return action;
-        }
-
-        let mut is_open = self.is_open;
-        let frame = egui::Frame::window(&ctx.global_style()).fill(self.config.bg_color);
-
-        Window::new(centred_title(ctx, "Go to"))
-            .open(&mut is_open)
-            .resizable(false)
-            .collapsible(false)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(titled_window_size(
-                ctx,
-                &frame,
-                Vec2::new(self.config.width, self.config.height),
-            ))
-            .frame(frame)
-            .show(ctx, |ui| {
-                action = self.draw_content(ui);
-            });
-
-        // Go, Cancel and the close button all close the picker.
-        if action != DatePickerAction::None {
-            is_open = false;
-        } else if !is_open {
-            action = DatePickerAction::Cancel;
-        }
-        self.is_open = is_open;
-
+        let mut open = self.is_open;
+        let action =
+            match Modal::new("go_to_date", "Go to date")
+                .width(width)
+                .show(ctx, &mut open, |ui| self.draw_content(ui))
+            {
+                Some(response) if response.close_requested => DatePickerAction::Cancel,
+                Some(response) => response.inner,
+                None => DatePickerAction::None,
+            };
+        // Go, Cancel, the close button and Escape all close the picker.
+        self.is_open = open && action == DatePickerAction::None;
         action
     }
 
     fn draw_content(&mut self, ui: &mut Ui) -> DatePickerAction {
-        let mut action = DatePickerAction::None;
+        let theme = ui.active_theme();
+        let row_height = ButtonSize::MD.pixels();
+        let mut field_valid = true;
+        let mut typed = None;
 
-        ui.space_lg();
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = theme.spacing.lg;
+            let row = Vec2::new(ui.available_width(), row_height);
 
-        // Date input field
-        ui.horizontal(|ui| {
-            ui.label("Date:");
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.date_input)
-                    .desired_width(120.0)
-                    .hint_text("YYYY-MM-DD"),
+            ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
+                let label = ui.label("Date");
+                let mut field = TextEdit::singleline(&mut self.date_input)
+                    .desired_width(f32::INFINITY)
+                    .min_size(Vec2::new(0.0, row_height))
+                    .align(Align2::LEFT_CENTER)
+                    .hint_text("YYYY-MM-DD")
+                    .show(ui);
+                let date = parse_date(&self.date_input);
+                if let Some(date) = date {
+                    if field.response.changed() {
+                        self.displayed_month = date;
+                        if !self.custom_range_mode {
+                            self.sel_date = date;
+                        }
+                    }
+                    // In range mode a typed date counts as a pick once the field is left.
+                    if self.custom_range_mode
+                        && field.response.lost_focus()
+                        && date != self.sel_date
+                    {
+                        typed = Some(date);
+                    }
+                }
+                field_valid = date.is_some();
+                if !field_valid {
+                    ui.painter().rect_stroke(
+                        field.response.rect,
+                        ui.visuals().widgets.inactive.corner_radius,
+                        Stroke::new(1.0, theme.ui.error),
+                        StrokeKind::Inside,
+                    );
+                }
+                // The sizing pass draws nothing, so take the focus on the first visible frame.
+                if self.focus_field && !ui.is_sizing_pass() {
+                    self.focus_field = false;
+                    field.response.request_focus();
+                    field
+                        .state
+                        .cursor
+                        .set_char_range(Some(CCursorRange::select_all(&field.galley)));
+                    field.state.store(ui.ctx(), field.response.id);
+                }
+                field.response.response.labelled_by(label.id);
+            });
+            if let Some(date) = typed {
+                self.pick(date);
+            }
+
+            // Always one line, so the dialog keeps its height while a range is picked.
+            let (status, color) = if !field_valid {
+                ("Enter a date as YYYY-MM-DD".to_owned(), theme.ui.error)
+            } else if !self.custom_range_mode {
+                (
+                    self.sel_date.format("%A %-d %B %Y").to_string(),
+                    theme.ui.text_secondary,
+                )
+            } else {
+                let text = match (self.range_start, self.range_end) {
+                    (Some(start), Some(end)) => format!("From {start} to {end}"),
+                    (Some(start), None) => format!("From {start}, pick the last day"),
+                    _ => "Pick the first day".to_owned(),
+                };
+                (text, theme.ui.text_secondary)
+            };
+            ui.allocate_ui_with_layout(
+                Vec2::new(row.x, LINE),
+                Layout::left_to_right(Align::Center),
+                |ui| ui.label(RichText::new(status).size(theme.text.label).color(color)),
             );
 
-            if response.changed()
-                && let Ok(date) = NaiveDate::parse_from_str(&self.date_input, "%Y-%m-%d")
-            {
-                self.sel_date = date;
-                self.displayed_month = date;
-            }
-        });
-
-        ui.space_lg();
-
-        // Custom range toggle
-        ui.checkbox(&mut self.custom_range_mode, "Custom range");
-
-        ui.separator_with_margin(DESIGN_TOKENS.spacing.lg);
-
-        // Month navigation
-        ui.horizontal(|ui| {
-            // Previous month
-            if ui.button("<").clicked() {
-                self.displayed_month = self
-                    .displayed_month
-                    .checked_sub_months(chrono::Months::new(1))
-                    .unwrap_or(self.displayed_month);
-            }
-
-            ui.space_lg();
-
-            // Month/Year display
-            let month_year = self.displayed_month.format("%B %Y").to_string();
-            ui.strong_label(month_year);
-
-            ui.space_lg();
-
-            // Next month
-            if ui.button(">").clicked() {
-                self.displayed_month = self
-                    .displayed_month
-                    .checked_add_months(chrono::Months::new(1))
-                    .unwrap_or(self.displayed_month);
-            }
-        });
-
-        ui.space_lg();
-
-        // Calendar grid
-        if let Some(date) = self.draw_calendar(ui) {
-            self.sel_date = date;
-            self.date_input = date.format("%Y-%m-%d").to_string();
-
-            if self.custom_range_mode {
-                if self.range_start.is_none() {
-                    self.range_start = Some(date);
-                } else if self.range_end.is_none() {
-                    self.range_end = Some(date);
-                    // Swap if start > end
-                    if let (Some(start), Some(end)) = (self.range_start, self.range_end)
-                        && start > end
-                    {
-                        self.range_start = Some(end);
-                        self.range_end = Some(start);
-                    }
-                } else {
-                    // Reset selection
-                    self.range_start = Some(date);
+            ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
+                if ui
+                    .checkbox(&mut self.custom_range_mode, "Custom range")
+                    .changed()
+                {
+                    self.range_start = None;
                     self.range_end = None;
                 }
-            }
-        }
-
-        ui.space_lg();
-
-        // Today button and action btns
-        ui.horizontal(|ui| {
-            if ui.button("Today").clicked() {
-                let today = chrono::Local::now().date_naive();
-                self.sel_date = today;
-                self.displayed_month = today;
-                self.date_input = today.format("%Y-%m-%d").to_string();
-            }
-
-            ui.right_aligned(|ui| {
-                if ui.button("  Go  ").clicked() {
-                    if self.custom_range_mode {
-                        if let (Some(start), Some(end)) = (self.range_start, self.range_end) {
-                            action = DatePickerAction::SetRange(start, end);
-                        }
-                    } else {
-                        action = DatePickerAction::GoToDate(self.sel_date);
-                    }
-                }
-
-                if ui.button("Cancel").clicked() {
-                    action = DatePickerAction::Cancel;
-                }
             });
-        });
 
-        action
-    }
+            ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
+                let previous = IconButton::new(&icons::CHEVRON_LEFT)
+                    .tooltip("Previous month")
+                    .show(ui)
+                    .clicked();
+                let next = ui
+                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let next = IconButton::new(&icons::CHEVRON_RIGHT)
+                            .tooltip("Next month")
+                            .show(ui)
+                            .clicked();
+                        ui.centered_and_justified(|ui| {
+                            ui.label(
+                                RichText::new(self.displayed_month.format("%B %Y").to_string())
+                                    .strong()
+                                    .size(theme.text.body),
+                            );
+                        });
+                        next
+                    })
+                    .inner;
+                let month = Months::new(1);
+                let shown = if previous {
+                    self.displayed_month.checked_sub_months(month)
+                } else if next {
+                    self.displayed_month.checked_add_months(month)
+                } else {
+                    None
+                };
+                self.displayed_month = shown.unwrap_or(self.displayed_month);
+            });
 
-    fn draw_calendar(&mut self, ui: &mut Ui) -> Option<NaiveDate> {
-        let mut selected = None;
-
-        let today = chrono::Local::now().date_naive();
-        let cell_size = 32.0;
-        let grid_width = cell_size * 7.0 + ui.spacing().item_spacing.x * 6.0;
-
-        // Weekday headers
-        ui.horizontal(|ui| {
-            ui.add_space((ui.available_width() - grid_width) / 2.0);
-            for day in &["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] {
-                let (rect, _) = ui.allocate_exact_size(Vec2::splat(cell_size), Sense::hover());
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    *day,
-                    egui::FontId::proportional(typography::SM),
-                    self.config.muted_color,
-                );
+            if let Some(date) = self.draw_calendar(ui) {
+                self.pick(date);
+                field_valid = true;
             }
         });
 
-        // Calculate first day of month and days in month
-        // Since displayed_month is always a valid NaiveDate, day 1 of that month is always valid
-        let first_of_month =
-            NaiveDate::from_ymd_opt(self.displayed_month.year(), self.displayed_month.month(), 1)
-                .unwrap_or(self.displayed_month);
-
-        let first_weekday = first_of_month.weekday().num_days_from_sunday() as i32;
-
-        // Calculate days in month by finding the first day of the next month
-        let next_month_first = if self.displayed_month.month() == 12 {
-            NaiveDate::from_ymd_opt(self.displayed_month.year() + 1, 1, 1)
+        let range = self.range_start.zip(self.range_end);
+        let can_go = if self.custom_range_mode {
+            range.is_some()
         } else {
-            NaiveDate::from_ymd_opt(
-                self.displayed_month.year(),
-                self.displayed_month.month() + 1,
-                1,
-            )
+            field_valid
         };
 
-        // Fallback to 28 days (minimum for any month) if date calculation fails
-        let days_in_month = next_month_first
-            .map(|d| d.signed_duration_since(first_of_month).num_days() as i32)
-            .unwrap_or(28);
+        let mut today_clicked = false;
+        let (go, cancel) = DialogFooter::new("Go")
+            .secondary("Cancel")
+            .primary_enabled(can_go)
+            .show_with_left(ui, |ui| {
+                today_clicked = Button::new("Today").ghost().show(ui).clicked();
+            });
+        if today_clicked {
+            self.pick(today());
+        }
 
-        // Draw calendar grid
-        let mut day = 1 - first_weekday;
+        // Enter applies Go unless a focused control takes it; the field gives up its focus on Enter.
+        let enter = can_go
+            && ui.memory(|m| m.focused().is_none())
+            && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
 
-        for _week in 0..6 {
+        if go || enter {
+            match range {
+                Some((start, end)) if self.custom_range_mode => {
+                    DatePickerAction::SetRange(start, end)
+                }
+                _ => DatePickerAction::GoToDate(self.sel_date),
+            }
+        } else if cancel {
+            DatePickerAction::Cancel
+        } else {
+            DatePickerAction::None
+        }
+    }
+
+    /// Select `date` as a click on its day does; in range mode it starts a range or ends the
+    /// started one.
+    fn pick(&mut self, date: NaiveDate) {
+        self.sel_date = date;
+        // A day of the previous or next month shows that month.
+        self.displayed_month = date;
+        self.date_input = date.format(DATE_FORMAT).to_string();
+        if self.custom_range_mode {
+            (self.range_start, self.range_end) = match (self.range_start, self.range_end) {
+                (Some(start), None) => (Some(start.min(date)), Some(start.max(date))),
+                _ => (Some(date), None),
+            };
+        }
+    }
+
+    /// Six weeks from the Sunday on or before the first of the displayed month.
+    fn draw_calendar(&mut self, ui: &mut Ui) -> Option<NaiveDate> {
+        let theme = ui.active_theme();
+        let today = today();
+        let first = self.displayed_month.with_day(1)?;
+        let grid_start =
+            first.checked_sub_days(Days::new(first.weekday().num_days_from_sunday().into()))?;
+        let ends = if self.custom_range_mode {
+            [self.range_start, self.range_end]
+        } else {
+            [Some(self.sel_date), None]
+        };
+
+        let mut picked = None;
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::splat(theme.spacing.sm);
+
             ui.horizontal(|ui| {
-                ui.add_space((ui.available_width() - grid_width) / 2.0);
-
-                for _weekday in 0..7 {
-                    let (rect, response) =
-                        ui.allocate_exact_size(Vec2::splat(cell_size), Sense::click());
-
-                    // Only render valid days within the month
-                    if day >= 1
-                        && day <= days_in_month
-                        && let Some(date) = NaiveDate::from_ymd_opt(
-                            self.displayed_month.year(),
-                            self.displayed_month.month(),
-                            day as u32,
-                        )
-                    {
-                        let is_sel = date == self.sel_date;
-                        let is_today = date == today;
-                        let is_in_range = if self.custom_range_mode {
-                            match (self.range_start, self.range_end) {
-                                (Some(start), Some(end)) => date >= start && date <= end,
-                                (Some(start), None) => date == start,
-                                _ => false,
-                            }
-                        } else {
-                            false
-                        };
-
-                        // Background
-                        if is_sel {
-                            ui.painter().rect_filled(
-                                rect,
-                                DESIGN_TOKENS.rounding.md,
-                                self.config.sel_color,
-                            );
-                        } else if is_in_range {
-                            // Range selection uses the accent with reduced alpha
-                            let range_color = ui.active_theme().ui.accent.gamma_multiply(0.5);
-                            ui.painter()
-                                .rect_filled(rect, DESIGN_TOKENS.rounding.sm, range_color);
-                        } else if response.hovered() {
-                            ui.painter().rect_filled(
-                                rect,
-                                DESIGN_TOKENS.rounding.md,
-                                self.config.hover_color,
-                            );
-                        }
-
-                        // Today indicator
-                        if is_today && !is_sel {
-                            ui.painter().rect_stroke(
-                                rect.shrink(2.0),
-                                DESIGN_TOKENS.rounding.md,
-                                Stroke::new(DESIGN_TOKENS.stroke.thick, self.config.today_color),
-                                StrokeKind::Outside,
-                            );
-                        }
-
-                        // Day number
-                        let text_color = if is_sel {
-                            ui.active_theme().ui.accent_text
-                        } else if is_today {
-                            self.config.today_color
-                        } else {
-                            self.config.text_color
-                        };
-
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            format!("{day}"),
-                            egui::FontId::proportional(typography::MD),
-                            text_color,
-                        );
-
-                        if response.clicked() {
-                            selected = Some(date);
-                        }
-                    }
-
-                    day += 1;
+                for day in ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] {
+                    ui.add_sized(
+                        [CELL, LINE],
+                        Label::new(
+                            RichText::new(day)
+                                .size(theme.text.small)
+                                .color(theme.ui.text_muted),
+                        ),
+                    );
                 }
             });
 
-            // Stop if we've finished the month
-            if day > days_in_month + 7 {
-                break;
-            }
-        }
+            for week in 0..6 {
+                ui.horizontal(|ui| {
+                    for weekday in 0..7 {
+                        let Some(date) = grid_start.checked_add_days(Days::new(week * 7 + weekday))
+                        else {
+                            continue;
+                        };
+                        let (rect, response) =
+                            ui.allocate_exact_size(Vec2::splat(CELL), Sense::click());
+                        let is_end = ends.contains(&Some(date));
+                        let is_between =
+                            matches!(ends, [Some(start), Some(end)] if start < date && date < end);
+                        response.widget_info(|| {
+                            let name = date.format("%A %-d %B %Y");
+                            let name = if date == today {
+                                format!("{name}, today")
+                            } else {
+                                name.to_string()
+                            };
+                            WidgetInfo::selected(Role::Button, true, is_end, name)
+                        });
 
-        selected
+                        let (fill, text) = if is_end {
+                            (Some(theme.ui.accent), theme.ui.accent_text)
+                        } else if is_between {
+                            (Some(theme.ui.accent.gamma_multiply(0.35)), theme.ui.text)
+                        } else if response.hovered() {
+                            (Some(theme.ui.btn_bg_hover), theme.ui.text)
+                        } else if date.month() == first.month() {
+                            (None, theme.ui.text)
+                        } else {
+                            (None, theme.ui.text_muted)
+                        };
+                        let painter = ui.painter();
+                        if let Some(fill) = fill {
+                            painter.rect_filled(rect, theme.radius.sm, fill);
+                        }
+                        if date == today && !is_end && !is_between {
+                            painter.rect_stroke(
+                                rect,
+                                theme.radius.sm,
+                                Stroke::new(1.0, theme.ui.text_muted),
+                                StrokeKind::Inside,
+                            );
+                        }
+                        painter.text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            date.day().to_string(),
+                            FontId::proportional(theme.text.body),
+                            text,
+                        );
+                        draw_focus_ring(ui, &response);
+
+                        if response.clicked() {
+                            picked = Some(date);
+                        }
+                    }
+                });
+            }
+        });
+        picked
     }
 }
