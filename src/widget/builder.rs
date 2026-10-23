@@ -124,6 +124,8 @@ impl Chart {
             quote_action: None,
             indicator_settings_request: None,
             session_quote: None,
+            session_provider: None,
+            extended_hours: false,
             axis_hover: None,
             scale_settings_requested: false,
             events: Vec::new(),
@@ -199,6 +201,7 @@ impl Chart {
         // Store the desired number so that we can compute the proper
         // bar spacing during `show_internal` when we know the widget width.
         self.desired_visible_bars = Some(count);
+        self.apply_visible_bars_once = true;
         // Default to showing the latest `count` bars unless caller overrides later
         self.start_idx = self.state.data().len().saturating_sub(count);
         self
@@ -479,6 +482,10 @@ impl ChartBuilder {
         chart_options.time_scale.ticks_visible = false;
 
         Self::new()
+            .with_config(ChartConfig {
+                show_time_labels: false,
+                ..Default::default()
+            })
             .with_chart_options(chart_options)
             .with_chart_type(ChartType::Line)
     }
@@ -741,5 +748,66 @@ impl ChartBuilder {
 impl Default for ChartBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Bar;
+    use chrono::{Duration, TimeZone, Utc};
+
+    /// Both entry points fit 50 slots once and leave the same view at the latest bar.
+    #[test]
+    fn visible_bars_matches_the_setter_on_initial_frames() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let data = BarData::from_bars(
+            (0..600)
+                .map(|i| Bar::new(start + Duration::days(i), 100.0, 200.0, 100.0, 200.0, 1.0))
+                .collect(),
+        );
+        for width in [600.0, 900.0, 1440.0] {
+            let mut built = Chart::new(data.clone()).visible_bars(50);
+            let mut set = Chart::new(data.clone());
+            set.set_visible_bars(50);
+            let contexts = [egui::Context::default(), egui::Context::default()];
+            built.set_timeframe(Timeframe::Day1);
+            set.set_timeframe(Timeframe::Day1);
+            for frame in 0..3 {
+                for (chart, ctx) in [(&mut built, &contexts[0]), (&mut set, &contexts[1])] {
+                    let input = egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 500.0),
+                        )),
+                        time: Some(frame as f64 * 0.1),
+                        ..Default::default()
+                    };
+                    ctx.run_ui(input, |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            chart.show(ui);
+                        });
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    built.state.time_scale().bar_spacing(),
+                    set.state.time_scale().bar_spacing(),
+                    "width {width}, frame {frame}"
+                );
+                assert_eq!(
+                    built.state.time_scale().bar_spacing(),
+                    built.get_rendered_price_rect().width() / 50.0
+                );
+                assert_eq!(built.get_visible_bars(), set.get_visible_bars());
+                assert_eq!(built.get_visible_bars(), 49);
+                assert_eq!(built.get_start_idx(), set.get_start_idx());
+                assert!(built.get_start_idx() >= 548);
+            }
+            // A later zoom survives subsequent frames: the builder's count is applied once.
+            built.state.time_scale_mut().set_bar_spacing(20.0);
+            built.apply_timescale_config(width - 166.0);
+            assert_eq!(built.state.time_scale().bar_spacing(), 20.0);
+        }
     }
 }

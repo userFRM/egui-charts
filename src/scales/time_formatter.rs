@@ -34,6 +34,17 @@ pub trait TimeFormatter: Send + Sync {
         time
     }
 
+    /// Converts local calendar fields from `wall_time` back to an instant.
+    /// Repeated times use the first instant; skipped times use the clock jump.
+    fn utc_time(&self, wall_time: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        Some(wall_time)
+    }
+
+    /// Whether intraday marks and hover labels include the clock.
+    fn time_visible(&self) -> bool {
+        true
+    }
+
     /// Formats the hovered bar, retaining this formatter's date and clock conventions.
     fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
         let mut label = self.format(time, TickMarkType::DayOfMonth);
@@ -317,6 +328,7 @@ impl TimezoneMode {
 pub struct TimezoneAwareFormatter {
     inner: Box<dyn TimeFormatter>,
     timezone: TimezoneMode,
+    time_visible: bool,
 }
 
 impl Clone for TimezoneAwareFormatter {
@@ -324,6 +336,7 @@ impl Clone for TimezoneAwareFormatter {
         Self {
             inner: self.inner.clone_box(),
             timezone: self.timezone.clone(),
+            time_visible: self.time_visible,
         }
     }
 }
@@ -331,19 +344,21 @@ impl Clone for TimezoneAwareFormatter {
 impl TimezoneAwareFormatter {
     /// Create a new timezone-aware formatter
     pub fn new(inner: Box<dyn TimeFormatter>, timezone: TimezoneMode) -> Self {
-        Self { inner, timezone }
+        Self {
+            inner,
+            timezone,
+            time_visible: true,
+        }
     }
 
     /// Convert UTC ts to target timezone
     fn convert_timezone(&self, utc_time: DateTime<Utc>) -> DateTime<Utc> {
+        use crate::model::session::local_time;
         match &self.timezone {
             TimezoneMode::Utc => utc_time,
-            TimezoneMode::Local => utc_time
-                .with_timezone(&chrono::Local)
-                .naive_local()
-                .and_utc(),
+            TimezoneMode::Local => local_time(chrono::Local, utc_time).and_utc(),
             TimezoneMode::Timezone(tz) | TimezoneMode::Exchange(tz) => {
-                utc_time.with_timezone(tz).naive_local().and_utc()
+                local_time(*tz, utc_time).and_utc()
             }
         }
     }
@@ -352,16 +367,46 @@ impl TimezoneAwareFormatter {
 impl TimeFormatter for TimezoneAwareFormatter {
     fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String {
         let converted = self.convert_timezone(time);
-        self.inner.format(converted, mark_type)
+        if !self.time_visible
+            && matches!(
+                mark_type,
+                TickMarkType::Time | TickMarkType::TimeWithSeconds
+            )
+        {
+            self.inner.format_crosshair(converted, 86_400)
+        } else {
+            self.inner.format(converted, mark_type)
+        }
+    }
+
+    fn time_visible(&self) -> bool {
+        self.time_visible
     }
 
     fn wall_time(&self, time: DateTime<Utc>) -> DateTime<Utc> {
         self.convert_timezone(time)
     }
 
+    fn utc_time(&self, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        use crate::model::session::local_instant;
+        match &self.timezone {
+            TimezoneMode::Utc => Some(time),
+            TimezoneMode::Local => local_instant(chrono::Local, time.naive_utc()),
+            TimezoneMode::Timezone(tz) | TimezoneMode::Exchange(tz) => {
+                local_instant(*tz, time.naive_utc())
+            }
+        }
+    }
+
     fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
-        self.inner
-            .format_crosshair(self.convert_timezone(time), bar_seconds)
+        self.inner.format_crosshair(
+            self.convert_timezone(time),
+            if self.time_visible {
+                bar_seconds
+            } else {
+                86_400
+            },
+        )
     }
 
     fn clone_box(&self) -> Box<dyn TimeFormatter> {
@@ -375,6 +420,7 @@ pub struct TimeFormatterBuilder {
     show_seconds: bool,
     locale: Option<String>,
     timezone: Option<TimezoneMode>,
+    time_visible: bool,
 }
 
 impl TimeFormatterBuilder {
@@ -385,6 +431,7 @@ impl TimeFormatterBuilder {
             show_seconds: true,
             locale: None,
             timezone: None,
+            time_visible: true,
         }
     }
 
@@ -397,6 +444,12 @@ impl TimeFormatterBuilder {
     /// Set seconds display
     pub fn with_seconds(mut self, show_seconds: bool) -> Self {
         self.show_seconds = show_seconds;
+        self
+    }
+
+    /// Show the clock in intraday marks and hover labels, or dates alone.
+    pub fn with_time_visible(mut self, time_visible: bool) -> Self {
+        self.time_visible = time_visible;
         self
     }
 
@@ -426,12 +479,9 @@ impl TimeFormatterBuilder {
             })
         };
 
-        // Wrap with timezone converter if specified
-        if let Some(tz) = self.timezone {
-            Box::new(TimezoneAwareFormatter::new(base, tz))
-        } else {
-            base
-        }
+        let mut formatter = TimezoneAwareFormatter::new(base, self.timezone.unwrap_or_default());
+        formatter.time_visible = self.time_visible;
+        Box::new(formatter)
     }
 }
 

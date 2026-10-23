@@ -16,7 +16,7 @@
 
 pub use crate::model::Bar;
 pub use crate::model::Timeframe;
-use crate::model::{Instrument, Tick};
+use crate::model::{BarClock, Instrument, Tick};
 use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
@@ -42,7 +42,7 @@ pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 )]
 pub(crate) mod trades;
 
-pub use inbox::{Reply, Sink};
+pub use inbox::{Reply, Sink, aggregate_trades};
 pub use resample::resample;
 
 /// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.
@@ -143,10 +143,14 @@ pub trait Datafeed: MaybeSend + 'static {
 pub struct HistoryRequest {
     pub symbol: String,
     pub timeframe: Timeframe,
+    /// Calendar boundaries selected by the chart, shared by historical and streaming aggregation.
+    pub clock: BarClock,
     /// Only bars that open strictly before this instant. `None` asks for the latest bars.
     pub before: Option<DateTime<Utc>>,
     /// Bars wanted. Fewer is fine; the chart asks again as the user scrolls back.
     pub count: usize,
+    /// Include the instrument's extended trading hours, as well as regular hours.
+    pub extended_hours: bool,
 }
 
 /// One page of history. A page without bars ends scroll-back like `end_of_history` does, so a
@@ -154,9 +158,9 @@ pub struct HistoryRequest {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HistoryPage {
     /// Any order, each stamped with its open or any instant inside it: a bar stamped with its
-    /// close time lands in the next bar. A bar of a day or longer covers a UTC period of
-    /// [`BarClock`](crate::model::BarClock), such as a UTC day, a week from Monday or a calendar
-    /// month: stamp it inside that period, for example at 00:00 UTC on its trading date. A
+    /// close time lands in the next bar. A bar of a day or longer covers a calendar period of
+    /// [`HistoryRequest::clock`], such as a day, a week from Monday or a calendar
+    /// month, in UTC by default: stamp it inside that period, for example at its local midnight. A
     /// session open on the evening before can fall in the period of the bar before, and one of
     /// the two bars is then dropped. The chart sorts, deduplicates and validates them.
     pub bars: Vec<Bar>,
@@ -208,6 +212,10 @@ pub struct Subscription {
     pub id: SubscriptionId,
     pub symbol: String,
     pub timeframe: Timeframe,
+    /// The same calendar boundaries supplied to history requests.
+    pub clock: BarClock,
+    /// Include the instrument's extended trading hours, as well as regular hours.
+    pub extended_hours: bool,
     pub sink: Sink,
 }
 

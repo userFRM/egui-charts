@@ -15,6 +15,62 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
 impl Chart {
+    /// Formats a timestamp with the chart's zone, clock visibility and bar duration.
+    /// Hosts can use this for data windows and other readouts beside the chart.
+    pub fn format_time(&self, time: chrono::DateTime<chrono::Utc>) -> String {
+        self.build_time_formatter()
+            .format_crosshair(time, self.time_label_seconds())
+    }
+
+    // Source-bar cadence sets precision even when many elements share one time.
+    fn time_label_seconds(&self) -> i64 {
+        let bars = &self.state.data().bars;
+        let visible = self.state.visible_data();
+        let Some((first, last)) = visible.first().zip(visible.last()) else {
+            return 1;
+        };
+        let end = bars.partition_point(|bar| bar.time <= last.time);
+        let at = bars
+            .partition_point(|bar| bar.time < first.time)
+            .min(end.saturating_sub(2));
+        if end >= 2 {
+            (bars[at + 1].time - bars[at].time).num_seconds().abs()
+        } else {
+            1
+        }
+    }
+
+    pub(super) fn display_timezone(&self) -> crate::scales::TimezoneMode {
+        match &self.chart_options.time_scale.timezone {
+            crate::scales::TimezoneMode::Exchange(fallback) => {
+                crate::scales::TimezoneMode::Exchange(
+                    self.instrument()
+                        .and_then(|instrument| instrument.time_zone.as_ref())
+                        .map(crate::model::TimezoneId::tz)
+                        .unwrap_or(*fallback),
+                )
+            }
+            timezone => timezone.clone(),
+        }
+    }
+
+    fn build_time_formatter(&self) -> Box<dyn crate::scales::TimeFormatter> {
+        TimeFormatterBuilder::new()
+            .with_24_hour(true)
+            .with_seconds(self.chart_options.time_scale.seconds_visible)
+            .with_time_visible(self.chart_options.time_scale.time_visible)
+            .with_timezone(self.display_timezone())
+            .build()
+    }
+
+    /// Overrides automatic session breaks with host logic. `None` restores metadata-based breaks.
+    pub fn set_session_provider(
+        &mut self,
+        provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
+    ) {
+        self.session_provider = provider;
+    }
+
     /// Draw the chart background (solid or gradient)
     fn draw_background(&self, painter: &egui::Painter, rect: Rect) {
         // Skip background when chart is inside a container that handles its own background
@@ -578,11 +634,8 @@ impl Chart {
             candle_border_width: self.config.candle_border_width,
         };
 
-        let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(true)
-            .with_timezone(self.chart_options.time_scale.timezone.clone())
-            .build();
+        let timezone = self.display_timezone();
+        let formatter = self.build_time_formatter();
 
         if self.config.show_vertical_grid {
             if time_based {
@@ -603,43 +656,46 @@ impl Chart {
             }
         }
 
-        // Session-break layer: day/session dividers and optional alternating
-        // session shading. Drawn here, after the grid and before the candles, so
-        // the shading sits behind the bars and the dividers stay subtle. The
-        // boundary granularity follows the timeframe: day changes intraday, week
-        // changes on daily bars, month changes on weekly/monthly bars. Painters
-        // are clipped to the price rect so neither bleeds onto the axes.
+        let session_tf = self.resolve_session_timeframe(visible_data);
+        let exchange_session = renderers::exchange_session(
+            self.instrument(),
+            self.config.session_config.as_ref(),
+            &timezone,
+            session_tf,
+        );
+        let session_painter = painter.with_clip_rect(price_rect);
+        let session_ctx = RenderContext::new(&session_painter, price_rect);
         if self.config.show_session_breaks {
-            let session_tf = self.resolve_session_timeframe(visible_data);
-            let provider = renderers::provider_for_timeframe(session_tf);
-            let session_painter = painter.with_clip_rect(price_rect);
-            let session_ctx = RenderContext::new(&session_painter, price_rect);
-
-            // Subtle alternating shading behind the candles (still gated by the
-            // same flag; the even span is transparent so the effect reads as a
-            // faint banding rather than two competing fills).
+            let provider = self
+                .session_provider
+                .as_deref()
+                .unwrap_or(&exchange_session);
             let background =
                 renderers::SessionBackgroundRenderer::from_background(self.config.background_color);
-            background.render(
+            background.render(&session_ctx, visible_data, provider, &coords, start_idx);
+            renderers::SessionBreakRenderer::new(renderers::SessionBreakRenderConfig {
+                line_color: self.config.session_break_color,
+                line_width: 1.0,
+                style: self.config.session_break_style,
+            })
+            .render(&session_ctx, visible_data, provider, &coords, start_idx);
+        }
+        if time_based
+            && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms()
+            && self.config.show_extended_hours
+        {
+            let color = if self.config.extended_hours_color == egui::Color32::PLACEHOLDER {
+                ui.active_theme().ui.accent.linear_multiply(0.08)
+            } else {
+                self.config.extended_hours_color
+            };
+            renderers::render_extended_hours(
                 &session_ctx,
                 visible_data,
-                provider.as_ref(),
+                &exchange_session,
                 &coords,
                 start_idx,
-            );
-
-            let break_renderer =
-                renderers::SessionBreakRenderer::new(renderers::SessionBreakRenderConfig {
-                    line_color: self.config.session_break_color,
-                    line_width: 1.0,
-                    style: self.config.session_break_style,
-                });
-            break_renderer.render(
-                &session_ctx,
-                visible_data,
-                provider.as_ref(),
-                &coords,
-                start_idx,
+                color,
             );
         }
 
@@ -872,7 +928,10 @@ impl Chart {
                 .state
                 .data()
                 .bars
-                .partition_point(|bar| bar.time.date_naive() < last.time.date_naive())
+                .partition_point(|bar| {
+                    exchange_session.trading_date(bar.time)
+                        < exchange_session.trading_date(last.time)
+                })
                 .checked_sub(1)
             && let Some(previous) = self.state.data().bars.get(index)
         {
@@ -915,11 +974,15 @@ impl Chart {
                 .as_ref()
                 .filter(|_| self.config.show_countdown)
                 .and_then(|quote| {
-                    let duration = self.timeframe?.duration_ms() / 1000;
-                    let elapsed = quote.ts.signed_duration_since(last.time).num_seconds();
-                    (elapsed >= 0 && elapsed < duration).then(|| {
-                        let remaining = duration - elapsed;
-                        format!("{:02}:{:02}", remaining / 60, remaining % 60)
+                    let close = if let Some(link) = &self.feed_link {
+                        link.clock.next_open(link.clock.bar_open(last.time))?
+                    } else {
+                        last.time.checked_add_signed(self.timeframe?.duration())?
+                    };
+                    let remaining = (close - quote.ts).num_milliseconds();
+                    (quote.ts >= last.time && remaining > 0).then(|| {
+                        let seconds = (remaining + 999) / 1000;
+                        format!("{:02}:{:02}", seconds / 60, seconds % 60)
                     })
                 });
             let quote_tags = rendering::axes::render_quote_tags_with_countdown(
@@ -1021,19 +1084,7 @@ impl Chart {
             );
         }
 
-        // Source-bar cadence sets precision even when many elements share one time.
-        let bars = &self.state.data().bars;
-        let first = &visible_data[0];
-        let last = &visible_data[visible_data.len() - 1];
-        let end = bars.partition_point(|bar| bar.time <= last.time);
-        let at = bars
-            .partition_point(|bar| bar.time < first.time)
-            .min(end.saturating_sub(2));
-        let bar_seconds = if end >= 2 {
-            (bars[at + 1].time - bars[at].time).num_seconds().abs()
-        } else {
-            1
-        };
+        let bar_seconds = self.time_label_seconds();
 
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
         // while a context menu is open, so the crosshair, its labels and the tooltip wait until
@@ -1062,6 +1113,64 @@ impl Chart {
             })
             .map(|(pos, _)| pos)
             .or_else(|| shown.hover_pos().filter(|pos| price_rect.contains(*pos)));
+        {
+            let visible_data = self.state.visible_data();
+            let selected = hover_pos
+                .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
+                .map(|index| start_idx + index)
+                .unwrap_or_else(|| self.state.shown().len().saturating_sub(1));
+            if let Some(bar) = self.state.shown().get(selected) {
+                let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
+                let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
+                let statuses: Vec<_> = self
+                    .legend_statuses
+                    .iter()
+                    .map(|(text, color, background)| super::LegendStatus {
+                        text,
+                        color: *color,
+                        background: *background,
+                    })
+                    .collect();
+                legend.instrument = self.instrument();
+                legend.badge = self.legend_badge.clone();
+                legend.statuses = &statuses;
+                legend.quote = self.quote.as_ref().filter(|_| self.config.show_quote_boxes);
+                legend.show_title = self.config.show_symbol_labels;
+                legend.title_as_description = self.config.title_as_description;
+                legend.show_ohlc = self.config.show_ohlc_info;
+                legend.show_change = self.config.show_ohlc_change;
+                legend.show_change_percent = self.config.show_ohlc_change_percent;
+                legend.show_indicator_titles = self.config.show_indicator_labels;
+                legend.show_indicator_inputs = self.config.show_indicator_inputs;
+                legend.show_indicator_values = self.config.show_indicator_last_val;
+                let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
+                legend.study_inputs = &inputs;
+                legend.previous_close = selected
+                    .checked_sub(1)
+                    .and_then(|index| self.state.shown().get(index))
+                    .map(|bar| bar.close);
+                legend.bar_index = selected;
+                legend.studies = if time_based {
+                    self.studies.indicators()
+                } else {
+                    &[]
+                };
+                legend.show_volume =
+                    self.chart_type.supports_volume() && self.config.show_legend_volume;
+                let (quote_action, study_settings) = ui
+                    .push_id(shown.id, |ui| {
+                        legend.show_with_colors(ui, price_rect, &colors)
+                    })
+                    .inner;
+                if let Some(action) = quote_action {
+                    self.quote_action = Some(action);
+                }
+                if let Some(index) = study_settings {
+                    self.indicator_settings_request = self.study_ids.get(index).copied();
+                }
+            }
+        }
+
         if let Some(hover_pos) = hover_pos {
             // Cache the hover bar index for multi-chart sync
             self.last_hover_bar_idx = Some(coords.x_to_idx_f32(hover_pos.x) as f64);
@@ -1154,6 +1263,8 @@ impl Chart {
                         &price_map,
                         &coords,
                         visible_data,
+                        formatter.as_ref(),
+                        bar_seconds,
                     );
                 }
             }
@@ -1224,64 +1335,6 @@ impl Chart {
             self.event_click = Some(id);
         }
 
-        {
-            let visible_data = self.state.visible_data();
-            let selected = hover_pos
-                .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
-                .map(|index| start_idx + index)
-                .unwrap_or_else(|| self.state.shown().len().saturating_sub(1));
-            if let Some(bar) = self.state.shown().get(selected) {
-                let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
-                let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
-                let statuses: Vec<_> = self
-                    .legend_statuses
-                    .iter()
-                    .map(|(text, color, background)| super::LegendStatus {
-                        text,
-                        color: *color,
-                        background: *background,
-                    })
-                    .collect();
-                legend.instrument = self.instrument();
-                legend.badge = self.legend_badge.clone();
-                legend.statuses = &statuses;
-                legend.quote = self.quote.as_ref().filter(|_| self.config.show_quote_boxes);
-                legend.show_title = self.config.show_symbol_labels;
-                legend.title_as_description = self.config.title_as_description;
-                legend.show_ohlc = self.config.show_ohlc_info;
-                legend.show_change = self.config.show_ohlc_change;
-                legend.show_change_percent = self.config.show_ohlc_change_percent;
-                legend.show_indicator_titles = self.config.show_indicator_labels;
-                legend.show_indicator_inputs = self.config.show_indicator_inputs;
-                legend.show_indicator_values = self.config.show_indicator_last_val;
-                let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
-                legend.study_inputs = &inputs;
-                legend.previous_close = selected
-                    .checked_sub(1)
-                    .and_then(|index| self.state.shown().get(index))
-                    .map(|bar| bar.close);
-                legend.bar_index = selected;
-                legend.studies = if time_based {
-                    self.studies.indicators()
-                } else {
-                    &[]
-                };
-                legend.show_volume =
-                    self.chart_type.supports_volume() && self.config.show_legend_volume;
-                let (quote_action, study_settings) = ui
-                    .push_id(shown.id, |ui| {
-                        legend.show_with_colors(ui, price_rect, &colors)
-                    })
-                    .inner;
-                if let Some(action) = quote_action {
-                    self.quote_action = Some(action);
-                }
-                if let Some(index) = study_settings {
-                    self.indicator_settings_request = self.study_ids.get(index).copied();
-                }
-            }
-        }
-
         // Draw the axis labels, leaving out those the tags overlap
         tags.extend([last_price_tag, crosshair_tags[0], crosshair_tags[1]]);
         if self.config.show_right_axis {
@@ -1307,6 +1360,7 @@ impl Chart {
                 &colors,
                 formatter.as_ref(),
                 &tags,
+                self.chart_options.time_scale.ticks_visible,
                 time_labels,
             );
         }
@@ -1782,8 +1836,287 @@ mod tests {
                 if expected {
                     assert!(labels.contains(&"-10.00 (-8.33%)"));
                     assert!(labels.contains(&"Vol"));
+                    let legend = labels
+                        .iter()
+                        .position(|label| *label == "O 100.00")
+                        .unwrap();
+                    let tooltip = labels.iter().position(|label| *label == "Open").unwrap();
+                    assert!(
+                        tooltip > legend,
+                        "the floating readout must paint above the legend"
+                    );
                     assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
                         if text.galley.text() == "110.00" && text.galley.job.sections[0].format.color == egui::Color32::BLUE)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn configured_sessions_reach_breaks_and_extended_shading() {
+        use crate::model::{Bar, BarData, Timeframe};
+        let times = [
+            "2024-03-08T23:00:00Z",
+            "2024-03-11T07:59:00Z",
+            "2024-03-11T08:00:00Z",
+            "2024-03-11T13:00:00Z",
+            "2024-03-11T13:30:00Z",
+            "2024-03-11T20:00:00Z",
+            "2024-03-11T23:59:00Z",
+            "2024-03-12T00:00:00Z",
+        ];
+        for (shade, custom, metadata, expected) in [
+            (true, false, false, vec![2]),
+            (false, false, false, vec![2]),
+            (true, true, false, vec![1, 6]),
+            (true, false, true, vec![3]),
+        ] {
+            let ctx = egui::Context::default();
+            let bars = times
+                .iter()
+                .map(|time| Bar::new(time.parse().unwrap(), 100.0, 102.0, 99.0, 101.0, 1.0))
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Hour1);
+            if metadata {
+                use crate::model::{Instrument, Session, SessionWindow, TimezoneId};
+                use chrono::{NaiveTime, Weekday::*};
+                let weekdays = [Mon, Tue, Wed, Thu, Fri];
+                let clock = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+                // The instrument opens pre-market at 05:00, independent of the display zone.
+                chart.set_instrument(Some(
+                    Instrument::new("SESSION")
+                        .with_time_zone(TimezoneId::named("America/New_York").unwrap())
+                        .with_session(
+                            Session::new([SessionWindow::new(
+                                weekdays,
+                                clock(9, 30),
+                                clock(16, 0),
+                            )])
+                            .with_extended_windows([
+                                SessionWindow::new(weekdays, clock(5, 0), clock(9, 30)),
+                                SessionWindow::new(weekdays, clock(16, 0), clock(20, 0)),
+                            ]),
+                        ),
+                ));
+                chart.chart_options.time_scale.timezone =
+                    crate::scales::TimezoneMode::Timezone("Europe/Zurich".parse().unwrap());
+            } else {
+                chart.config.session_config = Some(crate::config::SessionConfig {
+                    show_premarket: true,
+                    show_postmarket: true,
+                    ..crate::config::SessionConfig::nyse()
+                });
+            }
+            chart.config.show_session_breaks = true;
+            chart.config.session_break_style = crate::config::SessionBreakStyle::Solid;
+            chart.config.session_break_color = egui::Color32::from_rgb(201, 37, 180);
+            chart.config.extended_hours_color =
+                egui::Color32::from_rgba_unmultiplied(90, 40, 170, 30);
+            chart.config.show_extended_hours = shade;
+            if custom {
+                chart.set_session_provider(Some(std::sync::Arc::new(
+                    crate::model::DailySessionProvider::new(21, 0),
+                )));
+            }
+            let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let lines: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment { points, stroke }
+                        if stroke.color == chart.config.session_break_color.gamma_multiply(0.6) =>
+                    {
+                        Some(points[0].x)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                lines,
+                expected
+                    .iter()
+                    .map(|index| map.idx_to_x(*index))
+                    .collect::<Vec<_>>()
+            );
+            let fills: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Rect(rect) if rect.fill == chart.config.extended_hours_color => {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let expected: Vec<_> = if shade {
+                [(0, 1), (if metadata { 3 } else { 2 }, 4), (5, 7)]
+                    .into_iter()
+                    .map(|(first, end)| {
+                        Rect::from_min_max(
+                            Pos2::new(map.idx_to_x(first) - map.bar_spacing / 2.0, map.rect.top()),
+                            Pos2::new(
+                                map.idx_to_x(end - 1) + map.bar_spacing / 2.0,
+                                map.rect.bottom(),
+                            ),
+                        )
+                        .intersect(map.rect)
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+            assert_eq!(fills, expected);
+        }
+    }
+
+    #[test]
+    fn time_visibility_flags_reach_axis_and_crosshair() {
+        use crate::model::{Bar, BarData, Timeframe};
+        use chrono::{Duration, TimeZone, Utc};
+        let time = Utc.with_ymd_and_hms(2024, 3, 10, 6, 59, 30).unwrap();
+        for (seconds, time_visible, seconds_visible, ticks_visible, expected) in [
+            (1, true, true, false, "Sun 10 Mar '24 01:59:30"),
+            (1, true, false, false, "Sun 10 Mar '24 01:59"),
+            (1, false, true, false, "Mar 10, 2024"),
+            (1, false, false, false, "Mar 10, 2024"),
+            (1, true, true, true, "Sun 10 Mar '24 01:59:30"),
+            (60, true, true, true, "Sun 10 Mar '24 01:59"),
+            (86_400, true, true, true, "Mar 10, 2024"),
+        ] {
+            let ctx = egui::Context::default();
+            let bars = (0..100)
+                .map(|i| {
+                    Bar::new(
+                        time + Duration::seconds((i - 50) * seconds),
+                        100.0,
+                        102.0,
+                        99.0,
+                        101.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(if seconds == 1 {
+                Timeframe::Sec1
+            } else if seconds == 60 {
+                Timeframe::Min1
+            } else {
+                Timeframe::Day1
+            });
+            let options = &mut chart.chart_options.time_scale;
+            options.timezone = crate::scales::TimezoneMode::nyse();
+            options.time_visible = time_visible;
+            options.seconds_visible = seconds_visible;
+            options.ticks_visible = ticks_visible;
+            chart.chart_options.tooltip.enabled = false;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+            assert!(
+                painted.iter().any(
+                    |shape| matches!(shape, Shape::Text(text) if text.galley.text() == expected)
+                ),
+                "{seconds} {time_visible} {seconds_visible}"
+            );
+            let ticks = painted.iter().filter(|shape| matches!(shape, Shape::LineSegment { points, .. } if (points[0].y - map.rect.bottom()).abs() < 0.1 && (points[1].y - points[0].y - 3.0).abs() < 0.1)).count();
+            assert_eq!(ticks > 0, ticks_visible, "tick visibility: {seconds}");
+        }
+    }
+
+    #[test]
+    fn hover_times_share_the_chart_zone_through_dst() {
+        use crate::model::{Bar, BarData, Timeframe};
+        use crate::scales::TimezoneMode;
+        use chrono::{Duration, TimeZone, Utc};
+        // US: UTC-5 to -4 at 07:00Z in March, -4 to -5 at 06:00Z in November.
+        // Zurich: UTC+1 to +2 at 01:00Z in March, +2 to +1 at 01:00Z in October.
+        for (zone, month, day, hour, before, after) in [
+            (
+                "America/New_York",
+                3,
+                10,
+                7,
+                "Sun 10 Mar '24 01:59:59",
+                "Sun 10 Mar '24 03:00:00",
+            ),
+            (
+                "America/New_York",
+                11,
+                3,
+                6,
+                "Sun 03 Nov '24 01:59:59",
+                "Sun 03 Nov '24 01:00:00",
+            ),
+            (
+                "Europe/Zurich",
+                3,
+                31,
+                1,
+                "Sun 31 Mar '24 01:59:59",
+                "Sun 31 Mar '24 03:00:00",
+            ),
+            (
+                "Europe/Zurich",
+                10,
+                27,
+                1,
+                "Sun 27 Oct '24 02:59:59",
+                "Sun 27 Oct '24 02:00:00",
+            ),
+        ] {
+            let transition = Utc.with_ymd_and_hms(2024, month, day, hour, 0, 0).unwrap();
+            for (time, expected) in [
+                (transition - Duration::seconds(1), before),
+                (transition, after),
+            ] {
+                for mode in [
+                    crate::config::TooltipMode::Floating,
+                    crate::config::TooltipMode::Tracking,
+                ] {
+                    let ctx = egui::Context::default();
+                    let bars = (0..100)
+                        .map(|i| {
+                            Bar::new(
+                                time + Duration::seconds(i - 50),
+                                100.0,
+                                102.0,
+                                99.0,
+                                101.0,
+                                1.0,
+                            )
+                        })
+                        .collect();
+                    let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                    chart.set_timeframe(Timeframe::Sec1);
+                    chart.chart_options.time_scale.timezone = TimezoneMode::nyse();
+                    chart.set_instrument(Some(
+                        crate::model::Instrument::new("DST")
+                            .with_time_zone(crate::model::TimezoneId::named(zone).unwrap()),
+                    ));
+                    assert_eq!(chart.format_time(time), expected);
+                    chart.chart_options.tooltip.mode = mode;
+                    chart.chart_options.tooltip.show_time = true;
+                    chart.chart_options.tooltip.on_long_press = false;
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    let map = chart.get_chart_mapping();
+                    let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+                    let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+                    let times: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Text(text) if text.galley.text().contains(expected) => {
+                                Some(text.galley.text())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        times.len(),
+                        2,
+                        "{zone} {time} {mode:?}: expected matching tooltip and crosshair, {times:?}"
+                    );
                 }
             }
         }
@@ -1841,6 +2174,7 @@ mod tests {
             let (kind, highs, index, pointer, synced, expected, panes) = case;
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], highs);
+            chart.chart_options.tooltip.enabled = false;
             #[cfg(feature = "studies")]
             if panes {
                 chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
@@ -1885,6 +2219,8 @@ mod tests {
                 })
                 .collect();
             assert_eq!(labels, [expected], "{case:?}");
+            let time = chart.state.shown()[index + 1].time;
+            assert_eq!(chart.format_time(time), expected, "host readout: {case:?}");
         }
     }
 

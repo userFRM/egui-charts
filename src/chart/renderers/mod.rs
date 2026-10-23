@@ -35,7 +35,7 @@ pub(crate) use labels::{price_decimals, render_time_grid};
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,
-    provider_for_timeframe,
 };
+pub(crate) use session_breaks::{exchange_session, render_extended_hours};
 pub use tooltip::render_tooltip_with_options;
 pub use volume::render_volume_bar;
