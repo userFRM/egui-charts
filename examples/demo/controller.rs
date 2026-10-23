@@ -849,8 +849,8 @@ impl DemoApp {
                     |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         ui.add_space(8.0);
-                        publish = ui
-                            .add(
+                        publish = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
+                            ui.add(
                                 egui::Button::new(
                                     egui::RichText::new("Publish")
                                         .size(14.0)
@@ -859,17 +859,23 @@ impl DemoApp {
                                 .fill(self.theme.ui.text)
                                 .min_size(egui::vec2(72.0, 28.0))
                                 .corner_radius(16),
-                            )
-                            .clicked();
-                        trade = ui
-                            .add(
+                            ),
+                            "Export chart",
+                            None,
+                        )
+                        .clicked();
+                        trade = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
+                            ui.add(
                                 egui::Button::new(egui::RichText::new("Trade").size(14.0))
                                     .fill(bg)
                                     .stroke(egui::Stroke::new(1.0, self.theme.ui.border))
                                     .min_size(egui::vec2(60.0, 28.0))
                                     .corner_radius(16),
-                            )
-                            .clicked();
+                            ),
+                            "Trading account",
+                            None,
+                        )
+                        .clicked();
                         search = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
                             IconButton::new(&icons::QUICK_SEARCH)
                                 .icon_scale(24.0 / 28.0)

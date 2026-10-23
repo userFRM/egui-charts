@@ -90,6 +90,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The host Trade and Publish controls now explain their trading-account and chart-export actions on hover, using the shared toolbar tooltip.
+
 - The interval menu reserves a compact 200 px outer width until the custom form is expanded; the form retains its full input and unit controls.
 
 - Chart settings opens on Symbol in the shared modal, with a 752 px surface, tab-specific heights, neutral sidebar selection and aligned value columns. Existing tabs retain their controls and template actions; dropdown selection remains readable.
