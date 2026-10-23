@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn instrument_precision_formats_prices_change_and_volume() {
         let mut instrument = crate::model::Instrument::new("FX").with_volume_decimals(3);
-        instrument.min_tick = 0.00001;
+        instrument.tick_size = Some(0.00001);
         let data = DataWindowInfo::new("FX")
             .with_instrument(&instrument)
             .with_ohlcv(0.0, 1.23456, 0.0, 1.23456, 1234.0)
