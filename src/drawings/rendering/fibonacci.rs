@@ -638,7 +638,8 @@ impl Drawing {
         let fib_ratios = [0.0, 0.382, 0.5, 0.618, 1.0, 1.618, 2.618];
 
         for &ratio in &fib_ratios {
-            let x = p1.x + dx * ratio;
+            let origin = self.points.get(2).unwrap_or(&p1);
+            let x = origin.x + dx * ratio;
             painter.vline(
                 x,
                 chart_rect.y_range(),
@@ -982,6 +983,26 @@ mod tests {
                 "missing wedge point {want:?}"
             );
         }
+
+        let mut extension = Drawing::new(0, crate::drawings::DrawingToolType::FibonacciExtension);
+        extension.chart_points = vec![
+            crate::drawings::ChartPoint::new(0.0, 100.0),
+            crate::drawings::ChartPoint::new(10.0, 150.0),
+            crate::drawings::ChartPoint::new(30.0, 130.0),
+        ];
+        extension.update_screen_coords(|b| b, |p| (1000.0 / p) as f32);
+        let (_, prices) = extension.fib_levels().unwrap();
+        // C + ratio*(B-A): levels 0, 0.618 and 1 are 130, 160.9 and 180.
+        for (got, want) in prices.iter().take(3).zip([130.0, 160.9, 180.0]) {
+            assert!((got - want).abs() < 1e-4);
+        }
+        extension.tool_type = crate::drawings::DrawingToolType::TrendBasedFibTime;
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            extension.render_trend_based_fib_time(ui.painter(), rect)
+        });
+        let has_origin=output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::LineSegment{points,..} if points[0].x==30.0 && points[1].x==30.0));
+        output.drop_without_applying_deltas();
+        assert!(has_origin, "time projections must start at C, bar 30");
 
         assert!(wrong.is_empty(), "{wrong:#?}");
     }

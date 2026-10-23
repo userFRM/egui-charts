@@ -32,7 +32,9 @@ impl DrawingToolType {
             }
 
             // Single-click tools
-            Self::HorizontalLine
+            Self::LongPos
+            | Self::ShortPos
+            | Self::HorizontalLine
             | Self::VerticalLine
             | Self::CrossLine
             | Self::HorizontalRay
@@ -42,12 +44,10 @@ impl DrawingToolType {
             | Self::AnchoredNote
             | Self::PriceLabel
             | Self::FlagNote
-            | Self::ArrowMarker
             | Self::ArrowMarkUp
             | Self::ArrowMarkDown
             | Self::AnchoredVWAP
             | Self::AnchoredVolumeProfile
-            | Self::PriceNote
             | Self::Table
             | Self::Comment
             | Self::Signpost
@@ -58,10 +58,8 @@ impl DrawingToolType {
 
             // Drag-to-draw tools
             Self::Rect
-            | Self::RotatedRect
             | Self::Circle
             | Self::Ellipse
-            | Self::Arc
             | Self::Measure
             | Self::PriceRange
             | Self::DateRange
@@ -69,35 +67,35 @@ impl DrawingToolType {
             | Self::GannBox
             | Self::GannSquare
             | Self::GannFixed
-            | Self::LongPos
-            | Self::ShortPos
             | Self::Forecast
             | Self::FixedRangeVolumeProfile
             | Self::FibonacciRetracement
-            | Self::FibonacciExtension
             | Self::FibonacciSpeedResistanceArcs
             | Self::FibonacciTimeZones
             | Self::FibonacciCircles
             | Self::FibonacciSpeedFan
             | Self::FibonacciSpiral
-            | Self::TrendBasedFibTime
-            | Self::Pitchfan
             | Self::GannFan
             | Self::RegressionTrend
             | Self::CyclicLines
             | Self::TimeCycles
             | Self::SineLine
-            | Self::Curve
-            | Self::DoubleCurve
             | Self::Callout
-            | Self::Arrow
-            | Self::ProjectionTool => DrawingInteractionMode::DragToDraw,
+            | Self::Arrow => DrawingInteractionMode::DragToDraw,
 
             // Continuous drawing tools
             Self::Brush | Self::Highlighter => DrawingInteractionMode::ContinuousDraw,
 
             // Multi-point tools
-            Self::FibonacciWedge
+            Self::RotatedRect
+            | Self::Arc
+            | Self::FibonacciExtension
+            | Self::FibonacciWedge
+            | Self::TrendBasedFibTime
+            | Self::Pitchfan
+            | Self::Curve
+            | Self::DoubleCurve
+            | Self::ProjectionTool
             | Self::Polyline
             | Self::Path
             | Self::Triangle
@@ -124,7 +122,9 @@ impl DrawingToolType {
             | Self::GhostFeed => DrawingInteractionMode::MultiPoint,
 
             // Click-click tools
-            Self::TrendLine
+            Self::ArrowMarker
+            | Self::PriceNote
+            | Self::TrendLine
             | Self::Ray
             | Self::InfoLine
             | Self::ExtendedLine
@@ -134,11 +134,16 @@ impl DrawingToolType {
 
     /// Anchors a drawing of this tool needs to be drawn and selected: what its renderer reads, not
     /// what the toolbar collects, so a drawing finished early or saved by an earlier release
-    /// still counts. The parallel channel draws nothing below three; the other multi-point
-    /// tools draw a mark and a segment per anchor they have.
+    /// still counts. Tools without a meaningful partial construction require all their
+    /// geometry anchors; the other multi-point tools can draw partial paths.
     pub(crate) fn anchors_needed(&self) -> usize {
         match self {
-            Self::ParallelChannel | Self::FibonacciWedge => 3,
+            Self::ParallelChannel
+            | Self::RotatedRect
+            | Self::FibonacciWedge
+            | Self::Pitchfan
+            | Self::BarsPattern => 3,
+            Self::DoubleCurve => 4,
             Self::Triangle
             | Self::FlatTopBottom
             | Self::DisjointChannel
@@ -183,26 +188,101 @@ impl DrawingToolType {
             DrawingInteractionMode::MultiPoint => {
                 // Multi-point tools have varying requirements
                 match self {
-                    Self::FibonacciWedge
+                    Self::FibonacciExtension
+                    | Self::FibonacciWedge
+                    | Self::TrendBasedFibTime
+                    | Self::Pitchfan
+                    | Self::Arc
+                    | Self::RotatedRect
+                    | Self::Curve
+                    | Self::ProjectionTool
+                    | Self::FlatTopBottom
+                    | Self::DisjointChannel
+                    | Self::FibonacciChannel
+                    | Self::BarsPattern
+                    | Self::GhostFeed
+                    | Self::ElliottDoubleCombo
                     | Self::Triangle
                     | Self::ParallelChannel
                     | Self::Pitchfork
                     | Self::SchiffPitchfork
                     | Self::ModifiedSchiffPitchfork
                     | Self::InsidePitchfork => Some(3),
-                    Self::ABCDPattern | Self::ElliottCorrection => Some(4),
-                    Self::XABCDPattern | Self::CypherPattern | Self::ElliottTriangle => Some(5),
-                    Self::ElliottImpulse | Self::ThreeDrivesPattern => Some(6),
-                    Self::HeadAndShoulders | Self::TrianglePattern | Self::ElliottTripleCombo => {
-                        Some(7)
-                    }
-                    Self::ElliottDoubleCombo => Some(5),
+                    Self::ABCDPattern
+                    | Self::ElliottCorrection
+                    | Self::TrianglePattern
+                    | Self::DoubleCurve => Some(4),
+                    Self::XABCDPattern
+                    | Self::CypherPattern
+                    | Self::ElliottTriangle
+                    | Self::ElliottTripleCombo => Some(5),
+                    Self::ElliottImpulse => Some(6),
+                    Self::HeadAndShoulders | Self::ThreeDrivesPattern => Some(7),
                     // Polyline, Path have no fixed limit
                     _ => None,
                 }
             }
             DrawingInteractionMode::ContinuousDraw => None,
             DrawingInteractionMode::NotDrawing => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placement_collects_every_construction_anchor() {
+        use DrawingToolType::*;
+        for (tool, mode, count) in [
+            (FibonacciExtension, DrawingInteractionMode::MultiPoint, 3),
+            (TrendBasedFibTime, DrawingInteractionMode::MultiPoint, 3),
+            (FibonacciWedge, DrawingInteractionMode::MultiPoint, 3),
+            (Pitchfan, DrawingInteractionMode::MultiPoint, 3),
+            (Arc, DrawingInteractionMode::MultiPoint, 3),
+            (RotatedRect, DrawingInteractionMode::MultiPoint, 3),
+            (ProjectionTool, DrawingInteractionMode::MultiPoint, 3),
+            (FlatTopBottom, DrawingInteractionMode::MultiPoint, 3),
+            (DisjointChannel, DrawingInteractionMode::MultiPoint, 3),
+            (FibonacciChannel, DrawingInteractionMode::MultiPoint, 3),
+            (Curve, DrawingInteractionMode::MultiPoint, 3),
+            (DoubleCurve, DrawingInteractionMode::MultiPoint, 4),
+            (TrianglePattern, DrawingInteractionMode::MultiPoint, 4),
+            (ThreeDrivesPattern, DrawingInteractionMode::MultiPoint, 7),
+            (ElliottDoubleCombo, DrawingInteractionMode::MultiPoint, 3),
+            (ElliottTripleCombo, DrawingInteractionMode::MultiPoint, 5),
+            (PriceNote, DrawingInteractionMode::ClickClick, 2),
+            (ArrowMarker, DrawingInteractionMode::ClickClick, 2),
+            (LongPos, DrawingInteractionMode::SingleClick, 1),
+            (ShortPos, DrawingInteractionMode::SingleClick, 1),
+        ] {
+            assert_eq!(tool.interaction_mode(), mode, "{tool:?}");
+            assert_eq!(tool.required_points(), Some(count), "{tool:?}");
+            let mut manager = crate::drawings::DrawingManager::new();
+            manager.start_drawing_with_coords(
+                tool,
+                egui::pos2(10.0, 500.0),
+                |x| x,
+                |y| 1000.0 - f64::from(y),
+            );
+            for i in 1..count {
+                assert!(manager.drawings.is_empty(), "{tool:?} completed too soon");
+                manager.add_point_with_coords(
+                    egui::pos2(10.0 + i as f32 * 100.0, 400.0),
+                    |x| x,
+                    |y| 1000.0 - f64::from(y),
+                );
+            }
+            assert_eq!(manager.drawings.len(), 1, "{tool:?}");
+            let drawing = &manager.drawings[0];
+            let handles = crate::drawings::services::DrawingInteraction::new().get_handles(drawing);
+            for point in &drawing.points {
+                assert!(
+                    handles.iter().any(|(_, p)| p == point),
+                    "{tool:?}: no handle for {point:?}"
+                );
+            }
         }
     }
 }

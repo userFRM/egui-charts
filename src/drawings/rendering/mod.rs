@@ -201,6 +201,7 @@ impl Drawing {
             T::TrendAngle
             | T::InfoLine
             | T::Arrow
+            | T::ArrowMarker
             | T::Polyline
             | T::Path
             | T::Brush
@@ -238,7 +239,11 @@ impl Drawing {
                 boxed(&mut outline, Rect::from_two_pos(first, corner));
             }
             T::RotatedRect => {
-                outline.lines = edges(&corners(Rect::from_two_pos(first, second)));
+                let corners = self.rotated_rect_corners()?;
+                outline.lines = edges(&corners);
+                if filled {
+                    outline.areas.push(corners.to_vec());
+                }
             }
             T::Ray => outline.lines = vec![[first, lines::ray_end(first, second, rect)]],
             T::ExtendedLine => outline.lines = vec![lines::extended_line(first, second, rect)],
@@ -281,10 +286,7 @@ impl Drawing {
                 }
             }
             T::Arc => {
-                outline.lines = lines::arc_points(first, second)
-                    .windows(2)
-                    .map(|w| [w[0], w[1]])
-                    .collect();
+                outline.lines = self.arc_path().windows(2).map(|w| [w[0], w[1]]).collect();
             }
             T::Curve => {
                 let [p0, p1, p2] = self.curve_controls()?;
@@ -294,7 +296,8 @@ impl Drawing {
                     .collect();
             }
             T::DoubleCurve => {
-                outline.lines = shapes::double_curve_points(first, second)
+                outline.lines = self
+                    .double_curve_points()?
                     .windows(2)
                     .map(|w| [w[0], w[1]])
                     .collect();
@@ -303,7 +306,9 @@ impl Drawing {
                 outline.lines = self.pitchfork_lines(rect)?;
                 outline.areas = self.pitchfork_bands(rect);
             }
-            T::Pitchfan => outline.lines = pitchfork::pitchfan_lines(first, second, rect),
+            T::Pitchfan => {
+                outline.lines = pitchfork::pitchfan_lines(first, second, *p.get(2)?, rect)
+            }
             T::GannFan => outline.lines = gann::gann_fan_lines(first, second, rect),
             T::FlatTopBottom => {
                 let &third = p.get(2)?;

@@ -213,11 +213,9 @@ impl Drawing {
     }
 
     pub(crate) fn render_pitchfan(&self, painter: &egui::Painter, rect: Rect) {
-        if self.points.len() < 2 {
+        let &[center, end, boundary, ..] = self.points.as_slice() else {
             return;
-        }
-        let center = self.points[0];
-        let end = self.points[1];
+        };
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
             self.color[1],
@@ -228,7 +226,7 @@ impl Drawing {
 
         for (i, (&ratio, [_, fan_end])) in PITCHFAN_RATIOS
             .iter()
-            .zip(pitchfan_lines(center, end, rect))
+            .zip(pitchfan_lines(center, end, boundary, rect))
             .enumerate()
         {
             let fan_angle = (fan_end.y - center.y).atan2(fan_end.x - center.x);
@@ -287,22 +285,22 @@ fn level_lines(base: &[[Pos2; 2]], value: f32, rect: Rect) -> Vec<[Pos2; 2]> {
         .collect()
 }
 
-/// The fan lines' ratios: 0 turns 45 degrees one way from the line to the
-/// second anchor, 0.5 runs along it and 1 turns 45 degrees the other way.
+/// Fractions along the pitchfork's tine span through which the fan rays pass.
 const PITCHFAN_RATIOS: [f32; 7] = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
 
-/// The pitchfan's lines from `center`, one per ratio, turned from the line to
-/// `end` and run past every edge of `rect`.
-pub(super) fn pitchfan_lines(center: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2]> {
-    let base_angle = (end.y - center.y).atan2(end.x - center.x);
-    let extend_dist = rect.width().max(rect.height()) * 2.0;
+/// Rays from the first pivot through fractional points on the second-to-third leg.
+pub(super) fn pitchfan_lines(
+    center: Pos2,
+    end: Pos2,
+    boundary: Pos2,
+    rect: Rect,
+) -> Vec<[Pos2; 2]> {
     PITCHFAN_RATIOS
         .iter()
-        .map(|ratio| {
-            let angle = base_angle + (ratio - 0.5) * std::f32::consts::FRAC_PI_2;
+        .map(|&ratio| {
             [
                 center,
-                center + extend_dist * egui::vec2(angle.cos(), angle.sin()),
+                super::lines::ray_end(center, end.lerp(boundary, ratio), rect),
             ]
         })
         .collect()

@@ -500,7 +500,26 @@ impl DrawingManager {
         };
         drawing.z_order = self.top_z_order();
         self.preview_point = false;
-        drawing.add_point_with_chart_coords(point, x_to_bar, y_to_price);
+        drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
+        if matches!(
+            tool_type,
+            DrawingToolType::LongPos | DrawingToolType::ShortPos
+        ) {
+            let side = if tool_type == DrawingToolType::LongPos {
+                -1.0
+            } else {
+                1.0
+            };
+            let target = point + egui::vec2(100.0, side * 50.0);
+            let target_price = y_to_price(target.y);
+            let entry_price = drawing.chart_points[0].price;
+            let stop = Pos2::new(target.x, point.y - side * 50.0);
+            drawing.points.extend([target, stop]);
+            drawing.chart_points.extend([
+                ChartPoint::new(x_to_bar(target.x), target_price),
+                ChartPoint::new(x_to_bar(target.x), 2.0 * entry_price - target_price),
+            ]);
+        }
 
         let completed = drawing.completed;
         self.curr_drawing = Some(drawing);
@@ -1254,17 +1273,16 @@ mod tests {
             x_to_bar,
             y_to_price,
         );
-        manager.update_last_point_with_coords(Pos2::new(30.0, 90.0), x_to_bar, y_to_price);
-        manager.complete_drag_drawing();
+        assert!(manager.curr_drawing.is_none());
         let id = manager.drawings[0].id;
-        assert_eq!(manager.drawings[0].chart_points[2].price, 90.0);
+        assert_eq!(manager.drawings[0].chart_points[2].price, 50.0);
 
         manager.start_drag_handle(id, HandlePos::Point(2));
         manager.update_drag_handle(Pos2::new(50.0, 105.0), x_to_bar, y_to_price);
         manager.end_drag_handle();
         let points = &manager.drawings[0].chart_points;
-        assert_eq!((points[1].price, points[2].price), (110.0, 95.0));
-        assert_eq!(points[2].bar_idx, 30.0);
+        assert_eq!((points[1].price, points[2].price), (150.0, 95.0));
+        assert_eq!(points[2].bar_idx, 110.0);
 
         manager.start_drag_handle(id, HandlePos::Point(1));
         manager.update_drag_handle(Pos2::new(40.0, 85.0), x_to_bar, y_to_price);

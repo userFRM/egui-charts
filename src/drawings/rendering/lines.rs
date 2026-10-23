@@ -482,7 +482,7 @@ impl Drawing {
     pub(crate) fn render_arc(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         if self.points.len() >= 2 {
             let center = self.points[0];
-            for pair in arc_points(center, self.points[1]).windows(2) {
+            for pair in self.arc_path().windows(2) {
                 painter.line_segment([pair[0], pair[1]], stroke);
             }
 
@@ -490,6 +490,40 @@ impl Drawing {
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
         }
+    }
+
+    /// Circular arc from the first anchor to the second through the third.
+    pub(super) fn arc_path(&self) -> Vec<Pos2> {
+        let &[a, b, ..] = self.points.as_slice() else {
+            return Vec::new();
+        };
+        let Some(&c) = self.points.get(2) else {
+            return arc_points(a, b);
+        };
+        let (u, v) = (b - a, c - a);
+        let det = 2.0 * (u.x * v.y - u.y * v.x);
+        if det.abs() < 1e-6 {
+            return vec![a, c, b];
+        }
+        let center = a + egui::vec2(
+            (u.length_sq() * v.y - v.length_sq() * u.y) / det,
+            (u.x * v.length_sq() - v.x * u.length_sq()) / det,
+        );
+        let angle = |p: Pos2| (p.y - center.y).atan2(p.x - center.x);
+        let start = angle(a);
+        let end = (angle(b) - start).rem_euclid(std::f32::consts::TAU);
+        let through = (angle(c) - start).rem_euclid(std::f32::consts::TAU);
+        let sweep = if through <= end {
+            end
+        } else {
+            end - std::f32::consts::TAU
+        };
+        (0..=64)
+            .map(|i| {
+                let theta = start + sweep * i as f32 / 64.0;
+                center + center.distance(a) * egui::vec2(theta.cos(), theta.sin())
+            })
+            .collect()
     }
 
     /// Render polyline - connected line segments through all points
@@ -532,19 +566,9 @@ impl Drawing {
         }
     }
 
-    /// Render arrow marker - right-pointing triangle
+    /// Arrow marker from its tail anchor to its head anchor
     pub(crate) fn render_arrow_marker(&self, painter: &egui::Painter, color: Color32) {
-        if !self.points.is_empty() {
-            let pos = self.points[0];
-            let size = DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs;
-            let points = vec![
-                Pos2::new(pos.x + size, pos.y),
-                Pos2::new(pos.x - size * 0.5, pos.y - size * 0.6),
-                Pos2::new(pos.x - size * 0.5, pos.y + size * 0.6),
-            ];
-            let shape = egui::epaint::PathShape::convex_polygon(points, color, Stroke::NONE);
-            painter.add(shape);
-        }
+        self.render_arrow(painter, color, Stroke::new(self.stroke_width, color));
     }
 
     /// Render arrow mark up - upward pointing bullish arrow

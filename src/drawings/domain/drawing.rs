@@ -198,7 +198,7 @@ impl Drawing {
     }
 
     /// The Fibonacci config in use and the price of each of its visible levels, for a retracement
-    /// or an extension with both anchors placed.
+    /// or an extension projected from its third anchor (the first anchor for legacy two-point drawings).
     pub(crate) fn fib_levels(&self) -> Option<(FibonacciConfig, Vec<f64>)> {
         let extension = match self.tool_type {
             DrawingToolType::FibonacciRetracement => false,
@@ -215,8 +215,16 @@ impl Drawing {
                 FibonacciConfig::default()
             }
         });
+        let offset = if extension {
+            self.chart_points
+                .get(2)
+                .map_or(0.0, |origin| origin.price - start.price)
+        } else {
+            0.0
+        };
         let prices = config
             .level_prices(start.price, end.price, extension)
+            .map(|price| price + offset)
             .collect();
         Some((config, prices))
     }

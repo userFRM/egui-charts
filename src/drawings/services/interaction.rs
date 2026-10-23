@@ -50,77 +50,7 @@ impl DrawingInteraction {
     /// tool type (see [`HandleService::get_handles`](super::HandleService::get_handles)
     /// for the canonical implementation).
     pub fn get_handles(&self, drawing: &Drawing) -> Vec<(HandlePos, Pos2)> {
-        let mut handles = Vec::new();
-
-        match drawing.tool_type {
-            DrawingToolType::TrendLine | DrawingToolType::Measure => {
-                if !drawing.points.is_empty() {
-                    handles.push((HandlePos::Start, drawing.points[0]));
-                }
-                if drawing.points.len() >= 2 {
-                    handles.push((HandlePos::End, drawing.points[1]));
-                    // Middle handle
-                    let mid = Pos2::new(
-                        (drawing.points[0].x + drawing.points[1].x) / 2.0,
-                        (drawing.points[0].y + drawing.points[1].y) / 2.0,
-                    );
-                    handles.push((HandlePos::Middle, mid));
-                }
-            }
-            // Fibonacci tools
-            DrawingToolType::FibonacciRetracement
-            | DrawingToolType::FibonacciExtension
-            | DrawingToolType::FibonacciChannel
-            | DrawingToolType::FibonacciSpeedResistanceArcs
-            | DrawingToolType::FibonacciTimeZones
-            | DrawingToolType::FibonacciCircles
-            | DrawingToolType::FibonacciSpeedFan
-            | DrawingToolType::FibonacciSpiral
-            | DrawingToolType::FibonacciWedge
-            | DrawingToolType::TrendBasedFibTime => {
-                if !drawing.points.is_empty() {
-                    handles.push((HandlePos::Start, drawing.points[0]));
-                }
-                if drawing.points.len() >= 2 {
-                    handles.push((HandlePos::End, drawing.points[1]));
-                    let mid = Pos2::new(
-                        (drawing.points[0].x + drawing.points[1].x) / 2.0,
-                        (drawing.points[0].y + drawing.points[1].y) / 2.0,
-                    );
-                    handles.push((HandlePos::Middle, mid));
-                }
-            }
-            DrawingToolType::Rect => {
-                if drawing.points.len() >= 2 {
-                    let p1 = drawing.points[0];
-                    let p2 = drawing.points[1];
-                    handles.push((HandlePos::TopLeft, p1));
-                    handles.push((HandlePos::TopRight, Pos2::new(p2.x, p1.y)));
-                    handles.push((HandlePos::BottomLeft, Pos2::new(p1.x, p2.y)));
-                    handles.push((HandlePos::BottomRight, p2));
-                }
-            }
-            DrawingToolType::HorizontalLine | DrawingToolType::VerticalLine => {
-                if !drawing.points.is_empty() {
-                    handles.push((HandlePos::Start, drawing.points[0]));
-                }
-            }
-            _ => {
-                // For multi-point drawings, show handle at each point
-                for (i, &point) in drawing.points.iter().enumerate() {
-                    let pos = if i == 0 {
-                        HandlePos::Start
-                    } else if i == drawing.points.len() - 1 {
-                        HandlePos::End
-                    } else {
-                        HandlePos::Middle
-                    };
-                    handles.push((pos, point));
-                }
-            }
-        }
-
-        handles
+        super::HandleService::get_handles(drawing)
     }
 
     /// Hit-tests a screen point against the handles of a drawing.
