@@ -7,7 +7,9 @@ use crate::icons::icons;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
-use egui::{Align2, Context, CursorIcon, FontId, Id, Rect, RichText, Ui, Vec2, pos2};
+use egui::{
+    Align2, Context, CursorIcon, FontId, Id, Key, Modifiers, Rect, RichText, Ui, Vec2, pos2,
+};
 
 /// Replay speed presets for playback control
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -248,51 +250,7 @@ impl FloatingReplayControl {
             return ReplayControlAction::None;
         }
 
-        let mut action = ReplayControlAction::None;
-
-        // Handle keyboard shortcuts
-        ctx.input(|i| {
-            // Escape - close control
-            if i.key_pressed(egui::Key::Escape) {
-                action = ReplayControlAction::Close;
-            }
-            // Space - play/pause
-            else if i.key_pressed(egui::Key::Space) {
-                action = if self.state.is_playing {
-                    ReplayControlAction::Pause
-                } else {
-                    ReplayControlAction::Play
-                };
-            }
-            // Home - go to start
-            else if i.key_pressed(egui::Key::Home) {
-                action = ReplayControlAction::GoToStart;
-            }
-            // End - go to end
-            else if i.key_pressed(egui::Key::End) {
-                action = ReplayControlAction::GoToEnd;
-            }
-            // Shift+Left - step backward
-            else if i.modifiers.shift && i.key_pressed(egui::Key::ArrowLeft) {
-                action = ReplayControlAction::StepBackward;
-            }
-            // Shift+Right - step forward
-            else if i.modifiers.shift && i.key_pressed(egui::Key::ArrowRight) {
-                action = ReplayControlAction::StepForward;
-            }
-            // Left Arrow - previous bar
-            else if i.key_pressed(egui::Key::ArrowLeft) {
-                action = ReplayControlAction::PreviousBar;
-            }
-            // Right Arrow - next bar
-            else if i.key_pressed(egui::Key::ArrowRight) {
-                action = ReplayControlAction::NextBar;
-            }
-        });
-
-        if action != ReplayControlAction::None {
-            return action;
-        }
+        let mut action = self.shortcut(ctx);
 
         let dock = self.dock_rect.unwrap_or_else(|| ctx.content_rect());
         let inset = ctx.active_theme().spacing.lg;
@@ -304,14 +262,67 @@ impl FloatingReplayControl {
             // Not inset: an area clips to its constraint, which would cut off the shadow.
             .constrain_to(dock)
             .show(ctx, |ui| {
-                action = self.render_control(ui);
+                let clicked = self.render_control(ui);
+                if clicked != ReplayControlAction::None {
+                    action = clicked;
+                }
             });
 
         action
     }
 
+    /// The action of a shortcut pressed this frame, which takes its key.
+    ///
+    /// Shortcuts act only while no text field has focus, no popup is open and no control
+    /// outside the background layer has focus, so keys typed into a field, meant for an open
+    /// popup or pressing a focused button in the bar or a dialog never reach the replay. A
+    /// focused chart in a panel keeps them.
+    fn shortcut(&self, ctx: &Context) -> ReplayControlAction {
+        let focus_off_background = ctx
+            .memory(|m| m.focused())
+            .and_then(|id| ctx.read_response(id))
+            .is_some_and(|r| r.layer_id.order != egui::Order::Background);
+        if ctx.text_edit_focused() || focus_off_background || egui::Popup::is_any_open(ctx) {
+            return ReplayControlAction::None;
+        }
+        let play_or_pause = if self.state.is_playing {
+            ReplayControlAction::Pause
+        } else {
+            ReplayControlAction::Play
+        };
+        // Shift+arrow first: a pattern without Shift also matches the key with Shift held.
+        [
+            (Modifiers::NONE, Key::Space, play_or_pause),
+            (Modifiers::NONE, Key::Home, ReplayControlAction::GoToStart),
+            (Modifiers::NONE, Key::End, ReplayControlAction::GoToEnd),
+            (
+                Modifiers::SHIFT,
+                Key::ArrowLeft,
+                ReplayControlAction::StepBackward,
+            ),
+            (
+                Modifiers::SHIFT,
+                Key::ArrowRight,
+                ReplayControlAction::StepForward,
+            ),
+            (
+                Modifiers::NONE,
+                Key::ArrowLeft,
+                ReplayControlAction::PreviousBar,
+            ),
+            (
+                Modifiers::NONE,
+                Key::ArrowRight,
+                ReplayControlAction::NextBar,
+            ),
+        ]
+        .into_iter()
+        .find(|(modifiers, key, _)| ctx.input_mut(|i| i.consume_key(*modifiers, *key)))
+        .map_or(ReplayControlAction::None, |(_, _, action)| action)
+    }
+
     /// Render the control contents
-    /// Layout: grip | start, previous, play or pause, next, end | speed | symbol, progress | exit
+    /// Layout: grip | start, previous, play or pause, next, end | speed | symbol, progress | exit, hide
     fn render_control(&mut self, ui: &mut Ui) -> ReplayControlAction {
         let mut action = ReplayControlAction::None;
 
@@ -464,6 +475,15 @@ impl FloatingReplayControl {
                     {
                         action = ReplayControlAction::Stop;
                     }
+
+                    if IconButton::new(&icons::CLOSE)
+                        .size(ButtonSize::SM)
+                        .tooltip("Hide replay controls")
+                        .show(ui)
+                        .clicked()
+                    {
+                        action = ReplayControlAction::Close;
+                    }
                 });
             });
 
@@ -477,4 +497,76 @@ pub fn show_floating_replay_control(
     control: &mut FloatingReplayControl,
 ) -> ReplayControlAction {
     control.show(ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, Key, Modifiers, RawInput};
+
+    fn key(key: Key) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    /// Runs one frame: the bar, then a text field, as the demo draws dialogs after the bar.
+    fn frame(
+        ctx: &Context,
+        bar: &mut FloatingReplayControl,
+        events: Vec<Event>,
+        focus_field: bool,
+    ) -> ReplayControlAction {
+        let mut action = ReplayControlAction::None;
+        let input = RawInput {
+            events,
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| {
+            action = bar.show(ui.ctx());
+            let field = ui.text_edit_singleline(&mut String::new());
+            if focus_field {
+                field.request_focus();
+            }
+        })
+        .drop_without_applying_deltas();
+        action
+    }
+
+    /// The key a shortcut reads goes to the replay only when nothing else should take it.
+    #[test]
+    fn shortcuts_leave_keys_to_focused_widgets() {
+        // (keys before the checked frame, focus the text field, checked key, expected action)
+        let cases = [
+            (vec![], false, Key::Space, ReplayControlAction::Pause),
+            (vec![], false, Key::Escape, ReplayControlAction::None),
+            (vec![], true, Key::Space, ReplayControlAction::None),
+            // Tab focuses the bar's first button, which Space then presses.
+            (
+                vec![key(Key::Tab)],
+                false,
+                Key::Space,
+                ReplayControlAction::GoToStart,
+            ),
+        ];
+        for (before, focus_field, pressed, expected) in cases {
+            let ctx = Context::default();
+            let mut bar = FloatingReplayControl::new();
+            bar.sync_from(true, true, 1.0, 150, 300);
+            for _ in 0..2 {
+                frame(&ctx, &mut bar, vec![], focus_field);
+            }
+            frame(&ctx, &mut bar, before, focus_field);
+            frame(&ctx, &mut bar, vec![], focus_field);
+            let action = frame(&ctx, &mut bar, vec![key(pressed)], focus_field);
+            assert_eq!(
+                action, expected,
+                "{pressed:?}, text field focused: {focus_field}"
+            );
+        }
+    }
 }

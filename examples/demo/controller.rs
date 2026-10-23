@@ -291,7 +291,9 @@ impl DemoApp {
     // --- replay ------------------------------------------------------------
 
     fn toggle_replay(&mut self) {
-        if self.replay.is_some() {
+        if self.replay.is_some() && self.replay_control.is_user_dismissed() {
+            self.replay_control.show_control();
+        } else if self.replay.is_some() {
             self.stop_replay();
         } else {
             self.start_replay();
