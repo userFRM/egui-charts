@@ -71,6 +71,31 @@ impl LiveFeed {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    pub(super) fn fork(&self) -> Self {
+        let sim = self.state();
+        Self(Mutex::new(Simulation {
+            symbol: sim.symbol.clone(),
+            tick_size: sim.tick_size,
+            price_ticks: sim.price_ticks,
+            random: sim.random,
+            id: sim.id,
+            trades: sim.trades.clone(),
+            history: sim.history.clone(),
+            next_trade: sim.next_trade,
+            retain_from: sim.retain_from,
+            now: sim.now,
+            paused: sim.paused,
+            continuous: sim.continuous,
+            adjusted: sim.adjusted,
+            subscription: None,
+        }))
+    }
+
+    pub(super) fn view(&self, extended_hours: bool) -> (SessionType, bool) {
+        let sim = self.state();
+        (sim.session(extended_hours), sim.adjusted)
+    }
+
     pub(super) fn set_symbol(&self, symbol: &str) {
         let mut sim = self.state();
         if sim.symbol != symbol {
@@ -322,7 +347,7 @@ impl Simulation {
                 self.history.drain(..self.history.len() - 10_000);
             }
         }
-        // Bursts near 20/s alternate with quieter stretches and occasional half-second pauses.
+        // Keep the price RNG sequence independent of the daily profile and clustered arrivals.
         let delay = 50
             + self.random() % 100
             + if self.random().is_multiple_of(13) {
@@ -330,7 +355,14 @@ impl Simulation {
             } else {
                 0
             };
-        self.next_trade += TimeDelta::milliseconds(delay as i64);
+        let seconds = self.next_trade.timestamp();
+        let phase = seconds.rem_euclid(86_400) as f64 / 86_400.0 * std::f64::consts::TAU;
+        let session = 1.0 + 0.6 * phase.cos();
+        let mut burst = (seconds.div_euclid(120) as u64).wrapping_mul(0x9e3779b97f4a7c15);
+        burst = (burst ^ (burst >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        let intensity = session * (0.25 + 3.0 * ((burst >> 32) as f64 / u32::MAX as f64).powi(3));
+        let delay = (delay as f64 / intensity).round().max(1.0) as i64;
+        self.next_trade += TimeDelta::milliseconds(delay);
     }
 }
 
@@ -401,6 +433,42 @@ mod tests {
     use egui_charts::chart::selection::SeriesId;
     use std::sync::Arc;
 
+    /// Minute volume must reflect clustered arrivals and the daily activity profile.
+    #[test]
+    fn minute_volume_varies_across_a_full_generated_day() {
+        let now = "2026-10-23T19:07:05Z".parse().unwrap();
+        let feed = LiveFeed::new("SAMPLE", now);
+        let sim = feed.state();
+        let day = &sim.history[sim.history.len() - 1440..];
+        let mean = day.iter().map(|bar| bar.volume).sum::<f64>() / day.len() as f64;
+        let variance = day
+            .iter()
+            .map(|bar| (bar.volume - mean).powi(2))
+            .sum::<f64>()
+            / day.len() as f64;
+        let cv = variance.sqrt() / mean;
+        assert!((0.4..1.2).contains(&cv), "minute volume CV: {cv}");
+        let trades: Vec<_> = sim.trades.iter().cloned().collect();
+        let minutes = aggregate_trades(&trades, Timeframe::Min1).unwrap();
+        let counts: Vec<_> = minutes[1..minutes.len() - 1]
+            .iter()
+            .map(|bar| {
+                trades.partition_point(|trade| trade.ts < bar.time + TimeDelta::minutes(1))
+                    - trades.partition_point(|trade| trade.ts < bar.time)
+            })
+            .collect();
+        let mean = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
+        let variance = counts
+            .iter()
+            .map(|count| (*count as f64 - mean).powi(2))
+            .sum::<f64>()
+            / counts.len() as f64;
+        assert!(
+            variance.sqrt() / mean > 0.3,
+            "arrivals must vary, not only trade sizes"
+        );
+    }
+
     /// Archiving executions must preserve their price path, volume and the bucket crossing
     /// the archive boundary, including when a calendar or session choice rebuilds the stream.
     #[test]
@@ -419,7 +487,7 @@ mod tests {
                 let volume = bars.iter().map(|bar| bar.volume).sum::<f64>() / 60.0;
                 let range = bars.iter().map(|bar| bar.high - bar.low).sum::<f64>() / 60.0;
                 assert!(
-                    (8000.0..11000.0).contains(&volume),
+                    (4000.0..14000.0).contains(&volume),
                     "volume per minute: {volume}"
                 );
                 assert!(
@@ -468,10 +536,10 @@ mod tests {
                         bar.time == "2026-10-23T16:45:00Z".parse::<DateTime<Utc>>().unwrap()
                     })
                     .unwrap();
-                // Independently folded: 6,863 archived and 13,960 retained executions.
+                // Independently folded across the archived and retained executions.
                 for (actual, expected) in [join.open, join.high, join.low, join.close, join.volume]
                     .into_iter()
-                    .zip([771.22, 773.44, 767.23, 770.15, 412_689.0])
+                    .zip([763.95, 765.29, 758.36, 759.55, 376_797.0])
                 {
                     assert!((actual - expected).abs() < 1e-9);
                 }

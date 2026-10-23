@@ -96,50 +96,49 @@ impl SeriesSettingsDialog {
         let active_tab_mut = &mut self.active_tab;
         let settings = &mut self.settings;
 
-        SidebarLayout::new(sidebar_width).show(
-            ui,
-            |ui| {
-                ui.space_sm();
-                for tab in SeriesSettingsTab::all() {
-                    if SidebarTab::new(tab.label(), *active_tab_mut == tab)
-                        .icon(tab.icon())
-                        .show(ui)
-                    {
-                        *active_tab_mut = tab;
-                    }
-                }
-            },
-            |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.space_md();
-                    match active_tab {
-                        SeriesSettingsTab::Symbol => SymbolTab::show(ui, settings),
-                        SeriesSettingsTab::StatusLine => StatusLineTab::show(ui, settings),
-                        SeriesSettingsTab::ScalesAndLines => ScalesTab::show(ui, settings),
-                        SeriesSettingsTab::Canvas => CanvasTab::show(ui, settings),
-                        SeriesSettingsTab::Trading => TradingTab::show(ui, settings),
-                        SeriesSettingsTab::Alerts => AlertsTab::show(ui, settings),
-                        SeriesSettingsTab::Events => EventsTab::show(ui, settings),
-                    }
-                });
-            },
-        );
+        // Reserve the footer before the sidebar layout consumes the remaining height.
+        let body_height = (ui.available_height() - 64.0).max(0.0);
+        ui.allocate_ui(Vec2::new(ui.available_width(), body_height), |ui| {
+            SidebarLayout::new(sidebar_width.min(ui.available_width() * 0.4)).show(
+                ui,
+                |ui| {
+                    egui::ScrollArea::both()
+                        .id_salt("series_tabs")
+                        .show(ui, |ui| {
+                            ui.space_sm();
+                            for tab in SeriesSettingsTab::all() {
+                                if SidebarTab::new(tab.label(), *active_tab_mut == tab)
+                                    .icon(tab.icon())
+                                    .show(ui)
+                                {
+                                    *active_tab_mut = tab;
+                                }
+                            }
+                        });
+                },
+                |ui| {
+                    egui::ScrollArea::both()
+                        .id_salt("series_content")
+                        .show(ui, |ui| {
+                            ui.space_md();
+                            match active_tab {
+                                SeriesSettingsTab::Symbol => SymbolTab::show(ui, settings),
+                                SeriesSettingsTab::StatusLine => StatusLineTab::show(ui, settings),
+                                SeriesSettingsTab::ScalesAndLines => ScalesTab::show(ui, settings),
+                                SeriesSettingsTab::Canvas => CanvasTab::show(ui, settings),
+                                SeriesSettingsTab::Trading => TradingTab::show(ui, settings),
+                                SeriesSettingsTab::Alerts => AlertsTab::show(ui, settings),
+                                SeriesSettingsTab::Events => EventsTab::show(ui, settings),
+                            }
+                        });
+                },
+            );
+        });
 
         // Footer
-        let (ok, cancel) = DialogFooter::new("Ok")
-            .secondary("Cancel")
-            .show_with_left(ui, |ui| {
-                // Template dropdown (placeholder)
-                egui::ComboBox::from_id_salt("template")
-                    .selected_text("Template")
-                    .width(DESIGN_TOKENS.sizing.dialog.input_width)
-                    .show_ui(ui, |ui| {
-                        let _ = ui.selectable_label(false, "Default");
-                        let _ = ui.selectable_label(false, "Save as...");
-                    });
-            });
+        let (ok, cancel) = DialogFooter::new("Ok").secondary("Cancel").show(ui);
         if ok && let Some(id) = self.series_id {
-            action = SeriesSettingsAction::Apply(id, self.settings.clone());
+            action = SeriesSettingsAction::Apply(id, Box::new(self.settings.clone()));
             self.is_open = false;
         }
         if cancel {
@@ -148,5 +147,79 @@ impl SeriesSettingsDialog {
         }
 
         action
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ChartType;
+
+    #[test]
+    fn type_controls_leave_the_footer_inside_short_and_narrow_windows() {
+        for dark in [false, true] {
+            for size in [
+                Vec2::new(1440.0, 868.0),
+                Vec2::new(770.0, 520.0),
+                Vec2::new(420.0, 360.0),
+            ] {
+                for kind in [ChartType::Area, ChartType::Baseline, ChartType::Renko] {
+                    let ctx = Context::default();
+                    let theme = if dark {
+                        crate::theme::Theme::dark()
+                    } else {
+                        crate::theme::Theme::light()
+                    };
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                    let mut dialog = SeriesSettingsDialog::new();
+                    dialog.open(
+                        SeriesId::MAIN,
+                        SeriesSettings {
+                            chart_type: kind,
+                            ..Default::default()
+                        },
+                    );
+                    for frame in 0..3 {
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                dialog.show(ui.ctx());
+                            },
+                        );
+                        let ok = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "Ok" => Some((
+                                shape.clip_rect,
+                                egui::Rect::from_min_size(text.pos, text.galley.size()),
+                            )),
+                            _ => None,
+                        });
+                        let inert_colour_controls = output.shapes.iter().any(|shape| {
+                            matches!(
+                                &shape.shape, egui::Shape::Text(text)
+                                if matches!(text.galley.text(), "Border (up)" | "Wick (up)")
+                            )
+                        });
+                        output.drop_without_applying_deltas();
+                        if frame > 0 {
+                            if kind == ChartType::Renko {
+                                assert!(
+                                    !inert_colour_controls,
+                                    "Renko must only offer colours its renderer reads"
+                                );
+                            }
+                            let ok = ok.expect("apply button is painted");
+                            assert!(
+                                screen.contains_rect(ok.1) && ok.0.contains_rect(ok.1),
+                                "{kind:?} {size:?}: footer {ok:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

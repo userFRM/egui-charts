@@ -162,7 +162,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
+                &params.type_params.styles.line,
                 params.price_source(),
             );
         }
@@ -178,8 +178,9 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
+                &params.type_params.styles.line_with_markers,
                 params.price_source(),
+                params.type_params.styles.marker_radius,
             );
         }
         ChartType::StepLine => {
@@ -194,7 +195,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
+                &params.type_params.styles.step_line,
                 params.price_source(),
             );
         }
@@ -213,7 +214,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
+                &params.type_params.styles.area,
                 params.price_source(),
             );
         }
@@ -265,8 +266,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
+                &params.type_params.styles.baseline,
                 params.price_source(),
                 params.type_params.baseline,
             );
@@ -309,6 +309,7 @@ pub fn render_chart_type(
             japanese::render_renko(
                 painter,
                 built.shown(ctx.start_idx, ctx.visible_data.len()),
+                params.type_params.renko_wicks,
                 params.bar_width(),
                 ctx.price_scale,
                 params.bullish_color(),
@@ -376,5 +377,143 @@ pub fn render_chart_type(
                 params.bearish_color(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::{Bar, BarData, ChartType, LineStyle};
+    use crate::widget::Chart;
+    use egui::{Color32, Context, RawInput, Rect, Shape, pos2, vec2};
+
+    #[test]
+    fn chart_type_styles_paint_and_survive_switching_and_serialization() {
+        let time = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let bars = [100.0, 110.0, 90.0, 105.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| Bar::new(time + chrono::Duration::minutes(i as i64), c, c, c, c, 1.0))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.config_mut().show_volume = false;
+        let candle_color = chart.config().bullish_color;
+        let mut settings = chart.series_settings();
+        let styles = &mut settings.chart_type_params.styles;
+        let color = Color32::from_rgb(119, 17, 199);
+        for line in [
+            &mut styles.line,
+            &mut styles.step_line,
+            &mut styles.line_with_markers,
+            &mut styles.area.line,
+            &mut styles.baseline.above,
+            &mut styles.baseline.below,
+        ] {
+            line.color = color;
+            line.width = 3.5;
+        }
+        styles.line.style = LineStyle::Dashed;
+        styles.step_line.style = LineStyle::Dotted;
+        styles.marker_radius = 8.0;
+        styles.area.top_fill = Color32::from_rgba_unmultiplied(255, 0, 0, 200);
+        styles.area.bottom_fill = Color32::from_rgba_unmultiplied(0, 0, 255, 40);
+        styles.baseline.above_fill = Color32::from_rgba_unmultiplied(255, 255, 0, 100);
+        styles.baseline.below_fill = Color32::from_rgba_unmultiplied(0, 255, 255, 80);
+        chart.apply_series_settings(&settings);
+        assert_eq!(chart.config().bullish_color, candle_color);
+        let json = serde_json::to_string(chart.chart_type_params()).unwrap();
+        let restored = serde_json::from_str(&json).unwrap();
+        chart.set_chart_type_params(restored);
+
+        for kind in [
+            ChartType::Line,
+            ChartType::StepLine,
+            ChartType::LineWithMarkers,
+            ChartType::Area,
+            ChartType::Baseline,
+            ChartType::Candles,
+            ChartType::Line,
+        ] {
+            chart.set_chart_type(kind);
+            assert_eq!(
+                chart.series_settings().chart_type_params,
+                settings.chart_type_params
+            );
+            let ctx = Context::default();
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            );
+            let has_line = output.shapes.iter().any(|s| match &s.shape {
+                Shape::Path(path) => {
+                    path.stroke.width == 3.5
+                        && path.stroke.color == egui::epaint::ColorMode::Solid(color)
+                }
+                Shape::LineSegment { stroke, .. } => stroke.width == 3.5 && stroke.color == color,
+                _ => false,
+            });
+            let markers = output
+                .shapes
+                .iter()
+                .filter(|s| {
+                    matches!(&s.shape,
+                Shape::Circle(circle) if circle.radius == 8.0 && circle.fill == color)
+                })
+                .count();
+            let has_bottom = output.shapes.iter().any(|s| matches!(&s.shape,
+                Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color == settings.chart_type_params.styles.area.bottom_fill)));
+            let baseline_fills = output.shapes.iter().filter(|s| matches!(&s.shape,
+                Shape::Path(path) if path.fill == settings.chart_type_params.styles.baseline.above_fill
+                    || path.fill == settings.chart_type_params.styles.baseline.below_fill)).count();
+            output.drop_without_applying_deltas();
+            if kind != ChartType::Candles {
+                assert!(has_line, "{kind:?} ignored its line style");
+            }
+            if kind == ChartType::LineWithMarkers {
+                assert_eq!(markers, 4);
+            }
+            if kind == ChartType::Area {
+                assert!(has_bottom, "custom bottom fill was lost");
+            }
+            if kind == ChartType::Baseline {
+                assert!(baseline_fills >= 2, "baseline fills were lost");
+            }
+        }
+        // Subpixel segments still carry a continuous 8-on, 4-off pattern: 22 points of ink
+        // over a 30-point path, independent of how densely its points are sampled.
+        let ctx = Context::default();
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            super::line::draw_styled_line(
+                ui.painter(),
+                (0..=60).map(|i| pos2(i as f32 / 2.0, 50.0)).collect(),
+                &settings.chart_type_params.styles.line,
+            );
+        });
+        let ink: f32 = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                if let Shape::LineSegment { points, stroke } = &s.shape {
+                    (stroke.color == color).then_some(points[1].x - points[0].x)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        output.drop_without_applying_deltas();
+        assert_eq!(ink, 22.0, "dash phase must survive short segments");
+        let mut reset = chart.series_settings();
+        reset.reset_to_default();
+        assert_eq!(
+            reset.chart_type,
+            ChartType::Line,
+            "reset must keep the dialog's active type"
+        );
     }
 }

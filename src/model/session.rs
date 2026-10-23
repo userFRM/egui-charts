@@ -287,14 +287,9 @@ impl ExchangeSessionProvider {
         let Some(session) = &self.session else {
             return false;
         };
-        session
-            .extended_windows
-            .iter()
-            .any(|window| self.contains(session, window, time))
-            && !session
-                .windows
-                .iter()
-                .any(|window| self.contains(session, window, time))
+        let contains =
+            |window: &crate::model::SessionWindow| self.window_close(time, window).is_some();
+        session.extended_windows.iter().any(contains) && !session.windows.iter().any(contains)
     }
 
     /// Whether the exchange is open, optionally including extended windows.
@@ -309,46 +304,96 @@ impl ExchangeSessionProvider {
             .windows
             .iter()
             .chain(session.extended_windows.iter().filter(|_| extended_hours))
-            .any(|window| self.contains(session, window, time))
+            .any(|window| self.window_close(time, window).is_some())
     }
 
-    fn contains(
+    /// Closing instant of the active trading window. Outside trading hours, including holidays,
+    /// returns `None`. Extended windows participate only when requested.
+    pub fn session_close(&self, time: DateTime<Utc>, extended: bool) -> Option<DateTime<Utc>> {
+        let session = self.session.as_ref()?;
+        session
+            .windows
+            .iter()
+            .chain(session.extended_windows.iter().filter(|_| extended))
+            .filter_map(|window| self.window_close(time, window))
+            .max()
+    }
+
+    /// Close of the last trading window in a daily, weekly or monthly bar. Daily and longer
+    /// bars carry their trading date in UTC; intraday bars use their active exchange window.
+    pub fn bar_session_close(
         &self,
-        session: &Session,
-        window: &crate::model::SessionWindow,
+        open: DateTime<Utc>,
+        timeframe: Timeframe,
+        extended: bool,
+    ) -> Option<DateTime<Utc>> {
+        if timeframe.duration_ms() < 86_400_000 {
+            return self.session_close(open, extended);
+        }
+        let session = self.session.as_ref()?;
+        let mut date = open.date_naive();
+        let end = match timeframe {
+            Timeframe::Day1 => date.succ_opt()?,
+            Timeframe::Week1 => date.checked_add_days(chrono::Days::new(7))?,
+            Timeframe::Month1 => date
+                .with_day(1)?
+                .checked_add_months(chrono::Months::new(1))?,
+            _ => return None,
+        };
+        let mut close = None;
+        while date < end {
+            for window in session
+                .windows
+                .iter()
+                .chain(session.extended_windows.iter().filter(|_| extended))
+            {
+                let overnight = window.close <= window.open && window.open != NaiveTime::MIN;
+                let open_date = if overnight { date.pred_opt()? } else { date };
+                if let Some(start) = self.instant(open_date.and_time(window.open))
+                    && let Some(end) = self.window_close(start, window)
+                {
+                    close = Some(close.map_or(end, |previous: DateTime<Utc>| previous.max(end)));
+                }
+            }
+            date = date.succ_opt()?;
+        }
+        close
+    }
+
+    fn window_close(
+        &self,
         time: DateTime<Utc>,
-    ) -> bool {
+        window: &crate::model::SessionWindow,
+    ) -> Option<DateTime<Utc>> {
+        let session = self.session.as_ref()?;
         let local = self.wall_time(time);
         let overnight = window.close <= window.open && window.open != NaiveTime::MIN;
-        // During a repeated hour the clock alone cannot choose the overnight trading date.
         [
             Some(local.date()),
             local.date().succ_opt().filter(|_| overnight),
         ]
         .into_iter()
         .flatten()
-        .any(|close_date| {
+        .find_map(|close_date| {
             if session.holidays.contains(&close_date)
                 || !window.days.contains(&close_date.weekday())
             {
-                return false;
+                return None;
             }
             let open_date = if overnight {
-                close_date.pred_opt().unwrap_or(close_date)
+                close_date.pred_opt()?
             } else {
                 close_date
             };
             let end_date = if window.open == window.close && !overnight {
-                close_date.succ_opt().unwrap_or(close_date)
+                close_date.succ_opt()?
             } else {
                 close_date
             };
-            let Some(open) = self.instant(open_date.and_time(window.open)) else {
-                return false;
-            };
+            let open = self.instant(open_date.and_time(window.open))?;
             // The later close retains the full repeated hour in an overnight window.
-            let close = self.close_instant(end_date.and_time(window.close));
-            close.is_some_and(|close| time >= open && time < close)
+            let close = self.close_instant(end_date.and_time(window.close))?;
+            (time >= open && time < close).then_some(close)
         })
     }
 
@@ -957,6 +1002,48 @@ mod tests {
             weekly.trading_date("2024-03-25T08:00:00Z".parse().unwrap()),
             NaiveDate::from_ymd_opt(2024, 2, 26).unwrap()
         );
+        let regular = ExchangeSessionProvider::new(
+            TimezoneId::named("America/New_York").unwrap(),
+            Some(Session::new([SessionWindow::new(
+                weekdays,
+                clock(9, 30),
+                clock(16, 0),
+            )])),
+        );
+        for (open, timeframe, expected) in [
+            (
+                "2024-03-08T00:00:00Z",
+                Timeframe::Day1,
+                Some("2024-03-08T21:00:00Z"),
+            ),
+            (
+                "2024-03-11T00:00:00Z",
+                Timeframe::Day1,
+                Some("2024-03-11T20:00:00Z"),
+            ),
+            (
+                "2024-03-11T00:00:00Z",
+                Timeframe::Week1,
+                Some("2024-03-15T20:00:00Z"),
+            ),
+            (
+                "2024-03-01T00:00:00Z",
+                Timeframe::Month1,
+                Some("2024-03-29T20:00:00Z"),
+            ),
+            (
+                "2024-03-11T19:59:00Z",
+                Timeframe::Min1,
+                Some("2024-03-11T20:00:00Z"),
+            ),
+            ("2024-03-11T20:00:00Z", Timeframe::Min1, None),
+            ("2024-03-10T00:00:00Z", Timeframe::Day1, None),
+        ] {
+            assert_eq!(
+                regular.bar_session_close(open.parse().unwrap(), timeframe, false),
+                expected.map(|time| time.parse().unwrap())
+            );
+        }
         for zone in ["America/New_York", "Europe/Zurich"] {
             let provider = ExchangeSessionProvider::new(TimezoneId::named(zone).unwrap(), None);
             for time in [DateTime::<Utc>::MIN_UTC, DateTime::<Utc>::MAX_UTC] {

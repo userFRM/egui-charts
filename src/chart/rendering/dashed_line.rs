@@ -29,6 +29,36 @@ pub(crate) fn draw_dashed_line(
     dash_len: f32,
     gap_len: f32,
 ) {
+    draw_dashed_segment(painter, start, end, stroke, dash_len, gap_len, 0.0);
+}
+
+/// Draw a polyline with a continuous dash phase, clipping each segment before walking dashes.
+pub(crate) fn draw_dashed_polyline(
+    painter: &egui::Painter,
+    points: &[Pos2],
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+) {
+    let mut phase = 0.0;
+    let period = f64::from(dash_len) + f64::from(gap_len);
+    for pair in points.windows(2) {
+        draw_dashed_segment(painter, pair[0], pair[1], stroke, dash_len, gap_len, phase);
+        let dx = f64::from(pair[1].x) - f64::from(pair[0].x);
+        let dy = f64::from(pair[1].y) - f64::from(pair[0].y);
+        phase = (phase + dx.hypot(dy)).rem_euclid(period);
+    }
+}
+
+pub(super) fn draw_dashed_segment(
+    painter: &egui::Painter,
+    start: Pos2,
+    end: Pos2,
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+    phase: f64,
+) {
     let Some(clip) = finite_clip(painter) else {
         return;
     };
@@ -37,7 +67,7 @@ pub(crate) fn draw_dashed_line(
     let total_len = dx.hypot(dy);
     let period = f64::from(dash_len) + f64::from(gap_len);
     if !total_len.is_finite()
-        || total_len < 1.0
+        || total_len == 0.0
         || !period.is_finite()
         || dash_len <= 0.0
         || gap_len < 0.0
@@ -73,12 +103,12 @@ pub(crate) fn draw_dashed_line(
         Pos2::new((x0 + dx * t) as f32, (y0 + dy * t) as f32)
     };
     // Integer dash indices covering [from, to]: at most visible_len / period + 2 steps.
-    let first = (from / period).floor() as i64;
-    let last = (to / period).ceil() as i64;
+    let first = ((from + phase) / period).floor() as i64;
+    let last = ((to + phase) / period).ceil() as i64;
     let mut dots = Mesh::default();
     for k in first..last {
-        let dash_start = (k as f64 * period).max(from);
-        let dash_end = (k as f64 * period + f64::from(dash_len)).min(to);
+        let dash_start = (k as f64 * period - phase).max(from);
+        let dash_end = (k as f64 * period - phase + f64::from(dash_len)).min(to);
         if dash_start < dash_end {
             let (start, end) = (at(dash_start), at(dash_end));
             if dash_len == 1.0 && stroke.width == 1.0 && (dx == 0.0 || dy == 0.0) {

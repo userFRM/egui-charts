@@ -190,6 +190,10 @@ impl Indicator for Stochastic {
         "Stochastic"
     }
 
+    fn precision(&self) -> Option<usize> {
+        Some(2)
+    }
+
     fn desc(&self) -> &str {
         "Stochastic Oscillator - Momentum oscillator (0-100)"
     }

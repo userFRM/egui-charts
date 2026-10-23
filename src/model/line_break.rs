@@ -9,6 +9,7 @@
 //! - [`detect_signal`] classifies the relationship between the last two
 //!   lines as a continuation or reversal.
 
+use super::PriceBasedSource;
 use super::PriceBuilder;
 use super::bar::Bar;
 use chrono::{DateTime, Utc};
@@ -21,18 +22,26 @@ use chrono::{DateTime, Utc};
 pub struct LineBreakConfig {
     /// Number of lines to look back for reversal
     pub line_cnt: usize,
+    /// Price input; high/low gives continuation priority when a bar crosses both thresholds.
+    pub source: PriceBasedSource,
 }
 
 impl Default for LineBreakConfig {
     fn default() -> Self {
-        Self { line_cnt: 3 }
+        Self {
+            line_cnt: 3,
+            source: PriceBasedSource::Close,
+        }
     }
 }
 
 impl LineBreakConfig {
     /// Create a Line Break config with the given look-back count.
     pub fn new(line_cnt: usize) -> Self {
-        Self { line_cnt }
+        Self {
+            line_cnt,
+            source: PriceBasedSource::Close,
+        }
     }
 }
 
@@ -99,6 +108,7 @@ pub(crate) const MAX_LINES: usize = 10_000;
 #[derive(Clone)]
 pub(crate) struct LineBreakBuilder {
     line_cnt: usize,
+    source: PriceBasedSource,
     lines: Vec<LineBreakLine>,
 }
 
@@ -106,6 +116,7 @@ impl LineBreakBuilder {
     pub(crate) fn new(config: &LineBreakConfig) -> Self {
         Self {
             line_cnt: config.line_cnt,
+            source: config.source,
             lines: Vec::new(),
         }
     }
@@ -132,13 +143,30 @@ impl PriceBuilder for LineBreakBuilder {
         let lines = &self.lines;
         let curr_direction = last_line.direction;
 
+        let price = match self.source {
+            PriceBasedSource::Close => bar.close,
+            PriceBasedSource::HighLow if curr_direction == LineDirection::Up => {
+                if bar.high > last_line.high() {
+                    bar.high
+                } else {
+                    bar.low
+                }
+            }
+            PriceBasedSource::HighLow => {
+                if bar.low < last_line.low() {
+                    bar.low
+                } else {
+                    bar.high
+                }
+            }
+        };
         let new_line = match curr_direction {
             LineDirection::Up => {
                 // For a continuation, close must exceed the last line's high
-                if bar.close > last_line.high() {
+                if price > last_line.high() {
                     Some(LineBreakLine {
                         open: last_line.close,
-                        close: bar.close,
+                        close: price,
                         direction: LineDirection::Up,
                         ts: bar.time,
                     })
@@ -151,9 +179,9 @@ impl PriceBuilder for LineBreakBuilder {
                         .map(|l| l.low())
                         .fold(f64::INFINITY, f64::min);
 
-                    (bar.close < reversal_low).then_some(LineBreakLine {
+                    (price < reversal_low).then_some(LineBreakLine {
                         open: last_line.open,
-                        close: bar.close,
+                        close: price,
                         direction: LineDirection::Down,
                         ts: bar.time,
                     })
@@ -161,10 +189,10 @@ impl PriceBuilder for LineBreakBuilder {
             }
             LineDirection::Down => {
                 // For a continuation, close must break below the last line's low
-                if bar.close < last_line.low() {
+                if price < last_line.low() {
                     Some(LineBreakLine {
                         open: last_line.close,
-                        close: bar.close,
+                        close: price,
                         direction: LineDirection::Down,
                         ts: bar.time,
                     })
@@ -177,9 +205,9 @@ impl PriceBuilder for LineBreakBuilder {
                         .map(|l| l.high())
                         .fold(f64::NEG_INFINITY, f64::max);
 
-                    (bar.close > reversal_high).then_some(LineBreakLine {
+                    (price > reversal_high).then_some(LineBreakLine {
                         open: last_line.open,
-                        close: bar.close,
+                        close: price,
                         direction: LineDirection::Up,
                         ts: bar.time,
                     })
