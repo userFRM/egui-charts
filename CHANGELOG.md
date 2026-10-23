@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Charts pass instrument time zones and sessions to studies when added and when metadata arrives or changes, so a dialog-created VWAP follows the exchange session. VWAP supports quarter and year anchors, percentage bands, and `with_event_anchors` for earnings, dividend or split timestamps supplied by the host. Event anchors reset on the first bar at or after the timestamp, including after a market gap. ([#163](https://github.com/userFRM/egui-charts/issues/163))
+
 - Chart settings now retain and apply title format, quote controls and independent study title/input/value visibility. `Chart::set_indicator_inputs` supplies study input captions, retained through host templates; status-line volume no longer hides the histogram. The settings dialog keeps one top edge across tabs through `Modal::top`.
 - Price scale placement and independent current/previous close labels and lines now reach rendering on either axis. Countdown visibility is honoured, with its default enabled to retain the existing displayed countdown. Migration: add `..Default::default()` to `ChartConfig`, `settings_menu::data::StatusLineOptions`, `ScalesAndLinesSettings` and `IndicatorPaneConfig` literals, or set the new visibility fields explicitly. Construct `Legend` with `Legend::new` and set its public fields; it has no `Default` implementation. Previous close is the last bar before the latest UTC date.
 

@@ -107,6 +107,14 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Apply the chart instrument's time zone and trading session. Returns `true`
+    /// if calculation settings changed and the caller must recalculate from bar 0.
+    /// Studies independent of instrument metadata keep the default.
+    fn set_instrument(&mut self, instrument: &crate::model::Instrument) -> bool {
+        let _ = instrument;
+        false
+    }
+
     /// Return the slice of computed values (one per input bar).
     ///
     /// The length of the returned slice matches the length of the `data`
