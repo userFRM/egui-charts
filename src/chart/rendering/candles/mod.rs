@@ -20,7 +20,7 @@ mod params;
 pub(crate) mod price_based;
 mod range;
 pub mod tpo;
-mod volume;
+pub(crate) mod volume;
 
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,

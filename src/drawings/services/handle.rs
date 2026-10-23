@@ -96,8 +96,6 @@ impl HandleService {
             }
             // Fibonacci and similar two-point tools
             DrawingToolType::FibonacciRetracement
-            | DrawingToolType::FibonacciExtension
-            | DrawingToolType::FibonacciChannel
             | DrawingToolType::GannFan
             | DrawingToolType::GannSquare
             | DrawingToolType::GannBox => {
@@ -169,8 +167,6 @@ impl HandleService {
             DrawingToolType::TrendLine
             | DrawingToolType::Measure
             | DrawingToolType::FibonacciRetracement
-            | DrawingToolType::FibonacciExtension
-            | DrawingToolType::FibonacciChannel
             | DrawingToolType::GannFan
             | DrawingToolType::GannSquare
             | DrawingToolType::GannBox => {

@@ -4,52 +4,65 @@
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use egui::{Color32, Pos2, Stroke};
 
 impl Drawing {
-    /// Render Rotated Rectangle
-    ///
-    /// Rotation is not yet supported; currently draws an axis-aligned rectangle.
-    /// A full implementation would require a third control point or rotation angle.
+    /// A rectangle whose first two anchors form its base and whose third sets the width.
     pub(crate) fn render_rotated_rect(&self, painter: &egui::Painter) {
-        if self.points.len() < 2 {
+        let Some(corners) = self.rotated_rect_corners() else {
             return;
-        }
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // For now, draw as regular rect (rotation would require additional control point)
-        let rect = Rect::from_two_pos(p1, p2);
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(self.stroke_width, color),
-            StrokeKind::Inside,
-        );
+        };
+        let fill = self.fill_color.map_or(Color32::TRANSPARENT, |c| {
+            Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+        });
+        painter.add(egui::Shape::convex_polygon(
+            corners.to_vec(),
+            fill,
+            Stroke::new(self.stroke_width, self.color32()),
+        ));
     }
 
-    pub(crate) fn render_double_curve(&self, painter: &egui::Painter) {
-        if self.points.len() < 2 {
-            return;
+    pub(super) fn rotated_rect_corners(&self) -> Option<[Pos2; 4]> {
+        let &[a, b, c, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let base = b - a;
+        if base.length_sq() < 1e-6 {
+            return None;
         }
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
+        let normal = egui::vec2(-base.y, base.x);
+        let offset = normal * ((c - a).dot(normal) / base.length_sq());
+        Some([a, b, b + offset, a + offset])
+    }
 
-        for pair in double_curve_points(p1, p2).windows(2) {
-            painter.line_segment([pair[0], pair[1]], Stroke::new(self.stroke_width, color));
-        }
+    /// Cubic Bezier curve with two independently placed control points.
+    pub(crate) fn render_double_curve(&self, painter: &egui::Painter) {
+        let Some(points) = self.double_curve_points() else {
+            return;
+        };
+        painter.add(egui::Shape::line(
+            points,
+            Stroke::new(self.stroke_width, self.color32()),
+        ));
+    }
+
+    pub(super) fn double_curve_points(&self) -> Option<Vec<Pos2>> {
+        let &[a, b, c, d, ..] = self.points.as_slice() else {
+            return None;
+        };
+        Some(
+            (0..=64)
+                .map(|i| {
+                    let t = i as f32 / 64.0;
+                    let u = 1.0 - t;
+                    (a.to_vec2() * u * u * u
+                        + b.to_vec2() * 3.0 * u * u * t
+                        + c.to_vec2() * 3.0 * u * t * t
+                        + d.to_vec2() * t * t * t)
+                        .to_pos2()
+                })
+                .collect(),
+        )
     }
 
     /// The width a brush is drawn at: twice the stroke width for the brush,
@@ -179,14 +192,70 @@ pub(super) fn curve_points(p0: Pos2, p1: Pos2, p2: Pos2) -> Vec<Pos2> {
         .collect()
 }
 
-/// The S curve from `p1` to `p2`: the straight line between them with one
-/// sine period of 20 px added to y.
-pub(super) fn double_curve_points(p1: Pos2, p2: Pos2) -> Vec<Pos2> {
-    (0..=32)
-        .map(|i| {
-            let t = i as f32 / 32.0;
-            let offset = (t * std::f32::consts::TAU).sin() * 20.0;
-            Pos2::new(p1.x + (p2.x - p1.x) * t, p1.y + (p2.y - p1.y) * t + offset)
-        })
-        .collect()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shape_and_fan_geometry_uses_the_placed_controls() {
+        let rect = egui::Rect::from_min_max(egui::pos2(-400.0, -400.0), egui::pos2(400.0, 400.0));
+        for (tool, anchors, want) in [
+            (
+                DrawingToolType::RotatedRect,
+                vec![(0.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
+                vec![(50.0, 150.0), (-50.0, 50.0)],
+            ),
+            (
+                DrawingToolType::DoubleCurve,
+                vec![(0.0, 0.0), (0.0, 100.0), (100.0, -100.0), (100.0, 0.0)],
+                vec![(50.0, 0.0), (100.0, 0.0)],
+            ),
+            (
+                DrawingToolType::Arc,
+                vec![(-50.0, 0.0), (50.0, 0.0), (0.0, 50.0)],
+                vec![(-50.0, 0.0), (50.0, 0.0), (0.0, 50.0)],
+            ),
+            (
+                DrawingToolType::Pitchfan,
+                vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)],
+                vec![(400.0, 0.0), (400.0, 200.0), (400.0, 400.0)],
+            ),
+        ] {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.points = anchors.into_iter().map(Pos2::from).collect();
+            let outline = drawing.outline(rect).unwrap();
+            for point in want.into_iter().map(Pos2::from) {
+                assert!(
+                    outline
+                        .lines
+                        .iter()
+                        .flatten()
+                        .any(|p| p.distance(point) < 1e-3),
+                    "{tool:?} missing {point:?}"
+                );
+            }
+        }
+        for category in crate::drawings::categories::CATEGORY_ORDER {
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                crate::ui::drawing_toolbar::data::get_category_sections(category),
+                crate::drawings::categories::get_category_sections(category),
+            );
+            for (_, tools) in crate::drawings::categories::get_category_sections(category) {
+                for tool in tools {
+                    assert!(
+                        !matches!(
+                            tool,
+                            DrawingToolType::Table
+                                | DrawingToolType::Image
+                                | DrawingToolType::Tweet
+                                | DrawingToolType::Idea
+                                | DrawingToolType::GhostFeed
+                        ),
+                        "unfinished {tool:?} in {category}"
+                    );
+                }
+            }
+        }
+    }
 }

@@ -136,10 +136,46 @@ impl StoredDrawing {
         if size.into_iter().any(bad) {
             return Some("position_size".into());
         }
-        let mut levels = d.fib_config.iter().flat_map(|config| &config.levels);
-        levels
-            .position(|level| bad(level.value.into()))
-            .map(|i| format!("fib_config.levels[{i}].value"))
+        for (name, values) in [
+            (
+                "fib_config.levels",
+                d.fib_config
+                    .iter()
+                    .flat_map(|c| c.levels.iter().map(|l| l.value))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "pitchfork.levels",
+                d.pitchfork
+                    .iter()
+                    .flat_map(|c| c.levels.iter().map(|l| l.value))
+                    .collect(),
+            ),
+            (
+                "gann.price_levels",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.price_levels.iter().copied())
+                    .collect(),
+            ),
+            (
+                "gann.time_levels",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.time_levels.iter().copied())
+                    .collect(),
+            ),
+        ] {
+            if let Some(i) = values.iter().position(|v| !v.is_finite()) {
+                let suffix = if name.ends_with(".levels") {
+                    ".value"
+                } else {
+                    ""
+                };
+                return Some(format!("{name}[{i}]{suffix}"));
+            }
+        }
+        None
     }
 }
 
@@ -355,6 +391,25 @@ impl DrawingStorage {
                         }
                         if let Some(field) = drawing.non_finite_field() {
                             return Err(serde::de::Error::custom(format!("non-finite {field}")));
+                        }
+                        // Earlier placements stored fewer anchors. Keep their endpoints and
+                        // supply editable controls before checking the current construction.
+                        use DrawingToolType as T;
+                        match (tool, drawing.points.as_slice()) {
+                            (T::PriceNote | T::ArrowMarker, [a]) => {
+                                drawing.points.push(a.clone());
+                            }
+                            (T::RotatedRect, [a, b]) => {
+                                drawing.points =
+                                    vec![a.clone(), StoredCoord::new(b.ts_ms, a.price), b.clone()];
+                            }
+                            (T::DoubleCurve, [a, b]) => {
+                                drawing.points = vec![a.clone(), a.clone(), b.clone(), b.clone()];
+                            }
+                            (T::FibonacciWedge | T::Pitchfan, [a, b]) => {
+                                drawing.points.push(StoredCoord::new(b.ts_ms, a.price));
+                            }
+                            _ => {}
                         }
                         if let Some((needed, anchors)) = drawing.missing_anchors() {
                             return Err(serde::de::Error::custom(format!(
@@ -668,6 +723,9 @@ mod tests {
         });
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
+        if tool == DrawingToolType::DoubleCurve {
+            d.chart_points.push(ChartPoint::new(12.0, 115.0));
+        }
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -676,7 +734,18 @@ mod tests {
     #[test]
     fn every_tool_round_trips_with_all_settings() {
         for &tool in DrawingToolType::all().iter().filter(|t| !t.is_cursor()) {
-            let drawing = non_default_drawing(tool);
+            let mut drawing = non_default_drawing(tool);
+            drawing.gann = Some(crate::drawings::GannConfig {
+                price_levels: vec![0.25, 0.75],
+                time_levels: vec![0.5],
+            });
+            let mut fork = crate::drawings::PitchforkConfig::default();
+            fork.levels[0].line_style = LineStyle::Dotted;
+            fork.levels[1].visible = false;
+            fork.show_background = false;
+            drawing.pitchfork = Some(fork);
+            drawing.channel_midline = true;
+
             let mut storage = DrawingStorage::new("AAPL");
             storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
             let (loaded, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
@@ -789,6 +858,36 @@ mod tests {
                 format!("{:?}", restore(stored, want.id)),
                 format!("{want:?}")
             );
+        }
+
+        // Settings from a file saved before the new fields and placement counts.
+        for (tool, count, restored_count) in [
+            (DrawingToolType::PriceNote, 1, 2),
+            (DrawingToolType::ArrowMarker, 1, 2),
+            (DrawingToolType::RotatedRect, 2, 3),
+            (DrawingToolType::DoubleCurve, 2, 4),
+            (DrawingToolType::FibonacciWedge, 2, 3),
+            (DrawingToolType::Pitchfan, 2, 3),
+            (DrawingToolType::BarsPattern, 2, 2),
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            records[0]["drawing"]["tool_type"] = serde_json::to_value(tool).unwrap();
+            records[0]["points"].as_array_mut().unwrap().truncate(count);
+            let original = records[0]["points"].as_array().unwrap().clone();
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            let points = &loaded.drawings[0].points;
+            assert_eq!(points.len(), restored_count, "{tool:?}");
+            let points = serde_json::to_value(points).unwrap();
+            for anchor in original {
+                assert!(points.as_array().unwrap().contains(&anchor), "{tool:?}");
+            }
+            let (again, skipped) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(again.drawings[0].points.len(), restored_count);
         }
 
         let mut first = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
@@ -921,7 +1020,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 8] = [
+        let cases: [(Spoil, &str); 11] = [
             (
                 |s| first(s).drawing.stroke_width = f32::NAN,
                 "non-finite stroke_width",
@@ -946,6 +1045,37 @@ mod tests {
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,
                 "non-finite fib_config.levels[0].value",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .pitchfork
+                        .get_or_insert_with(Default::default)
+                        .levels[0]
+                        .value = f32::NAN
+                },
+                "non-finite pitchfork.levels[0].value",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .gann
+                        .get_or_insert_with(Default::default)
+                        .price_levels[0] = f32::INFINITY
+                },
+                "non-finite gann.price_levels[0]",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .gann
+                        .get_or_insert_with(Default::default)
+                        .time_levels[0] = f32::NAN
+                },
+                "non-finite gann.time_levels[0]",
             ),
             (|s| s.drawings.push(s.drawings[0].clone()), "duplicate id"),
             (|s| first(s).points.truncate(1), "Trend Line needs 2"),

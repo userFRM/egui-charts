@@ -6,6 +6,31 @@
 
 use egui_charts::model::{Bar, Symbol, SymbolType, Timeframe};
 
+/// Deterministic executions inside each fixture bar's UTC slot. These are synthetic aggressors,
+/// independent of historical trades. Sizes sum to the fixture volume.
+pub fn synthetic_trades(bars: &[Bar]) -> Vec<egui_charts::model::Tick> {
+    use egui_charts::model::{Tick, TradeSide};
+    bars.iter()
+        .flat_map(|bar| {
+            (0..64).map(move |i| {
+                let fraction = ((i * 17) % 64) as f64 / 63.0;
+                let price = bar.low + (bar.high - bar.low) * fraction;
+                let side = if (i * 13 + bar.time.timestamp() as usize) % 11 < 6 {
+                    TradeSide::Buy
+                } else {
+                    TradeSide::Sell
+                };
+                Tick::new(
+                    bar.time + chrono::TimeDelta::microseconds(i as i64),
+                    price,
+                    bar.volume / 64.0,
+                    Some(side),
+                )
+            })
+        })
+        .collect()
+}
+
 /// A tradable instrument the demo knows how to render, including the seed and
 /// starting price used to synthesize its bars.
 pub struct DemoSymbol {
@@ -347,6 +372,25 @@ mod tests {
             let repeated = generate_sample_bars("SAMPLE", 600, timeframe);
             assert_eq!(bars.len(), 600);
             assert_eq!(bars, repeated);
+            let trades = synthetic_trades(&bars);
+            assert_eq!(trades, synthetic_trades(&bars));
+            let clock = egui_charts::model::BarClock::new(timeframe);
+            for (bar, trades) in bars.iter().zip(trades.chunks_exact(64)) {
+                assert!(
+                    trades
+                        .iter()
+                        .all(|trade| clock.same_bar(trade.ts, bar.time))
+                );
+                assert!(
+                    (trades.iter().map(|t| t.size).sum::<f64>() - bar.volume).abs()
+                        < bar.volume * 1e-12
+                );
+            }
+            assert!(
+                trades.windows(2).all(|t| t[0].ts <= t[1].ts),
+                "{timeframe}: {:?}",
+                trades.windows(2).find(|t| t[0].ts > t[1].ts)
+            );
             let bodies: f64 = bars.iter().map(|bar| (bar.close - bar.open).abs()).sum();
             let wicks: f64 = bars
                 .iter()

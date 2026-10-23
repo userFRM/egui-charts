@@ -3,15 +3,15 @@
 //! Includes: lines, rays, shapes (rect, circle, ellipse, triangle, arc),
 //! arrows, and polylines.
 
+use super::ChartView;
 use crate::drawings::domain::Drawing;
-use crate::model::Bar;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
 impl Drawing {
     /// Draws the straight segment from `a` to `b` in the drawing's line style.
-    fn styled_segment(&self, painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke) {
+    pub(super) fn styled_segment(&self, painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke) {
         match self.line_style.dash_pattern() {
             None => {
                 painter.line_segment([a, b], stroke);
@@ -161,7 +161,7 @@ impl Drawing {
         painter: &egui::Painter,
         color: Color32,
         stroke: Stroke,
-        bars: &[Bar],
+        view: &ChartView,
     ) {
         if self.points.len() >= 2 {
             let start = self.points[0];
@@ -283,7 +283,9 @@ impl Drawing {
                 mid_point.y + info_offset * perpendicular_angle.sin(),
             );
 
-            let info_text = self.measurement_label(bars).unwrap_or_default();
+            let info_text = self
+                .measurement_label(view.bars, view.instrument)
+                .unwrap_or_default();
             let info_font = egui::FontId::proportional(typography::XS);
             let muted_color =
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180);
@@ -480,7 +482,7 @@ impl Drawing {
     pub(crate) fn render_arc(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         if self.points.len() >= 2 {
             let center = self.points[0];
-            for pair in arc_points(center, self.points[1]).windows(2) {
+            for pair in self.arc_path().windows(2) {
                 painter.line_segment([pair[0], pair[1]], stroke);
             }
 
@@ -488,6 +490,40 @@ impl Drawing {
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
         }
+    }
+
+    /// Circular arc from the first anchor to the second through the third.
+    pub(super) fn arc_path(&self) -> Vec<Pos2> {
+        let &[a, b, ..] = self.points.as_slice() else {
+            return Vec::new();
+        };
+        let Some(&c) = self.points.get(2) else {
+            return arc_points(a, b);
+        };
+        let (u, v) = (b - a, c - a);
+        let det = 2.0 * (u.x * v.y - u.y * v.x);
+        if det.abs() < 1e-6 {
+            return vec![a, c, b];
+        }
+        let center = a + egui::vec2(
+            (u.length_sq() * v.y - v.length_sq() * u.y) / det,
+            (u.x * v.length_sq() - v.x * u.length_sq()) / det,
+        );
+        let angle = |p: Pos2| (p.y - center.y).atan2(p.x - center.x);
+        let start = angle(a);
+        let end = (angle(b) - start).rem_euclid(std::f32::consts::TAU);
+        let through = (angle(c) - start).rem_euclid(std::f32::consts::TAU);
+        let sweep = if through <= end {
+            end
+        } else {
+            end - std::f32::consts::TAU
+        };
+        (0..=64)
+            .map(|i| {
+                let theta = start + sweep * i as f32 / 64.0;
+                center + center.distance(a) * egui::vec2(theta.cos(), theta.sin())
+            })
+            .collect()
     }
 
     /// Render polyline - connected line segments through all points
@@ -530,19 +566,9 @@ impl Drawing {
         }
     }
 
-    /// Render arrow marker - right-pointing triangle
+    /// Arrow marker from its tail anchor to its head anchor
     pub(crate) fn render_arrow_marker(&self, painter: &egui::Painter, color: Color32) {
-        if !self.points.is_empty() {
-            let pos = self.points[0];
-            let size = DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs;
-            let points = vec![
-                Pos2::new(pos.x + size, pos.y),
-                Pos2::new(pos.x - size * 0.5, pos.y - size * 0.6),
-                Pos2::new(pos.x - size * 0.5, pos.y + size * 0.6),
-            ];
-            let shape = egui::epaint::PathShape::convex_polygon(points, color, Stroke::NONE);
-            painter.add(shape);
-        }
+        self.render_arrow(painter, color, Stroke::new(self.stroke_width, color));
     }
 
     /// Render arrow mark up - upward pointing bullish arrow
@@ -597,17 +623,19 @@ impl Drawing {
 }
 
 /// Where a ray from `start` through `end` leaves `rect`: on the side `end` is
-/// towards, or at the top or bottom when it is vertical.
+/// towards, or at the top or bottom when it is vertical. Keep the defining
+/// segment when its endpoint is already beyond that edge, so panning never reverses it.
 pub(super) fn ray_end(start: Pos2, end: Pos2, rect: Rect) -> Pos2 {
     let (dx, dy) = (end.x - start.x, end.y - start.y);
     if dx.abs() > 1e-6 {
         let edge = if dx > 0.0 { rect.max.x } else { rect.min.x };
-        let t = (edge - start.x) / dx;
-        Pos2::new(edge, start.y + t * dy)
-    } else if dy > 0.0 {
-        Pos2::new(start.x, rect.max.y)
+        let t = ((edge - start.x) / dx).max(1.0);
+        start + (end - start) * t
+    } else if dy.abs() > 1e-6 {
+        let edge = if dy > 0.0 { rect.max.y } else { rect.min.y };
+        start + (end - start) * ((edge - start.y) / dy).max(1.0)
     } else {
-        Pos2::new(start.x, rect.min.y)
+        start
     }
 }
 
@@ -677,6 +705,21 @@ mod tests {
                     .then(|| format!("through ({x}, {y}): got {got:?}, want ({want_x}, {want_y})"))
             })
             .collect();
+        for (end, rect, want) in [
+            (
+                Pos2::new(600.0, 150.0),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 600.0)),
+                Pos2::new(600.0, 150.0),
+            ),
+            (
+                Pos2::new(500.0, 300.0),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 50.0)),
+                Pos2::new(500.0, 300.0),
+            ),
+            (start, rect, start),
+        ] {
+            assert_eq!(ray_end(start, end, rect), want);
+        }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 }

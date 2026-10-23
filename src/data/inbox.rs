@@ -9,7 +9,7 @@ use super::depth::{Book, Lost};
 use super::merge::{Origin, fold, valid};
 use super::trades::{self, Trades};
 use super::{FeedError, FeedStatus, SubscriptionId};
-use crate::model::{Bar, BarClock, OrderBook, Tick};
+use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::any::Any;
 use std::collections::btree_map::Entry;
@@ -39,6 +39,7 @@ struct State {
 }
 
 struct Live {
+    symbol: String,
     clock: BarClock,
     /// Open of the newest slot pushed, kept across drains: trades of older slots are late.
     forming: Option<DateTime<Utc>>,
@@ -85,6 +86,8 @@ pub(crate) struct Updates {
     pub(crate) trades: Trades,
     /// The order book, if it changed.
     pub(crate) depth: Option<OrderBook>,
+    /// Latest top-of-book quote pushed in this frame.
+    pub(crate) quote: Option<Level1Quote>,
     /// The book lost its snapshot: call `Datafeed::request_depth_snapshot`.
     pub(crate) resnapshot: bool,
     pub(crate) status: Option<FeedStatus>,
@@ -106,6 +109,7 @@ impl Updates {
             bars: BTreeMap::new(),
             trades,
             depth: None,
+            quote: None,
             resnapshot: false,
             status: None,
             error: None,
@@ -135,10 +139,16 @@ impl Inbox {
 
     /// A sink for a new subscription, whose ticks fold into bars of `clock` and wait in a store of
     /// `trade_capacity`.
-    pub(crate) fn subscribe(self: &Arc<Self>, clock: BarClock, trade_capacity: usize) -> Sink {
+    pub(crate) fn subscribe(
+        self: &Arc<Self>,
+        symbol: String,
+        clock: BarClock,
+        trade_capacity: usize,
+    ) -> Sink {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let id = SubscriptionId(NEXT.fetch_add(1, Ordering::Relaxed));
         let live = Live {
+            symbol,
             clock,
             forming: None,
             offset: TimeDelta::zero(),
@@ -376,6 +386,39 @@ impl Sink {
         self.update(|live| live.depth(|depth| depth.delta(sequence, changes)));
     }
 
+    /// Latest best bid and ask. Bursts coalesce to the newest timestamp (last arrival on a tie).
+    /// Non-finite prices, negative or non-finite sizes and crossed quotes are rejected without
+    /// replacing the pending quote. Times obey the feed-clock rule of [`Self::set_server_time`].
+    /// The subscription supplies the instrument identity; the
+    /// sink ignores a quote whose symbol differs from its subscribed symbol.
+    pub fn push_quote(&self, quote: Level1Quote) {
+        let system = Utc::now();
+        self.update(|live| {
+            if quote.symbol != live.symbol {
+                return;
+            }
+            if !quote.bid.is_finite()
+                || !quote.ask.is_finite()
+                || quote.bid > quote.ask
+                || !quote.bid_size.is_finite()
+                || !quote.ask_size.is_finite()
+                || quote.bid_size < 0.0
+                || quote.ask_size < 0.0
+                || live.ahead(live.clock.bar_open(quote.ts), system)
+            {
+                live.updates.error =
+                    Some(FeedError::InvalidData("invalid best bid/ask quote".into()));
+            } else if live
+                .updates
+                .quote
+                .as_ref()
+                .is_none_or(|old| quote.ts >= old.ts)
+            {
+                live.updates.quote = Some(quote);
+            }
+        });
+    }
+
     /// The feed's current time, from a clock other than the times it pushes, such as its server's
     /// heartbeat or time message: reporting the time of the trade or bar about to be pushed would
     /// let a wrong time through. The time runs on with the system clock until the next call; until
@@ -489,7 +532,7 @@ mod tests {
     }
 
     fn subscribe(inbox: &Arc<Inbox>) -> Sink {
-        inbox.subscribe(BarClock::new(Timeframe::Min1), 100)
+        inbox.subscribe("ES".into(), BarClock::new(Timeframe::Min1), 100)
     }
 
     /// Guards coalescing: folding must keep the highs and lows of every trade, a pushed bar must
@@ -521,6 +564,21 @@ mod tests {
         };
         sink.push_depth_snapshot(5, book(99.0));
         sink.push_depth_delta(6, book(f64::NAN)); // invalid: the book is lost
+        let quote = |second, bid| Level1Quote {
+            ts: at(1, second),
+            symbol: "ES".into(),
+            bid,
+            ask: 101.0,
+            bid_size: 2.0,
+            ask_size: 3.0,
+        };
+        sink.push_quote(quote(0, 99.0));
+        sink.push_quote(quote(1, 100.0));
+        sink.push_quote(quote(0, 98.0)); // older must not replace the latest
+        sink.push_quote(quote(2, f64::NAN)); // invalid must not replace it either
+        let mut future = quote(2, 100.0);
+        future.ts = DateTime::from_timestamp(1_710_496_805_000, 0).unwrap();
+        sink.push_quote(future); // a bad time must not make every later quote stale
         sink.set_status(FeedStatus::Connecting);
         sink.set_status(FeedStatus::Live);
         sink.report_error(FeedError::Network("reset".into()));
@@ -543,6 +601,10 @@ mod tests {
             (Some(0), true, 1)
         );
         assert_eq!((updates.late_ticks, updates.rejected), (1, 1));
+        assert_eq!(
+            updates.quote.as_ref().map(|q| (q.ts, q.bid)),
+            Some((at(1, 1), 100.0))
+        );
         assert_eq!(updates.status, Some(FeedStatus::Live));
         assert_eq!(updates.error, Some(FeedError::Network("timeout".into())));
 
@@ -614,7 +676,7 @@ mod tests {
 
         // A store of two trades remembers the last two ids: 1 is forgotten once 3 is folded.
         let inbox = Arc::new(Inbox::default());
-        let sink = inbox.subscribe(BarClock::new(Timeframe::Min1), 2);
+        let sink = inbox.subscribe("ES".into(), BarClock::new(Timeframe::Min1), 2);
         for (second, id) in [(1, 1), (2, 2), (3, 3), (4, 1), (5, 3)] {
             sink.push_tick(tick(at(0, second), 100.0, 1.0).with_id(id));
         }
@@ -668,7 +730,7 @@ mod tests {
         ];
         for (timeframe, now, bars, pushes, kept, rejected) in cases {
             let inbox = Arc::new(Inbox::default());
-            let sink = inbox.subscribe(BarClock::new(timeframe), 100);
+            let sink = inbox.subscribe("ES".into(), BarClock::new(timeframe), 100);
             sink.set_server_time(time(now));
             for &push in pushes {
                 let ts = time(push);
