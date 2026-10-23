@@ -136,7 +136,7 @@ mod sync;
 use feed::FeedLink;
 pub(crate) mod tool_interaction;
 
-pub use state::{BoxZoomMode, BoxZoomState, ElasticBounceState, KineticScrollState};
+pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// Interactive financial chart widget for egui.
 ///

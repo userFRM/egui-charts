@@ -17,7 +17,6 @@
 use egui::{Event, MouseWheelUnit, Pos2, Rect, Response, Ui, Vec2, vec2};
 use web_time::Instant;
 
-use crate::chart::state::BoxZoomMode;
 use crate::scales::PriceTransform;
 use crate::widget::Chart;
 
@@ -442,8 +441,7 @@ impl Chart {
 
     /// Handle box-zoom interaction (left-click drag when zoom mode is active).
     ///
-    /// On press, starts tracking the selection rectangle. On release, either
-    /// zooms into the rectangle (Zoom mode) or measures price/bar delta (Measure mode).
+    /// On press, starts tracking the selection rectangle. On release, zooms into the rectangle.
     /// Returns `true` if a zoom was successfully applied this frame.
     pub fn handle_box_zoom(
         &mut self,
@@ -479,17 +477,7 @@ impl Chart {
             if let (Some(start), Some(end)) = (self.box_zoom.start_pos, self.box_zoom.curr_pos)
                 && (chart_rect.contains(start) || chart_rect.contains(end))
             {
-                match self.box_zoom.mode {
-                    BoxZoomMode::Zoom => {
-                        zoom_applied = self.execute_box_zoom(start, end, chart_rect, chart_width);
-                    }
-                    BoxZoomMode::Measure => {
-                        // TODO(P1): Display measurement overlay showing price delta, percentage
-                        // change, and bar count between start/end of the box-select region.
-                        // Render as a floating tooltip anchored to the selection rectangle,
-                        // similar to a Measure tool (Alt+click drag).
-                    }
-                }
+                zoom_applied = self.execute_box_zoom(start, end, chart_rect, chart_width);
             }
             self.box_zoom.reset();
         }

@@ -50,7 +50,6 @@ Each item is marked as complete, partial, or missing.
 - [x] Price axis drag-scaling (the scale compounds per frame; needs a per-frame delta)
 - [x] Double-click to reset axes
 - [x] Box zoom (selection rectangle)
-- [ ] Box zoom Measure mode (TODO P1 in code)
 
 ### Crosshair / Cursor
 - [x] Normal mode (follows raw cursor)
@@ -557,7 +556,6 @@ The ui_kit components are generic building blocks:
 - [ ] Implement Double Curve with proper bezier geometry
 - [ ] Differentiate Cypher Pattern from XABCD
 - [ ] Differentiate Paintbrush from Brush
-- [ ] Implement Box Zoom Measure mode
 - [ ] Export: integrate native file dialog, implement `Exportable`
 - [ ] Template system: persistence, serialization, user management UI
 

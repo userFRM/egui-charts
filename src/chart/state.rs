@@ -46,21 +46,11 @@ impl KineticScrollState {
     }
 }
 
-/// Box zoom mode (right-click drag functionality)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BoxZoomMode {
-    /// Draw rect and zoom to selected region (default)
-    Zoom,
-    /// Draw measurement ruler showing bars/price change
-    Measure,
-}
-
-/// Tracks an active box-zoom or box-measure selection.
+/// Tracks an active box-zoom selection.
 ///
 /// The user initiates box zoom by left-clicking when zoom mode is active,
-/// then drags to define a rectangular region. On release the chart either
-/// zooms into the selection or displays measurement info, depending on
-/// [`BoxZoomMode`].
+/// then drags to define a rectangular region. On release the chart zooms
+/// into the selection.
 #[derive(Debug, Clone)]
 pub struct BoxZoomState {
     /// Whether box zoom is currently active
@@ -69,8 +59,6 @@ pub struct BoxZoomState {
     pub start_pos: Option<Pos2>,
     /// Current mouse position during drag
     pub curr_pos: Option<Pos2>,
-    /// Mode: Zoom or Measure
-    pub mode: BoxZoomMode,
 }
 
 impl Default for BoxZoomState {
@@ -86,7 +74,6 @@ impl BoxZoomState {
             active: false,
             start_pos: None,
             curr_pos: None,
-            mode: BoxZoomMode::Zoom,
         }
     }
 
