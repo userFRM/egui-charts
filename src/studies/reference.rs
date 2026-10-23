@@ -7,30 +7,41 @@
 //! for RSI, ATR, the directional indicators, the Commodity Selection Index and Parabolic SAR; Appel for MACD, PPO and
 //! the Percentage Volume Oscillator; Bollinger; Lambert
 //! 1980 for CCI; Quong and Soudack for MFI; Chande 1995 for Aroon; Hull; Chaikin; Lane; Williams;
-//! Donchian; Hosoda; ordinary least squares; population standard deviation) on the same fixture,
-//! and rounded to 12 significant digits. Volume signs use exact integer comparisons; the
+//! Donchian; Hosoda; ordinary least squares; population standard deviation; Granville for OBV;
+//! Chaikin for the Accumulation/Distribution line and volatility; Bill Williams; Larry Williams for the Ultimate
+//! Oscillator; Elder for Force Index and Elder Ray; Botes and Siepman for the Vortex indicator; Dreiss for the
+//! Choppiness Index; Hutson for TRIX; Dorsey for the Mass Index; Chande for the Chande Momentum Oscillator;
+//! Coppock) on the same fixture, and rounded to 12 significant digits. Volume signs use exact integer comparisons; the
 //! volatility rows use decimal logarithms at 50-digit precision. Calendar-window rows are
 //! hand-calculated over an inclusive 364-day window.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
 //! seed their EMAs with the mean of the first values and their signal with the mean of the first
-//! values of the oscillator, and Parabolic SAR reverses when the price
+//! values of the oscillator, Force Index, Elder Ray, TRIX and the Mass Index seed their EMAs with the mean of
+//! their first values, the Envelopes EMA and the Chaikin volatility EMA seed with their first input, an
+//! Accumulation/Distribution bar with a high equal to its low adds nothing, and Parabolic SAR reverses when the price
 //! crosses it, not on a touch), otherwise a published one (Wilder's first true range is high minus
 //! low, Keltner's EMA seeds with the SMA of the first closes). Where no published rule settles it,
 //! the series pins the study's current behaviour: Supertrend starts bullish, an Aroon tie counts
 //! the most recent bar, and Parabolic SAR takes its first direction from the first two closes (up
 //! on a tie), starts at the first bar's low or high and takes its first extreme point from the
-//! first two bars.
+//! first two bars. The Chaikin volatility starts once its average and its change both have their full
+//! length; the windows of the Choppiness Index, Vortex indicator and Ultimate Oscillator start at the
+//! second bar, the first with a previous close.
 
 use crate::model::Bar;
 use crate::studies::{
-    ADX, ATR, Aroon, BalanceOfPower, BollingerBands, CCI, ChaikinMoneyFlow,
-    CommoditySelectionIndex, DirectionalMovement, DonchianChannels, EMA, HMA, IchimokuCloud,
-    Indicator, IndicatorValue, KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD,
-    MoneyFlowIndex, NetVolume, ParabolicSAR, ParkinsonVol, PercentageVolumeOscillator,
-    PriceOscillator, RSI, RateOfChange, SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA,
-    Week52HighLow, Week52HighLowLevels, WilliamsR, ZeroTrendVol,
+    ADX, ATR, AccumulationDistribution, Aroon, AwesomeOscillator, BalanceOfPower, BollingerBands,
+    BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility, ChandeMomentumOscillator,
+    ChoppinessIndex, CommoditySelectionIndex, CoppockCurve, DirectionalMovement, DonchianChannels,
+    EMA, ElderRay, Envelopes, ForceIndex, HL2, HLC3, HMA, IchimokuCloud, Indicator, IndicatorValue,
+    KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD, MassIndex, MedianPrice,
+    MoneyFlowIndex, NetVolume, OHLC4, OnBalanceVolume, ParabolicSAR, ParkinsonVol, PercentB,
+    PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange, SMA, StandardDeviation,
+    Stochastic, SuperTrend, TRIX, TrueRange, TypicalPrice, UltimateOscillator, VWMA,
+    VortexIndicator, WMA, Week52HighLow, Week52HighLowLevels, WeightedClose, WilliamsR,
+    ZeroTrendVol,
 };
 use chrono::{TimeZone, Utc};
 
@@ -141,6 +152,30 @@ fn staple_studies_match_published_definitions() {
             "PVO(12,26,9)",
             Box::new(PercentageVolumeOscillator::default()),
         ),
+        ("OBV", Box::new(OnBalanceVolume::default())),
+        ("A/D", Box::new(AccumulationDistribution::default())),
+        ("AO(5,34)", Box::new(AwesomeOscillator::default())),
+        ("UO(7,14,28)", Box::new(UltimateOscillator::default())),
+        ("TP", Box::new(TypicalPrice::default())),
+        ("WC", Box::new(WeightedClose::default())),
+        ("MP", Box::new(MedianPrice::default())),
+        ("OHLC4", Box::new(OHLC4::default())),
+        ("HLC3", Box::new(HLC3::default())),
+        ("HL2", Box::new(HL2::default())),
+        ("TR", Box::new(TrueRange::default())),
+        ("Force(13)", Box::new(ForceIndex::default())),
+        ("ElderRay(13)", Box::new(ElderRay::default())),
+        ("Vortex(14)", Box::new(VortexIndicator::default())),
+        ("Chop(14)", Box::new(ChoppinessIndex::default())),
+        ("TRIX(15,9)", Box::new(TRIX::default())),
+        ("Mass(9,25)", Box::new(MassIndex::default())),
+        ("%B(20,2)", Box::new(PercentB::default())),
+        ("BBW(20,2)", Box::new(BollingerBandsWidth::default())),
+        ("Env(20,2.5,SMA)", Box::new(Envelopes::default())),
+        ("Env(20,2.5,EMA)", Box::new(Envelopes::new(20, 2.5, "EMA"))),
+        ("CV(10,10)", Box::new(ChaikinVolatility::default())),
+        ("CMO(14)", Box::new(ChandeMomentumOscillator::default())),
+        ("Coppock(14,11,10)", Box::new(CoppockCurve::default())),
         ("Ichimoku(9,26,52)", Box::new(IchimokuCloud::default())),
         (
             "Ichimoku(9,26,52,22)",
