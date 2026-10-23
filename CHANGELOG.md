@@ -320,6 +320,7 @@ All notable changes to this project are documented in this file. The format is b
 - `ChartBuilder` moved to `widget::builder`. Migration: import `egui_charts::ChartBuilder` or `egui_charts::widget::ChartBuilder` instead of `egui_charts::chart::builder::ChartBuilder`.
 - `ChartBuilder::price_chart` hides the horizontal and vertical grid lines; it used to clear a flag the chart does not read.
 - While bars stream, studies that do not update incrementally are recalculated at most four times a second, so `Chart::indicators` can return values up to 0.25 s old; they catch up within 0.25 s of the last change. Incremental studies update every frame, and a series replaced with `set_data` updates every study at once.
+- While the view is scrolled back, new bars no longer move the visible bars.
 
 ### Removed
 

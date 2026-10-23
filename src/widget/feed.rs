@@ -571,6 +571,27 @@ mod tests {
         frames.run(&mut chart);
         assert_eq!(feed.calls(), [], "c: one snapshot");
 
+        // h. Bars appended while the view is scrolled back leave the visible bars where they are,
+        // and so do updates of the forming bar stamped later inside its slot.
+        chart.state.time_scale_mut().set_right_offset(-50.0);
+        frames.run(&mut chart);
+        let first_visible = |chart: &Chart| chart.bars(main)[chart.state.visible_range().0].time;
+        let shown = first_visible(&chart);
+        for bar in bars(1004).drain(1001..) {
+            feed.sink().push_bar(bar);
+        }
+        frames.run(&mut chart);
+        assert_eq!(chart.bars(main).len(), 1004, "h");
+        assert_eq!(first_visible(&chart), shown, "h: the view moved");
+        let mut forming = bars(1004).pop().unwrap();
+        for seconds in [10, 20] {
+            forming.time += TimeDelta::seconds(seconds);
+            feed.sink().push_bar(forming.clone());
+            frames.run(&mut chart);
+        }
+        assert_eq!(chart.bars(main).len(), 1004, "h: forming");
+        assert_eq!(first_visible(&chart), shown, "h: forming bar");
+
         // d. Near the oldest bar the chart asks once for the page before it; a page with nothing
         // older ends scroll-back.
         chart.set_start_idx(0);

@@ -89,6 +89,7 @@ impl Chart {
     /// [`apply`](Self::apply) with the slots of `clock`, the chart's.
     pub(super) fn apply_by(&mut self, clock: &BarClock, incoming: Vec<(Bar, Origin)>) -> Merged {
         let before = self.edge();
+        let tail = before.tail.as_ref().map(|bar| bar.time);
         let from_ticks = &mut self.from_ticks;
         let mut merged = Merged::default();
         self.state.edit_bars(|bars| {
@@ -106,7 +107,19 @@ impl Chart {
             };
             self.drawings.shift_bar_indices(from, run.len() as f32);
         }
-        self.bars_changed(before, merged.first_changed);
+        if !self.bars_changed(before, merged.first_changed)
+            && let Some(tail) = tail
+        {
+            // The right edge is the last bar plus the right offset: without this a view scrolled
+            // back would move one bar left per appended bar. A bar stamped later in the slot of
+            // the last bar replaces it and appends nothing.
+            let bars = &self.state.data().bars;
+            let tail = clock.bar_open(tail);
+            let appended =
+                bars.len() - bars.partition_point(|bar| clock.bar_open(bar.time) <= tail);
+            let time_scale = self.state.time_scale_mut();
+            time_scale.set_right_offset(time_scale.right_offset() - appended as f32);
+        }
         merged
     }
 
@@ -195,14 +208,15 @@ impl Chart {
 
     /// Keeps studies and the view in step after the main bars changed. `first_changed` is the
     /// index of the first bar inserted, changed or removed. The studies are updated once on the
-    /// next frame, for all changes since the previous one.
-    fn bars_changed(&mut self, before: Edge, first_changed: Option<usize>) {
+    /// next frame, for all changes since the previous one. Returns whether the view followed the
+    /// live edge.
+    fn bars_changed(&mut self, before: Edge, first_changed: Option<usize>) -> bool {
         if let Some(from) = first_changed {
             for pending in &mut self.pending_from {
                 *pending = Some(pending.map_or(from, |pending| pending.min(from)));
             }
         }
-        self.follow_live_edge(before);
+        self.follow_live_edge(before)
     }
 
     fn edge(&self) -> Edge {
@@ -218,8 +232,9 @@ impl Chart {
     }
 
     /// Scrolls to the live edge when the view was near it and a bar was appended, or the last
-    /// bar replaced while the options allow shifting on whitespace replacement.
-    fn follow_live_edge(&mut self, before: Edge) {
+    /// bar replaced while the options allow shifting on whitespace replacement. Returns whether
+    /// it did.
+    fn follow_live_edge(&mut self, before: Edge) -> bool {
         let bars = &self.state.data().bars;
         let tail = before.tail.as_ref().zip(bars.last());
         // Appended only if the last bar moved forward in time: older bars loaded in front make
@@ -233,14 +248,15 @@ impl Chart {
         let shift_for_whitespace = tail_changed
             && !appended
             && options.allow_shift_visible_range_on_whitespace_replacement;
-        if options.shift_visible_range_on_new_bar
+        let follow = options.shift_visible_range_on_new_bar
             && before.near_live
-            && (appended || shift_for_whitespace)
-        {
+            && (appended || shift_for_whitespace);
+        if follow {
             self.state.time_scale_mut().scroll_to_realtime();
             // A pending start index would move the view away from the edge again.
             self.pending_start_idx = None;
         }
+        follow
     }
 }
 
