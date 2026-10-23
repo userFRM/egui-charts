@@ -8,6 +8,7 @@
 /// Combines data with coordinate systems.
 use super::{Bar, BarData, TimeScale};
 use crate::scales::{PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
+use crate::studies::{Indicator, IndicatorValue};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Source of [`ChartState::revision`] values, so that no two chart states or
@@ -269,12 +270,16 @@ impl ChartState {
         &mut self.price_scale
     }
 
-    /// Fits the price scale to the visible bars, unless the user scaled by hand,
-    /// and returns this frame's transform: percentage and indexed modes are
-    /// relative to the first visible close.
-    pub fn fit_price_scale(&mut self) -> PriceTransform {
+    /// Fits the price scale to the visible bars and the visible values of the visible overlay
+    /// studies in `indicators`, unless the user scaled by hand, and returns this frame's
+    /// transform: percentage and indexed modes are relative to the first visible close.
+    pub fn fit_price_scale<'a>(
+        &mut self,
+        indicators: impl IntoIterator<Item = &'a dyn Indicator>,
+    ) -> PriceTransform {
         let mode = self.price_scale.options().mode;
-        let visible = self.visible_data();
+        let (start, end) = self.visible_range();
+        let visible = &self.data.bars[start..end];
         let base = visible.first().map_or(f64::NAN, |bar| bar.close);
         let relative = matches!(
             mode,
@@ -289,9 +294,27 @@ impl ChartState {
         } else {
             PriceTransform::default()
         };
+        let study_values = indicators
+            .into_iter()
+            .filter(|study| study.is_visible() && study.is_overlay())
+            .flat_map(|study| {
+                let (values, lines) = (study.values(), study.line_cnt());
+                values
+                    .get(start..end.min(values.len()))
+                    .unwrap_or_default()
+                    .iter()
+                    .flat_map(move |value| match value {
+                        IndicatorValue::Single(price) => std::slice::from_ref(price),
+                        IndicatorValue::Multiple(prices) => &prices[..prices.len().min(lines)],
+                        IndicatorValue::None => &[],
+                    })
+                    .copied()
+            });
         let (min, max) = visible
             .iter()
-            .flat_map(|bar| [transform.to_scale(bar.low), transform.to_scale(bar.high)])
+            .flat_map(|bar| [bar.low, bar.high])
+            .chain(study_values)
+            .map(|value| transform.to_scale(value))
             .filter(|value| value.is_finite())
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
                 (min.min(value), max.max(value))
@@ -372,7 +395,7 @@ mod tests {
             let mut state = ChartState::new(BarData::from_bars(bars));
             state.time_scale_mut().set_width(800.0);
             state.price_scale_mut().options_mut().mode = mode;
-            let transform = state.fit_price_scale();
+            let transform = state.fit_price_scale(std::iter::empty());
             let range = state.price_scale().range();
             let (min, max) = (transform.to_price(range.min), transform.to_price(range.max));
             assert!(min < price && price < max, "{mode:?}: ({min}, {max})");
@@ -401,7 +424,7 @@ mod tests {
             state.time_scale_mut().set_width(800.0);
             state.price_scale_mut().options_mut().mode = mode;
             let y_of_380 = |state: &mut ChartState| {
-                let transform = state.fit_price_scale();
+                let transform = state.fit_price_scale(std::iter::empty());
                 let map = state.price_scale().map(transform, 0.0, 500.0);
                 map.price_to_y(380.0)
             };

@@ -122,6 +122,10 @@ impl Indicator for VolProfileVisible {
         true
     }
 
+    fn line_cnt(&self) -> usize {
+        0 // A histogram of volumes per bar, not a price line (#167)
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }

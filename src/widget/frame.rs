@@ -417,7 +417,14 @@ impl Chart {
         }
 
         // Fit the price scale, then apply this frame's price zoom
-        let transform = self.state.fit_price_scale();
+        let transform = self.state.fit_price_scale(
+            self.studies
+                .indicators()
+                .iter()
+                .zip(&self.study_autoscale)
+                .filter(|(_, autoscale)| **autoscale)
+                .map(|(study, _)| study.as_ref()),
+        );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let price_map = self
             .state

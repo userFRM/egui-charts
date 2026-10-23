@@ -104,6 +104,7 @@ impl Chart {
             from_ticks: BTreeSet::new(),
             studies: IndicatorRegistry::new(),
             study_ids: Vec::new(),
+            study_autoscale: Vec::new(),
             pending_from: Vec::new(),
             last_refresh: Vec::new(),
             // 0 and 1 are the main and volume series.

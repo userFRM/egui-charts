@@ -235,6 +235,8 @@ pub struct Chart {
     pub(crate) studies: IndicatorRegistry,
     /// Id of each study in `studies`.
     pub(crate) study_ids: Vec<SeriesId>,
+    /// Whether each study in `studies` contributes to the main price auto-scale.
+    pub(crate) study_autoscale: Vec<bool>,
     /// For each study in `studies`, the first bar it must be updated from on the next frame.
     pub(crate) pending_from: Vec<Option<usize>>,
     /// For each study in `studies`, the input time of its last refresh, in seconds.

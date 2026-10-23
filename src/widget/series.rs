@@ -142,6 +142,7 @@ impl Chart {
         self.next_series += 1;
         self.studies.add(indicator);
         self.study_ids.push(id);
+        self.study_autoscale.push(true);
         self.pending_from.push(None);
         self.last_refresh.push(f64::NEG_INFINITY);
         id
@@ -155,6 +156,7 @@ impl Chart {
         };
         self.studies.remove_indicator(at);
         self.study_ids.remove(at);
+        self.study_autoscale.remove(at);
         self.pending_from.remove(at);
         self.last_refresh.remove(at);
         if self.selection.selected_id() == Some(ChartElementId::Indicator(id)) {
@@ -170,6 +172,17 @@ impl Chart {
             return false;
         };
         self.studies.indicators_mut()[at].set_visible(visible);
+        true
+    }
+
+    /// Includes or excludes study `id` from the main price auto-scale, without hiding it.
+    /// Defaults to `true`; only visible overlay studies contribute. Returns `false` for an id
+    /// that is not a study of the chart.
+    pub fn set_indicator_autoscale(&mut self, id: SeriesId, autoscale: bool) -> bool {
+        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+            return false;
+        };
+        self.study_autoscale[at] = autoscale;
         true
     }
 
@@ -314,6 +327,88 @@ mod tests {
     use chrono::TimeDelta;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Bars span 100..110 and the overlay reaches 120: 10% margins give 98..122. Every line of a
+    /// study counts and non-finite values do not; without eligible values, or with a volume
+    /// profile, the bars alone give 99..111. Relative modes use close 110.
+    #[test]
+    fn autoscale_includes_only_visible_overlay_values() {
+        use crate::scales::PriceScaleMode;
+        use crate::studies::{CustomIndicator, VolProfileVisible};
+        use crate::widget::test_frames::chart;
+
+        for (mode, fitted, bars_only) in [
+            (PriceScaleMode::Normal, (98.0, 122.0), (99.0, 111.0)),
+            (
+                PriceScaleMode::Percentage,
+                (-120.0 / 11.0, 120.0 / 11.0),
+                (-10.0, 10.0 / 11.0),
+            ),
+            (
+                PriceScaleMode::IndexedTo100,
+                (980.0 / 11.0, 1220.0 / 11.0),
+                (90.0, 1110.0 / 11.0),
+            ),
+        ] {
+            for case in [
+                "single", "multiple", "excluded", "hidden", "pane", "short", "profile",
+            ] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[100.0], &[110.0]);
+                chart.price_scale_mut().options_mut().mode = mode;
+                frame(&ctx, &mut chart, 0.0, Vec::new());
+                chart.set_visible_bars(20);
+                chart.set_start_idx(40);
+                frame(&ctx, &mut chart, 0.02, Vec::new());
+                let (start, end) = chart.state.visible_range();
+                assert!(start > 0 && end < 100);
+                let study = CustomIndicator::new("Overlay", move |bars| {
+                    let len = if case == "short" { start } else { bars.len() };
+                    (0..len)
+                        .map(|i| {
+                            if i < start {
+                                IndicatorValue::Single(-10_000.0)
+                            } else if i >= end {
+                                IndicatorValue::Single(10_000.0)
+                            } else if case == "multiple" {
+                                IndicatorValue::Multiple(vec![
+                                    105.0,
+                                    120.0,
+                                    f64::NAN,
+                                    f64::INFINITY,
+                                    f64::NEG_INFINITY,
+                                ])
+                            } else {
+                                IndicatorValue::Single(120.0)
+                            }
+                        })
+                        .collect()
+                })
+                .with_line_cnt(if case == "multiple" { 5 } else { 1 })
+                .with_overlay(case != "pane");
+                let study: Box<dyn Indicator> = if case == "profile" {
+                    Box::new(VolProfileVisible::default())
+                } else {
+                    Box::new(study)
+                };
+                let id = chart.add_indicator(study);
+                chart.set_indicator_visible(id, case != "hidden");
+                assert!(chart.set_indicator_autoscale(id, case != "excluded"));
+                frame(&ctx, &mut chart, 0.04, Vec::new());
+                let expected = if matches!(case, "single" | "multiple") {
+                    fitted
+                } else {
+                    bars_only
+                };
+                let range = chart.price_scale_mut().range();
+                assert!(
+                    (range.min - expected.0).abs() < 1e-10
+                        && (range.max - expected.1).abs() < 1e-10,
+                    "{mode:?} {case}: {range:?}, expected {expected:?}"
+                );
+            }
+        }
+    }
 
     /// A flat bar at `close`, stamped `seconds` after 10:00.
     fn bar(seconds: i64, close: f64) -> Bar {

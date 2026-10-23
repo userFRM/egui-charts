@@ -539,7 +539,14 @@ impl Chart {
             self.last_price_map.y_to_price(min_y),
             self.last_price_map.y_to_price(max_y),
         );
-        let transform = self.state.fit_price_scale();
+        let transform = self.state.fit_price_scale(
+            self.studies
+                .indicators()
+                .iter()
+                .zip(&self.study_autoscale)
+                .filter(|(_, autoscale)| **autoscale)
+                .map(|(study, _)| study.as_ref()),
+        );
         let (a, b) = (transform.to_scale(p), transform.to_scale(q));
         let scale = self.state.price_scale_mut();
         // Widened around its middle to the span zooming stops at.
