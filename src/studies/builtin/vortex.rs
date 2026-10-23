@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Vortex Indicator (VI)
 /// Identifies trend direction and strength
 /// Uses True Range and directional movement concepts
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct VortexIndicator {
     /// Lookback period (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [+VI (bullish), -VI (bearish)]
     colors: Vec<Color32>,
     visible: bool,
@@ -21,7 +21,7 @@ impl VortexIndicator {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - +VI
                 DESIGN_TOKENS.semantic.extended.error,   // Red - -VI
@@ -45,8 +45,8 @@ impl Default for VortexIndicator {
 
 impl VortexIndicator {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -98,7 +98,7 @@ impl VortexIndicator {
                 } else {
                     let vi_plus = vm_plus_sum / tr_sum;
                     let vi_minus = vm_minus_sum / tr_sum;
-                    values.push(IndicatorValue::Multiple(vec![vi_plus, vi_minus]));
+                    values.push_lines(&[vi_plus, vi_minus]);
                 }
             }
         }
@@ -108,6 +108,10 @@ impl VortexIndicator {
 }
 
 impl Indicator for VortexIndicator {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Vortex"
     }
@@ -124,7 +128,7 @@ impl Indicator for VortexIndicator {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

@@ -25,7 +25,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -33,7 +33,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct ADX {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     adx_color: Color32,
     plus_di_color: Color32,
     minus_di_color: Color32,
@@ -48,7 +48,7 @@ impl ADX {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             adx_color: DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber (ADX)
             plus_di_color: DESIGN_TOKENS.semantic.extended.success,   // Green (+DI)
             minus_di_color: DESIGN_TOKENS.semantic.extended.error,    // Red (-DI)
@@ -89,8 +89,8 @@ impl Default for ADX {
 
 impl ADX {
     /// The values over `data`, every bar of which has finite inputs.
-    pub(super) fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    pub(super) fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period.saturating_mul(2) {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -189,11 +189,7 @@ impl ADX {
             if i < self.period * 2 - 1 {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![
-                    adx[i],
-                    plus_di[i],
-                    minus_di[i],
-                ]));
+                values.push_lines(&[adx[i], plus_di[i], minus_di[i]]);
             }
         }
 
@@ -202,6 +198,10 @@ impl ADX {
 }
 
 impl Indicator for ADX {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "ADX"
     }
@@ -218,7 +218,7 @@ impl Indicator for ADX {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

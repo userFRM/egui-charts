@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Double Stochastic
 /// Applies the stochastic formula twice for smoother signals
 /// More responsive to overbought/oversold conditions
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -13,7 +13,7 @@ pub struct DoubleStochastic {
     period: usize,
     /// Smoothing period
     smooth: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -23,7 +23,7 @@ impl DoubleStochastic {
         Self {
             period: period.max(1),
             smooth: smooth.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
         }
@@ -58,8 +58,8 @@ impl Default for DoubleStochastic {
 
 impl DoubleStochastic {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let min_period = self.period.saturating_add(self.smooth.saturating_mul(2));
         if data.len() < min_period {
             for _ in 0..data.len() {
@@ -146,6 +146,11 @@ impl DoubleStochastic {
 }
 
 impl Indicator for DoubleStochastic {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        smooth: length("Smooth", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "DS"
     }
@@ -162,7 +167,7 @@ impl Indicator for DoubleStochastic {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

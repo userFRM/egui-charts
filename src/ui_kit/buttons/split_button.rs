@@ -4,10 +4,12 @@
 //! Layout: the icon centred in the same square cell as an [`super::IconButton`], with a small
 //! downward chevron in its bottom-right corner.
 
+use egui::emath::GuiRounding;
+
 use super::{ButtonSize, ButtonVariant, finish};
-use crate::icons::Icon;
+use crate::icons::{Icon, icons};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Rect, Response, Sense, Stroke, Ui, Vec2, vec2};
+use egui::{Rect, Response, Sense, Ui, Vec2, vec2};
 
 /// Split button with icon and dropdown arrow
 ///
@@ -83,7 +85,7 @@ impl SplitButton {
     pub fn show(self, ui: &mut Ui) -> Response {
         let button_size = Vec2::splat(self.size.pixels());
         let (rect, response) = ui.allocate_exact_size(button_size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
 
         let show_active = self.expanded || self.selected;
         if ui.is_rect_visible(rect) {
@@ -102,23 +104,20 @@ impl SplitButton {
 
             let color = if show_active {
                 variant.fg_color(ui)
-            } else if hovered || pressed {
-                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
+                ui.style().interact(&response).fg_stroke.color
             };
             let icon_size = Vec2::splat(self.size.icon_pixels(None));
             self.icon
                 .as_image_tinted(icon_size, color)
                 .paint_at(ui, Rect::from_center_size(rect.center(), icon_size));
 
-            // Chevron pointing down, open or closed, in the corner the icon leaves free.
-            let tip = rect.right_bottom() - vec2(4.0, 3.0);
-            ui.painter().add(egui::Shape::convex_polygon(
-                vec![tip - vec2(2.5, 2.5), tip + vec2(2.5, -2.5), tip],
-                color,
-                Stroke::NONE,
-            ));
+            let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
+            let chevron = Rect::from_min_size(rect.right_bottom() - size + vec2(0.0, 4.0), size)
+                .round_to_pixels(ui.pixels_per_point());
+            icons::CHEVRON_DOWN
+                .as_image_tinted(size, color)
+                .paint_at(ui, chevron);
         }
 
         let tooltip = self.tooltip.as_deref();

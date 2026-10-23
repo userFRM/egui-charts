@@ -4,7 +4,7 @@ use crate::studies::stepper::rolling_mean;
 /// Know Sure Thing (KST) Oscillator
 /// Developed by Martin Pring
 /// Combines multiple ROC values with different smoothing periods
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -16,7 +16,7 @@ pub struct KnowSureThing {
     sma_periods: [usize; 4],
     /// Signal line SMA period (typically 9)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [KST, Signal]
     colors: Vec<Color32>,
     visible: bool,
@@ -28,7 +28,7 @@ impl KnowSureThing {
             roc_periods: [10, 15, 20, 30],
             sma_periods: [10, 10, 10, 15],
             signal_period: 9,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - KST
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
@@ -78,8 +78,8 @@ impl Default for KnowSureThing {
 
 impl KnowSureThing {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         // Get closes
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
@@ -114,7 +114,7 @@ impl KnowSureThing {
             if kst[i].is_nan() {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![kst[i], signal[i]]));
+                values.push_lines(&[kst[i], signal[i]]);
             }
         }
 
@@ -123,6 +123,18 @@ impl KnowSureThing {
 }
 
 impl Indicator for KnowSureThing {
+    crate::studies::inputs::study_inputs!(self;
+        roc_periods[0]: length("Roc periods 1", 1, usize::MAX),
+        roc_periods[1]: length("Roc periods 2", 1, usize::MAX),
+        roc_periods[2]: length("Roc periods 3", 1, usize::MAX),
+        roc_periods[3]: length("Roc periods 4", 1, usize::MAX),
+        sma_periods[0]: length("SMA periods 1", 1, usize::MAX),
+        sma_periods[1]: length("SMA periods 2", 1, usize::MAX),
+        sma_periods[2]: length("SMA periods 3", 1, usize::MAX),
+        sma_periods[3]: length("SMA periods 4", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "KST"
     }
@@ -135,7 +147,7 @@ impl Indicator for KnowSureThing {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

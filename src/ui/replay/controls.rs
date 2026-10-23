@@ -226,6 +226,7 @@ impl<'a> ReplayControls<'a> {
             Vec2::new(width, layout.progress_bar_height),
             egui::Sense::click_and_drag(),
         );
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.xs);
 
         if ui.is_rect_visible(rect) {
             // Background

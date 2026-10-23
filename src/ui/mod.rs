@@ -31,6 +31,7 @@ pub mod dialogs;
 pub mod icons;
 
 // Standalone components
+mod axis_context_menu;
 pub mod connection_status;
 pub mod context_menu;
 pub mod export;

@@ -206,6 +206,7 @@ impl LayoutMenu {
             DESIGN_TOKENS.sizing.button_md,
         );
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
 
         let bg_color = if self.is_open || response.hovered() {
             hover_color
@@ -428,6 +429,7 @@ impl LayoutMenu {
             Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, self.config.item_height));
 
         let response = ui.allocate_rect(item_rect, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
 
         if response.hovered() {
             ui.painter()
@@ -543,6 +545,7 @@ impl LayoutMenu {
             ),
         );
         let btn_res = ui.allocate_rect(btn_rect, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.md);
 
         let btn_bg = if btn_res.hovered() {
             colors.selected
@@ -582,6 +585,7 @@ impl LayoutMenu {
         colors: &MenuColors,
     ) -> Option<LayoutAction> {
         let item_res = ui.allocate_rect(item_rect, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &item_res, DESIGN_TOKENS.rounding.sm);
 
         // Background
         if is_current || item_res.hovered() {

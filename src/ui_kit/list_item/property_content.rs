@@ -54,9 +54,8 @@ impl ListItemContent for PropertyContent {
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> Response {
         let egui_visuals = ui.style().visuals.clone();
 
-        // Use ListVisuals for color computation (rerun-inspired)
         // Label is always subdued (noninteractive)
-        let label_color = egui_visuals.widgets.noninteractive.fg_stroke.color;
+        let label_color = egui_visuals.weak_text_color();
 
         // Value color (use ListVisuals text_color or custom)
         let value_color = self

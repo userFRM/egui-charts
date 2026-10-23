@@ -12,6 +12,7 @@ mod live;
 use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
+use egui_charts::model::{Alert, AlertCondition, AlertFrequency};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
@@ -25,14 +26,13 @@ use egui_charts::ui::dialogs::{DrawingContextMenuAction, DrawingLineStyle};
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
-use egui_charts::ui::model::{AlertCondition, AlertStatus, PriceAlert};
 use egui_charts::ui::replay::{ReplayAction, ReplayController};
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
 };
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
-    IndicatorDialog, IndicatorDialogAction,
+    IndicatorDialog, IndicatorDialogAction, IndicatorSettingsDialog,
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
@@ -40,7 +40,9 @@ use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
+use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
+use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
 
@@ -54,16 +56,20 @@ struct SavedIndicators {
 
 /// Object-tree ids for indicators are offset into a high range so a single
 /// `usize` id space cleanly distinguishes indicators from drawings (which use
-/// small monotonic ids from the drawing manager). The main series is id 0.
-const MAIN_SERIES_ID: usize = 0;
-const INDICATOR_ID_BASE: usize = 1_000_000;
+/// small monotonic ids from the drawing manager). The main series reserves the last id.
+const MAIN_SERIES_ID: usize = usize::MAX;
+const INDICATOR_ID_BASE: usize = usize::MAX / 2;
 
 fn indicator_tree_id(id: SeriesId) -> usize {
     INDICATOR_ID_BASE + id.0
 }
 
 fn indicator_from_tree_id(id: usize) -> Option<SeriesId> {
-    id.checked_sub(INDICATOR_ID_BASE).map(SeriesId)
+    if id == MAIN_SERIES_ID {
+        None
+    } else {
+        id.checked_sub(INDICATOR_ID_BASE).map(SeriesId)
+    }
 }
 
 /// Which right-hand side panel is open, if any.
@@ -138,6 +144,7 @@ pub struct DemoApp {
 
     // Dialogs (each owns its open/closed state).
     indicator_dialog: IndicatorDialog,
+    indicator_settings: IndicatorSettingsDialog,
     settings_dialog: SettingsDialog,
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
@@ -155,10 +162,8 @@ pub struct DemoApp {
     open_panel: Option<SidePanel>,
     data_window_expanded: bool,
 
-    // In-memory alert store. `AlertManager` exposes no mutators, so the demo
-    // owns its alerts for the session (no fake persistence).
-    alerts: Vec<PriceAlert>,
-    next_alert_id: usize,
+    // Host-owned session-only alerts, shown through the library service connection.
+    alerts: AlertsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -170,10 +175,7 @@ pub struct DemoApp {
     // egui's capture callback sends each screenshot here; the next frame delivers it.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
-    // Transient status notice (text, time shown). Controls whose backing is a
-    // stub/network/broker surface an honest message here rather than silently
-    // doing nothing, since the library toolbar renders them unconditionally.
-    notice: Option<(String, f64)>,
+    toasts: Toasts,
 }
 
 impl DemoApp {
@@ -202,7 +204,7 @@ impl DemoApp {
             .with_symbol(symbol)
             .with_timeframe(timeframe)
             .with_theme(theme.clone())
-            .with_visible_candles(210)
+            .with_visible_candles(0)
             .with_chart_options(options)
             .build();
         chart.config_mut().volume_height_fraction = 0.25;
@@ -257,6 +259,7 @@ impl DemoApp {
             timeframe_toolbar,
             widget_bar,
             indicator_dialog: IndicatorDialog::new(),
+            indicator_settings: IndicatorSettingsDialog::default(),
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
@@ -281,22 +284,23 @@ impl DemoApp {
             object_tree: ObjectTreePanel::new(),
             open_panel: None,
             data_window_expanded: true,
-            alerts: Vec::new(),
-            next_alert_id: 1,
+            alerts: AlertsPanel::default(),
             replay: None,
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
             screenshots: mpsc::channel(),
-            notice: None,
+            toasts: Toasts::new(),
         };
+        app.alerts
+            .set_service(Arc::new(crate::panel_alerts::DemoAlerts::default()));
         app.apply_session();
         app
     }
 
     /// Surface a short-lived, honest status message in the UI.
     fn notify(&mut self, msg: impl Into<String>) {
-        self.notice = Some((msg.into(), 0.0));
+        self.toasts.info(msg);
     }
 
     // --- data helpers ------------------------------------------------------
@@ -453,30 +457,24 @@ impl DemoApp {
             repeating,
         } = data
         {
-            self.alerts.push(PriceAlert {
-                id: self.next_alert_id,
-                symbol,
-                target_price: price,
-                condition: condition_from_label(&condition),
-                status: AlertStatus::Active,
-                message: (!message.is_empty()).then_some(message),
-                repeating,
-            });
-            self.next_alert_id += 1;
+            let mut alert = Alert::new(symbol, condition_from_label(&condition, price));
+            alert.message = message;
+            alert.frequency = if repeating {
+                AlertFrequency::EveryTime
+            } else {
+                AlertFrequency::Once
+            };
+            self.alerts.save(alert);
+        } else {
+            self.notify(
+                "This session store accepts price alerts; other conditions need a host evaluator",
+            );
         }
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
-        self.alerts.push(PriceAlert {
-            id: self.next_alert_id,
-            symbol,
-            target_price: price,
-            condition: AlertCondition::CrossesAbove,
-            status: AlertStatus::Active,
-            message: None,
-            repeating: false,
-        });
-        self.next_alert_id += 1;
+        self.alerts
+            .save(Alert::new(symbol, AlertCondition::CrossingUp(price)));
     }
 
     // --- selection / context helpers --------------------------------------
@@ -517,6 +515,20 @@ impl DemoApp {
         settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
         settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
         settings.scales_and_lines.show_countdown = config.show_countdown;
+        settings.scales_and_lines.show_bid_ask = config.show_bid_ask;
+        settings.scales_and_lines.show_high_low = config.show_high_low;
+        settings.margins.top_percent =
+            (self.chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
+        settings.margins.bottom_percent = (self
+            .chart
+            .state()
+            .price_scale()
+            .options()
+            .scale_margins
+            .bottom
+            * 100.0) as f32;
+        settings.margins.right_bars =
+            self.chart.chart_options().time_scale.right_offset.max(0.0) as u32;
         let scale = self.chart.state().price_scale();
         settings.scales_and_lines.auto_scale = !scale.is_manual();
         settings.scales_and_lines.log_scale =
@@ -540,11 +552,39 @@ impl DemoApp {
         let props = DrawingProps {
             color: drawing.color32(),
             line_width: drawing.stroke_width,
+            line_style: match drawing.line_style {
+                egui_charts::drawings::LineStyle::Solid => DrawingLineStyle::Solid,
+                egui_charts::drawings::LineStyle::Dashed => DrawingLineStyle::Dashed,
+                egui_charts::drawings::LineStyle::Dotted => DrawingLineStyle::Dotted,
+            },
+            fill_color: drawing.fill_color32(),
+            fill_enabled: drawing.fill_color.is_some(),
+            extend_left: drawing.extend_left,
+            extend_right: drawing.extend_right,
+            font_size: drawing.font_size,
+            visible_all_timeframes: drawing.timeframe_visibility.show_on_all,
+            visible_timeframes: drawing
+                .timeframe_visibility
+                .visible_timeframes
+                .iter()
+                .cloned()
+                .collect(),
             label: drawing.text.clone().unwrap_or_default(),
             ..DrawingProps::default()
         };
         let name = drawing.tool_type.as_str().to_string();
         self.drawing_props.open(DrawingId(drawing_id), name, props);
+    }
+
+    fn open_indicator_settings(&mut self, id: SeriesId) {
+        if let Some((_, study)) = self
+            .chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+        {
+            self.indicator_settings
+                .open(id, study, self.chart.timeframe());
+        }
     }
 
     // --- dialog wiring -----------------------------------------------------
@@ -567,6 +607,46 @@ impl DemoApp {
             let inputs = self.indicator_dialog.input_summary(study.name());
             let id = self.chart.add_indicator(study);
             self.chart.set_indicator_inputs(id, inputs);
+        }
+
+        if let Some(edit) = self.indicator_settings.show(ctx, &self.theme) {
+            let result = self
+                .chart
+                .indicator_mut(edit.id)
+                .ok_or("Study was removed")
+                .and_then(|study| {
+                    study.apply_settings(&edit.inputs, edit.settings)?;
+                    Ok(study
+                        .inputs()
+                        .iter()
+                        .map(|input| match (&input.kind, &input.value) {
+                            (
+                                egui_charts::studies::InputKind::Choice(choices),
+                                egui_charts::studies::InputValue::Choice(index),
+                            ) => choices.get(*index).cloned().unwrap_or_default(),
+                            (_, egui_charts::studies::InputValue::Length(value)) => {
+                                value.to_string()
+                            }
+                            (_, egui_charts::studies::InputValue::Integer(value)) => {
+                                value.to_string()
+                            }
+                            (_, egui_charts::studies::InputValue::Number(value)) => {
+                                value.to_string()
+                            }
+                            (_, egui_charts::studies::InputValue::Toggle(value)) => {
+                                value.to_string()
+                            }
+                            _ => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "))
+                });
+            match result {
+                Ok(inputs) => {
+                    self.chart.set_indicator_inputs(edit.id, inputs);
+                }
+                Err(error) => self.notify(error),
+            }
         }
 
         // Chart settings.
@@ -654,39 +734,26 @@ impl DemoApp {
 
     fn apply_drawing_props(&mut self, id: DrawingId, props: DrawingProps) {
         self.chart.drawings_mut().edit_drawing(id.0, |drawing| {
-            drawing.color = props.color.to_array();
+            drawing.color = props.color.to_srgba_unmultiplied();
             drawing.stroke_width = props.line_width;
             drawing.line_style = line_style_from_dialog(props.line_style);
             drawing.extend_left = props.extend_left;
             drawing.extend_right = props.extend_right;
-            if !props.label.is_empty() {
-                drawing.text = Some(props.label);
-            }
+            drawing.text = (!props.label.is_empty()).then_some(props.label);
+            drawing.fill_color = props
+                .fill_color
+                .filter(|_| props.fill_enabled)
+                .map(|c| c.to_srgba_unmultiplied());
+            drawing.font_size = props.font_size;
+            drawing.timeframe_visibility = egui_charts::drawings::TimeframeVisibility {
+                show_on_all: props.visible_all_timeframes,
+                visible_timeframes: props.visible_timeframes.into_iter().collect(),
+            };
         });
     }
 
-    fn set_all_drawings_visible(&mut self, visible: bool) {
-        let dm = self.chart.drawings_mut();
-        let ids: Vec<usize> = dm
-            .drawings
-            .iter()
-            .filter(|d| d.visible != visible)
-            .map(|d| d.id)
-            .collect();
-        for id in ids {
-            dm.edit_drawing(id, |d| d.visible = visible);
-        }
-    }
-
     fn clone_drawing(&mut self, id: usize) {
-        let dm = self.chart.drawings_mut();
-        if let Some(src) = dm.drawings.iter().find(|d| d.id == id).cloned() {
-            let mut copy = src;
-            for cp in &mut copy.chart_points {
-                cp.bar_idx += 3.0; // offset so the clone is visible
-            }
-            dm.add_synced_drawing(copy);
-        }
+        self.chart.drawings_mut().duplicate_drawing(id);
     }
 
     fn go_to_date(&mut self, date: chrono::NaiveDate) {
@@ -715,7 +782,7 @@ impl DemoApp {
         };
         // Capture the next frame after the dialog and any previous notice are gone.
         self.export_dialog.close();
-        self.notice = None;
+        self.toasts.clear();
         self.screenshot_requested = Some(target);
         ctx.request_repaint();
     }
@@ -750,13 +817,13 @@ impl DemoApp {
                 if from_dialog {
                     self.export_dialog.mark_success();
                 }
-                self.notice = Some((format!("Export successful: {}", path.display()), 0.0));
+                self.notify(format!("Export successful: {}", path.display()));
             }
             Err(error) => {
                 if from_dialog {
                     self.export_dialog.mark_error(error.clone());
                 }
-                self.notice = Some((format!("Export failed: {error}"), 0.0));
+                self.notify(format!("Export failed: {error}"));
             }
         }
     }
@@ -775,6 +842,7 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
+        self.alerts.poll(&ctx, &mut self.toasts);
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
@@ -983,7 +1051,7 @@ impl DemoApp {
             }
             TopToolbarAction::TakeScreenshot => {
                 self.export_dialog.close();
-                self.notice = None;
+                self.toasts.clear();
                 self.screenshot_requested = Some(ScreenshotTarget::File(None));
                 ctx.request_repaint();
             }
@@ -1067,6 +1135,9 @@ impl DemoApp {
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        let drawings = &self.chart.drawings().drawings;
+        self.drawing_toolbar.state.lock_all =
+            !drawings.is_empty() && drawings.iter().all(|d| d.locked);
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
             .exact_size(56.0)
@@ -1147,11 +1218,14 @@ impl DemoApp {
             DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
             DrawingToolbarAction::ToggleMagnet => {
                 dm.options.magnet_mode = !dm.options.magnet_mode;
+                dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
+                    != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
             }
-            DrawingToolbarAction::SetMagnetType(_) => {
-                // Magnet strength maps to the same snap behavior; ensure on.
+            DrawingToolbarAction::SetMagnetType(kind) => {
                 dm.options.magnet_mode = true;
+                dm.options.strong_magnet =
+                    kind != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
             }
             DrawingToolbarAction::ToggleEraserMode => {
@@ -1184,6 +1258,13 @@ impl DemoApp {
     }
 
     fn show_widget_bar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        self.widget_bar.active_icon = match self.open_panel {
+            Some(SidePanel::ObjectTree) => Some(RightBarIcon::ObjectTree),
+            Some(SidePanel::Alerts) => Some(RightBarIcon::Alerts),
+            _ => None,
+        };
+        self.widget_bar.active_widget =
+            (self.open_panel == Some(SidePanel::DataWindow)).then_some(1);
         egui::Panel::right("widget_bar")
             .resizable(false)
             .exact_size(49.0)
@@ -1261,15 +1342,17 @@ impl DemoApp {
 
         // Main data source row.
         let tf = self.state.timeframe.as_str();
-        items.push(SourceItem::data_source(
-            MAIN_SERIES_ID,
-            format!("{} · {}", self.state.symbol, tf),
-        ));
+        let mut main =
+            SourceItem::data_source(MAIN_SERIES_ID, format!("{} · {}", self.state.symbol, tf))
+                .with_series_id(SeriesId::MAIN);
+        main.visible = self.chart.is_main_series_visible();
+        items.push(main);
 
         // Live indicators.
         for (id, ind) in self.chart.indicators() {
             let color = ind.colors().first().copied().unwrap_or(egui::Color32::GRAY);
-            let mut item = SourceItem::indicator(indicator_tree_id(id), ind.name(), color);
+            let mut item =
+                SourceItem::indicator(indicator_tree_id(id), ind.name(), color).with_series_id(id);
             item.visible = ind.is_visible();
             items.push(item);
         }
@@ -1279,6 +1362,8 @@ impl DemoApp {
             let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
             item.visible = d.visible;
             item.locked = d.locked;
+            item.z_index = d.z_order;
+            item.label = d.label.clone();
             items.push(item);
         }
         items
@@ -1296,6 +1381,9 @@ impl DemoApp {
         let last = bars.get(index);
         let mut info = DataWindowInfo::new(self.state.symbol.clone())
             .with_timeframe(self.state.timeframe.as_str().to_string());
+        if let Some(instrument) = self.chart.instrument() {
+            info = info.with_instrument(instrument);
+        }
         if let Some(b) = last {
             info = info.with_ohlcv(b.open, b.high, b.low, b.close, b.volume);
             info = info.with_timestamp(self.chart.format_time(b.time));
@@ -1307,39 +1395,13 @@ impl DemoApp {
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
+        if self
+            .object_tree
+            .apply_to_chart(&mut self.chart, &action, sources)
+        {
+            return;
+        }
         match action {
-            ObjectTreeAction::ToggleVisibility(id) => {
-                let chart = &mut self.chart;
-                if let Some(study) = indicator_from_tree_id(id) {
-                    let now = chart
-                        .indicators()
-                        .find(|(id, _)| *id == study)
-                        .is_none_or(|(_, i)| i.is_visible());
-                    chart.set_indicator_visible(study, !now);
-                } else {
-                    chart
-                        .drawings_mut()
-                        .edit_drawing(id, |d| d.visible = !d.visible);
-                }
-            }
-            ObjectTreeAction::ToggleLock(id) => {
-                self.chart
-                    .drawings_mut()
-                    .edit_drawing(id, |d| d.locked = !d.locked);
-            }
-            ObjectTreeAction::Delete(id) | ObjectTreeAction::RemoveIndicator(id) => {
-                let chart = &mut self.chart;
-                if let Some(study) = indicator_from_tree_id(id) {
-                    chart.remove_series(study);
-                } else {
-                    chart.drawings_mut().delete_drawing(id);
-                }
-            }
-            ObjectTreeAction::Select(id) => {
-                if indicator_from_tree_id(id).is_none() {
-                    self.chart.drawings_mut().select(id);
-                }
-            }
             ObjectTreeAction::ChangeColor(id, color) => {
                 let chart = &mut self.chart;
                 if let Some(study) = indicator_from_tree_id(id) {
@@ -1349,77 +1411,41 @@ impl DemoApp {
                 } else {
                     chart
                         .drawings_mut()
-                        .drag_edit_drawing(id, |d| d.color = color.to_array());
+                        .drag_edit_drawing(id, |d| d.color = color.to_srgba_unmultiplied());
                     self.colour_drag = true;
                 }
             }
             ObjectTreeAction::OpenProperties(id) | ObjectTreeAction::OpenIndicatorSettings(id) => {
-                if indicator_from_tree_id(id).is_some() {
-                    self.indicator_dialog.open();
+                if id == MAIN_SERIES_ID {
+                    self.open_series_settings_dialog();
+                } else if let Some(study) = indicator_from_tree_id(id) {
+                    self.open_indicator_settings(study);
                 } else {
                     self.open_drawing_props_for(id);
                 }
             }
-            ObjectTreeAction::Duplicate(id) => {
-                if indicator_from_tree_id(id).is_none() {
-                    self.clone_drawing(id);
-                }
-            }
-            ObjectTreeAction::BringToFront(id) => {
-                self.chart.drawings_mut().bring_to_front(id);
-            }
-            ObjectTreeAction::SendToBack(id) => {
-                self.chart.drawings_mut().send_to_back(id);
-            }
-            ObjectTreeAction::HideAll => self.set_all_drawings_visible(false),
-            ObjectTreeAction::ShowAll => self.set_all_drawings_visible(true),
-            ObjectTreeAction::RemoveAllDrawings => {
-                self.chart.drawings_mut().clear_all();
-            }
-            ObjectTreeAction::RemoveAllIndicators => self.remove_all_indicators(),
-            ObjectTreeAction::ClearSelection => {
-                self.chart.drawings_mut().deselect();
-            }
-            _ => {
-                let _ = sources;
-            }
+            _ => {}
         }
     }
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading("Alerts");
-            if ui.button("+ New").clicked() {
-                self.alert_dialog.open(self.state.symbol.clone());
+        match self.alerts.show(ui) {
+            AlertPanelAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            AlertPanelAction::ExportLog(csv) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let path = std::env::temp_dir().join("alerts.csv");
+                #[cfg(target_arch = "wasm32")]
+                let path = std::path::PathBuf::from("alerts.csv");
+                #[cfg(not(target_arch = "wasm32"))]
+                let result = std::fs::write(&path, csv).map_err(|e| e.to_string());
+                #[cfg(target_arch = "wasm32")]
+                let result = browser_download(csv.as_bytes(), &path);
+                self.notify(match result {
+                    Ok(()) => format!("Export successful: {}", path.display()),
+                    Err(error) => format!("Export failed: {error}"),
+                });
             }
-        });
-        ui.separator();
-        if self.alerts.is_empty() {
-            ui.label("No alerts. Click + New, the bell button, or right-click the chart.");
-            return;
-        }
-        let mut remove: Option<usize> = None;
-        for alert in &self.alerts {
-            ui.horizontal(|ui| {
-                let dot = match alert.status {
-                    AlertStatus::Active => egui::Color32::from_rgb(38, 166, 154),
-                    AlertStatus::Triggered => egui::Color32::from_rgb(239, 83, 80),
-                    _ => egui::Color32::GRAY,
-                };
-                ui.colored_label(dot, "●");
-                ui.label(format!(
-                    "{} {} {:.2}",
-                    alert.symbol,
-                    alert.condition.as_str(),
-                    alert.target_price
-                ));
-                if ui.small_button("✕").clicked() {
-                    remove = Some(alert.id);
-                }
-            });
-        }
-        if let Some(id) = remove {
-            self.alerts.retain(|a| a.id != id);
+            AlertPanelAction::None => {}
         }
     }
 
@@ -1568,6 +1594,9 @@ impl DemoApp {
                     }
                 } else {
                     self.chart.show(ui);
+                }
+                if let Some(id) = self.chart.take_indicator_settings_request() {
+                    self.open_indicator_settings(id);
                 }
                 if self.chart.take_scale_settings_request() {
                     self.open_series_settings_dialog();
@@ -1728,6 +1757,7 @@ impl DemoApp {
 
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
         if let Some(target) = self.screenshot_requested.take() {
+            self.toasts.clear();
             self.request_screenshot(ctx, target);
         }
 
@@ -1736,7 +1766,7 @@ impl DemoApp {
             match target {
                 ScreenshotTarget::Clipboard => {
                     ctx.copy_image((*image).clone());
-                    self.notice = Some(("Image sent to clipboard".into(), 0.0));
+                    self.notify("Image sent to clipboard");
                 }
                 ScreenshotTarget::File(path) => self.save_screenshot(&image, path),
             }
@@ -1744,34 +1774,9 @@ impl DemoApp {
     }
 
     fn show_notice(&mut self, ctx: &egui::Context) {
-        let now = ctx.input(|i| i.time);
-        let text = {
-            let Some((msg, shown_at)) = self.notice.as_mut() else {
-                return;
-            };
-            if *shown_at == 0.0 {
-                *shown_at = now;
-            }
-            if now - *shown_at > 4.0 {
-                None
-            } else {
-                Some(msg.clone())
-            }
-        };
-        let Some(text) = text else {
-            self.notice = None;
-            return;
-        };
-        egui::Area::new(egui::Id::unique("demo_notice"))
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -56.0))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(ui.visuals().widgets.active.bg_fill)
-                    .show(ui, |ui| {
-                        ui.label(text);
-                    });
-            });
-        ctx.request_repaint();
+        NotificationPanel::new()
+            .width(340.0)
+            .show_with_toasts(ctx, &mut self.toasts);
     }
 
     fn save_screenshot(&mut self, image: &egui::ColorImage, path: Option<std::path::PathBuf>) {
@@ -1804,10 +1809,10 @@ impl DemoApp {
             });
         match result {
             Ok(()) => {
-                self.notice = Some((format!("Export successful: {}", path.display()), 0.0));
+                self.notify(format!("Export successful: {}", path.display()));
             }
             Err(error) => {
-                self.notice = Some((format!("Export failed: {error}"), 0.0));
+                self.notify(format!("Export failed: {error}"));
             }
         }
     }
@@ -1846,12 +1851,13 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .inner_margin(egui::Margin::ZERO)
 }
 
-fn condition_from_label(label: &str) -> AlertCondition {
-    match label.to_lowercase().as_str() {
-        l if l.contains("below") && l.contains("cross") => AlertCondition::CrossesBelow,
-        l if l.contains("cross") => AlertCondition::CrossesAbove,
-        l if l.contains("below") || l.contains("less") => AlertCondition::Below,
-        _ => AlertCondition::Above,
+fn condition_from_label(label: &str, price: f64) -> AlertCondition {
+    match label {
+        "Crossing" => AlertCondition::Crossing(price),
+        "Crossing Up" => AlertCondition::CrossingUp(price),
+        "Crossing Down" => AlertCondition::CrossingDown(price),
+        "Less Than" => AlertCondition::Below(price),
+        _ => AlertCondition::Above(price),
     }
 }
 
@@ -1940,12 +1946,281 @@ fn apply_settings_state(
     config.show_symbol_prev_close = state.scales_and_lines.show_prev_close_label;
     config.show_prev_close_line = state.scales_and_lines.show_prev_close;
     config.show_countdown = state.scales_and_lines.show_countdown;
+    config.show_bid_ask = state.scales_and_lines.show_bid_ask;
+    config.show_high_low = state.scales_and_lines.show_high_low;
+    chart.price_scale_mut().options_mut().scale_margins = egui_charts::scales::PriceScaleMargins {
+        top: f64::from(state.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
+        bottom: f64::from(state.margins.bottom_percent.clamp(0.0, 100.0)) / 100.0,
+    };
+    if state.margins.right_bars != chart.chart_options().time_scale.right_offset.max(0.0) as u32 {
+        chart.set_right_margin(state.margins.right_bars as f32);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// A narrow first layout and later resizes retain the configured zoom and live edge.
+    #[test]
+    fn opening_view_keeps_default_spacing_across_resizes() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for scale in [1.0, 2.0] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.live.set_paused(true);
+                *app.chart.config_mut() = theme.apply_to_config(app.chart.config().clone());
+                for width in [140.0, 0.0, 80.0, 320.0, 1440.0] {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            app.chart.show(ui);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                    let time_scale = app.chart.state().time_scale();
+                    assert_eq!(
+                        time_scale.bar_spacing(),
+                        6.1,
+                        "width {width}, scale {scale}"
+                    );
+                    assert!(
+                        (time_scale.right_offset() - (65.0 - 6.1 * 0.5 - 1.0) / 6.1).abs() < 1e-5
+                    );
+                }
+            }
+        }
+    }
+
+    /// Existing drawing settings survive opening and applying the dialog, and the toolbar
+    /// reflects locks changed through other drawing controls rather than an optimistic toggle.
+    #[test]
+    fn drawing_controls_round_trip_visibility_fill_fonts_and_locks() {
+        use egui_charts::drawings::{Drawing, DrawingToolType, LineStyle, TimeframeVisibility};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut drawing = Drawing::new(7, DrawingToolType::TextLabel);
+        drawing.line_style = LineStyle::Dotted;
+        drawing.fill_color = Some([51, 102, 153, 85]);
+        drawing.font_size = 24.0;
+        drawing.extend_left = true;
+        drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+        drawing.text = Some("Annotation".into());
+        drawing.locked = true;
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.open_drawing_props_for(7);
+        let props = app.drawing_props.props.clone();
+        assert!(!props.visible_all_timeframes);
+        assert_eq!(props.visible_timeframes, ["1h"]);
+        assert!(props.fill_enabled);
+        assert_eq!(
+            props.fill_color.unwrap().to_srgba_unmultiplied(),
+            [51, 102, 153, 85]
+        );
+        assert_eq!(props.font_size, 24.0);
+        assert!(matches!(props.line_style, DrawingLineStyle::Dotted));
+        assert!(props.extend_left);
+        app.apply_drawing_props(
+            DrawingId(7),
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            },
+        );
+        assert_eq!(app.chart.drawings().drawings[0].font_size, 24.0);
+        app.chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.locked = false);
+        app.apply_drawing_props(DrawingId(7), props);
+        let changed = DrawingProps {
+            visible_all_timeframes: false,
+            visible_timeframes: vec!["4h".into()],
+            font_size: 28.0,
+            fill_enabled: false,
+            ..app.drawing_props.props.clone()
+        };
+        app.apply_drawing_props(DrawingId(7), changed);
+        let saved = &app.chart.drawings().drawings[0];
+        assert!(saved.timeframe_visibility.is_visible_on("4h"));
+        assert!(!saved.timeframe_visibility.is_visible_on("1h"));
+        assert_eq!(saved.fill_color, None);
+        assert_eq!(saved.font_size, 28.0);
+        app.handle_object_tree(
+            ObjectTreeAction::ChangeColor(
+                7,
+                egui::Color32::from_rgba_unmultiplied(51, 102, 153, 85),
+            ),
+            &[],
+        );
+        assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
+        app.chart.drawings_mut().end_drag_handle();
+        app.chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.locked = true);
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+        })
+        .drop_without_applying_deltas();
+        assert!(app.drawing_toolbar.state.lock_all);
+        app.chart.drawings_mut().drawings[0].locked = false;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+        })
+        .drop_without_applying_deltas();
+        assert!(!app.drawing_toolbar.state.lock_all);
+    }
+
+    #[test]
+    fn object_tree_applies_layer_bulk_and_focus_actions() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        for id in 1..=3 {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 200.0)];
+            drawing.completed = true;
+            app.chart.drawings_mut().add_synced_drawing(drawing);
+        }
+        let ids: Vec<_> = app.chart.drawings().drawings.iter().map(|d| d.id).collect();
+        let sources = app.build_source_items();
+        assert_eq!(
+            sources
+                .iter()
+                .map(|s| s.id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            sources.len()
+        );
+        app.handle_object_tree(ObjectTreeAction::ToggleVisibility(MAIN_SERIES_ID), &sources);
+        assert!(!app.chart.is_main_series_visible());
+        assert!(!app.build_source_items()[0].visible);
+        assert!(app.chart.drawings().drawings[0].visible);
+        let sources = app.build_source_items();
+        app.handle_object_tree(ObjectTreeAction::ToggleVisibility(MAIN_SERIES_ID), &sources);
+        assert!(app.chart.is_main_series_visible());
+        app.handle_object_tree(ObjectTreeAction::ToggleVisibility(ids[0]), &sources);
+        assert!(!app.chart.drawings().drawings[0].visible);
+        let sources = app.build_source_items();
+        app.handle_object_tree(ObjectTreeAction::ToggleVisibility(ids[0]), &sources);
+        assert!(app.chart.drawings().drawings[0].visible);
+        // Tied layers still have a stable paint order. Move across exactly one neighbour.
+        for drawing in &mut app.chart.drawings_mut().drawings {
+            drawing.z_order = 0;
+        }
+        for (action, expected) in [
+            (
+                ObjectTreeAction::MoveUp(ids[0]),
+                vec![ids[1], ids[0], ids[2]],
+            ),
+            (ObjectTreeAction::MoveDown(ids[0]), ids.clone()),
+            (
+                ObjectTreeAction::BringToFront(ids[0]),
+                vec![ids[1], ids[2], ids[0]],
+            ),
+            (ObjectTreeAction::SendToBack(ids[0]), ids.clone()),
+        ] {
+            let sources = app.build_source_items();
+            let before: Vec<_> = app
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.z_order)
+                .collect();
+            app.handle_object_tree(action, &sources);
+            let after: Vec<_> = app
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.z_order)
+                .collect();
+            assert!(app.chart.drawings_mut().undo());
+            assert_eq!(
+                app.chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.z_order)
+                    .collect::<Vec<_>>(),
+                before
+            );
+            assert!(app.chart.drawings_mut().redo());
+            assert_eq!(
+                app.chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.z_order)
+                    .collect::<Vec<_>>(),
+                after
+            );
+            let mut actual: Vec<_> = app
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| (d.z_order, d.id))
+                .collect();
+            actual.sort_by_key(|(z, _)| *z);
+            assert_eq!(
+                actual.iter().map(|(_, id)| *id).collect::<Vec<_>>(),
+                expected
+            );
+        }
+        let sources = app.build_source_items();
+        app.handle_object_tree(ObjectTreeAction::Rename(ids[0], "Support".into()), &sources);
+        assert_eq!(
+            app.chart.drawings().drawings[0].label.as_deref(),
+            Some("Support")
+        );
+        assert!(app.chart.drawings_mut().undo());
+        assert_eq!(app.chart.drawings().drawings[0].label, None);
+        assert!(app.chart.drawings_mut().redo());
+        app.handle_object_tree(ObjectTreeAction::Duplicate(ids[0]), &sources);
+        assert_eq!(app.chart.drawings().drawings.len(), 4);
+        assert!(app.chart.drawings_mut().undo());
+        assert_eq!(app.chart.drawings().drawings.len(), 3);
+        assert!(app.chart.drawings_mut().redo());
+        assert_eq!(app.chart.drawings().drawings.len(), 4);
+        assert!(app.chart.drawings_mut().undo());
+        app.handle_object_tree(ObjectTreeAction::ZoomTo(ids[0]), &sources);
+        // Prices 100..200 with ten percent on either side give 90..210.
+        assert_eq!(app.chart.state().price_scale().range().min, 90.0);
+        assert_eq!(app.chart.state().price_scale().range().max, 210.0);
+        let study = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+        app.chart.set_indicator_inputs(study, "2 close");
+        let sources = app.build_source_items();
+        app.handle_object_tree(
+            ObjectTreeAction::Duplicate(indicator_tree_id(study)),
+            &sources,
+        );
+        let copy = app
+            .chart
+            .indicators()
+            .find(|(id, _)| *id != study)
+            .unwrap()
+            .0;
+        assert_eq!(app.chart.indicator_inputs(copy), Some("2 close"));
+        app.object_tree.state_mut().select(ids[0]);
+        app.object_tree
+            .state_mut()
+            .toggle_selection(indicator_tree_id(study));
+        let sources = app.build_source_items();
+        app.handle_object_tree(ObjectTreeAction::DeleteSelected, &sources);
+        assert_eq!(app.chart.drawings().drawings.len(), 2);
+        assert!(!app.chart.indicators().any(|(id, _)| id == study));
+    }
 
     #[test]
     fn opening_settings_keeps_the_charts_current_display() {

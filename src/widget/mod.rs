@@ -199,6 +199,8 @@ pub struct Chart {
     pub(crate) state: ChartState,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
     pub(crate) config: ChartConfig,
+    /// Whether the main price series and its volume are drawn.
+    pub(crate) main_series_visible: bool,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
     /// Starting index of visible range (for backward compatibility)
@@ -264,14 +266,21 @@ pub struct Chart {
     pub(crate) symbol: String,
     /// Metadata supplied directly by a host without a feed.
     legend_instrument: Option<crate::model::Instrument>,
+    currency_choices: Vec<String>,
+    currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    server_time_offset: Option<chrono::TimeDelta>,
+    bar_close_time: Option<chrono::DateTime<chrono::Utc>>,
+    indicator_settings_request: Option<SeriesId>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,
+    pub(crate) measured_axis_width: f32,
+    last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
     events: Vec<crate::model::Marker>,
@@ -427,8 +436,19 @@ impl Chart {
         self.legend_instrument = instrument;
         let precision = self
             .instrument()
-            .and_then(|instrument| instrument.price_decimals);
+            .and_then(crate::scales::instrument_price_precision);
         self.state.price_scale_mut().set_price_precision(precision);
+    }
+
+    /// Supplies currencies the host can convert the chart into. Choosing one emits an intent;
+    /// the host replaces bars and instrument metadata together after conversion.
+    pub fn set_currency_choices(&mut self, currencies: Vec<String>) {
+        self.currency_choices = currencies;
+    }
+
+    /// Takes the selected currency. No prices change until the host supplies converted data.
+    pub fn take_currency_choice(&mut self) -> Option<String> {
+        self.currency_choice.take()
     }
 
     /// Supplies a host-owned instrument image for the legend. `None` hides it.
@@ -448,6 +468,26 @@ impl Chart {
     /// Pass `None` when quotes are unavailable or the symbol changes.
     pub fn set_quote(&mut self, quote: Option<crate::model::Level1Quote>) {
         self.quote = quote;
+    }
+
+    /// Supplies the current server time for a chart without a feed. The clock advances between
+    /// calls; update it when a replay jumps. `None` restores the feed clock or latest quote time.
+    pub fn set_server_time(&mut self, now: Option<chrono::DateTime<chrono::Utc>>) {
+        self.server_time_offset = now.map(|time| time - chrono::Utc::now());
+    }
+
+    /// Supplies an exact closing instant for the newest bar, for irregular sessions or replays.
+    /// `None` derives the close from the timeframe and the instrument's session.
+    pub fn set_bar_close_time(&mut self, close: Option<chrono::DateTime<chrono::Utc>>) {
+        self.bar_close_time = close;
+    }
+
+    /// Sets the right margin in bars and moves to that margin when it changes.
+    pub fn set_right_margin(&mut self, bars: f32) {
+        if bars.is_finite() && bars >= 0.0 && self.chart_options.time_scale.right_offset != bars {
+            self.chart_options.time_scale.right_offset = bars;
+            self.state.time_scale_mut().set_right_offset(bars);
+        }
     }
 
     /// Supplies an independent extended-session price and qualifier. `None` hides the tag.
@@ -497,12 +537,12 @@ impl Chart {
             .max(0.0)
             .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
         let left_axis = if self.config.show_left_axis {
-            self.config.left_axis_width.max(0.0)
+            self.config.left_axis_width.max(self.measured_axis_width)
         } else {
             0.0
         };
         let right_axis = if self.config.show_right_axis {
-            self.config.right_axis_width.max(0.0)
+            self.config.right_axis_width.max(self.measured_axis_width)
         } else {
             0.0
         };
@@ -526,7 +566,10 @@ impl Chart {
         } else {
             Rect::NOTHING
         };
-        let volume_rect = if self.config.show_volume && self.chart_type.supports_volume() {
+        let volume_rect = if self.main_series_visible
+            && self.config.show_volume
+            && self.chart_type.supports_volume()
+        {
             let inset = self
                 .config
                 .volume_baseline_inset
@@ -653,6 +696,15 @@ impl Chart {
     /// whole [`ChartConfig`]. Changes take effect on the next rendered frame.
     pub fn config_mut(&mut self) -> &mut ChartConfig {
         &mut self.config
+    }
+
+    /// Apply a theme to this chart and to the UI in `ctx`, without changing data or pan and zoom.
+    ///
+    /// Other charts sharing the context keep their configured series colours until updated.
+    pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
+        self.config = theme.apply_to_config(self.config.clone());
+        crate::theme::apply_to_egui(ctx, theme);
+        ctx.request_repaint();
     }
 
     /// The chart's visual configuration.

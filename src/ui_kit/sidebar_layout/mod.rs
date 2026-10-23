@@ -160,7 +160,7 @@ impl<'a> SidebarTab<'a> {
             egui::FontId::proportional(theme.text.body),
             text_color,
         );
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, 0.0);
 
         response.clicked()
     }

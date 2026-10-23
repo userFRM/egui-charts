@@ -11,6 +11,11 @@ use std::collections::BTreeSet;
 use web_time::Instant;
 
 impl Chart {
+    /// Take the study settings request from a legend button or a double-click in a study pane.
+    pub fn take_indicator_settings_request(&mut self) -> Option<SeriesId> {
+        self.indicator_settings_request.take()
+    }
+
     /// Replaces the bars of `series`, for history or a replay window. Invalid bars (a non-finite
     /// value, a high or low on the wrong side of the open and close, negative volume) are dropped
     /// and counted in [`feed_state`](Self::feed_state), the rest sorted by time, and of several
@@ -141,6 +146,12 @@ impl Chart {
     /// main pane if [`Indicator::is_overlay`], otherwise in a pane below it. Returns the study's
     /// id, which stays valid when other studies are removed.
     pub fn add_indicator(&mut self, mut indicator: Box<dyn Indicator>) -> SeriesId {
+        if !indicator.has_settings() {
+            indicator = Box::new(crate::studies::ConfiguredStudy::new(indicator));
+        }
+        if let Some(timeframe) = self.timeframe() {
+            indicator.set_timeframe(timeframe);
+        }
         indicator.set_instrument(self.instrument());
         indicator.calculate(&self.state.data().bars);
         let id = SeriesId(self.next_series);
@@ -197,6 +208,25 @@ impl Chart {
         };
         self.studies.indicators_mut()[at].set_visible(visible);
         true
+    }
+
+    /// Show or hide the main price series, its volume and its legend without unloading its bars.
+    /// Studies and drawings remain visible and continue to receive data.
+    pub fn set_main_series_visible(&mut self, visible: bool) {
+        self.main_series_visible = visible;
+        if !visible
+            && matches!(
+                self.selection.selected_id(),
+                Some(ChartElementId::Series(_))
+            )
+        {
+            self.selection.deselect();
+        }
+    }
+
+    /// Whether the main price series is visible.
+    pub fn is_main_series_visible(&self) -> bool {
+        self.main_series_visible
     }
 
     /// Includes or excludes study `id` from the main price auto-scale, without hiding it.
@@ -425,7 +455,16 @@ mod tests {
             ),
         ] {
             for case in [
-                "single", "multiple", "excluded", "hidden", "pane", "short", "profile", "renko",
+                "single",
+                "multiple",
+                "excluded",
+                "hidden",
+                "plot_hidden",
+                "interval_hidden",
+                "pane",
+                "short",
+                "profile",
+                "renko",
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
@@ -468,7 +507,22 @@ mod tests {
                 } else {
                     Box::new(study)
                 };
+                if case == "interval_hidden" {
+                    chart.set_timeframe(crate::model::Timeframe::Min1);
+                }
                 let id = chart.add_indicator(study);
+                if matches!(case, "plot_hidden" | "interval_hidden") {
+                    let study = chart.indicator_mut(id).unwrap();
+                    let mut settings = study.settings();
+                    if case == "plot_hidden" {
+                        settings.plots[0].visible = false;
+                    } else {
+                        settings
+                            .hidden_intervals
+                            .push(crate::model::Timeframe::Min1);
+                    }
+                    study.apply_settings(&[], settings).unwrap();
+                }
                 chart.set_indicator_visible(id, case != "hidden");
                 assert!(chart.set_indicator_autoscale(id, case != "excluded"));
                 frame(&ctx, &mut chart, 0.04, Vec::new());
@@ -630,6 +684,7 @@ mod tests {
             let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
             let values: Vec<Option<f64>> = study
                 .values()
+                .to_rows()
                 .iter()
                 .map(|value| match value {
                     IndicatorValue::Single(value) => Some(*value),
@@ -668,7 +723,7 @@ mod tests {
             }
             self.0.update(data, from);
         }
-        fn values(&self) -> &[IndicatorValue] {
+        fn values(&self) -> &crate::studies::IndicatorValues {
             self.0.values()
         }
         fn colors(&self) -> Vec<egui::Color32> {

@@ -374,6 +374,7 @@ impl FloatingSelectionToolbar {
     fn render_icon_button(ui: &mut Ui, icon: &Icon, tooltip: &str) -> Response {
         let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_btn);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
 
         let painter = ui.painter();
         let is_hovered = response.hovered();
@@ -400,6 +401,7 @@ impl FloatingSelectionToolbar {
     fn render_delete_button(ui: &mut Ui) -> Response {
         let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_btn);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
 
         let painter = ui.painter();
         let is_hovered = response.hovered();

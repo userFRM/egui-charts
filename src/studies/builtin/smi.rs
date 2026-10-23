@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Stochastic Momentum Index (SMI)
 /// Enhanced stochastic that measures close relative to HL range midpoint
 /// More responsive than standard stochastic
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -17,7 +17,7 @@ pub struct StochasticMomentumIndex {
     smooth2: usize,
     /// Signal line period (typically 10)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [SMI, Signal]
     colors: Vec<Color32>,
     visible: bool,
@@ -30,7 +30,7 @@ impl StochasticMomentumIndex {
             smooth1: smooth1.max(1),
             smooth2: smooth2.max(1),
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - SMI
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
@@ -80,8 +80,8 @@ impl StochasticMomentumIndex {
     }
 
     /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
@@ -157,7 +157,7 @@ impl StochasticMomentumIndex {
             if smi[i].is_nan() {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![smi[i], signal[i]]));
+                values.push_lines(&[smi[i], signal[i]]);
             }
         }
 
@@ -172,6 +172,13 @@ impl Default for StochasticMomentumIndex {
 }
 
 impl Indicator for StochasticMomentumIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        smooth1: length("Smooth1", 1, usize::MAX),
+        smooth2: length("Smooth2", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "SMI"
     }
@@ -188,7 +195,7 @@ impl Indicator for StochasticMomentumIndex {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -257,6 +264,7 @@ mod tests {
         // Should have valid values
         let valid_cnt = smi
             .values
+            .to_rows()
             .iter()
             .filter(|v| !matches!(v, IndicatorValue::None))
             .count();

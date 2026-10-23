@@ -6,7 +6,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Cumulative Volume Delta (CVD)
@@ -16,7 +16,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct CVD {
     /// Values calculated from bars
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Line color
     color: Color32,
     /// Visibility flag
@@ -41,7 +41,7 @@ impl CVD {
     /// Create a new CVD indicator
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: Color32::from_rgb(76, 175, 80), // Green for volume/delta
             visible: true,
             mode: CVDMode::default(),
@@ -97,8 +97,8 @@ impl CVD {
 
     /// The values over `data`, every bar of which has a finite high, low, close and volume, and open outside
     /// `ClosePosition` mode, which does not read it.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let mut cumulative_delta = 0.0;
         for bar in data {
@@ -119,6 +119,10 @@ impl Default for CVD {
 }
 
 impl Indicator for CVD {
+    crate::studies::inputs::study_inputs!(self;
+        mode: choice("Mode", [CVDMode::ClosePosition, CVDMode::BodyRatio, CVDMode::Simple])
+    ; {});
+
     fn name(&self) -> &str {
         "CVD"
     }
@@ -141,7 +145,7 @@ impl Indicator for CVD {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -221,16 +225,16 @@ mod tests {
         assert_eq!(cvd.values.len(), 3);
 
         // First bar is bullish (close near high) - positive delta
-        let IndicatorValue::Single(val) = cvd.values[0] else {
-            panic!("no value: {:?}", cvd.values[0]);
+        let IndicatorValue::Single(val) = cvd.values.to_rows()[0] else {
+            panic!("no value: {:?}", cvd.values.to_rows()[0]);
         };
         assert!(val > 0.0, "First bar should have positive delta");
 
         // After second bar (bearish), delta should decrease
         let (IndicatorValue::Single(v1), IndicatorValue::Single(v2)) =
-            (&cvd.values[0], &cvd.values[1])
+            (&cvd.values.to_rows()[0], &cvd.values.to_rows()[1])
         else {
-            panic!("no values: {:?}", &cvd.values[..2]);
+            panic!("no values: {:?}", &cvd.values.to_rows()[..2]);
         };
         assert!(v2 < v1, "Second bar should decrease cumulative delta");
     }
@@ -243,7 +247,7 @@ mod tests {
         bars[1].open = f64::NAN;
         let mut cvd = CVD::new();
         cvd.calculate(&bars);
-        for (got, want) in cvd.values.iter().zip([2000.0 / 3.0, 0.0, 1300.0]) {
+        for (got, want) in cvd.values.to_rows().iter().zip([2000.0 / 3.0, 0.0, 1300.0]) {
             let IndicatorValue::Single(got) = got else {
                 panic!("expected a value, got {got:?}");
             };
@@ -253,7 +257,7 @@ mod tests {
         // BodyRatio reads the open, so that bar has no value.
         let mut body = CVD::new().with_mode(CVDMode::BodyRatio);
         body.calculate(&bars);
-        assert!(matches!(body.values[1], IndicatorValue::None));
+        assert!(matches!(body.values.to_rows()[1], IndicatorValue::None));
     }
 
     #[test]
@@ -264,8 +268,8 @@ mod tests {
         cvd.calculate(&bars);
 
         // Simple mode: first bar bullish = +1000, second bearish = -1000
-        let IndicatorValue::Single(val) = cvd.values[1] else {
-            panic!("no value: {:?}", cvd.values[1]);
+        let IndicatorValue::Single(val) = cvd.values.to_rows()[1] else {
+            panic!("no value: {:?}", cvd.values.to_rows()[1]);
         };
         // First is +1000 (bullish), second is -1000 (bearish) = 0
         assert!(

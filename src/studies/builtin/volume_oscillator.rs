@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Volume Oscillator
 /// Measures the difference between two volume moving avgs
 /// Similar to MACD but for volume
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -13,7 +13,7 @@ pub struct VolumeOscillator {
     short_period: usize,
     /// Long EMA period (typically 10)
     long_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -23,7 +23,7 @@ impl VolumeOscillator {
         Self {
             short_period: short_period.max(1),
             long_period: long_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.info, // Blue
             visible: true,
         }
@@ -60,8 +60,8 @@ impl VolumeOscillator {
     }
 
     /// The values over `data`, every bar of which has a finite volume.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.long_period {
             for _ in 0..data.len() {
@@ -99,6 +99,11 @@ impl Default for VolumeOscillator {
 }
 
 impl Indicator for VolumeOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        short_period: length("Short period", 1, usize::MAX),
+        long_period: length("Long period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Volume Osc"
     }
@@ -111,7 +116,7 @@ impl Indicator for VolumeOscillator {
         self.values = over_finite_bars(data, |b| b.volume.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -186,6 +191,7 @@ mod tests {
         // Should have valid values after long period warmup
         let valid_cnt = vo
             .values
+            .to_rows()
             .iter()
             .filter(|v| matches!(v, IndicatorValue::Single(_)))
             .count();
@@ -210,8 +216,9 @@ mod tests {
         vo.calculate(&data);
 
         // Last value should be positive (rising volume)
-        let IndicatorValue::Single(v) = vo.values.last().unwrap() else {
-            panic!("no value: {:?}", vo.values.last().unwrap());
+        let rows = vo.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", vo.values.to_rows().last().unwrap());
         };
         assert!(*v > 0.0, "Oscillator should be positive for rising volume");
     }

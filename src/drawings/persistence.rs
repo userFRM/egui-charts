@@ -692,6 +692,7 @@ mod tests {
         d.stroke_width = 3.5;
         d.completed = true;
         d.text = Some("note".into());
+        d.label = Some("Support".into());
         d.line_style = LineStyle::Dotted;
         d.fill_color = Some([5, 6, 7, 8]);
         d.locked = true;
@@ -853,7 +854,8 @@ mod tests {
         ];
         assert_eq!(v2.drawings().len(), tools.len());
         for (stored, tool) in v2.drawings().iter().zip(tools) {
-            let want = non_default_drawing(tool);
+            let mut want = non_default_drawing(tool);
+            want.label = None; // Earlier files have no object name.
             assert_eq!(
                 format!("{:?}", restore(stored, want.id)),
                 format!("{want:?}")

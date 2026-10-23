@@ -31,14 +31,6 @@ pub struct ObjectTreeState {
     /// Filter by source type
     pub filter_type: Option<SourceType>,
 
-    // === Context Menu ===
-    /// Context menu is open
-    pub context_menu_open: bool,
-    /// Context menu position
-    pub context_menu_pos: egui::Pos2,
-    /// Context menu target item ID
-    pub context_menu_target: Option<usize>,
-
     // === Drag & Drop ===
     /// Currently dragging item ID
     pub dragging_id: Option<usize>,
@@ -193,21 +185,6 @@ impl ObjectTreeState {
     /// Check if filter is active
     pub fn has_filter(&self) -> bool {
         !self.filter_text.is_empty() || self.filter_type.is_some()
-    }
-
-    // === Context Menu Methods ===
-
-    /// Open context menu at position for optional target
-    pub fn open_context_menu(&mut self, pos: egui::Pos2, target: Option<usize>) {
-        self.context_menu_open = true;
-        self.context_menu_pos = pos;
-        self.context_menu_target = target;
-    }
-
-    /// Close context menu
-    pub fn close_context_menu(&mut self) {
-        self.context_menu_open = false;
-        self.context_menu_target = None;
     }
 
     // === Rename Methods ===

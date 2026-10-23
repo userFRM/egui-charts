@@ -249,31 +249,33 @@ pub(crate) fn show_menu<A: Clone>(
             MenuEntry::Separator => t.separator_height,
         })
         .sum();
-    let size = Vec2::new(row_width, height) + chrome;
-    let pos = place(
-        anchor,
-        gap,
-        size,
-        ctx.content_rect().shrink(theme.spacing.lg),
-    );
+    let bounds = ctx.content_rect().shrink(theme.spacing.lg);
+    let size = (Vec2::new(row_width, height) + chrome).min(bounds.size());
+    let row_width = (size.x - chrome.x).max(0.0);
+    let pos = place(anchor, gap, size, bounds);
 
     let mut picked = None;
     egui::Area::new(id)
         .fixed_pos(pos)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
+            ui.set_min_size(size);
             frame.show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
-                for (entry, row) in entries.iter().zip(rows) {
-                    match (entry, row) {
-                        (MenuEntry::Item(item), Some((label, trailing))) => {
-                            if draw_item(ui, theme, item, label, trailing, row_width, pad) {
-                                picked = Some(item.action.clone());
+                egui::ScrollArea::vertical()
+                    .max_height((size.y - chrome.y).max(0.0))
+                    .show(ui, |ui| {
+                        for (entry, row) in entries.iter().zip(rows) {
+                            match (entry, row) {
+                                (MenuEntry::Item(item), Some((label, trailing))) => {
+                                    if draw_item(ui, theme, item, label, trailing, row_width, pad) {
+                                        picked = Some(item.action.clone());
+                                    }
+                                }
+                                _ => draw_separator(ui, theme, row_width, pad),
                             }
                         }
-                        _ => draw_separator(ui, theme, row_width, pad),
-                    }
-                }
+                    });
             });
         });
 
@@ -325,7 +327,15 @@ fn draw_item<A>(
 ) -> bool {
     let t = &DESIGN_TOKENS.sizing.context_menu;
     let c = &theme.ui;
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, t.item_height), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(width, t.item_height),
+        if item.enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
     response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, item.enabled, &item.label));
 
     let hovered = item.enabled && response.hovered();
@@ -623,6 +633,7 @@ pub struct ChartMenus {
     chart: ChartContextMenu,
     series: SeriesContextMenu,
     drawing: DrawingContextMenu,
+    axes: super::axis_context_menu::AxisMenus,
 }
 
 impl ChartMenus {
@@ -637,7 +648,13 @@ impl ChartMenus {
     /// Opens the menu for the chart's last right-click, shows the open one and returns the
     /// chosen action. While a menu is open the chart draws no crosshair or tooltip under it.
     pub fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ChartContextAction> {
+        if self.axes.open_from_pointer(ctx, chart) {
+            self.chart.close();
+            self.series.close();
+            self.drawing.close();
+        }
         if let Some(target) = chart.take_right_click() {
+            self.axes.close();
             // A new right-click supersedes any menu still open.
             self.chart.close();
             self.series.close();
@@ -682,10 +699,14 @@ impl ChartMenus {
         self.chart.show(ctx, &theme);
         self.series.show(ctx, &theme);
         self.drawing.show(ctx, &theme);
-        chart.menu_open = self.chart.is_open() || self.series.is_open() || self.drawing.is_open();
+        let axis_action = self.axes.show(ctx, chart);
+        chart.menu_open = self.chart.is_open()
+            || self.series.is_open()
+            || self.drawing.is_open()
+            || self.axes.is_open();
 
         // At most one menu is open at a time, so at most one action resolves.
-        let chart_action = self.chart.take_action();
+        let chart_action = axis_action.unwrap_or_else(|| self.chart.take_action());
         let series_action = self.series.take_action();
         let drawing_action = self.drawing.take_action();
         if chart_action != ContextMenuAction::None {
@@ -703,6 +724,177 @@ impl ChartMenus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn axis_right_clicks_open_menus_and_apply_choices() {
+        use crate::scales::{PriceScaleMode, TimezoneMode};
+        use egui::{Event, PointerButton, RawInput, Shape};
+        fn paint(
+            ctx: &Context,
+            chart: &mut Chart,
+            menus: &mut ChartMenus,
+            events: Vec<Event>,
+            size: Vec2,
+        ) -> Vec<egui::epaint::ClippedShape> {
+            let mut output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                    menus.show(ui.ctx(), chart);
+                },
+            );
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            shapes
+        }
+        let click = |pos, button| {
+            vec![
+                Event::PointerMoved(pos),
+                Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+                Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: false,
+                    modifiers: Default::default(),
+                },
+            ]
+        };
+        for theme in [Theme::light(), Theme::dark()] {
+            for (time, left, ratio, short) in [
+                (false, false, false, false),
+                (false, true, false, false),
+                (true, false, false, false),
+                (false, false, true, false),
+                (false, false, false, true),
+            ] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let size = if short {
+                    Vec2::new(320.0, 240.0)
+                } else {
+                    Vec2::new(800.0, 900.0)
+                };
+                let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+                chart.config_mut().show_left_axis = left;
+                chart.config_mut().show_right_axis = !left;
+                let mut menus = ChartMenus::default();
+                paint(&ctx, &mut chart, &mut menus, vec![], size);
+                let plot = chart.get_rendered_price_rect();
+                let anchor = if time {
+                    Pos2::new(plot.center().x, plot.bottom() + 10.0)
+                } else {
+                    Pos2::new(
+                        if left {
+                            plot.left() - 25.0
+                        } else {
+                            plot.right() + 25.0
+                        },
+                        plot.center().y,
+                    )
+                };
+                paint(
+                    &ctx,
+                    &mut chart,
+                    &mut menus,
+                    click(anchor, PointerButton::Secondary),
+                    size,
+                );
+                if short {
+                    paint(
+                        &ctx,
+                        &mut chart,
+                        &mut menus,
+                        vec![
+                            Event::PointerMoved(Pos2::new(150.0, 120.0)),
+                            Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                source: egui::MouseWheelSource::Wheel,
+                                phase: egui::TouchPhase::Move,
+                                delta: Vec2::new(0.0, -2000.0),
+                                modifiers: Default::default(),
+                            },
+                        ],
+                        size,
+                    );
+                    for _ in 0..30 {
+                        paint(&ctx, &mut chart, &mut menus, vec![], size);
+                    }
+                }
+                let shapes = paint(&ctx, &mut chart, &mut menus, vec![], size);
+                if !time && !short {
+                    let settings = shapes.iter().find(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == "Scale settings…")).expect("bottom scale row");
+                    if let Shape::Text(text) = &settings.shape {
+                        assert!(
+                            settings
+                                .clip_rect
+                                .contains_rect(Rect::from_min_size(text.pos, text.galley.size())),
+                            "a menu that fits must show its bottom row without scrolling"
+                        );
+                    }
+                }
+                let label = if short {
+                    "High and low"
+                } else if time {
+                    "Local time"
+                } else if ratio {
+                    "Lock price to bar ratio"
+                } else {
+                    "Percent"
+                };
+                let text = shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text() == label => Some(text),
+                        _ => None,
+                    })
+                    .expect("axis menu choice");
+                let pos = text.pos + text.galley.size() / 2.0;
+                assert!(Rect::from_min_size(Pos2::ZERO, size).contains(pos));
+                paint(
+                    &ctx,
+                    &mut chart,
+                    &mut menus,
+                    click(pos, PointerButton::Primary),
+                    size,
+                );
+                assert!(!chart.menu_open);
+                if short {
+                    assert!(chart.config().show_high_low);
+                } else if ratio {
+                    let before = chart.state().price_scale().range().length();
+                    let (spacing, offset) = chart.get_time_scale_state();
+                    chart.apply_synced_time_scale(spacing * 2.0, offset);
+                    paint(&ctx, &mut chart, &mut menus, vec![], size);
+                    // Doubling the pixels per bar halves the price span at the same pane height.
+                    assert!(
+                        (chart.state().price_scale().range().length() - before / 2.0).abs()
+                            < 0.00001
+                    );
+                } else if time {
+                    assert_eq!(
+                        chart.chart_options().time_scale.timezone,
+                        TimezoneMode::Local
+                    );
+                } else {
+                    assert_eq!(
+                        chart.state().price_scale().options().mode,
+                        PriceScaleMode::Percentage
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn reset_row_shows_the_reset_chart_binding() {

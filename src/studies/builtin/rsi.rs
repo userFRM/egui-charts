@@ -38,13 +38,13 @@
 //! let mut rsi = RSI::new(14);
 //! rsi.calculate(&bars);
 //! // The first `period` values are warmup.
-//! assert!(rsi.values()[..14].iter().all(|v| matches!(v, IndicatorValue::None)));
-//! assert!(matches!(rsi.values()[14], IndicatorValue::Single(_)));
+//! assert!(rsi.values().to_rows()[..14].iter().all(|v| matches!(v, IndicatorValue::None)));
+//! assert!(matches!(rsi.values().to_rows()[14], IndicatorValue::Single(_)));
 //! ```
 
 use crate::model::Bar;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -55,7 +55,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct RSI {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     stepper: Stepper<State>,
     color: Color32,
     visible: bool,
@@ -88,7 +88,7 @@ impl RSI {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: DESIGN_TOKENS.semantic.indicators.rsi, // Purple
             visible: true,
@@ -110,8 +110,16 @@ impl Default for RSI {
 }
 
 impl Indicator for RSI {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "RSI"
+    }
+
+    fn precision(&self) -> Option<usize> {
+        Some(2)
     }
 
     fn desc(&self) -> &str {
@@ -159,7 +167,7 @@ impl Indicator for RSI {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -226,7 +234,7 @@ mod tests {
         let mut rsi = RSI::new(14);
         rsi.calculate(&bars);
 
-        match rsi.values()[14] {
+        match rsi.values().to_rows()[14] {
             IndicatorValue::Single(v) => assert!((v - 100.0).abs() < 1e-6),
             _ => panic!("expected first RSI at index 14"),
         }

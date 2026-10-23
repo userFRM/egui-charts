@@ -39,10 +39,10 @@ impl SourceType {
     pub fn icon(&self) -> &'static crate::icons::Icon {
         use crate::icons::icons as embedded_icons;
         match self {
-            Self::DataSource => &embedded_icons::EMOJI_ICON,
-            Self::Indicator => &embedded_icons::EMOJI_ICON,
-            Self::Drawing => &embedded_icons::EMOJI_ICON,
-            Self::Template => &embedded_icons::EMOJI_ICON,
+            Self::DataSource => &embedded_icons::DATABASE,
+            Self::Indicator => &embedded_icons::INDICATORS,
+            Self::Drawing => &embedded_icons::WIDGET_BAR_LAYERS,
+            Self::Template => &embedded_icons::TEMPLATE,
         }
     }
 }
@@ -118,6 +118,8 @@ impl Default for DrawingProperties {
 pub struct SourceItem {
     /// Unique identifier
     pub id: usize,
+    /// Chart series id used by `ObjectTreePanel::apply_to_chart`; drawing rows use `id`.
+    pub series_id: Option<crate::widget::SeriesId>,
     /// Source type (indicator, drawing, template)
     pub source_type: SourceType,
     /// For drawings: the tool type
@@ -155,6 +157,7 @@ impl SourceItem {
     pub fn drawing(id: usize, tool_type: DrawingToolType, color: Color32) -> Self {
         Self {
             id,
+            series_id: None,
             source_type: SourceType::Drawing,
             tool_type: Some(tool_type),
             name: tool_type.as_str().to_string(),
@@ -183,6 +186,7 @@ impl SourceItem {
     pub fn indicator(id: usize, name: impl Into<String>, color: Color32) -> Self {
         Self {
             id,
+            series_id: None,
             source_type: SourceType::Indicator,
             tool_type: None,
             name: name.into(),
@@ -221,6 +225,7 @@ impl SourceItem {
     pub fn template(id: usize, name: impl Into<String>) -> Self {
         Self {
             id,
+            series_id: None,
             source_type: SourceType::Template,
             tool_type: None,
             name: name.into(),
@@ -245,6 +250,7 @@ impl SourceItem {
     pub fn data_source(id: usize, name: impl Into<String>) -> Self {
         Self {
             id,
+            series_id: None,
             source_type: SourceType::DataSource,
             tool_type: None,
             name: name.into(),
@@ -258,6 +264,12 @@ impl SourceItem {
             properties: None,
             parameters: None,
         }
+    }
+
+    /// Bind a data-source or indicator row to its chart series without overloading the tree's ids.
+    pub fn with_series_id(mut self, id: crate::widget::SeriesId) -> Self {
+        self.series_id = Some(id);
+        self
     }
 
     /// Get display name (label if set, otherwise name)
@@ -322,8 +334,12 @@ pub struct DataWindowInfo {
     pub change: f64,
     /// Change from previous close (percentage)
     pub change_percent: f64,
+    /// Decimals of abbreviated volume fields.
+    pub volume_precision: Option<u8>,
     /// Previous close price
     pub prev_close: f64,
+    /// Instrument price decimals; `None` keeps magnitude-based formatting.
+    pub price_decimals: Option<u8>,
 }
 
 impl DataWindowInfo {
@@ -335,6 +351,13 @@ impl DataWindowInfo {
         }
     }
 
+    /// Applies the instrument's price and volume precision to this readout.
+    pub fn with_instrument(mut self, instrument: &crate::model::Instrument) -> Self {
+        self.price_decimals = crate::scales::instrument_price_precision(instrument);
+        self.volume_precision = instrument.volume_decimals;
+        self
+    }
+
     /// Set OHLCV data
     pub fn with_ohlcv(mut self, open: f64, high: f64, low: f64, close: f64, volume: f64) -> Self {
         self.open = open;
@@ -342,6 +365,12 @@ impl DataWindowInfo {
         self.low = low;
         self.close = close;
         self.volume = volume;
+        self
+    }
+
+    /// Set the instrument precision used for prices and absolute change.
+    pub fn with_price_decimals(mut self, decimals: Option<u8>) -> Self {
+        self.price_decimals = decimals;
         self
     }
 

@@ -39,7 +39,7 @@ impl<'a> ToolbarIconButton<'a> {
         let icon_size = self.config.small_icon_size;
         let btn_size = self.config.btn_size;
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(btn_size), Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, self.config.rounding);
 
         // Background with theme-aware colors
         let bg_color = if response.is_pointer_button_down_on() {
@@ -113,7 +113,7 @@ impl<'a> IconTextButton<'a> {
 
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, self.config.rounding);
 
         // All paint operations wrapped with visibility check
         if ui.is_rect_visible(rect) {
@@ -217,7 +217,7 @@ impl TextButton {
 
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(total_width, height), Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, self.config.rounding);
 
         // Background
         let bg_color = if response.is_pointer_button_down_on() {
@@ -299,7 +299,7 @@ impl<'a> TextIconButton<'a> {
         let font_id = egui::FontId::proportional(ui.active_theme().text.title);
         let size = Vec2::new(self.width(ui), self.config.btn_size);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, self.config.rounding);
 
         if ui.is_rect_visible(rect) {
             // Background
@@ -402,7 +402,15 @@ impl Trigger<'_> {
             },
         );
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(
+            ui,
+            &response,
+            if self.filled {
+                rect.height() / 2.0
+            } else {
+                theme.radius.md
+            },
+        );
 
         if ui.is_rect_visible(rect) {
             let widgets = &ui.visuals().widgets;

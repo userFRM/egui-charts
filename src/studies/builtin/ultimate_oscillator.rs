@@ -25,7 +25,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -35,7 +35,7 @@ pub struct UltimateOscillator {
     period1: usize, // Short (typically 7)
     period2: usize, // Medium (typically 14)
     period3: usize, // Long (typically 28)
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -52,7 +52,7 @@ impl UltimateOscillator {
             period1: period1.max(1),
             period2: period2.max(1),
             period3: period3.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.purple,
             visible: true,
         }
@@ -79,8 +79,8 @@ impl Default for UltimateOscillator {
 
 impl UltimateOscillator {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.is_empty() {
             return values;
         }
@@ -138,6 +138,12 @@ impl UltimateOscillator {
 }
 
 impl Indicator for UltimateOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        period1: length("Period1", 1, usize::MAX),
+        period2: length("Period2", 1, usize::MAX),
+        period3: length("Period3", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "UO"
     }
@@ -154,7 +160,7 @@ impl Indicator for UltimateOscillator {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

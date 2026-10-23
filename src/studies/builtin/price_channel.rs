@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Price Channel
 /// Simple highest high and lowest low channel
 /// Also known as "N-bar high/low"
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct PriceChannel {
     /// Lookback period
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Upper, Lower, Middle]
     colors: Vec<Color32>,
     visible: bool,
@@ -21,7 +21,7 @@ impl PriceChannel {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Upper
                 DESIGN_TOKENS.semantic.extended.error,   // Red - Lower
@@ -45,8 +45,8 @@ impl Default for PriceChannel {
 
 impl PriceChannel {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -66,7 +66,7 @@ impl PriceChannel {
                 let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
                 let middle = (highest + lowest) / 2.0;
 
-                values.push(IndicatorValue::Multiple(vec![highest, lowest, middle]));
+                values.push_lines(&[highest, lowest, middle]);
             }
         }
 
@@ -75,6 +75,10 @@ impl PriceChannel {
 }
 
 impl Indicator for PriceChannel {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Price Channel"
     }
@@ -91,7 +95,7 @@ impl Indicator for PriceChannel {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -163,8 +167,9 @@ mod tests {
         assert_eq!(pc.values.len(), 5);
 
         // Last value should be highest=110, lowest=98, middle=104
-        let IndicatorValue::Multiple(v) = pc.values.last().unwrap() else {
-            panic!("no value: {:?}", pc.values.last().unwrap());
+        let rows = pc.values.to_rows();
+        let IndicatorValue::Multiple(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", pc.values.to_rows().last().unwrap());
         };
         assert_eq!(v.len(), 3);
         assert!((v[0] - 110.0).abs() < 0.01); // Upper

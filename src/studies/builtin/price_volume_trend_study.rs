@@ -3,13 +3,13 @@ use crate::model::Bar;
 /// Price Volume Trend (Enhanced) with Signal Line
 /// PVT = prev_PVT + volume * (close - prev_close) / prev_close
 /// Signal = EMA(PVT, signal_period)
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
 #[derive(Clone)]
 pub struct PriceVolumeTrendStudy {
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -18,7 +18,7 @@ impl PriceVolumeTrendStudy {
     pub fn new(signal_period: usize) -> Self {
         Self {
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 Color32::from_rgb(38, 166, 154), // PVT line (teal)
                 Color32::from_rgb(255, 152, 0),  // Signal line (orange)
@@ -28,8 +28,8 @@ impl PriceVolumeTrendStudy {
     }
 
     /// The values over `data`, every bar of which has a finite close and volume.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
             return values;
@@ -61,10 +61,7 @@ impl PriceVolumeTrendStudy {
 
         // Output both lines
         for i in 0..data.len() {
-            values.push(IndicatorValue::Multiple(vec![
-                pvt_values[i],
-                signal_values[i],
-            ]));
+            values.push_lines(&[pvt_values[i], signal_values[i]]);
         }
 
         values
@@ -78,6 +75,10 @@ impl Default for PriceVolumeTrendStudy {
 }
 
 impl Indicator for PriceVolumeTrendStudy {
+    crate::studies::inputs::study_inputs!(self;
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "PVT Enhanced"
     }
@@ -94,7 +95,7 @@ impl Indicator for PriceVolumeTrendStudy {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Elder Ray Index (Bull Power / Bear Power)
 /// Measures buying and selling pressure
 /// Developed by Alexander Elder
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct ElderRay {
     /// EMA period (typically 13)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Bull Power (green), Bear Power (red)]
     colors: Vec<Color32>,
     visible: bool,
@@ -21,7 +21,7 @@ impl ElderRay {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Bull Power
                 DESIGN_TOKENS.semantic.extended.error,   // Red - Bear Power
@@ -62,8 +62,8 @@ impl ElderRay {
     }
 
     /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
@@ -85,7 +85,7 @@ impl ElderRay {
                 // Bear Power = Low - EMA
                 let bear_power = data[i].low - ema[i];
 
-                values.push(IndicatorValue::Multiple(vec![bull_power, bear_power]));
+                values.push_lines(&[bull_power, bear_power]);
             }
         }
 
@@ -101,6 +101,10 @@ impl Default for ElderRay {
 }
 
 impl Indicator for ElderRay {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Elder Ray"
     }
@@ -117,7 +121,7 @@ impl Indicator for ElderRay {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

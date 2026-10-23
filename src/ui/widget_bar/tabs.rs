@@ -184,7 +184,7 @@ impl RightPanelTabs {
 
             // Check for clicks
             let btn_res = ui.allocate_rect(btn_rect, Sense::click());
-            crate::styles::focus::draw_focus_ring(ui, &btn_res);
+            crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.md);
             let is_hovered = btn_res.hovered();
             let is_pressed = btn_res.is_pointer_button_down_on();
 

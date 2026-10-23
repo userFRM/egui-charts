@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Pretty Good Oscillator (PGO)
 /// Measures price distance from moving avg in ATR units
 /// Values > 3 or < -3 indicate potential reversal
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct PrettyGoodOscillator {
     /// Period for calculations (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -20,7 +20,7 @@ impl PrettyGoodOscillator {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.cyan,
             visible: true,
         }
@@ -40,8 +40,8 @@ impl Default for PrettyGoodOscillator {
 
 impl PrettyGoodOscillator {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -90,6 +90,10 @@ impl PrettyGoodOscillator {
 }
 
 impl Indicator for PrettyGoodOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "PGO"
     }
@@ -106,7 +110,7 @@ impl Indicator for PrettyGoodOscillator {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -175,8 +179,9 @@ mod tests {
         assert_eq!(pgo.values.len(), 6);
 
         // Last value should be positive (price above avg)
-        let IndicatorValue::Single(v) = pgo.values.last().unwrap() else {
-            panic!("no value: {:?}", pgo.values.last().unwrap());
+        let rows = pgo.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", pgo.values.to_rows().last().unwrap());
         };
         assert!(*v > 0.0, "PGO should be positive after upward move");
     }
