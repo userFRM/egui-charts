@@ -1838,8 +1838,6 @@ impl DemoApp {
                     A::MaximizeChart => {
                         self.handle_top_toolbar(ctx, TopToolbarAction::ToggleFullscreen)
                     }
-                    A::Undo => self.handle_top_toolbar(ctx, TopToolbarAction::Undo),
-                    A::Redo => self.handle_top_toolbar(ctx, TopToolbarAction::Redo),
                     A::CopyDrawing => {
                         self.copied_drawing = self
                             .chart
