@@ -2077,7 +2077,8 @@ mod tests {
         frame(&mut app, vec![], egui::Modifiers::NONE);
         let map = app.chart.get_chart_mapping();
         let point = egui::pos2(map.rect.center().x, map.rect.center().y);
-        let expected = map.y_to_price(point.y);
+        let range = map.price.range();
+        let expected = (range.min + range.max) / 2.0;
         frame(
             &mut app,
             vec![
@@ -2131,10 +2132,11 @@ mod tests {
         let AlertCondition::Crossing(level) = app.alerts.alerts()[0].condition else {
             panic!("expected crossing");
         };
+        let expected_drag =
+            expected - 45.0 / f64::from(map.rect.height()) * (range.max - range.min);
         assert!(
-            (level - map.y_to_price(target.y)).abs() < 1e-6,
-            "{level} expected {}",
-            map.y_to_price(target.y)
+            (level - expected_drag).abs() < 1e-6,
+            "{level} expected {expected_drag}"
         );
         assert_eq!(
             app.chart.get_time_scale_state(),
