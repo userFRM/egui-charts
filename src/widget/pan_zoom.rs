@@ -224,7 +224,8 @@ impl Chart {
     /// Handle drag-to-pan, price-axis scaling, and time-axis drag-zoom.
     ///
     /// When the drag starts on the main chart area, horizontal movement pans the
-    /// time axis. Starting on the price axis enables price scale dragging.
+    /// time axis and, while auto-scale is off, vertical movement pans the price
+    /// axis. Starting on the price axis enables price scale dragging.
     /// Starting on the time axis enables drag-to-zoom the time scale. Also
     /// tracks velocity for kinetic scrolling continuation after release.
     pub fn handle_drag_pan(
@@ -331,6 +332,18 @@ impl Chart {
                 let new_offset = start_offset - drag_in_bars;
 
                 self.state.time_scale_mut().set_right_offset(new_offset);
+
+                // With auto-scale off the prices follow the pointer too. The range is still in
+                // the units of the last frame's map, which places the pointer's previous position.
+                if self.state.price_scale().is_manual() {
+                    let map = self.last_price_map;
+                    let dy = response.drag_delta().y;
+                    let shift = map.y_to_scale(curr_pos.y - dy) - map.y_to_scale(curr_pos.y);
+                    let range = self.state.price_scale().range();
+                    self.state
+                        .price_scale_mut()
+                        .set_range(range.min + shift, range.max + shift);
+                }
             }
 
             // Track velocity for kinetic scrolling
@@ -611,16 +624,15 @@ impl Chart {
 mod tests {
     use crate::chart::series::SeriesSettings;
     use crate::scales::PriceScaleMode;
+    use crate::widget::Chart;
     use crate::widget::test_frames::{chart, frame};
-    use egui::{Event, Modifiers, PointerButton, Pos2};
+    use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
-    /// Drags the price axis down by 100 points in `steps` frames and returns the resulting range.
-    fn drag_price_axis(steps: usize) -> (f64, f64) {
+    /// Drags down by 100 points in `steps` frames from the point `start` picks given the price pane.
+    fn drag_down(chart: &mut Chart, start: fn(Rect) -> Pos2, steps: usize) {
         let ctx = egui::Context::default();
-        let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-        frame(&ctx, &mut chart, 0.0, Vec::new());
-        let rect = chart.last_rendered_price_rect;
-        let start = Pos2::new(rect.max.x + 10.0, rect.center().y);
+        frame(&ctx, chart, 0.0, Vec::new());
+        let start = start(chart.last_rendered_price_rect);
         let button = |pos, pressed| Event::PointerButton {
             pos,
             button: PointerButton::Primary,
@@ -632,14 +644,24 @@ mod tests {
             t += 0.02;
             frame(&ctx, chart, t, events);
         };
-        step(&mut chart, vec![Event::PointerMoved(start)]);
-        step(&mut chart, vec![button(start, true)]);
+        step(chart, vec![Event::PointerMoved(start)]);
+        step(chart, vec![button(start, true)]);
         let mut pos = start;
         for _ in 0..steps {
             pos.y += 100.0 / steps as f32;
-            step(&mut chart, vec![Event::PointerMoved(pos)]);
+            step(chart, vec![Event::PointerMoved(pos)]);
         }
-        step(&mut chart, vec![button(pos, false)]);
+        step(chart, vec![button(pos, false)]);
+    }
+
+    /// Drags the price axis down by 100 points in `steps` frames and returns the resulting range.
+    fn drag_price_axis(steps: usize) -> (f64, f64) {
+        let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+        drag_down(
+            &mut chart,
+            |rect| Pos2::new(rect.max.x + 10.0, rect.center().y),
+            steps,
+        );
         let range = chart.state.price_scale().range();
         (range.min, range.max)
     }
@@ -730,6 +752,28 @@ mod tests {
             (one.0 - ten.0).abs() < span * 1e-9 && (one.1 - ten.1).abs() < span * 1e-9,
             "1 frame: {one:?}, 10 frames: {ten:?}"
         );
+    }
+
+    /// With auto-scale off, the prices follow a drag on the chart: 100 points down moves the
+    /// 20-wide range up by 20 * 100 / height, or down by as much on an inverted scale.
+    #[test]
+    fn chart_drag_pans_a_manual_price_range() {
+        for (invert_scale, sign) in [(false, 1.0), (true, -1.0)] {
+            let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+            chart.apply_series_settings(&SeriesSettings {
+                invert_scale,
+                ..SeriesSettings::default()
+            });
+            chart.state.price_scale_mut().set_range(90.0, 110.0);
+            drag_down(&mut chart, |rect| rect.center(), 10);
+            let shift = sign * 20.0 * 100.0 / chart.last_rendered_price_rect.height() as f64;
+            let range = chart.state.price_scale().range();
+            assert!(
+                (range.min - (90.0 + shift)).abs() < 1e-4
+                    && (range.max - (110.0 + shift)).abs() < 1e-4,
+                "inverted {invert_scale}: {range:?}, expected a shift of {shift}"
+            );
+        }
     }
 
     /// The bars and prices inside a zoom box fill the pane on the next frame. The box re-centres
