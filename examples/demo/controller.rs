@@ -31,7 +31,7 @@ use egui_charts::ui::timeframe_toolbar::{
 };
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
-    IndicatorDialog, IndicatorDialogAction,
+    IndicatorDialog, IndicatorDialogAction, IndicatorTab,
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
@@ -679,8 +679,10 @@ impl DemoApp {
             TopToolbarAction::Redo => {
                 self.trading_chart.chart.drawings_mut().redo();
             }
-            // Indicator templates live in the indicator dialog's Templates tab.
-            TopToolbarAction::OpenIndicatorTemplates => self.indicator_dialog.open(),
+            // Indicator templates live in the indicator dialog's Profiles tab.
+            TopToolbarAction::OpenIndicatorTemplates => {
+                self.indicator_dialog.open_tab(IndicatorTab::Profiles)
+            }
             // Save routes through the export dialog (PNG / SVG / CSV of the view).
             TopToolbarAction::Save => self.export_dialog.open(),
             // Light/dark toggle is a real, cheap visual change.

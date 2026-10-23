@@ -95,8 +95,14 @@ impl IndicatorDialog {
         self
     }
 
-    /// Open the dialog with the search field focused
+    /// Open the dialog on the Indicators tab with the search field focused
     pub fn open(&mut self) {
+        self.open_tab(IndicatorTab::Indicators);
+    }
+
+    /// Open the dialog on `tab` with the search field focused
+    pub fn open_tab(&mut self, tab: IndicatorTab) {
+        self.active_tab = tab;
         self.is_open = true;
         self.search.clear();
         self.focus_search = true;

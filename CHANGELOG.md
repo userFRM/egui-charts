@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `IndicatorDialog::open_tab` opens the indicator dialog on a given tab; `open` opens it on the Indicators tab.
 - `IndicatorDialogConfig` implements `Debug` and `Clone`.
 - `ui_kit::modal::Modal::height` fixes a modal's outer height for content that fills it, such as a list in a scroll area. The modal keeps 24 px free above and below it in the window and follows the window when it shrinks; `min_height` sets only a floor, so filling content keeps a modal at its largest size.
 - `ui_kit::EmptyState::icon` shows an icon above the message, `EmptyState::action` adds a primary button below the text, and `EmptyState::fill_height` centres the empty state vertically in the rest of the `Ui`. The message is in the normal text colour at the body size; only the description is muted.
