@@ -437,13 +437,17 @@ impl FloatingReplayControl {
                         + spacing.icon_width
                         + 2.0 * spacing.button_padding.x;
                     let mut speed = ReplaySpeed::from_multiplier(self.state.speed);
-                    if ui.combo_select_width(
-                        "replay_speed_selector",
-                        &mut speed,
-                        ReplaySpeed::all().iter().copied(),
-                        |speed| speed.label().to_owned(),
-                        combo_width,
-                    ) {
+                    let speed_response = ui.scope(|ui| {
+                        ui.combo_select_width(
+                            "replay_speed_selector",
+                            &mut speed,
+                            ReplaySpeed::all().iter().copied(),
+                            |speed| speed.label().to_owned(),
+                            combo_width,
+                        )
+                    });
+                    speed_response.response.on_hover_text("Playback speed");
+                    if speed_response.inner {
                         action = ReplayControlAction::SetSpeed(speed.multiplier());
                     }
 
