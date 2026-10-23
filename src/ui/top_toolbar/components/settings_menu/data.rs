@@ -73,7 +73,7 @@ impl Default for StatusLineOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartBasicStylesSettings {
     pub background_type: BackgroundType,
-    /// `Color32::PLACEHOLDER` takes the chart background when the dialog opens.
+    /// `Color32::PLACEHOLDER` follows the active chart background until a colour is chosen.
     pub background_color: Color32,
     pub background_gradient_top: Color32,
     pub background_gradient_bottom: Color32,

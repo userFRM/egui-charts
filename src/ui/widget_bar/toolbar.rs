@@ -343,7 +343,7 @@ impl WidgetBar {
             icon_hover_color
         } else if is_active {
             active_color
-        } else if is_pressed || is_hovered {
+        } else if is_hovered {
             icon_hover_color
         } else {
             icon_color
