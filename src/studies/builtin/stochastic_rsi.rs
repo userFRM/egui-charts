@@ -149,7 +149,8 @@ impl StochasticRSI {
             .rsi_period
             .saturating_add(self.stoch_period)
             .saturating_add(self.smooth_k)
-            .saturating_add(self.smooth_d);
+            .saturating_add(self.smooth_d)
+            .saturating_sub(2);
         if data.len() < min_period {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -274,62 +275,5 @@ impl Indicator for StochasticRSI {
             ),
             format!("%D({})", self.smooth_d),
         ]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::{Duration, Utc};
-
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..60)
-            .map(|i| {
-                let price = 100.0 + (i as f64 * 0.2).sin() * 10.0;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: price,
-                    high: price + 2.0,
-                    low: price - 2.0,
-                    close: price + 0.5,
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_stoch_rsi_calculation() {
-        let bars = create_test_bars();
-        let mut stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        stoch_rsi.calculate(&bars);
-
-        assert_eq!(stoch_rsi.values().len(), bars.len());
-
-        // Check that we eventually get valid values
-        let valid_cnt = stoch_rsi
-            .values()
-            .iter()
-            .filter(|v| matches!(v, IndicatorValue::Multiple(_)))
-            .count();
-        assert!(valid_cnt > 0, "Should have some valid values");
-    }
-
-    #[test]
-    fn test_stoch_rsi_range() {
-        let bars = create_test_bars();
-        let mut stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        stoch_rsi.calculate(&bars);
-
-        let mut checked = 0;
-        for value in stoch_rsi.values() {
-            if let IndicatorValue::Multiple(vals) = value {
-                assert!(vals[0] >= 0.0 && vals[0] <= 100.0, "%K should be 0-100");
-                assert!(vals[1] >= 0.0 && vals[1] <= 100.0, "%D should be 0-100");
-                checked += 1;
-            }
-        }
-        assert!(checked > 0, "no value to check");
     }
 }

@@ -79,8 +79,9 @@ pub use range_bar::{
 };
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub use session::{
-    CompositeSessionProvider, DailySessionProvider, MonthlySessionProvider, SessionBreak,
-    SessionBreakType, SessionProvider, WeeklySessionProvider, find_session_breaks,
+    CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
+    MonthlySessionProvider, SessionBreak, SessionBreakType, SessionProvider, WeeklySessionProvider,
+    find_session_breaks,
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{

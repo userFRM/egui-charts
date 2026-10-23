@@ -267,6 +267,10 @@ pub struct ChartConfig {
     pub session_break_style: SessionBreakStyle,
     /// Session configuration (market hours)
     pub session_config: Option<SessionConfig>,
+    /// Shade bars identified as extended hours by the session metadata.
+    pub show_extended_hours: bool,
+    /// Extended-hours fill. `PLACEHOLDER` uses the active theme accent at low opacity.
+    pub extended_hours_color: Color32,
     /// Whether to show watermark (large symbol name overlay)
     pub show_watermark: bool,
     /// Watermark text (None = use symbol name)
@@ -385,6 +389,8 @@ impl Default for ChartConfig {
             session_break_color: chart.grid_line_major,
             session_break_style: SessionBreakStyle::Dashed,
             session_config: None,
+            show_extended_hours: true,
+            extended_hours_color: Color32::PLACEHOLDER,
             // Watermark disabled by default
             show_watermark: false,
             watermark_text: None,

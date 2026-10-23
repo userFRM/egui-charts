@@ -34,6 +34,61 @@ pub enum IndicatorValue {
     None,
 }
 
+/// Direction of a crossing marker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CrossDirection {
+    /// First line crosses above the second.
+    Up,
+    /// First line crosses below the second.
+    Down,
+}
+
+/// A shape at a study value on a source bar.
+#[derive(Clone, Copy, Debug)]
+pub struct IndicatorMarker {
+    /// Index in the study's input bars.
+    pub bar: usize,
+    /// Price at which the crossing is marked.
+    pub value: f64,
+    /// Crossing direction.
+    pub direction: CrossDirection,
+}
+
+/// A vertical fade between an overlay line and the plot's bottom edge.
+#[derive(Clone, Copy, Debug)]
+pub struct IndicatorFill {
+    /// Fill colour; alpha is supplied separately at each end of the gradient.
+    pub color: Color32,
+    /// Alpha just under the line, from 0 to 255.
+    pub top_alpha: u8,
+    /// Alpha at the plot's bottom edge, from 0 to 255.
+    pub bottom_alpha: u8,
+}
+
+/// Width, optional direction colours and optional bottom fill of an overlay line.
+#[derive(Clone, Copy, Debug)]
+pub struct IndicatorLineStyle {
+    /// Stroke width in logical pixels.
+    pub width: f32,
+    /// Colour on rising segments, or the study's line colour when absent.
+    pub rising: Option<Color32>,
+    /// Colour on falling segments, or the study's line colour when absent.
+    pub falling: Option<Color32>,
+    /// Fill from the line to the plot's bottom.
+    pub fill: Option<IndicatorFill>,
+}
+
+impl Default for IndicatorLineStyle {
+    fn default() -> Self {
+        Self {
+            width: 1.0,
+            rising: None,
+            falling: None,
+            fill: None,
+        }
+    }
+}
+
 /// The core trait that every technical indicator must implement.
 ///
 /// The trait defines the full indicator lifecycle: naming, calculation,
@@ -107,11 +162,41 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Apply the chart instrument's time zone and trading session. Returns `true`
+    /// if calculation settings changed and the caller must recalculate from bar 0.
+    /// `None` clears chart metadata and restores the study's own settings.
+    /// Studies independent of instrument metadata keep the default.
+    fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
+        let _ = instrument;
+        false
+    }
+
     /// Return the slice of computed values (one per input bar).
     ///
     /// The length of the returned slice matches the length of the `data`
     /// slice most recently passed to [`calculate`](Indicator::calculate).
     fn values(&self) -> &[IndicatorValue];
+
+    /// Rendering style of an overlay line. Defaults to a 1 px line in its configured colour.
+    fn line_style(&self, line: usize) -> IndicatorLineStyle {
+        let _ = line;
+        IndicatorLineStyle::default()
+    }
+
+    /// Shapes attached to study values, empty by default.
+    fn markers(&self) -> &[IndicatorMarker] {
+        &[]
+    }
+
+    /// Extend the last two values of each overlay line to the plot's right edge.
+    fn extend_right(&self) -> bool {
+        false
+    }
+
+    /// An annotation beside the latest value of a zero-based overlay line.
+    fn plot_label(&self) -> Option<(usize, String)> {
+        None
+    }
 
     /// Return the colors used for rendering this indicator's lines.
     ///

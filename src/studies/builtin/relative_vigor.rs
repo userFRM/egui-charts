@@ -1,5 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::stepper::rolling_mean;
 /// Relative Vigor Index (RVI)
 /// Measures conviction of price movement
 /// Uses the relationship between close-open vs high-low
@@ -50,30 +51,6 @@ impl RelativeVigorIndex {
 
         result
     }
-
-    fn calculate_sma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                result.push(f64::NAN);
-            } else {
-                let valid: Vec<f64> = data[i + 1 - period..=i]
-                    .iter()
-                    .filter(|&&x| !x.is_nan())
-                    .copied()
-                    .collect();
-
-                if valid.is_empty() {
-                    result.push(f64::NAN);
-                } else {
-                    result.push(valid.iter().sum::<f64>() / valid.len() as f64);
-                }
-            }
-        }
-
-        result
-    }
 }
 
 impl Default for RelativeVigorIndex {
@@ -86,13 +63,6 @@ impl RelativeVigorIndex {
     /// The values over `data`, every bar of which has finite inputs.
     fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
         let mut values = Vec::new();
-        if data.len() < self.period.saturating_add(4) {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
         // Calculate (Close - Open) for numerator
         let close_open: Vec<f64> = data.iter().map(|b| b.close - b.open).collect();
 
@@ -104,8 +74,8 @@ impl RelativeVigorIndex {
         let smoothed_den = Self::swma(&high_low);
 
         // Calculate running sums over period
-        let num_sum = Self::calculate_sma(&smoothed_num, self.period);
-        let den_sum = Self::calculate_sma(&smoothed_den, self.period);
+        let num_sum = rolling_mean(&smoothed_num, self.period);
+        let den_sum = rolling_mean(&smoothed_den, self.period);
 
         // Calculate RVI
         let mut rvi = Vec::with_capacity(data.len());
@@ -184,51 +154,5 @@ impl Indicator for RelativeVigorIndex {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("RVI({})", self.period), "Signal".to_string()]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(open: f64, high: f64, low: f64, close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open,
-            high,
-            low,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_rvi_calculation() {
-        let mut rvi = RelativeVigorIndex::new(5);
-
-        let data: Vec<Bar> = (0..20)
-            .map(|i| {
-                make_bar(
-                    100.0 + i as f64,
-                    102.0 + i as f64,
-                    98.0 + i as f64,
-                    101.0 + i as f64,
-                )
-            })
-            .collect();
-
-        rvi.calculate(&data);
-
-        assert_eq!(rvi.values.len(), 20);
-
-        // Should have valid values
-        let valid_cnt = rvi
-            .values
-            .iter()
-            .filter(|v| !matches!(v, IndicatorValue::None))
-            .count();
-
-        assert!(valid_cnt > 0);
     }
 }

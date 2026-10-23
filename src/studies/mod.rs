@@ -61,6 +61,8 @@ mod custom;
 #[cfg(feature = "studies")]
 pub mod factory;
 mod indicator_trait;
+#[cfg(any(feature = "studies", feature = "widget"))]
+pub(crate) mod math;
 #[cfg(all(test, feature = "studies"))]
 mod reference;
 #[cfg(feature = "studies")]
@@ -71,7 +73,9 @@ pub use builtin::*;
 pub use custom::CustomIndicator;
 #[cfg(feature = "studies")]
 pub use factory::IndicatorFactory;
-pub use indicator_trait::{Indicator, IndicatorValue};
+pub use indicator_trait::{
+    CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,
+};
 
 use crate::model::Bar;
 

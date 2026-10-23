@@ -1,6 +1,6 @@
 //! Instrument metadata reported by a feed or a search service.
 
-use chrono::{NaiveTime, Weekday};
+use chrono::{NaiveDate, NaiveTime, Weekday};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
@@ -169,7 +169,6 @@ impl TimezoneId {
         self.0.name()
     }
 
-    #[cfg(feature = "studies")]
     pub(crate) fn tz(&self) -> Tz {
         self.0
     }
@@ -179,8 +178,12 @@ impl TimezoneId {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Session {
-    /// No window means always open.
+    /// Regular windows. With no regular or extended windows, the session is always open.
     pub windows: Vec<SessionWindow>,
+    /// Pre-market and post-market windows in the exchange zone.
+    pub extended_windows: Vec<SessionWindow>,
+    /// Trading dates on which every window is closed, including overnight windows.
+    pub holidays: Vec<NaiveDate>,
 }
 
 impl Session {
@@ -188,7 +191,24 @@ impl Session {
     pub fn new(windows: impl IntoIterator<Item = SessionWindow>) -> Self {
         Self {
             windows: windows.into_iter().collect(),
+            extended_windows: Vec::new(),
+            holidays: Vec::new(),
         }
+    }
+
+    /// Adds the extended windows beside the regular windows.
+    pub fn with_extended_windows(
+        mut self,
+        windows: impl IntoIterator<Item = SessionWindow>,
+    ) -> Self {
+        self.extended_windows = windows.into_iter().collect();
+        self
+    }
+
+    /// Closes every window on these trading dates.
+    pub fn with_holidays(mut self, holidays: impl IntoIterator<Item = NaiveDate>) -> Self {
+        self.holidays = holidays.into_iter().collect();
+        self
     }
 }
 

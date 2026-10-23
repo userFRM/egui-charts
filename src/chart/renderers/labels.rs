@@ -264,6 +264,7 @@ pub fn render_time_labels(
     colors: &StyleColors,
     formatter: &dyn TimeFormatter,
     tags: &[Option<Rect>],
+    ticks_visible: bool,
     slot: ShapeIdx,
 ) {
     let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter);
@@ -322,6 +323,15 @@ pub fn render_time_labels(
             && context.painter.clip_rect().contains_rect(rect)
             && !under_tag(tags, rect)
         {
+            if ticks_visible {
+                labels.push(Shape::line_segment(
+                    [
+                        Pos2::new(x, context.rect.bottom()),
+                        Pos2::new(x, context.rect.bottom() + 3.0),
+                    ],
+                    egui::Stroke::new(1.0, text_color),
+                ));
+            }
             labels.push(Shape::galley(rect.min, galley, text_color));
         }
 

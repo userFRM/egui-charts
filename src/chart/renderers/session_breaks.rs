@@ -19,33 +19,103 @@ use crate::config::SessionBreakStyle;
 use crate::model::{Bar, SessionBreakType, SessionProvider, Timeframe, find_session_breaks};
 use egui::{Color32, Pos2, Stroke};
 
-/// Pick the session provider whose boundaries are meaningful at `timeframe`.
-///
-/// Boundary granularity is chosen one tier coarser than the bar interval so a
-/// divider marks a genuine break in the series rather than appearing between
-/// every pair of bars:
-///
-/// | Timeframe tier            | Boundary drawn            |
-/// |---------------------------|---------------------------|
-/// | Intraday (`< 1 day`)      | Day change (midnight UTC) |
-/// | Daily (`1D`)              | ISO-week change           |
-/// | Weekly / monthly (`≥ 1W`) | Calendar-month change     |
-///
-/// Intraday charts use a midnight-UTC day boundary by default; callers that
-/// know the exchange session can substitute a session-aware provider.
-pub fn provider_for_timeframe(timeframe: Timeframe) -> Box<dyn SessionProvider> {
-    use crate::model::{DailySessionProvider, MonthlySessionProvider, WeeklySessionProvider};
-
-    // Day1 has duration 86_400_000 ms; anything below that is intraday.
-    let day_ms = Timeframe::Day1.duration_ms();
-    let ms = timeframe.duration_ms();
-
-    if ms < day_ms {
-        Box::new(DailySessionProvider::continuous())
-    } else if ms == day_ms {
-        Box::new(WeeklySessionProvider::default())
+/// Resolve explicit legacy hours, instrument metadata, then the displayed zone.
+pub(crate) fn exchange_session(
+    instrument: Option<&crate::model::Instrument>,
+    config: Option<&crate::config::SessionConfig>,
+    timezone: &crate::scales::TimezoneMode,
+    timeframe: Timeframe,
+) -> crate::model::ExchangeSessionProvider {
+    use crate::model::{ExchangeSessionProvider, Session, SessionWindow, TimezoneId};
+    use chrono::{NaiveTime, Weekday::*};
+    let supplied_zone = instrument.and_then(|instrument| instrument.time_zone.clone());
+    let mut local_zone = supplied_zone.is_none() && *timezone == crate::scales::TimezoneMode::Local;
+    let mut zone = supplied_zone.unwrap_or_else(|| {
+        TimezoneId::named(timezone.to_tz().map_or("UTC", |tz| tz.name()))
+            .unwrap_or_else(TimezoneId::utc)
+    });
+    let mut session = instrument.and_then(|instrument| instrument.session.clone());
+    if let Some(config) = config
+        && let (Some(time_zone), Ok(open), Ok(close)) = (
+            TimezoneId::named(&config.timezone),
+            NaiveTime::parse_from_str(&config.session_start, "%H:%M"),
+            NaiveTime::parse_from_str(&config.session_end, "%H:%M"),
+        )
+    {
+        zone = time_zone;
+        local_zone = false;
+        let days = if config.session_start == "00:00" && config.session_end == "23:59" {
+            vec![Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+        } else {
+            vec![Mon, Tue, Wed, Thu, Fri]
+        };
+        let close = if days.len() == 7 {
+            NaiveTime::MIN
+        } else {
+            close
+        };
+        let mut hours = Session::new([SessionWindow::new(days.clone(), open, close)]);
+        if let Some(session) = &session {
+            hours.holidays.clone_from(&session.holidays);
+        }
+        if config.show_premarket
+            && let Some(start) = config
+                .premarket_start
+                .as_ref()
+                .and_then(|start| NaiveTime::parse_from_str(start, "%H:%M").ok())
+        {
+            hours
+                .extended_windows
+                .push(SessionWindow::new(days.clone(), start, open));
+        }
+        if config.show_postmarket
+            && let Some(end) = config
+                .postmarket_end
+                .as_ref()
+                .and_then(|end| NaiveTime::parse_from_str(end, "%H:%M").ok())
+        {
+            hours
+                .extended_windows
+                .push(SessionWindow::new(days, close, end));
+        }
+        session = Some(hours);
+    }
+    if local_zone {
+        ExchangeSessionProvider::local(session).with_timeframe(timeframe)
     } else {
-        Box::new(MonthlySessionProvider)
+        ExchangeSessionProvider::new(zone, session).with_timeframe(timeframe)
+    }
+}
+
+/// Shade complete bar slots only where the supplied session identifies extended hours.
+pub(crate) fn render_extended_hours(
+    ctx: &RenderContext,
+    bars: &[Bar],
+    provider: &crate::model::ExchangeSessionProvider,
+    mapping: &ChartMapping,
+    start_idx: usize,
+    color: Color32,
+) {
+    let mut start = None;
+    for i in 0..=bars.len() {
+        let extended = bars
+            .get(i)
+            .is_some_and(|bar| provider.is_extended(bar.time));
+        if extended && start.is_none() {
+            start = Some(i);
+        }
+        if !extended && let Some(first) = start.take() {
+            let x0 = mapping.idx_to_x(start_idx + first) - mapping.bar_spacing / 2.0;
+            let x1 = mapping.idx_to_x(start_idx + i - 1) + mapping.bar_spacing / 2.0;
+            let rect = egui::Rect::from_min_max(
+                Pos2::new(x0, ctx.rect.top()),
+                Pos2::new(x1, ctx.rect.bottom()),
+            )
+            .intersect(ctx.rect);
+            if rect.is_positive() {
+                ctx.painter.rect_filled(rect, 0.0, color);
+            }
+        }
     }
 }
 
@@ -233,25 +303,6 @@ mod tests {
             close: 100.5,
             volume: 1000.0,
         }
-    }
-
-    #[test]
-    fn provider_tier_is_one_step_coarser_than_bars() {
-        // Intraday -> day boundary.
-        let p = provider_for_timeframe(Timeframe::Min1);
-        assert_eq!(p.name(), "Daily Sessions");
-        let p = provider_for_timeframe(Timeframe::Hour4);
-        assert_eq!(p.name(), "Daily Sessions");
-
-        // Daily -> week boundary.
-        let p = provider_for_timeframe(Timeframe::Day1);
-        assert_eq!(p.name(), "Weekly Sessions");
-
-        // Weekly / monthly -> month boundary.
-        let p = provider_for_timeframe(Timeframe::Week1);
-        assert_eq!(p.name(), "Monthly Sessions");
-        let p = provider_for_timeframe(Timeframe::Month1);
-        assert_eq!(p.name(), "Monthly Sessions");
     }
 
     #[test]
