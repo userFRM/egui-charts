@@ -218,7 +218,7 @@ Drawings are anchored in chart coordinates (bar index and price), so they stay i
 
 ## Technical Indicators
 
-`IndicatorFactory` registers 128 indicator names, each creating a type that implements the `Indicator` trait. Some names compute the same values as another under their default settings, for example HL2 and Median Price, HLC3 and Typical Price, or A/D and CVD. The indicator dialog in the `ui` feature offers a fixed subset.
+`IndicatorFactory` registers 129 indicator names, each creating a type that implements the `Indicator` trait. Some names compute the same values as another under their default settings, for example HL2 and Median Price, HLC3 and Typical Price, or A/D and CVD. The indicator dialog in the `ui` feature offers a fixed subset.
 
 | Category | Indicators |
 |---|---|

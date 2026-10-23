@@ -4,13 +4,16 @@
 //! `reference/expected.txt` holds one line per compared output line: the row name, the line index and one
 //! token per fixture bar, `-` where the study has no value. The values were computed once in exact
 //! rational arithmetic, with square roots to 40 digits, from the published definitions (Wilder 1978
-//! for RSI, ATR, the directional indicators, the Commodity Selection Index and Parabolic SAR; Appel for MACD; Bollinger; Lambert
+//! for RSI, ATR, the directional indicators, the Commodity Selection Index and Parabolic SAR; Appel for MACD, PPO and
+//! the Percentage Volume Oscillator; Bollinger; Lambert
 //! 1980 for CCI; Quong and Soudack for MFI; Chande 1995 for Aroon; Hull; Chaikin; Lane; Williams;
 //! Donchian; Hosoda; ordinary least squares; population standard deviation) on the same fixture,
 //! and rounded to 12 significant digits.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
-//! documents (EMA and MACD seed with the first close, and Parabolic SAR reverses when the price
+//! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
+//! seed their EMAs with the mean of the first values and their signal with the mean of the first
+//! values of the oscillator, and Parabolic SAR reverses when the price
 //! crosses it, not on a touch), otherwise a published one (Wilder's first true range is high minus
 //! low, Keltner's EMA seeds with the SMA of the first closes). Where no published rule settles it,
 //! the series pins the study's current behaviour: Supertrend starts bullish, an Aroon tie counts
@@ -23,8 +26,8 @@ use crate::studies::{
     ADX, ATR, Aroon, BalanceOfPower, BollingerBands, CCI, ChaikinMoneyFlow,
     CommoditySelectionIndex, DirectionalMovement, DonchianChannels, EMA, HMA, IchimokuCloud,
     Indicator, IndicatorValue, KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD,
-    MoneyFlowIndex, ParabolicSAR, RSI, RateOfChange, SMA, StandardDeviation, Stochastic,
-    SuperTrend, VWMA, WMA, WilliamsR,
+    MoneyFlowIndex, ParabolicSAR, PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange,
+    SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, WilliamsR,
 };
 use chrono::{TimeZone, Utc};
 
@@ -126,6 +129,11 @@ fn staple_studies_match_published_definitions() {
         ("Stoch(14,1,3)", Box::new(Stochastic::new(14, 1, 3))),
         ("WilliamsR(14)", Box::new(WilliamsR::default())),
         ("BoP(14)", Box::new(BalanceOfPower::default())),
+        ("PPO(12,26,9)", Box::new(PriceOscillator::default())),
+        (
+            "PVO(12,26,9)",
+            Box::new(PercentageVolumeOscillator::default()),
+        ),
         ("Ichimoku(9,26,52)", Box::new(IchimokuCloud::default())),
         (
             "Ichimoku(9,26,52,22)",

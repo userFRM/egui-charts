@@ -19,7 +19,8 @@
 //! [`ElderRay`], [`FisherTransform`], [`ForceIndex`], [`MassIndex`],
 //! [`DetrendedPriceOscillator`], [`KDJ`], [`PrettyGoodOscillator`],
 //! [`ChandeMomentumOscillator`], [`TrueStrengthIndex`],
-//! [`StochasticMomentumIndex`], [`SchaffTrendCycle`]
+//! [`StochasticMomentumIndex`], [`SchaffTrendCycle`], [`PriceOscillator`],
+//! [`PercentageVolumeOscillator`]
 //!
 //! ## Trend
 //! [`ADX`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
@@ -113,6 +114,7 @@ mod trix;
 // Volume/Price oscillators
 mod balance_of_power;
 mod ease_of_movement;
+mod percentage_volume_oscillator;
 mod price_oscillator;
 mod volume_oscillator;
 mod vroc;
@@ -274,6 +276,7 @@ pub use trix::TRIX;
 // Re-exports - Volume/Price oscillators
 pub use balance_of_power::BalanceOfPower;
 pub use ease_of_movement::EaseOfMovement;
+pub use percentage_volume_oscillator::PercentageVolumeOscillator;
 pub use price_oscillator::PriceOscillator;
 pub use volume_oscillator::VolumeOscillator;
 pub use vroc::VolumeRateOfChange;
@@ -444,6 +447,7 @@ pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
             "Volume Oscillator - Volume EMA difference",
         ),
         ("PPO", "Percentage Price Oscillator"),
+        ("PVO", "Percentage Volume Oscillator"),
         // Trend/Volatility
         ("Vortex", "Vortex Indicator - Trend direction"),
         ("Klinger", "Klinger Volume Oscillator - Money flow trend"),

@@ -1,12 +1,21 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Price Oscillator (PPO - Percentage Price Oscillator)
-/// Measures the percentage difference between two EMAs
-/// Similar to MACD but expressed as percentage
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Percentage Price Oscillator (PPO): MACD taken as a percentage of the long average.
+///
+/// - PPO = 100 * (EMA(close, short) - EMA(close, long)) / EMA(close, long).
+/// - Signal = EMA(PPO, signal length), computed only over the bars where the PPO is defined
+///   and seeded with the mean of its first `signal` values, like the study's other averages,
+///   which are seeded with the mean of their first values.
+/// - Histogram = PPO - signal.
+///
+/// With lengths 12, 26 and 9 a bar has no value before bar 25, the PPO alone on bars 25 to 32,
+/// and from bar 33, the mean of the PPO on bars 25 to 33 being the first signal, the PPO, the
+/// signal and the histogram. A bar with a non-finite close has no value and is skipped by the
+/// averages.
 #[derive(Clone)]
 pub struct PriceOscillator {
     /// Short EMA period (typically 12)
@@ -16,7 +25,7 @@ pub struct PriceOscillator {
     /// Signal line EMA period (typically 9)
     signal_period: usize,
     values: Vec<IndicatorValue>,
-    /// Colors: [PPO line, Signal line]
+    /// Colors: [PPO line, Signal line, Histogram]
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -31,94 +40,80 @@ impl PriceOscillator {
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - PPO
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
+                DESIGN_TOKENS.semantic.extended.success, // Green - Histogram
             ],
             visible: true,
         }
     }
 
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
-        self.colors = colors;
+        self.set_colors(colors);
         self
-    }
-
-    fn calculate_ema(data: &[f64], period: usize) -> Vec<f64> {
-        if data.is_empty() || period == 0 {
-            return Vec::new();
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let mut ema = Vec::with_capacity(data.len());
-
-        // First value is SMA
-        let first_sma: f64 = data.iter().take(period).sum::<f64>() / period as f64;
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                ema.push(f64::NAN);
-            } else if i == period - 1 {
-                ema.push(first_sma);
-            } else {
-                let prev = ema[i - 1];
-                if prev.is_nan() {
-                    ema.push(f64::NAN);
-                } else {
-                    ema.push((data[i] - prev) * multiplier + prev);
-                }
-            }
-        }
-
-        ema
     }
 
     /// The values over `data`, every bar of which has a finite close.
     fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
-
-        if data.len() < self.long_period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Extract closes
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-
-        // Calculate short and long EMAs
-        let short_ema = Self::calculate_ema(&closes, self.short_period);
-        let long_ema = Self::calculate_ema(&closes, self.long_period);
-
-        // Calculate PPO line
-        let mut ppo_line = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if short_ema[i].is_nan() || long_ema[i].is_nan() || long_ema[i] == 0.0 {
-                ppo_line.push(f64::NAN);
-            } else {
-                let ppo = (short_ema[i] - long_ema[i]) / long_ema[i] * 100.0;
-                ppo_line.push(ppo);
-            }
-        }
-
-        // Calculate signal line (EMA of PPO)
-        let valid_ppo: Vec<f64> = ppo_line
-            .iter()
-            .map(|&v| if v.is_nan() { 0.0 } else { v })
-            .collect();
-        let signal_line = Self::calculate_ema(&valid_ppo, self.signal_period);
-
-        // Store results
-        for i in 0..data.len() {
-            if ppo_line[i].is_nan() {
-                values.push(IndicatorValue::None);
-            } else if signal_line[i].is_nan() || i < self.long_period + self.signal_period - 2 {
-                values.push(IndicatorValue::Single(ppo_line[i]));
-            } else {
-                values.push(IndicatorValue::Multiple(vec![ppo_line[i], signal_line[i]]));
-            }
-        }
-
-        values
+        percentage_oscillator(
+            &closes,
+            self.short_period,
+            self.long_period,
+            self.signal_period,
+        )
     }
+}
+
+/// An EMA of `period` over `values` that skips `None`: it is seeded with the mean of the first
+/// `period` values and carries over a missing one, which has no EMA.
+fn ema_of(values: &[Option<f64>], period: usize) -> Vec<Option<f64>> {
+    let (mut seed, mut ema) = (Vec::new(), None);
+    values
+        .iter()
+        .map(|&v| {
+            let v = v?;
+            match ema {
+                Some(prev) => ema = Some(prev + (v - prev) * 2.0 / (period as f64 + 1.0)),
+                None => {
+                    seed.push(v);
+                    if seed.len() == period {
+                        ema = Some(seed.iter().sum::<f64>() / period as f64);
+                    }
+                }
+            }
+            ema
+        })
+        .collect()
+}
+
+/// The percentage oscillator of `values` as MACD defines it, taken as a percentage of the long
+/// average: `100 * (EMA(short) - EMA(long)) / EMA(long)`, its signal `EMA(signal)` over the bars
+/// where it is defined, and the histogram. A bar has no value until the oscillator is defined,
+/// only the oscillator until the signal is, and all three lines from then on.
+pub(super) fn percentage_oscillator(
+    values: &[f64],
+    short: usize,
+    long: usize,
+    signal: usize,
+) -> Vec<IndicatorValue> {
+    let values: Vec<Option<f64>> = values.iter().map(|&v| Some(v)).collect();
+    let (short, long) = (ema_of(&values, short), ema_of(&values, long));
+    let line: Vec<Option<f64>> = short
+        .iter()
+        .zip(&long)
+        .map(|(s, l)| match (s, l) {
+            (Some(s), Some(l)) if *l != 0.0 => Some((s - l) / l * 100.0),
+            _ => None,
+        })
+        .collect();
+    let signal = ema_of(&line, signal);
+    line.iter()
+        .zip(&signal)
+        .map(|(line, signal)| match (line, signal) {
+            (Some(l), Some(s)) => IndicatorValue::Multiple(vec![*l, *s, l - s]),
+            (Some(l), None) => IndicatorValue::Single(*l),
+            _ => IndicatorValue::None,
+        })
+        .collect()
 }
 
 /// Construct with the conventional default parameters.
@@ -150,8 +145,9 @@ impl Indicator for PriceOscillator {
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if colors.len() >= 2 {
-            self.colors = colors;
+        // Lines without a colour in `colors` keep theirs.
+        for (line, color) in self.colors.iter_mut().zip(colors) {
+            *line = color;
         }
     }
 
@@ -171,10 +167,15 @@ impl Indicator for PriceOscillator {
         Box::new(self.clone())
     }
 
+    fn line_cnt(&self) -> usize {
+        3
+    }
+
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("PPO({},{})", self.short_period, self.long_period),
             format!("Signal({})", self.signal_period),
+            "Histogram".to_string(),
         ]
     }
 }

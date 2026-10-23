@@ -239,14 +239,14 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 
 ---
 
-## Technical Indicators (128 registered)
+## Technical Indicators (129 registered)
 
-All 128 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
+All 129 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
 Some indicators appear in more than one category below (for example Standard Error in Volatility and Statistics).
 
 ### Rendering Limitation
 All indicators use a **generic polyline renderer**. There is no indicator-specific rendering. This means:
-- [ ] MACD histogram renders as a line instead of bars
+- [ ] MACD, PPO and PVO histograms render as a line instead of bars
 - [ ] Ichimoku cloud renders as 5 separate lines instead of filled cloud regions
 - [ ] Parabolic SAR renders as a connected line instead of individual dots
 - [ ] Volume Profile outputs `IndicatorValue::Multiple` but there is no horizontal bar chart renderer
@@ -336,10 +336,10 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; the last leg follows the current extreme until the next reversal
 
 ### Price Oscillators
-- [x] PPO: Price Oscillator (signal line computed, not drawn)
+- [x] PPO and PVO (Percentage Volume Oscillator): oscillator, signal and histogram, drawn as three lines
 
 ### Factory Coverage
-- [x] `IndicatorFactory` registers all 128 built-in indicators by name
+- [x] `IndicatorFactory` registers all 129 built-in indicators by name
 - [ ] The indicator dialog offers a fixed subset (`IndicatorType::all()`); the other indicators are reachable only from code
 
 ---
@@ -544,7 +544,7 @@ The ui_kit components are generic building blocks:
 - 18 of 18 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
 - `DrawingToolType` defines 95 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
-- 128 registered indicators with calculation code; studies that keep the default line count of 1 draw only their first line
+- 129 registered indicators with calculation code; studies that keep the default line count of 1 draw only their first line
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - Reusable ui_kit building blocks
 - Theme system with design tokens and dark, light and high-contrast presets
