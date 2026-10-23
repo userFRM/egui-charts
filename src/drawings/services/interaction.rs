@@ -263,6 +263,17 @@ impl DrawingInteraction {
         None
     }
 
+    /// Hit-tests the shapes painted for one drawing, including text extents and filled zones.
+    ///
+    /// Pass the clipped shapes emitted by the renderer, excluding selection handles. The
+    /// manager records them during `render_all`; standalone hosts can retain their own paint
+    /// commands. Uses a five-pixel tolerance along strokes and respects every shape's clip.
+    pub fn hit_test_painted(point: Pos2, shapes: &[egui::epaint::ClippedShape]) -> bool {
+        shapes
+            .iter()
+            .any(|s| s.clip_rect.contains(point) && hit_shape(point, &s.shape))
+    }
+
     /// Hit-tests at `point` and selects the topmost drawing found.
     ///
     /// Returns `true` if a drawing was selected, `false` if the click hit empty
@@ -276,6 +287,111 @@ impl DrawingInteraction {
             false
         }
     }
+}
+
+/// Selection follows the renderer's primitives, so text layout and data-driven geometry
+/// need no second implementation in the interaction service.
+fn hit_shape(point: Pos2, shape: &egui::Shape) -> bool {
+    use egui::Shape;
+    if !shape.visual_bounding_rect().expand(5.0).contains(point) {
+        return false;
+    }
+    let line = |a, b, width: f32| point_to_line_distance(point, a, b) <= 5.0_f32.max(width / 2.0);
+    let path = |points: &[Pos2], closed: bool, fill: bool, width: f32| {
+        (fill && polygon_contains(points, point))
+            || (width > 0.0
+                && (points.windows(2).any(|p| line(p[0], p[1], width))
+                    || (closed
+                        && points.len() > 1
+                        && line(points[points.len() - 1], points[0], width))))
+    };
+    match shape {
+        Shape::Noop | Shape::Callback(_) | Shape::Band(_) => false,
+        Shape::Vec(shapes) => shapes.iter().any(|s| hit_shape(point, s)),
+        Shape::LineSegment { points, stroke } => {
+            stroke.color.a() > 0 && stroke.width > 0.0 && line(points[0], points[1], stroke.width)
+        }
+        Shape::Path(p) => path(
+            &p.points,
+            p.closed,
+            p.fill.a() > 0,
+            if p.stroke.is_empty() {
+                0.0
+            } else {
+                p.stroke.width
+            },
+        ),
+        Shape::Circle(c) => {
+            let distance = point.distance(c.center);
+            (c.fill.a() > 0 && distance <= c.radius)
+                || (!c.stroke.is_empty()
+                    && (distance - c.radius).abs() <= 5.0_f32.max(c.stroke.width / 2.0))
+        }
+        Shape::Ellipse(e) => {
+            let ring: Vec<_> = (0..64)
+                .map(|i| {
+                    let angle = i as f32 * std::f32::consts::TAU / 64.0;
+                    e.center + e.radius * egui::vec2(angle.cos(), angle.sin())
+                })
+                .collect();
+            path(
+                &ring,
+                true,
+                e.fill.a() > 0,
+                if e.stroke.is_empty() {
+                    0.0
+                } else {
+                    e.stroke.width
+                },
+            )
+        }
+        Shape::Rect(r) => {
+            let corners = [
+                r.rect.left_top(),
+                r.rect.right_top(),
+                r.rect.right_bottom(),
+                r.rect.left_bottom(),
+            ];
+            path(
+                &corners,
+                true,
+                r.fill.a() > 0,
+                if r.stroke.is_empty() {
+                    0.0
+                } else {
+                    r.stroke.width
+                },
+            )
+        }
+        Shape::Text(t) => t.visual_bounding_rect().contains(point),
+        Shape::Mesh(m) => m.indices.as_chunks::<3>().0.iter().any(|tri| {
+            let points = [
+                m.vertices[tri[0] as usize].pos,
+                m.vertices[tri[1] as usize].pos,
+                m.vertices[tri[2] as usize].pos,
+            ];
+            polygon_contains(&points, point)
+        }),
+        Shape::QuadraticBezier(b) => hit_shape(point, &Shape::Path(b.to_path_shape(Some(0.5)))),
+        Shape::CubicBezier(b) => b
+            .to_path_shapes(Some(0.5), None)
+            .iter()
+            .any(|p| hit_shape(point, &Shape::Path(p.clone()))),
+    }
+}
+
+/// Even-odd containment also handles concave paths. Edges are tested with stroke tolerance.
+fn polygon_contains(points: &[Pos2], point: Pos2) -> bool {
+    let mut inside = false;
+    for i in 0..points.len() {
+        let (a, b) = (points[i], points[(i + 1) % points.len()]);
+        if (a.y > point.y) != (b.y > point.y)
+            && point.x < a.x + (point.y - a.y) * (b.x - a.x) / (b.y - a.y)
+        {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 /// Whether `point` lies inside the convex polygon `area`, wound either way. An

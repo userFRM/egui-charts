@@ -18,6 +18,7 @@ use crate::drawings::services::{
 };
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect};
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 /// A change to the stored drawings, queued in [`DrawingManager::pending_sync`].
@@ -107,6 +108,13 @@ impl Default for DrawingManagerOptions {
     }
 }
 
+/// Last painted geometry, invalid once its anchors have moved.
+struct PaintedDrawing {
+    id: usize,
+    points: Vec<Pos2>,
+    shapes: Vec<egui::epaint::ClippedShape>,
+}
+
 /// Central coordinator for chart drawings.
 ///
 /// `DrawingManager` owns the list of completed drawings and the in-progress
@@ -162,6 +170,8 @@ pub struct DrawingManager {
     selection: SelectionService,
     history: HistoryService,
     snap_service: SnapService,
+    /// Geometry from the last paint, including laid-out text and data-driven shapes.
+    painted: RefCell<Vec<PaintedDrawing>>,
     /// Nearby bar and overlay points, refreshed by the chart before pointer handling.
     pub(crate) snap_targets: Vec<Pos2>,
 
@@ -211,6 +221,7 @@ impl DrawingManager {
             selection: SelectionService::new(),
             history: HistoryService::new(),
             snap_service: SnapService::new(),
+            painted: RefCell::new(Vec::new()),
             snap_targets: Vec::new(),
             options: DrawingManagerOptions::default(),
             dragging_handle: None,
@@ -835,8 +846,24 @@ impl DrawingManager {
     /// channels, Fibonacci levels, fans, and pitchforks are selectable along
     /// their drawn geometry rather than only near a control point. Honors the
     /// active timeframe so drawings hidden on the current timeframe are not hit.
+    /// After [`Self::render_all`], uses the actual clipped paint geometry, including text and
+    /// data-driven bodies. Before the first paint, falls back to the tool's geometric outline.
     pub fn hit_test(&self, point: Pos2) -> Option<usize> {
-        DrawingInteraction::new().hit_test(point, &self.drawings, &self.curr_timeframe)
+        let painted = self.painted.borrow();
+        in_z_order(&self.drawings)
+            .into_iter()
+            .rev()
+            .filter(|d| d.is_visible_on_timeframe(&self.curr_timeframe))
+            .find(|drawing| {
+                painted
+                    .iter()
+                    .find(|p| p.id == drawing.id && p.points == drawing.points)
+                    .is_some_and(|p| DrawingInteraction::hit_test_painted(point, &p.shapes))
+                    || DrawingInteraction::new()
+                        .hit_test(point, std::slice::from_ref(*drawing), &self.curr_timeframe)
+                        .is_some()
+            })
+            .map(|d| d.id)
     }
 
     // === Visibility ===
@@ -948,10 +975,26 @@ impl DrawingManager {
     /// Render all drawings against the chart's bars and coordinate mapping
     pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
         let painter = &painter.with_clip_rect(price_rect);
+        let mut painted = self.painted.borrow_mut();
+        painted.clear();
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
             if drawing.is_visible_on_timeframe(&self.curr_timeframe) {
+                let start = painter.ctx().graphics(|g| {
+                    g.get(painter.layer_id())
+                        .map_or(0, |list| list.next_idx().0)
+                });
                 drawing.render(painter, price_rect, view);
+                let shapes = painter.ctx().graphics(|g| {
+                    g.get(painter.layer_id())
+                        .map(|list| list.all_entries().skip(start).cloned().collect())
+                        .unwrap_or_default()
+                });
+                painted.push(PaintedDrawing {
+                    id: drawing.id,
+                    points: drawing.points.clone(),
+                    shapes,
+                });
             }
         }
 
@@ -983,6 +1026,75 @@ fn sync_id(drawing: &Drawing) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Text extents, position zones, Fibonacci rings and repeating cycle lines are
+    /// selectable away from every anchor, using their actual paint geometry.
+    #[test]
+    fn painted_bodies_are_hit_away_from_anchors() {
+        use egui::{Context, RawInput};
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        for (tool, anchors, hit, miss) in [
+            (
+                DrawingToolType::TextLabel,
+                vec![(50., 100.)],
+                (180., 105.),
+                (180., 160.),
+            ),
+            (
+                DrawingToolType::LongPos,
+                vec![(50., 150.), (250., 50.), (250., 250.)],
+                (180., 100.),
+                (350., 300.),
+            ),
+            (
+                DrawingToolType::FibonacciCircles,
+                vec![(100., 100.), (200., 100.)],
+                (100., 200.),
+                (400., 350.),
+            ),
+            (
+                DrawingToolType::CyclicLines,
+                vec![(50., 100.), (150., 100.)],
+                (250., 300.),
+                (480., 390.),
+            ),
+        ] {
+            let ctx = Context::default();
+            let mut manager = DrawingManager::new();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = anchors.into_iter().map(|(x, y)| Pos2::new(x, y)).collect();
+            drawing.chart_points = drawing
+                .points
+                .iter()
+                .map(|p| ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                .collect();
+            drawing.text = Some("A long text annotation".into());
+            manager.drawings.push(drawing);
+            ctx.run_ui(RawInput::default(), |ui| {
+                let view = ChartView {
+                    instrument: None,
+                    bars: &[],
+                    revision: 0,
+                    bar_to_x: &|b| b * 10.0,
+                    price_to_y: &|p| 500.0 - p as f32,
+                };
+                manager.render_all(ui.painter(), pane, &view);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                manager.hit_test(Pos2::new(hit.0, hit.1)),
+                Some(7),
+                "{tool:?}"
+            );
+            assert_eq!(
+                manager.hit_test(Pos2::new(miss.0, miss.1)),
+                None,
+                "{tool:?}"
+            );
+            manager.drawings[0].visible = false;
+            assert_eq!(manager.hit_test(Pos2::new(hit.0, hit.1)), None);
+        }
+    }
 
     #[test]
     fn test_new_manager() {
