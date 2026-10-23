@@ -191,14 +191,11 @@ impl<'a> AutocompleteEdit<'a> {
             selected_idx = 0;
         }
 
-        // Store selected index
-        ui.ctx()
-            .memory_mut(|m| m.data.insert_temp(selected_idx_id, selected_idx));
-
         let mut selected = None;
 
         // Show the popup using Area + Frame pattern
         if popup_open && has_suggestions {
+            Popup::open_id(ui.ctx(), popup_id);
             let visuals = ui.visuals().clone();
             let text_x = response.rect.left() + inset;
             let area_response = egui::Area::new(popup_id.with("area"))
@@ -214,15 +211,27 @@ impl<'a> AutocompleteEdit<'a> {
                         ui.spacing_mut().item_spacing.y = 0.0;
 
                         ScrollArea::vertical().show(ui, |ui| {
-                            for (idx, (suggestion, _score)) in filtered.iter().enumerate() {
+                            let rows: Vec<_> = filtered
+                                .iter()
+                                .map(|_| {
+                                    ui.allocate_exact_size(
+                                        Vec2::new(
+                                            ui.available_width(),
+                                            DESIGN_TOKENS.sizing.list_item_height,
+                                        ),
+                                        Sense::click(),
+                                    )
+                                })
+                                .collect();
+                            if let Some(idx) =
+                                rows.iter().position(|(_, response)| response.hovered())
+                            {
+                                selected_idx = idx;
+                            }
+                            for (idx, ((suggestion, _score), (rect, item_response))) in
+                                filtered.iter().zip(rows).enumerate()
+                            {
                                 let is_selected = idx == selected_idx;
-                                let (rect, item_response) = ui.allocate_exact_size(
-                                    Vec2::new(
-                                        ui.available_width(),
-                                        DESIGN_TOKENS.sizing.list_item_height,
-                                    ),
-                                    Sense::click(),
-                                );
                                 item_response.widget_info(|| {
                                     WidgetInfo::selected(
                                         Role::Button,
@@ -234,9 +243,13 @@ impl<'a> AutocompleteEdit<'a> {
 
                                 if ui.is_rect_visible(rect) {
                                     let painter = ui.painter();
-                                    if is_selected || item_response.hovered() {
+                                    if is_selected {
                                         let fill = visuals.widgets.hovered.bg_fill;
-                                        painter.rect_filled(rect, 0.0, fill);
+                                        painter.rect_filled(
+                                            rect.shrink2(Vec2::new(DESIGN_TOKENS.spacing.sm, 0.0)),
+                                            DESIGN_TOKENS.rounding.sm,
+                                            fill,
+                                        );
                                     }
                                     painter.text(
                                         egui::pos2(text_x, rect.center().y),
@@ -271,6 +284,9 @@ impl<'a> AutocompleteEdit<'a> {
                 }
             }
         }
+
+        ui.ctx()
+            .memory_mut(|m| m.data.insert_temp(selected_idx_id, selected_idx));
 
         // If a suggestion was selected, update the text
         if let Some(ref sel) = selected {
@@ -332,8 +348,7 @@ mod tests {
         };
 
         // Every name contains an `a`, so typing it lists all eight and five arrows reach row 5.
-        // The popup stays in memory only every other frame, and Enter takes the input's focus,
-        // so each Enter follows an idle frame that reopens the popup.
+        // Enter takes the input's focus; the next confirmation explicitly focuses it again.
         let (id, _, _) = frame(vec![]);
         ctx.memory_mut(|m| m.request_focus(id));
         frame(vec![Event::Text("a".into())]);
@@ -349,5 +364,78 @@ mod tests {
         frame(vec![]);
         let (_, _, text_after_enter) = frame(vec![key(Key::Enter)]);
         assert_eq!(text_after_enter, text_after_pick);
+    }
+
+    #[test]
+    fn hovering_a_suggestion_moves_the_only_highlight_and_enter_picks_it() {
+        let ctx = Context::default();
+        let mut text = "a".to_owned();
+        let mut input_rect = egui::Rect::NOTHING;
+        let mut time = 0.0;
+        let mut input_id = Id::NULL;
+        let mut frame = |events: Vec<Event>| {
+            let mut picked = None;
+            time += 0.1;
+            let output = ctx.run_ui(
+                RawInput {
+                    time: Some(time),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let shown = AutocompleteEdit::new(&mut text, ["Apple", "Avocado", "Apricot"])
+                        .id_salt("hover")
+                        .show(ui);
+                    input_rect = shown.response.rect;
+                    input_id = shown.response.id;
+                    picked = shown.selected;
+                },
+            );
+            (output, picked, input_rect, input_id)
+        };
+        let key = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let (output, _, rect, id) = frame(vec![]);
+        output.drop_without_applying_deltas();
+        ctx.memory_mut(|m| m.request_focus(id));
+        for _ in 0..3 {
+            frame(vec![]).0.drop_without_applying_deltas();
+        }
+        frame(vec![key(Key::ArrowDown)])
+            .0
+            .drop_without_applying_deltas();
+        let pointer = egui::pos2(rect.left() + 20.0, rect.bottom() + 18.0);
+        frame(vec![Event::PointerMoved(pointer)])
+            .0
+            .drop_without_applying_deltas();
+        let (output, _, _, _) = frame(vec![]);
+        let hover = ctx.global_style().visuals.widgets.hovered.bg_fill;
+        let highlights: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.fill == hover => Some(r.clone()),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(
+            highlights[0].corner_radius,
+            egui::CornerRadius::from(DESIGN_TOKENS.rounding.sm)
+        );
+        assert!(highlights[0].rect.left() > rect.left() + 1.0);
+        let (output, picked, _, _) = frame(vec![key(Key::Enter)]);
+        output.drop_without_applying_deltas();
+        assert_eq!(picked.as_deref(), Some("Apple"));
     }
 }
