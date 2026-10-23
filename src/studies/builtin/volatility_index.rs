@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Volatility Index (simplified VIX-like)
 /// ATR-based volatility normalized as percentage of price
@@ -22,28 +23,13 @@ impl VolatilityIndex {
             visible: true,
         }
     }
-}
 
-impl Default for VolatilityIndex {
-    fn default() -> Self {
-        Self::new(20)
-    }
-}
-
-impl Indicator for VolatilityIndex {
-    fn name(&self) -> &str {
-        "Vol Index"
-    }
-
-    fn desc(&self) -> &str {
-        "Volatility Index - ATR-based volatility as annualized percentage of price"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite high, low and close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
 
         // Calculate True Range series
@@ -62,13 +48,13 @@ impl Indicator for VolatilityIndex {
         let mut atr = tr_values[0];
 
         // First bar: no ATR warmup yet
-        self.values.push(IndicatorValue::None);
+        values.push(IndicatorValue::None);
 
         for i in 1..data.len() {
             atr = (tr_values[i] - atr) * mult + atr;
 
             if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -76,11 +62,37 @@ impl Indicator for VolatilityIndex {
             if close > 0.0 {
                 // ATR / close * 100 * sqrt(252) for annualized vol percentage
                 let vol_pct = atr / close * 100.0 * 252.0_f64.sqrt();
-                self.values.push(IndicatorValue::Single(vol_pct));
+                values.push(IndicatorValue::Single(vol_pct));
             } else {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
         }
+
+        values
+    }
+}
+
+impl Default for VolatilityIndex {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
+impl Indicator for VolatilityIndex {
+    fn name(&self) -> &str {
+        "Vol Index"
+    }
+
+    fn desc(&self) -> &str {
+        "Volatility Index - ATR-based volatility as annualized percentage of price"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

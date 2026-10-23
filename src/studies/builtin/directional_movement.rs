@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Directional Movement Index (DMI / DI+ / DI-)
 /// Shows the positive and negative directional indicators
@@ -33,31 +34,16 @@ impl DirectionalMovement {
         self.colors = colors;
         self
     }
-}
 
-impl Default for DirectionalMovement {
-    fn default() -> Self {
-        Self::new(14)
-    }
-}
-
-impl Indicator for DirectionalMovement {
-    fn name(&self) -> &str {
-        "DMI"
-    }
-
-    fn desc(&self) -> &str {
-        "Directional Movement Index - +DI and -DI lines"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite high, low and close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate +DM, -DM, and TR
@@ -132,14 +118,39 @@ impl Indicator for DirectionalMovement {
         // Calculate +DI and -DI
         for i in 0..data.len() {
             if smoothed_tr[i].is_nan() || smoothed_tr[i] == 0.0 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let plus_di = 100.0 * smoothed_plus_dm[i] / smoothed_tr[i];
                 let minus_di = 100.0 * smoothed_minus_dm[i] / smoothed_tr[i];
-                self.values
-                    .push(IndicatorValue::Multiple(vec![plus_di, minus_di]));
+                values.push(IndicatorValue::Multiple(vec![plus_di, minus_di]));
             }
         }
+
+        values
+    }
+}
+
+impl Default for DirectionalMovement {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
+impl Indicator for DirectionalMovement {
+    fn name(&self) -> &str {
+        "DMI"
+    }
+
+    fn desc(&self) -> &str {
+        "Directional Movement Index - +DI and -DI lines"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -23,6 +23,7 @@
 //! ```
 
 use super::clamp_param;
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -82,33 +83,17 @@ impl KeltnerChannels {
         let lc = (bar.low - prev_close).abs();
         hl.max(hc).max(lc)
     }
-}
 
-/// Construct with the conventional default parameters.
-impl Default for KeltnerChannels {
-    fn default() -> Self {
-        Self::new(20, 10, 2.0)
-    }
-}
-
-impl Indicator for KeltnerChannels {
-    fn name(&self) -> &str {
-        "Keltner"
-    }
-
-    fn desc(&self) -> &str {
-        "Keltner Channels - Volatility-based envelope"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite high, low and close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         let min_period = self.ema_period.max(self.atr_period);
         if data.len() < min_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate EMA of close prices
@@ -151,17 +136,43 @@ impl Indicator for KeltnerChannels {
         // Build output values
         for i in 0..data.len() {
             if i < min_period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let middle = ema[i];
                 let band_width = self.multiplier * atr[i];
                 let upper = middle + band_width;
                 let lower = middle - band_width;
 
-                self.values
-                    .push(IndicatorValue::Multiple(vec![middle, upper, lower]));
+                values.push(IndicatorValue::Multiple(vec![middle, upper, lower]));
             }
         }
+
+        values
+    }
+}
+
+/// Construct with the conventional default parameters.
+impl Default for KeltnerChannels {
+    fn default() -> Self {
+        Self::new(20, 10, 2.0)
+    }
+}
+
+impl Indicator for KeltnerChannels {
+    fn name(&self) -> &str {
+        "Keltner"
+    }
+
+    fn desc(&self) -> &str {
+        "Keltner Channels - Volatility-based envelope"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

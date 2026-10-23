@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Chaikin Volatility
 /// Measures the rate of change of the trading range
@@ -49,6 +50,45 @@ impl ChaikinVolatility {
 
         result
     }
+
+    /// The values over `data`, every bar of which has a finite high and low.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        let min_period = self.ema_period.saturating_add(self.roc_period);
+        if data.len() < min_period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        // Calculate H-L range
+        let hl_range: Vec<f64> = data.iter().map(|b| b.high - b.low).collect();
+
+        // Calculate EMA of H-L range
+        let hl_ema = Self::ema(&hl_range, self.ema_period);
+
+        // Calculate Rate of Change of EMA
+        for i in 0..data.len() {
+            if i < min_period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let current = hl_ema[i];
+                let past = hl_ema[i - self.roc_period];
+
+                let cv = if past != 0.0 {
+                    (current - past) / past * 100.0
+                } else {
+                    0.0
+                };
+
+                values.push(IndicatorValue::Single(cv));
+            }
+        }
+
+        values
+    }
 }
 
 impl Default for ChaikinVolatility {
@@ -67,39 +107,11 @@ impl Indicator for ChaikinVolatility {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        let min_period = self.ema_period.saturating_add(self.roc_period);
-        if data.len() < min_period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // Calculate H-L range
-        let hl_range: Vec<f64> = data.iter().map(|b| b.high - b.low).collect();
-
-        // Calculate EMA of H-L range
-        let hl_ema = Self::ema(&hl_range, self.ema_period);
-
-        // Calculate Rate of Change of EMA
-        for i in 0..data.len() {
-            if i < min_period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let current = hl_ema[i];
-                let past = hl_ema[i - self.roc_period];
-
-                let cv = if past != 0.0 {
-                    (current - past) / past * 100.0
-                } else {
-                    0.0
-                };
-
-                self.values.push(IndicatorValue::Single(cv));
-            }
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
