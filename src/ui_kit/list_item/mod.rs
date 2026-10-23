@@ -207,4 +207,52 @@ mod tests {
         })
         .drop_without_applying_deltas();
     }
+
+    #[test]
+    fn subdued_and_property_labels_keep_their_weak_text_colour() {
+        for (name, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                ListItem::new().show_text(ui, "Plain");
+                ListItem::new().show(ui, LabelContent::new("Subdued").subdued(true));
+                ListItem::new().show_property(ui, "Open", "19,126.06");
+            });
+            let text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| {
+                    if let egui::Shape::Text(t) = &s.shape {
+                        Some((
+                            t.galley.job.text.clone(),
+                            t.override_text_color
+                                .unwrap_or(t.galley.job.sections[0].format.color),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            for (label, expected) in [
+                ("Plain", theme.ui.text),
+                ("Subdued", theme.ui.text_muted),
+                ("Open", theme.ui.text_muted),
+                ("19,126.06", theme.ui.text),
+            ] {
+                assert_eq!(
+                    text.iter().find(|(s, _)| s == label).unwrap().1,
+                    expected,
+                    "{name}: {label}"
+                );
+            }
+            assert_ne!(theme.ui.text_muted, theme.ui.text);
+            for bg in [theme.ui.panel_bg, theme.ui.panel_bg_floating] {
+                assert!(
+                    crate::theme::contrast(theme.ui.text_muted, bg) >= 4.5,
+                    "{name}"
+                );
+            }
+        }
+    }
 }

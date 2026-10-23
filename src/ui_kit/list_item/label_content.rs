@@ -88,7 +88,7 @@ impl<'a> ListItemContent for LabelContent<'a> {
 
         // Determine text color using ListVisuals
         let text_color = if self.subdued {
-            egui_visuals.widgets.noninteractive.fg_stroke.color
+            egui_visuals.weak_text_color()
         } else {
             list_visuals.text_color(&egui_visuals)
         };
