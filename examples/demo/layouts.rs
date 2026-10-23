@@ -38,7 +38,7 @@ impl LayoutTab {
 }
 
 impl DemoApp {
-    pub(super) fn toggle_theme(&mut self) {
+    pub(super) fn toggle_theme(&mut self, ctx: &egui::Context) {
         self.theme = if self.theme.dark {
             egui_charts::theme::Theme::light()
         } else {
@@ -55,10 +55,7 @@ impl DemoApp {
                     .chain(workspace.extra.iter_mut().map(|c| &mut c.chart))
             }))
         {
-            let config = chart.config_mut();
-            config.background_color = self.theme.chart.bg;
-            config.text_color = self.theme.chart.axis_text;
-            config.grid_color = self.theme.chart.grid_line;
+            chart.set_theme(ctx, &self.theme);
         }
     }
 
@@ -96,6 +93,7 @@ impl DemoApp {
             .with_chart_type(source.chart_type())
             .with_visible_candles(0)
             .build();
+        chart.set_main_series_visible(source.is_main_series_visible());
         chart.set_data(SeriesId::MAIN, source.bars(SeriesId::MAIN).to_vec());
         chart.set_instrument(Some(live.instrument()));
         chart.set_extended_hours(source.extended_hours());
@@ -391,6 +389,7 @@ mod tests {
             .chart_points
             .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
         app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.set_main_series_visible(false);
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
         let frame = |app: &mut DemoApp| {
@@ -398,6 +397,12 @@ mod tests {
                 app.show_chart(ui, app.theme.chart.bg)
             })
             .drop_without_applying_deltas();
+            assert!(!app.chart.is_main_series_visible());
+            assert!(
+                app.extra_charts
+                    .iter()
+                    .all(|c| !c.chart.is_main_series_visible())
+            );
             assert_eq!(app.chart.drawings().drawings.len(), 1);
             assert!(
                 app.extra_charts
@@ -431,10 +436,16 @@ mod tests {
         assert_eq!(app.chart.config().candle_width, 0.5);
         app.select_layout(1);
         assert_eq!(app.chart.symbol(), "copy-only");
-        app.toggle_theme();
+        app.toggle_theme(&ctx);
         let background = app.theme.chart.bg;
         app.select_layout(0);
         assert_eq!(app.chart.config().background_color, background);
+        assert_eq!(app.chart.config().bullish_color, app.theme.chart.candle_up);
+        assert_eq!(
+            app.chart.config().bearish_wick_color,
+            Some(app.theme.chart.candle_down)
+        );
+        assert_eq!(egui_charts::theme::ThemeExt::active_theme(&ctx), app.theme);
         app.select_layout(1);
         app.close_layout(1);
         assert_eq!(app.chart.symbol(), "SAMPLE");

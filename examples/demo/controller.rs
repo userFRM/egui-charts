@@ -1145,7 +1145,7 @@ impl DemoApp {
             // Save routes through the export dialog (PNG / CSV of the view).
             TopToolbarAction::Save => self.export_dialog.open(),
             // Light/dark toggle is a real, cheap visual change.
-            TopToolbarAction::ThemeToggle => self.toggle_theme(),
+            TopToolbarAction::ThemeToggle => self.toggle_theme(ctx),
             TopToolbarAction::Layout(action) => self.handle_layout_action(action),
             TopToolbarAction::None => {}
         }
