@@ -81,6 +81,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The demo opens at one minute and concentrates synthetic volume in a low band with occasional peaks. Hourly session data remains available from the interval selector.
+
 - The cursor flyout uses 40 px rows, larger glyphs, a neutral selected row and a labelled values switch. Held values have wider columns and more space between rows.
 
 - Time axes use denser calendar marks and semibold day, month and year labels. Vertical time grids share those marks, while round price levels use semibold labels.

@@ -169,7 +169,7 @@ impl DemoApp {
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
         let theme = Theme::light();
-        let timeframe = Timeframe::Hour1;
+        let timeframe = Timeframe::Min1;
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
         options.time_scale.bar_spacing = 6.1;
@@ -202,7 +202,7 @@ impl DemoApp {
         top_toolbar.timeframe_selector.current =
             egui_charts::ui::top_toolbar::components::timeframe_selector::Timeframe::new(
                 1,
-                egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Hour,
+                egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute,
             );
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
