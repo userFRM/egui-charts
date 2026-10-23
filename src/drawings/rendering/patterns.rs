@@ -48,28 +48,6 @@ impl Drawing {
             );
         }
 
-        // Draw XB and AD extension lines (dashed) for completed patterns
-        if self.points.len() >= 5 {
-            let dashed_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-            super::utils::draw_dashed_line(
-                painter,
-                self.points[0],
-                self.points[2],
-                Stroke::new(stroke::HAIRLINE, dashed_color),
-                DESIGN_TOKENS.spacing.sm,
-                DESIGN_TOKENS.spacing.xs + DESIGN_TOKENS.spacing.hairline,
-            );
-            super::utils::draw_dashed_line(
-                painter,
-                self.points[1],
-                self.points[4],
-                Stroke::new(stroke::HAIRLINE, dashed_color),
-                DESIGN_TOKENS.spacing.sm,
-                DESIGN_TOKENS.spacing.xs + DESIGN_TOKENS.spacing.hairline,
-            );
-        }
-
         // Draw labels and anchor points
         for (i, &point) in self.points.iter().enumerate() {
             // Determine label position (above or below based on local extrema)
@@ -127,58 +105,49 @@ impl Drawing {
         }
     }
 
-    /// Draw Fibonacci ratio labels for harmonic patterns
+    /// Draw each ratio on the chord joining the outside ends of its two legs.
     fn draw_harmonic_ratios(&self, painter: &egui::Painter, color: Color32) {
-        let ratio_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 180);
-        let [xab, xac, d] = self.harmonic_ratios();
-
-        if self.points.len() >= 3
-            && let Some(xab_ratio) = xab
-        {
-            // Position ratio label at midpoint of XB line
-            let mid_xb = Pos2::new(
-                (self.points[0].x + self.points[2].x) / 2.0,
-                (self.points[0].y + self.points[2].y) / 2.0,
-            );
-            painter.text(
-                Pos2::new(mid_xb.x - DESIGN_TOKENS.spacing.xxxl, mid_xb.y),
-                egui::Align2::RIGHT_CENTER,
-                format!("{xab_ratio:.3}"),
-                egui::FontId::proportional(typography::XS),
-                ratio_color,
-            );
+        let [b, c, d] = self.harmonic_ratios();
+        let cypher = self.tool_type == DrawingToolType::CypherPattern;
+        for (ends, ratio) in [
+            ([0, 2], b),
+            (if cypher { [0, 3] } else { [1, 3] }, c),
+            (if cypher { [0, 4] } else { [2, 4] }, d),
+            (
+                [0, 4],
+                (!cypher).then(|| self.leg_ratio([1, 4], [0, 1])).flatten(),
+            ),
+        ] {
+            self.draw_pattern_ratio(painter, color, ends, ratio);
         }
+    }
 
-        if self.points.len() >= 4
-            && let Some(xac_ratio) = xac
-        {
-            let mid_xc = self.points[0].lerp(self.points[3], 0.5);
-            painter.text(
-                Pos2::new(mid_xc.x - DESIGN_TOKENS.spacing.xxxl, mid_xc.y),
-                egui::Align2::RIGHT_CENTER,
-                format!("{xac_ratio:.3}"),
-                egui::FontId::proportional(typography::XS),
-                ratio_color,
-            );
-        }
-
-        if self.points.len() >= 5
-            && let Some(d_ratio) = d
-        {
-            let from = if self.tool_type == DrawingToolType::CypherPattern {
-                0
-            } else {
-                2
-            };
-            let mid_d = self.points[from].lerp(self.points[4], 0.5);
-            painter.text(
-                Pos2::new(mid_d.x + DESIGN_TOKENS.spacing.xxxl, mid_d.y),
-                egui::Align2::LEFT_CENTER,
-                format!("{d_ratio:.3}"),
-                egui::FontId::proportional(typography::XS),
-                ratio_color,
-            );
-        }
+    fn draw_pattern_ratio(
+        &self,
+        painter: &egui::Painter,
+        color: Color32,
+        [from, to]: [usize; 2],
+        ratio: Option<f64>,
+    ) {
+        let (Some(&a), Some(&b), Some(ratio)) = (self.points.get(from), self.points.get(to), ratio)
+        else {
+            return;
+        };
+        super::utils::draw_dashed_line(
+            painter,
+            a,
+            b,
+            Stroke::new(stroke::HAIRLINE, color.gamma_multiply(0.4)),
+            DESIGN_TOKENS.spacing.sm,
+            DESIGN_TOKENS.spacing.xs + DESIGN_TOKENS.spacing.hairline,
+        );
+        painter.text(
+            a.lerp(b, 0.5),
+            egui::Align2::CENTER_BOTTOM,
+            format!("{ratio:.3}"),
+            egui::FontId::proportional(typography::XS),
+            color,
+        );
     }
 
     /// Render Cypher Pattern - Similar to XABCD with Cypher-specific ratios
@@ -383,27 +352,8 @@ impl Drawing {
             );
         }
 
-        // Draw AC line (dashed) for complete pattern
-        if self.points.len() >= 4 {
-            let dashed_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 100);
-            super::utils::draw_dashed_line(
-                painter,
-                self.points[0],
-                self.points[2],
-                Stroke::new(stroke::HAIRLINE, dashed_color),
-                DESIGN_TOKENS.spacing.sm,
-                DESIGN_TOKENS.spacing.xs + DESIGN_TOKENS.spacing.hairline,
-            );
-            super::utils::draw_dashed_line(
-                painter,
-                self.points[1],
-                self.points[3],
-                Stroke::new(stroke::HAIRLINE, dashed_color),
-                DESIGN_TOKENS.spacing.sm,
-                DESIGN_TOKENS.spacing.xs + DESIGN_TOKENS.spacing.hairline,
-            );
-        }
+        self.draw_pattern_ratio(painter, color, [0, 2], self.leg_ratio([1, 2], [0, 1]));
+        self.draw_pattern_ratio(painter, color, [1, 3], self.leg_ratio([2, 3], [1, 2]));
 
         // Draw anchor points and labels
         for (i, &point) in self.points.iter().enumerate() {
@@ -784,16 +734,23 @@ impl Drawing {
         head_and_shoulders_neckline(&self.points, extend)
     }
 
-    /// B's price retracement of XA, Cypher's C extension of XA, and D's price
+    /// B's price retracement of XA, C's retracement of AB (extension of XA for Cypher), and D's price
     /// retracement of XC for Cypher or extension of BC for XABCD.
     fn harmonic_ratios(&self) -> [Option<f64>; 3] {
+        if self.tool_type == DrawingToolType::ABCDPattern {
+            return [
+                self.leg_ratio([1, 2], [0, 1]),
+                self.leg_ratio([2, 3], [1, 2]),
+                None,
+            ];
+        }
         let cypher = self.tool_type == DrawingToolType::CypherPattern;
         [
             self.leg_ratio([1, 2], [0, 1]),
             if cypher {
                 self.leg_ratio([0, 3], [0, 1])
             } else {
-                None
+                self.leg_ratio([2, 3], [1, 2])
             },
             self.leg_ratio([3, 4], if cypher { [0, 3] } else { [2, 3] }),
         ]
@@ -875,11 +832,16 @@ mod tests {
         use DrawingToolType::{CypherPattern, XABCDPattern};
         let cases = [
             (
+                DrawingToolType::ABCDPattern,
+                &[200.0, 100.0, 161.8, 38.2][..],
+                [Some(0.618), Some(2.0), None, Some(1.236)],
+            ),
+            (
                 XABCDPattern,
                 &[100.0, 200.0, 138.2, 176.4, 78.6][..],
                 [
                     Some(61.8 / 100.0),
-                    None,
+                    Some(38.2 / 61.8),
                     Some(97.8 / 38.2),
                     Some(38.2 / 100.0),
                 ],
@@ -887,12 +849,12 @@ mod tests {
             (
                 XABCDPattern,
                 &[100.0, 150.0, 125.0, 175.0],
-                [Some(25.0 / 50.0), None, None, Some(1.0)],
+                [Some(25.0 / 50.0), Some(2.0), None, Some(1.0)],
             ),
             (
                 XABCDPattern,
                 &[100.0, 100.0, 138.2, 176.4],
-                [None, None, None, None],
+                [None, Some(1.0), None, None],
             ),
             (
                 CypherPattern,
@@ -923,6 +885,37 @@ mod tests {
         for (tool, prices, expected) in cases {
             let drawing = pattern(tool, prices);
             let [b, c, d] = drawing.harmonic_ratios();
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let painter = ui.painter().clone();
+                if tool == DrawingToolType::ABCDPattern {
+                    drawing.render_abcd_pattern(&painter);
+                } else {
+                    drawing.render_xabcd_pattern(&painter);
+                }
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(t) = &shape.shape {
+                        Some(t.galley.job.text.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            for ratio in [b, c, d].into_iter().flatten().chain(
+                (tool == XABCDPattern)
+                    .then(|| drawing.leg_ratio([1, 4], [0, 1]))
+                    .flatten(),
+            ) {
+                assert!(
+                    labels.contains(&format!("{ratio:.3}")),
+                    "{tool:?}: {labels:?}"
+                );
+            }
             for (actual, expected) in [b, c, d, drawing.abcd_ratio()].into_iter().zip(expected) {
                 match (actual, expected) {
                     (Some(a), Some(e)) => {
