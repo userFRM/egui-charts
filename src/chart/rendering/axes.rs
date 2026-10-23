@@ -197,7 +197,7 @@ pub fn price_axis_width(painter: &Painter, price_map: &PriceMap, tag_labels: &[&
 /// in that order. Pass all three rectangles to tick occlusion and pointer routing.
 ///
 /// Session lines stay at their data price. Tags move apart only to keep the rows readable;
-/// volume is a value readout above the price rows, never a price coordinate. The caller supplies
+/// volume is a value readout at the bottom of the pane, never a price coordinate. The caller supplies
 /// the current values and colours independently of the historical bar under the pointer.
 /// Off-scale prices do not hide other rows. A short pane keeps close, session, then volume.
 pub fn render_quote_tags(
@@ -208,6 +208,22 @@ pub fn render_quote_tags(
     session: Option<(&crate::model::quote::SessionQuote, Color32)>,
     volume: Option<(f64, Color32)>,
     axis_right: f32,
+) -> [Option<Rect>; 3] {
+    render_quote_tags_with_countdown(
+        painter, price_rect, price_map, close, session, volume, axis_right, None,
+    )
+}
+
+/// The chart's current-value stack, optionally including the supplied quote's bar countdown.
+pub(crate) fn render_quote_tags_with_countdown(
+    painter: &Painter,
+    price_rect: Rect,
+    price_map: &PriceMap,
+    close: &PriceLine,
+    session: Option<(&crate::model::quote::SessionQuote, Color32)>,
+    volume: Option<(f64, Color32)>,
+    axis_right: f32,
+    countdown: Option<&str>,
 ) -> [Option<Rect>; 3] {
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
@@ -236,7 +252,10 @@ pub fn render_quote_tags(
         rows.push((
             0,
             close_y,
-            transform.label(transform.to_scale(close.price), decimals),
+            {
+                let price = transform.label(transform.to_scale(close.price), decimals);
+                countdown.map_or_else(|| price.clone(), |time| format!("{price}\n{time}"))
+            },
             close.color,
         ));
     }
@@ -255,32 +274,50 @@ pub fn render_quote_tags(
             axis_right,
         );
         let mut y = price_map.price_to_y(quote.price);
-        if !rows.is_empty() && (y - close_y).abs() < height {
-            y = close_y - height;
+        let separation = height
+            + if countdown.is_some() {
+                (height - TAG_PADDING.y * 2.0) / 2.0
+            } else {
+                0.0
+            };
+        if !rows.is_empty() && (y - close_y).abs() < separation {
+            y = close_y - separation;
         }
         let label = transform.label(transform.to_scale(quote.price), decimals);
         rows.push((1, y, format!("{} {label}", quote.qualifier), color));
     }
     if let Some((value, color)) = volume.filter(|(value, _)| value.is_finite() && *value >= 0.0) {
-        let y = rows
-            .iter()
-            .map(|row| row.1)
-            .fold(price_rect.bottom(), f32::min)
-            - height;
-        rows.push((2, y, VolumeFormatter::default().format(value), color));
+        rows.push((
+            2,
+            price_rect.bottom() - height / 2.0,
+            VolumeFormatter::default().format(value),
+            color,
+        ));
     }
-    // If the pane cannot hold every row, keep the close, then session, then volume.
-    rows.truncate((price_rect.height() / height).max(0.0) as usize);
+    let row_height = |text: &str| {
+        painter
+            .layout_no_wrap(text.to_owned(), axis_font(painter.ctx()), Color32::WHITE)
+            .size()
+            .y
+            + TAG_PADDING.y * 2.0
+    };
+    while rows.iter().map(|row| row_height(&row.2)).sum::<f32>() > price_rect.height() {
+        if rows.pop().is_none() {
+            break;
+        }
+    }
     rows.sort_by(|a, b| a.1.total_cmp(&b.1));
-    let mut next = price_rect.top() + height / 2.0;
+    let mut next = price_rect.top();
     for row in &mut rows {
-        row.1 = row.1.max(next);
-        next = row.1 + height;
+        let height = row_height(&row.2);
+        row.1 = row.1.max(next + height / 2.0);
+        next = row.1 + height / 2.0;
     }
-    next = price_rect.bottom() - height / 2.0;
+    next = price_rect.bottom();
     for row in rows.iter_mut().rev() {
-        row.1 = row.1.min(next);
-        next = row.1 - height;
+        let height = row_height(&row.2);
+        row.1 = row.1.min(next - height / 2.0);
+        next = row.1 - height / 2.0;
     }
     // Keep paint order stable even when the price coordinates reverse the row order.
     rows.sort_by_key(|row| row.0);
@@ -507,15 +544,32 @@ mod tests {
     #[test]
     fn quote_tags_separate_colliding_prices_and_volume() {
         use crate::model::quote::SessionQuote;
-        for (close, session_price, font_size, pane_height, show_close, slots) in [
-            (704.61, 704.64, 12.0, 100.0, true, [true, true, true]),
-            (709.99, 709.99, 12.0, 100.0, true, [true, true, true]),
-            (700.01, 700.01, 12.0, 100.0, true, [true, true, true]),
-            (704.61, 704.64, 24.0, 100.0, true, [true, true, true]),
-            (709.99, 700.01, 12.0, 100.0, true, [true, true, true]),
-            (720.0, 704.64, 12.0, 100.0, true, [false, true, true]),
-            (704.61, 704.64, 12.0, 100.0, false, [false, true, true]),
-            (704.61, 704.64, 12.0, 25.0, true, [true, false, false]),
+        for (close, session_price, font_size, pane_height, show_close, slots, countdown) in [
+            (704.61, 704.64, 12.0, 100.0, true, [true, true, true], None),
+            (709.99, 709.99, 12.0, 100.0, true, [true, true, true], None),
+            (700.01, 700.01, 12.0, 100.0, true, [true, true, true], None),
+            (704.61, 704.64, 24.0, 100.0, true, [true, true, true], None),
+            (709.99, 700.01, 12.0, 100.0, true, [true, true, true], None),
+            (720.0, 704.64, 12.0, 100.0, true, [false, true, true], None),
+            (
+                704.61,
+                704.64,
+                12.0,
+                100.0,
+                false,
+                [false, true, true],
+                None,
+            ),
+            (704.61, 704.64, 12.0, 25.0, true, [true, false, false], None),
+            (
+                704.61,
+                704.64,
+                12.0,
+                100.0,
+                true,
+                [true, true, true],
+                Some("00:15"),
+            ),
         ] {
             for mut theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
                 let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, pane_height));
@@ -534,7 +588,10 @@ mod tests {
                 let mut tags = [None; 3];
                 let mut width = 0.0;
                 let text = [
-                    format!("{close:.2}"),
+                    countdown.map_or_else(
+                        || format!("{close:.2}"),
+                        |time| format!("{close:.2}\n{time}"),
+                    ),
                     format!("EXT {session_price:.2}"),
                     "1.59M".into(),
                 ];
@@ -544,7 +601,7 @@ mod tests {
                         &map,
                         &text.iter().map(String::as_str).collect::<Vec<_>>(),
                     );
-                    tags = render_quote_tags(
+                    tags = render_quote_tags_with_countdown(
                         ui.painter(),
                         pane,
                         &map,
@@ -552,6 +609,7 @@ mod tests {
                         Some((&session, Color32::from_rgb(251, 142, 1))),
                         Some((1_590_000.0, Color32::RED)),
                         pane.right() + width,
+                        countdown,
                     );
                 });
                 let labels: Vec<_> = output

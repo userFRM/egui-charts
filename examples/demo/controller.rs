@@ -190,6 +190,7 @@ impl DemoApp {
         .with_chart_options(options);
         chart.config_mut().volume_baseline_inset = 0.0;
         chart.config_mut().candle_width = 0.75;
+        chart.config_mut().right_axis_width = 59.0;
         chart.set_symbol("SAMPLE (synthetic)");
         chart.set_timeframe(timeframe);
 
@@ -335,18 +336,34 @@ impl DemoApp {
         );
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
         let spec = DemoSymbol::find(&self.state.symbol);
-        self.chart.set_instrument(Some(egui_charts::model::Instrument::new(spec.symbol)
-            .with_description(format!("{} (synthetic)", spec.company_name))
-            .with_exchange(spec.exchange)
-            .with_price_decimals(2)));
-        self.chart.set_quote(self.bars.last().map(|bar| egui_charts::model::Level1Quote {
-            ts: bar.time,
-            symbol: self.state.symbol.clone(),
-            bid: (bar.close * 100.0).round() / 100.0 - 0.02,
-            ask: (bar.close * 100.0).round() / 100.0 + 0.02,
-            bid_size: 100.0,
-            ask_size: 100.0,
-        }));
+        self.chart.set_instrument(Some(
+            egui_charts::model::Instrument::new(spec.symbol)
+                .with_description(format!("{} (synthetic)", spec.company_name))
+                .with_exchange(spec.exchange)
+                .with_price_decimals(2),
+        ));
+        self.chart
+            .set_quote(self.bars.last().map(|bar| egui_charts::model::Level1Quote {
+                // The frozen quote is fifteen seconds before this synthetic bar closes.
+                ts: bar.time
+                    + chrono::Duration::milliseconds(self.state.timeframe.duration_ms() - 15_000),
+                symbol: self.state.symbol.clone(),
+                bid: (bar.close * 100.0).round() / 100.0 - 0.02,
+                ask: (bar.close * 100.0).round() / 100.0 + 0.02,
+                bid_size: 100.0,
+                ask_size: 100.0,
+            }));
+        self.chart.set_events(
+            self.bars
+                .last()
+                .map(|bar| {
+                    egui_charts::model::Marker::event(bar.time, "S")
+                        .with_id("sample-session")
+                        .with_tooltip("Synthetic session: generated example data")
+                })
+                .into_iter()
+                .collect(),
+        );
     }
 
     // --- replay ------------------------------------------------------------
@@ -841,8 +858,8 @@ impl DemoApp {
 
         match action {
             DrawingToolbarAction::SetCursorType(cursor) => {
-                use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
                 use egui_charts::config::CrosshairStyle;
+                use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
                 self.chart.set_crosshair_style(match cursor {
                     CursorType::Cross => CrosshairStyle::Full,
                     CursorType::Dot => CrosshairStyle::Dot,
@@ -850,11 +867,14 @@ impl DemoApp {
                     CursorType::Demonstration => CrosshairStyle::Demonstration,
                 });
                 self.chart.drawings_mut().set_active_tool(None);
-                self.chart.drawings_mut().set_eraser_mode(cursor == CursorType::Eraser);
+                self.chart
+                    .drawings_mut()
+                    .set_eraser_mode(cursor == CursorType::Eraser);
                 return;
             }
             DrawingToolbarAction::ToggleValuesTooltip => {
-                self.chart.set_tooltip_enabled(self.drawing_toolbar.state.values_tooltip_on_long_press);
+                self.chart
+                    .set_tooltip_enabled(self.drawing_toolbar.state.values_tooltip_on_long_press);
                 return;
             }
             _ => {}
@@ -1225,6 +1245,13 @@ impl DemoApp {
             .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
                 self.chart.show(ui);
+                if self.chart.take_scale_settings_request() {
+                    self.open_series_settings_dialog();
+                    self.series_settings.active_tab = egui_charts::ui::dialogs::series_settings::SeriesSettingsTab::ScalesAndLines;
+                }
+                if self.chart.take_event_click().is_some() {
+                    self.notify("Synthetic session: generated example data");
+                }
                 if let Some(side) = self.chart.take_quote_action() {
                     self.notify(format!("{side:?} quote selected; synthetic data, no order submitted"));
                 }

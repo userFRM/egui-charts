@@ -265,6 +265,11 @@ pub struct Chart {
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    session_quote: Option<crate::model::quote::SessionQuote>,
+    axis_hover: Option<(Pos2, Rect)>,
+    scale_settings_requested: bool,
+    events: Vec<crate::model::Marker>,
+    event_click: Option<String>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
     pub(crate) timeframe: Option<Timeframe>,
     /// The feed the chart loads from, if it was built with one.
@@ -424,6 +429,26 @@ impl Chart {
     /// Pass `None` when quotes are unavailable or the symbol changes.
     pub fn set_quote(&mut self, quote: Option<crate::model::Level1Quote>) {
         self.quote = quote;
+    }
+
+    /// Supplies an independent extended-session price and qualifier. `None` hides the tag.
+    pub fn set_session_quote(&mut self, quote: Option<crate::model::quote::SessionQuote>) {
+        self.session_quote = quote;
+    }
+
+    /// Supplies event badges at the time-axis boundary, separately from bar annotations.
+    pub fn set_events(&mut self, events: Vec<crate::model::Marker>) {
+        self.events = events;
+    }
+
+    /// Takes the ID of the last clicked event badge.
+    pub fn take_event_click(&mut self) -> Option<String> {
+        self.event_click.take()
+    }
+
+    /// Takes a request to open the host's price-scale settings.
+    pub fn take_scale_settings_request(&mut self) -> bool {
+        std::mem::take(&mut self.scale_settings_requested)
     }
 
     /// Takes the last legend quote click. No order is submitted by the chart.

@@ -290,7 +290,26 @@ impl Chart {
         // A button owns the whole gesture, including a drag that leaves the row. The chart's
         // own response goes back to the caller; the gesture handlers see a hover-only one.
         let shown = response.clone();
-        if navigation_interaction {
+        let axis_corner = Rect::from_min_max(
+            Pos2::new(chart_rect.right(), time_axis_top),
+            Pos2::new(rect.right(), time_axis_top + 28.0),
+        );
+        let axis_interaction = self.config.show_right_axis
+            && ui.input(|input| {
+                (input.pointer.any_down() || input.pointer.any_released())
+                    && input
+                        .pointer
+                        .press_origin()
+                        .or(input.pointer.hover_pos())
+                        .is_some_and(|pos| {
+                            axis_corner.contains(pos)
+                                || self.axis_hover.is_some_and(|(_, tag)| {
+                                    Rect::from_min_size(tag.min, Vec2::new(21.0, tag.height()))
+                                        .contains(pos)
+                                })
+                        })
+            });
+        if navigation_interaction || axis_interaction {
             response = ui.interact(
                 Rect::NOTHING,
                 response.id.with("navigation_input"),
@@ -772,16 +791,40 @@ impl Chart {
             } else {
                 self.config.bearish_color
             };
-            let line = PriceLine::new(last.close, color).with_width(DESIGN_TOKENS.stroke.hairline);
-            rendering::render_price_line(
+            let line = PriceLine::new(last.close, color)
+                .with_width(DESIGN_TOKENS.stroke.hairline)
+                .with_style(crate::model::LineStyle::Dotted)
+                .with_axis_label(self.config.show_right_axis);
+            let countdown = self.quote.as_ref().and_then(|quote| {
+                let duration = self.timeframe?.duration_ms() / 1000;
+                let elapsed = quote.ts.signed_duration_since(last.time).num_seconds();
+                (elapsed >= 0 && elapsed < duration).then(|| {
+                    let remaining = duration - elapsed;
+                    format!("{:02}:{:02}", remaining / 60, remaining % 60)
+                })
+            });
+            let quote_tags = rendering::axes::render_quote_tags_with_countdown(
                 &painter,
                 price_rect,
                 &price_map,
                 &line,
-                price_rect.min.x,
-                self.config.show_right_axis,
+                self.session_quote
+                    .as_ref()
+                    .filter(|_| self.config.show_right_axis)
+                    .map(|quote| (quote, egui::Color32::from_rgb(251, 142, 1))),
+                (show_volume && self.config.show_right_axis).then_some((
+                    last.volume,
+                    if last.is_bullish() {
+                        ui.active_theme().chart.volume_up().to_opaque()
+                    } else {
+                        ui.active_theme().chart.volume_down().to_opaque()
+                    },
+                )),
                 rect.max.x,
-            )
+                countdown.as_deref(),
+            );
+            tags.extend([quote_tags[1], quote_tags[2]]);
+            quote_tags[0]
         } else {
             None
         };
@@ -886,9 +929,22 @@ impl Chart {
         } else {
             self.cursor_modes.move_pointer(None);
         }
-        if let Some(hover_pos) = response.hover_pos()
-            && price_rect.contains(hover_pos)
-        {
+        let hover_pos = shown
+            .hover_pos()
+            .filter(|pos| price_rect.contains(*pos))
+            .or_else(|| {
+                self.axis_hover
+                    .filter(|(_, tag)| {
+                        ui.input(|input| {
+                            input
+                                .pointer
+                                .hover_pos()
+                                .is_some_and(|pos| tag.contains(pos))
+                        })
+                    })
+                    .map(|(pos, _)| pos)
+            });
+        if let Some(hover_pos) = hover_pos {
             // Cache the hover bar index for multi-chart sync
             self.last_hover_bar_idx = Some(coords.x_to_idx_f32(hover_pos.x) as f64);
 
@@ -1008,6 +1064,35 @@ impl Chart {
                         );
                     }
                 }
+            }
+        }
+
+        self.axis_hover = hover_pos.zip(crosshair_tags[0]);
+        #[cfg(feature = "icons")]
+        if self.config.show_right_axis {
+            if let Some((pos, tag)) = self.axis_hover {
+                if let Some(price) =
+                    rendering::axes::crosshair_price_action(ui, tag, price_map.y_to_price(pos.y))
+                {
+                    self.right_click = Some(RightClickTarget::Background {
+                        pos: tag.left_bottom(),
+                        price,
+                    });
+                }
+            }
+            if rendering::axes::axis_settings_button(ui, axis_corner).clicked() {
+                self.scale_settings_requested = true;
+            }
+        }
+        if time_based {
+            if let Some(id) = renderers::render_event_band(
+                ui,
+                &self.events,
+                visible_data,
+                &coords,
+                price_rect.bottom(),
+            ) {
+                self.event_click = Some(id);
             }
         }
 
