@@ -6,6 +6,7 @@
 use egui::{RichText, Ui};
 
 use crate::icons::icons;
+use crate::scales::{PriceFormatter, VolumeFormatter};
 use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 
@@ -109,7 +110,15 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
             ui.end_row();
 
             ui.hint_label("Vol");
-            ui.label(format_volume(data.volume));
+            ui.label(data.volume_precision.map_or_else(
+                || format_volume(data.volume),
+                |decimals| {
+                    VolumeFormatter {
+                        precision: usize::from(decimals),
+                    }
+                    .format(data.volume)
+                },
+            ));
             ui.end_row();
             ui.hint_label("Chg");
             ui.label(
@@ -134,9 +143,6 @@ fn format_price(price: f64, decimals: Option<u8>) -> String {
     }
     if let Some(decimals) = decimals {
         return format!("{:.*}", usize::from(decimals), price);
-    }
-    if price == 0.0 {
-        return "\u{2014}".to_string();
     }
 
     let magnitude = price.abs();
@@ -178,6 +184,8 @@ mod tests {
 
     #[test]
     fn test_format_price() {
+        assert_eq!(format_price(0.0, None), "0.00000000");
+        assert_eq!(format_price(f64::NAN, Some(2)), "\u{2014}");
         assert_eq!(format_price(50000.0, None), "50000");
         assert_eq!(format_price(1234.5, None), "1234.5");
         assert_eq!(format_price(99.99, None), "99.99");
@@ -192,6 +200,33 @@ mod tests {
         ] {
             assert_eq!(format_price(price, Some(decimals)), expected);
         }
+    }
+
+    #[test]
+    fn instrument_precision_formats_prices_change_and_volume() {
+        let mut instrument = crate::model::Instrument::new("FX").with_volume_decimals(3);
+        instrument.tick_size = Some(0.00001);
+        let data = DataWindowInfo::new("FX")
+            .with_instrument(&instrument)
+            .with_ohlcv(0.0, 1.23456, 0.0, 1.23456, 1234.0)
+            .with_prev_close(1.23455);
+        assert_eq!(data.price_decimals, Some(5));
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show_ohlcv_grid(ui, &data);
+        });
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        for expected in ["0.00000", "1.23456", "+0.00001 (+0.00%)", "1.234K"] {
+            assert!(texts.contains(&expected), "{expected}: {texts:?}");
+        }
+        output.drop_without_applying_deltas();
     }
 
     #[test]

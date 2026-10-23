@@ -20,13 +20,14 @@
 //! - Range-based: High-Low, Range Bars
 //! - Advanced: TPO (Market Profile)
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Chart visualization types
 ///
 /// Each variant represents a distinct way to visualize OHLCV data.
 /// The default is `Candles` (Japanese candlesticks).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ChartType {
     // === Standard OHLC Types ===
     /// Traditional OHLC bars with tick marks
@@ -326,7 +327,7 @@ impl fmt::Display for ChartType {
 }
 
 /// Where the Baseline chart draws its base line.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BaselineLevel {
     /// A price.
     Price(f64),
@@ -336,8 +337,27 @@ pub enum BaselineLevel {
 
 /// The parameters of the chart types that need them. Sizes are in price units and are used as
 /// given; a size the chart cannot use is reported on the chart instead of being replaced.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChartTypeParams {
+    /// Independent line, area and baseline styles, retained across chart type changes.
+    pub styles: super::ChartTypeStyles,
+    /// Renko: method resolved once from loaded history, then frozen while bars stream.
+    pub renko_size_method: super::BoxSizeMethod,
+    /// Kagi: method for its reversal amount.
+    pub kagi_size_method: super::BoxSizeMethod,
+    /// Range bars: method for their range.
+    pub range_size_method: super::BoxSizeMethod,
+    /// Point and Figure: method for its box size.
+    pub pnf_size_method: super::BoxSizeMethod,
+    /// Renko: close or high/low input, also used for wick extremes.
+    pub renko_source: super::PriceBasedSource,
+    /// Kagi: close or high/low input.
+    pub kagi_source: super::PriceBasedSource,
+    /// Line Break: close or high/low input.
+    pub line_break_source: super::PriceBasedSource,
+    /// Draw Renko wicks from the brick's actual high and low.
+    pub renko_wicks: bool,
     /// Renko: size of a brick.
     pub renko_brick_size: f64,
     /// Kagi: the move against the line that starts a new line.
@@ -358,6 +378,15 @@ pub struct ChartTypeParams {
 impl Default for ChartTypeParams {
     fn default() -> Self {
         Self {
+            styles: super::ChartTypeStyles::default(),
+            renko_size_method: super::BoxSizeMethod::Fixed,
+            kagi_size_method: super::BoxSizeMethod::Fixed,
+            range_size_method: super::BoxSizeMethod::Fixed,
+            pnf_size_method: super::BoxSizeMethod::Fixed,
+            renko_source: super::PriceBasedSource::Close,
+            kagi_source: super::PriceBasedSource::Close,
+            line_break_source: super::PriceBasedSource::Close,
+            renko_wicks: false,
             renko_brick_size: 1.0,
             kagi_reversal: 1.0,
             range_size: 1.0,
@@ -375,6 +404,42 @@ impl ChartTypeParams {
         Self {
             renko_brick_size: atr * multiplier,
             ..Default::default()
+        }
+    }
+
+    /// Size methods in Renko, Kagi, Range, Point and Figure order.
+    #[cfg(feature = "widget")]
+    pub(crate) fn size_methods(&self) -> [super::BoxSizeMethod; 4] {
+        [
+            self.renko_size_method,
+            self.kagi_size_method,
+            self.range_size_method,
+            self.pnf_size_method,
+        ]
+    }
+
+    /// Resolve pending sizes only when their history is ready. Each successful calculation is
+    /// frozen until explicitly armed again; prepending history and live corrections keep it.
+    #[cfg(feature = "widget")]
+    pub(crate) fn resolve_sizes(&mut self, bars: &[super::Bar], pending: &mut [bool; 4]) {
+        let methods = self.size_methods();
+        let sizes = [
+            &mut self.renko_brick_size,
+            &mut self.kagi_reversal,
+            &mut self.range_size,
+            &mut self.pnf_box_size,
+        ];
+        for ((method, size), pending) in methods.into_iter().zip(sizes).zip(pending) {
+            if !*pending {
+                continue;
+            }
+            let waiting = match method {
+                super::BoxSizeMethod::Atr { period, .. } => period > bars.len(),
+                super::BoxSizeMethod::Percentage(_) => bars.is_empty(),
+                super::BoxSizeMethod::Fixed => false,
+            };
+            *size = method.resolve(*size, bars).unwrap_or(0.0);
+            *pending = waiting;
         }
     }
 

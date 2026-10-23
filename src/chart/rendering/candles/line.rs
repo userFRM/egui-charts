@@ -4,11 +4,11 @@
 
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Painter, Pos2, Shape, Stroke};
+use egui::{Painter, Pos2, Shape, Stroke};
 
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
-use crate::model::{Bar, PriceSource};
+use crate::model::{Bar, LinePlotStyle, PriceSource};
 
 pub(super) fn render_line(
     painter: &Painter,
@@ -21,7 +21,7 @@ pub(super) fn render_line(
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    line_color: Color32,
+    style: &LinePlotStyle,
     price_source: PriceSource,
 ) {
     let points: Vec<Pos2> = visible_data
@@ -36,10 +36,7 @@ pub(super) fn render_line(
         .collect();
 
     if points.len() > 1 {
-        painter.add(Shape::line(
-            points,
-            Stroke::new(DESIGN_TOKENS.stroke.thick, line_color),
-        ));
+        draw_styled_line(painter, points, style);
     }
 
     if show_volume {
@@ -67,8 +64,9 @@ pub(super) fn render_line_with_markers(
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    line_color: Color32,
+    style: &LinePlotStyle,
     price_source: PriceSource,
+    marker_radius: f32,
 ) {
     let points: Vec<Pos2> = visible_data
         .iter()
@@ -82,16 +80,15 @@ pub(super) fn render_line_with_markers(
         .collect();
 
     if points.len() > 1 {
-        painter.add(Shape::line(
-            points.clone(),
-            Stroke::new(DESIGN_TOKENS.stroke.thick, line_color),
-        ));
+        draw_styled_line(painter, points.clone(), style);
     }
 
     // Draw markers
-    let marker_radius = 3.0;
-    for point in &points {
-        painter.add(Shape::circle_filled(*point, marker_radius, line_color));
+    for point in points
+        .iter()
+        .filter(|_| marker_radius.is_finite() && marker_radius > 0.0)
+    {
+        painter.add(Shape::circle_filled(*point, marker_radius, style.color));
         painter.add(Shape::circle_stroke(
             *point,
             marker_radius,
@@ -127,7 +124,7 @@ pub(super) fn render_step_line(
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    line_color: Color32,
+    style: &LinePlotStyle,
     price_source: PriceSource,
 ) {
     if visible_data.is_empty() {
@@ -152,10 +149,7 @@ pub(super) fn render_step_line(
     }
 
     if points.len() > 1 {
-        painter.add(Shape::line(
-            points,
-            Stroke::new(DESIGN_TOKENS.stroke.thick, line_color),
-        ));
+        draw_styled_line(painter, points, style);
     }
 
     if show_volume {
@@ -168,5 +162,20 @@ pub(super) fn render_step_line(
             chart_rect_min_x,
             &idx_to_coord,
         );
+    }
+}
+
+/// Paint a line with the chart type's own style; dashes keep their phase through corners.
+pub(super) fn draw_styled_line(painter: &Painter, points: Vec<Pos2>, style: &LinePlotStyle) {
+    if !style.width.is_finite() || style.width <= 0.0 {
+        return;
+    }
+    let stroke = Stroke::new(style.width, style.color);
+    if let Some((dash, gap)) = style.style.dash_pattern() {
+        crate::chart::rendering::dashed_line::draw_dashed_polyline(
+            painter, &points, stroke, dash, gap,
+        );
+    } else {
+        painter.add(Shape::line(points, stroke));
     }
 }

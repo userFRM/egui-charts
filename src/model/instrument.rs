@@ -69,6 +69,8 @@ pub struct Instrument {
     pub pip_size: Option<f64>,
     /// Decimals of price labels.
     pub price_decimals: Option<u8>,
+    /// Decimals of volume readouts, including abbreviated K/M/B values.
+    pub volume_decimals: Option<u8>,
     /// Currency of prices, such as "USD".
     pub currency: Option<String>,
     /// Exchange time zone.
@@ -88,6 +90,7 @@ impl Instrument {
             tick_size: None,
             pip_size: None,
             price_decimals: None,
+            volume_decimals: None,
             currency: None,
             time_zone: None,
             session: None,
@@ -127,6 +130,12 @@ impl Instrument {
     /// Sets [`price_decimals`](Self::price_decimals).
     pub fn with_price_decimals(mut self, decimals: u8) -> Self {
         self.price_decimals = Some(decimals);
+        self
+    }
+
+    /// Sets [`volume_decimals`](Self::volume_decimals).
+    pub fn with_volume_decimals(mut self, decimals: u8) -> Self {
+        self.volume_decimals = Some(decimals);
         self
     }
 

@@ -10,6 +10,11 @@ use egui::Color32;
 /// Settings for chart series appearance
 #[derive(Clone, Debug)]
 pub struct SeriesSettings {
+    /// Active chart type, used by the dialog to choose the controls to show.
+    /// Applying settings keeps the chart's currently selected type.
+    pub chart_type: crate::model::ChartType,
+    /// Retained styles and chart type parameters.
+    pub chart_type_params: crate::model::ChartTypeParams,
     // === Symbol Tab: Colors ===
     /// Bullish candle body color
     pub bullish_color: Color32,
@@ -68,6 +73,8 @@ pub struct SeriesSettings {
 impl Default for SeriesSettings {
     fn default() -> Self {
         Self {
+            chart_type: crate::model::ChartType::default(),
+            chart_type_params: crate::model::ChartTypeParams::default(),
             // Symbol Tab: Colors
             bullish_color: DESIGN_TOKENS.semantic.extended.bullish,
             bearish_color: DESIGN_TOKENS.semantic.extended.bearish,
@@ -125,9 +132,12 @@ impl SeriesSettings {
         self.bearish_wick_color.unwrap_or(self.bearish_color)
     }
 
-    /// Reset to default colors
+    /// Reset settings to defaults, keeping the active chart type for dialog context.
     pub fn reset_to_default(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            chart_type: self.chart_type,
+            ..Self::default()
+        };
     }
 
     /// Compute the line value for a bar based on the configured price source.

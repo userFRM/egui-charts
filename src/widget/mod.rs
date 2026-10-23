@@ -82,15 +82,10 @@
 //!
 //! ```rust
 //! # fn example(chart_a: &egui_charts::Chart, chart_b: &mut egui_charts::Chart) {
-//! // Emit crosshair position from chart A
-//! let hover_idx = chart_a.get_hover_bar_idx();
-//!
-//! // Apply to chart B
-//! chart_b.set_synced_crosshair_bar_idx(hover_idx);
-//!
-//! // Sync time scales
-//! let (spacing, offset) = chart_a.get_time_scale_state();
-//! chart_b.apply_synced_time_scale(spacing, offset);
+//! chart_b.set_synced_crosshair_time(chart_a.hover_time());
+//! if let Some(range) = chart_a.visible_time_range() {
+//!     chart_b.apply_synced_time_range(range);
+//! }
 //! # }
 //! ```
 //!
@@ -129,13 +124,16 @@ pub mod builder;
 mod feed;
 mod frame;
 pub(crate) mod interaction;
+pub mod layout;
 mod navigation;
 pub(crate) mod pan_zoom;
 mod panes;
 mod selection;
 mod series;
+pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 mod sync;
 use feed::FeedLink;
+pub use sync::VisibleTimeRange;
 pub(crate) mod tool_interaction;
 
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
@@ -229,6 +227,7 @@ pub struct Chart {
     pub(crate) chart_type: ChartType,
     /// Parameters of the price-based chart types and the baseline
     pub(crate) chart_type_params: ChartTypeParams,
+    pending_box_sizes: [bool; 4],
     /// Whether older source bars can contribute to the shown series.
     pub(crate) older_bars_drawn: bool,
     /// Whether tracking mode is currently active
@@ -265,15 +264,21 @@ pub struct Chart {
     pub(crate) symbol: String,
     /// Metadata supplied directly by a host without a feed.
     legend_instrument: Option<crate::model::Instrument>,
+    currency_choices: Vec<String>,
+    currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    server_time_offset: Option<chrono::TimeDelta>,
+    bar_close_time: Option<chrono::DateTime<chrono::Utc>>,
     indicator_settings_request: Option<SeriesId>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,
+    pub(crate) measured_axis_width: f32,
+    last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
     events: Vec<crate::model::Marker>,
@@ -429,8 +434,19 @@ impl Chart {
         self.legend_instrument = instrument;
         let precision = self
             .instrument()
-            .and_then(|instrument| instrument.price_decimals);
+            .and_then(crate::scales::instrument_price_precision);
         self.state.price_scale_mut().set_price_precision(precision);
+    }
+
+    /// Supplies currencies the host can convert the chart into. Choosing one emits an intent;
+    /// the host replaces bars and instrument metadata together after conversion.
+    pub fn set_currency_choices(&mut self, currencies: Vec<String>) {
+        self.currency_choices = currencies;
+    }
+
+    /// Takes the selected currency. No prices change until the host supplies converted data.
+    pub fn take_currency_choice(&mut self) -> Option<String> {
+        self.currency_choice.take()
     }
 
     /// Supplies a host-owned instrument image for the legend. `None` hides it.
@@ -450,6 +466,26 @@ impl Chart {
     /// Pass `None` when quotes are unavailable or the symbol changes.
     pub fn set_quote(&mut self, quote: Option<crate::model::Level1Quote>) {
         self.quote = quote;
+    }
+
+    /// Supplies the current server time for a chart without a feed. The clock advances between
+    /// calls; update it when a replay jumps. `None` restores the feed clock or latest quote time.
+    pub fn set_server_time(&mut self, now: Option<chrono::DateTime<chrono::Utc>>) {
+        self.server_time_offset = now.map(|time| time - chrono::Utc::now());
+    }
+
+    /// Supplies an exact closing instant for the newest bar, for irregular sessions or replays.
+    /// `None` derives the close from the timeframe and the instrument's session.
+    pub fn set_bar_close_time(&mut self, close: Option<chrono::DateTime<chrono::Utc>>) {
+        self.bar_close_time = close;
+    }
+
+    /// Sets the right margin in bars and moves to that margin when it changes.
+    pub fn set_right_margin(&mut self, bars: f32) {
+        if bars.is_finite() && bars >= 0.0 && self.chart_options.time_scale.right_offset != bars {
+            self.chart_options.time_scale.right_offset = bars;
+            self.state.time_scale_mut().set_right_offset(bars);
+        }
     }
 
     /// Supplies an independent extended-session price and qualifier. `None` hides the tag.
@@ -499,12 +535,12 @@ impl Chart {
             .max(0.0)
             .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
         let left_axis = if self.config.show_left_axis {
-            self.config.left_axis_width.max(0.0)
+            self.config.left_axis_width.max(self.measured_axis_width)
         } else {
             0.0
         };
         let right_axis = if self.config.show_right_axis {
-            self.config.right_axis_width.max(0.0)
+            self.config.right_axis_width.max(self.measured_axis_width)
         } else {
             0.0
         };
@@ -603,6 +639,7 @@ impl Chart {
         self.config.bullish_wick_color = settings.bullish_wick_color;
         self.config.bearish_wick_color = settings.bearish_wick_color;
         self.config.price_source = settings.price_source;
+        self.set_chart_type_params(settings.chart_type_params.clone());
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();
@@ -610,6 +647,26 @@ impl Chart {
         let options = self.state.price_scale_mut().options_mut();
         options.mode = settings.price_scale_mode;
         options.invert_scale = settings.invert_scale;
+    }
+
+    /// Read the current appearance and chart type parameters for the series settings dialog.
+    /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
+    /// [`Self::apply_series_settings`]. The active chart type is dialog context only.
+    pub fn series_settings(&self) -> SeriesSettings {
+        SeriesSettings {
+            chart_type: self.chart_type,
+            chart_type_params: self.chart_type_params.clone(),
+            bullish_color: self.config.bullish_color,
+            bearish_color: self.config.bearish_color,
+            bullish_border_color: self.config.bullish_border_color,
+            bearish_border_color: self.config.bearish_border_color,
+            bullish_wick_color: self.config.bullish_wick_color,
+            bearish_wick_color: self.config.bearish_wick_color,
+            price_source: self.config.price_source,
+            price_scale_mode: self.state.price_scale().options().mode,
+            invert_scale: self.state.price_scale().options().invert_scale,
+            ..Default::default()
+        }
     }
 
     /// Get a [`ChartMapping`] for coordinate conversions.

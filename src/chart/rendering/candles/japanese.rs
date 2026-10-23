@@ -13,6 +13,7 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 pub(super) fn render_renko(
     painter: &Painter,
     bricks: &[RenkoBrick],
+    show_wicks: bool,
     bar_width: f32,
     price_scale: &PriceMap,
     bullish_color: Color32,
@@ -29,6 +30,15 @@ pub(super) fn render_renko(
         } else {
             bearish_color
         };
+        if show_wicks {
+            painter.line_segment(
+                [
+                    Pos2::new(x, coords.price_to_y(brick.high)),
+                    Pos2::new(x, coords.price_to_y(brick.low)),
+                ],
+                Stroke::new(1.0, color),
+            );
+        }
         let rect = calc_brick_rect(x, &bar, &coords, bar_width);
         draw_brick(painter, rect, color, 1.0);
     }
@@ -244,6 +254,67 @@ fn draw_pnf_column(
             draw_x_symbol(painter, Pos2::new(x, y), half, color);
         } else {
             draw_o_symbol(painter, Pos2::new(x, y), half, color);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::RenkoDirection;
+    use crate::scales::{PriceRange, PriceTransform};
+
+    #[test]
+    fn renko_wick_switch_draws_actual_extremes() {
+        // On a 100..110 axis spanning 100 points, 104 maps to y=60 and 101.5 to y=85.
+        for show_wicks in [false, true] {
+            let ctx = egui::Context::default();
+            let map = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(100.0, 110.0),
+                0.0,
+                100.0,
+                false,
+            );
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                render_renko(
+                    ui.painter(),
+                    &[RenkoBrick {
+                        ts: chrono::Utc::now(),
+                        open: 103.0,
+                        close: 104.0,
+                        high: 104.0,
+                        low: 101.5,
+                        direction: RenkoDirection::Up,
+                    }],
+                    show_wicks,
+                    8.0,
+                    &map,
+                    Color32::GREEN,
+                    Color32::RED,
+                    |_| 50.0,
+                );
+            });
+            let wicks: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| {
+                    if let Shape::LineSegment { points, .. } = &s.shape {
+                        Some(*points)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(
+                wicks,
+                if show_wicks {
+                    vec![[Pos2::new(50.0, 60.0), Pos2::new(50.0, 85.0)]]
+                } else {
+                    vec![]
+                }
+            );
         }
     }
 }

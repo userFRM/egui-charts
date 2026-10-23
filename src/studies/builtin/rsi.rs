@@ -118,6 +118,10 @@ impl Indicator for RSI {
         "RSI"
     }
 
+    fn precision(&self) -> Option<usize> {
+        Some(2)
+    }
+
     fn desc(&self) -> &str {
         "Relative Strength Index - Momentum oscillator (0-100)"
     }

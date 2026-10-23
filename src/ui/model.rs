@@ -4,7 +4,6 @@
 //! toolbars, panels, and dialogs of the `ui` feature.
 
 use chrono::{DateTime, Utc};
-use std::fmt;
 
 // =============================================================================
 // Connection
@@ -24,60 +23,7 @@ pub enum ConnectionState {
 // Chart Layout
 // =============================================================================
 
-/// Multi-chart grid layout mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ChartLayoutMode {
-    Single,
-    TwoHorizontal,
-    TwoVertical,
-    Three,
-    Four,
-    Six,
-}
-
-impl ChartLayoutMode {
-    /// All available layout modes
-    pub fn all() -> &'static [ChartLayoutMode] {
-        &[
-            Self::Single,
-            Self::TwoHorizontal,
-            Self::TwoVertical,
-            Self::Three,
-            Self::Four,
-            Self::Six,
-        ]
-    }
-
-    /// Human-readable label
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Single => "Single",
-            Self::TwoHorizontal => "2 Horizontal",
-            Self::TwoVertical => "2 Vertical",
-            Self::Three => "3 Charts",
-            Self::Four => "2x2 Grid",
-            Self::Six => "3x2 Grid",
-        }
-    }
-
-    /// Grid dimensions (columns, rows)
-    pub fn grid_size(&self) -> (usize, usize) {
-        match self {
-            Self::Single => (1, 1),
-            Self::TwoHorizontal => (2, 1),
-            Self::TwoVertical => (1, 2),
-            Self::Three => (2, 2),
-            Self::Four => (2, 2),
-            Self::Six => (3, 2),
-        }
-    }
-}
-
-impl fmt::Display for ChartLayoutMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label())
-    }
-}
+pub use crate::widget::ChartLayoutMode;
 
 // =============================================================================
 // Layout Style

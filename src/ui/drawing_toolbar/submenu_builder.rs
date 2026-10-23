@@ -141,6 +141,15 @@ impl<'a> SubmenuBuilder<'a> {
         self
     }
 
+    /// Draw the item added last with `icon`.
+    #[must_use]
+    pub(super) fn icon(mut self, icon: &'static Icon) -> Self {
+        if let Some(item) = self.items.last_mut() {
+            item.icon = Some(icon);
+        }
+        self
+    }
+
     /// Show a check mark on the item added last when `checked`.
     #[must_use]
     pub fn checked(mut self, checked: bool) -> Self {

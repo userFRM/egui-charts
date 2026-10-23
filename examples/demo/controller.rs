@@ -6,13 +6,17 @@
 //! actions. Indicator templates live in host memory. Controls that need a trading
 //! account show a notice, and the context menu entries it does not model do nothing.
 
+#[path = "layouts.rs"]
+mod layouts;
+use egui_charts::widget::ChartLayout;
+use layouts::{DemoChart, LayoutTab};
+
 #[path = "live.rs"]
 mod live;
 
 use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
-use egui_charts::chart::series::SeriesSettings;
 use egui_charts::model::{Alert, AlertCondition, AlertFrequency};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
@@ -126,6 +130,11 @@ impl ChartAppState for DemoAppState {
 /// The full demo application.
 pub struct DemoApp {
     pub chart: Chart,
+    layout: ChartLayout,
+    layout_slot: usize,
+    extra_charts: Vec<DemoChart>,
+    layout_tabs: Vec<LayoutTab>,
+    layout_tab: usize,
     live: Arc<LiveFeed>,
     /// Whether an object tree colour picker is editing a drawing, as one undo step.
     colour_drag: bool,
@@ -205,7 +214,7 @@ impl DemoApp {
             .with_symbol(symbol)
             .with_timeframe(timeframe)
             .with_theme(theme.clone())
-            .with_visible_candles(210)
+            .with_visible_candles(0)
             .with_chart_options(options)
             .build();
         chart.config_mut().volume_height_fraction = 0.25;
@@ -248,6 +257,11 @@ impl DemoApp {
         let mut app = Self {
             chart,
             live,
+            layout: ChartLayout::default(),
+            layout_slot: 0,
+            extra_charts: Vec::new(),
+            layout_tabs: vec![LayoutTab::unnamed()],
+            layout_tab: 0,
             colour_drag: false,
             footprint: None,
             footprint_scale: None,
@@ -522,6 +536,20 @@ impl DemoApp {
         settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
         settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
         settings.scales_and_lines.show_countdown = config.show_countdown;
+        settings.scales_and_lines.show_bid_ask = config.show_bid_ask;
+        settings.scales_and_lines.show_high_low = config.show_high_low;
+        settings.margins.top_percent =
+            (self.chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
+        settings.margins.bottom_percent = (self
+            .chart
+            .state()
+            .price_scale()
+            .options()
+            .scale_margins
+            .bottom
+            * 100.0) as f32;
+        settings.margins.right_bars =
+            self.chart.chart_options().time_scale.right_offset.max(0.0) as u32;
         let scale = self.chart.state().price_scale();
         settings.scales_and_lines.auto_scale = !scale.is_manual();
         settings.scales_and_lines.log_scale =
@@ -534,7 +562,7 @@ impl DemoApp {
 
     fn open_series_settings_dialog(&mut self) {
         self.series_settings
-            .open(SeriesId::MAIN, SeriesSettings::default());
+            .open(SeriesId::MAIN, self.chart.series_settings());
     }
 
     fn open_drawing_props_for(&mut self, drawing_id: usize) {
@@ -712,7 +740,7 @@ impl DemoApp {
         // Date picker (opened from the bottom toolbar): jump the visible window.
         match self.date_picker.show(ctx) {
             DatePickerAction::GoToDate(date) => self.go_to_date(date),
-            DatePickerAction::SetRange(start, _end) => self.go_to_date(start),
+            DatePickerAction::SetRange(start, end) => self.set_date_range(start, end),
             DatePickerAction::Cancel | DatePickerAction::None => {}
         }
     }
@@ -747,6 +775,16 @@ impl DemoApp {
 
     fn clone_drawing(&mut self, id: usize) {
         self.chart.drawings_mut().duplicate_drawing(id);
+    }
+
+    fn set_date_range(&mut self, start: chrono::NaiveDate, end: chrono::NaiveDate) {
+        let range = egui_charts::widget::VisibleTimeRange {
+            from: start.and_hms_opt(0, 0, 0).unwrap().and_utc(),
+            to: end.and_hms_opt(23, 59, 59).unwrap().and_utc(),
+        };
+        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        charts.insert(self.layout_slot, &mut self.chart);
+        self.layout.apply_date_range(&mut charts, range);
     }
 
     fn go_to_date(&mut self, date: chrono::NaiveDate) {
@@ -854,6 +892,14 @@ impl eframe::App for DemoApp {
             }
         }
 
+        for extra in &mut self.extra_charts {
+            extra.live.set_symbol(extra.chart.symbol());
+            let delay = extra.live.advance(chrono::Utc::now());
+            if !extra.live.paused() {
+                ctx.request_repaint_after(delay);
+            }
+        }
+
         // A colour picker drag ends, as one edit, when the pointer is released.
         if self.colour_drag && !ctx.input(|i| i.pointer.any_down()) {
             self.colour_drag = false;
@@ -864,7 +910,10 @@ impl eframe::App for DemoApp {
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
+        self.show_layout_tabs(ui);
+        self.refresh_layout_menu();
         self.show_top_toolbar(ui, panel_bg);
+        self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.show_side_panel(ui);
@@ -905,7 +954,7 @@ impl DemoApp {
         self.top_toolbar.state.can_undo = drawings.can_undo();
         self.top_toolbar.state.can_redo = drawings.can_redo();
         egui::Panel::top("toolbar")
-            .exact_size(42.0)
+            .exact_size(44.0)
             .show_separator_line(false)
             .frame(panel_frame(bg).outer_margin(egui::Margin {
                 bottom: 4,
@@ -1108,38 +1157,47 @@ impl DemoApp {
             // Save routes through the export dialog (PNG / CSV of the view).
             TopToolbarAction::Save => self.export_dialog.open(),
             // Light/dark toggle is a real, cheap visual change.
-            TopToolbarAction::ThemeToggle => self.toggle_theme(),
-            // The layout-setup button opens the chart-object panel in this
-            // single-chart context.
-            TopToolbarAction::Layout(_) => {
-                self.open_panel = Some(SidePanel::ObjectTree);
-            }
+            TopToolbarAction::ThemeToggle => self.toggle_theme(ctx),
+            TopToolbarAction::Layout(action) => self.handle_layout_action(action),
             TopToolbarAction::None => {}
         }
     }
 
-    fn toggle_theme(&mut self) {
-        // Swap the demo theme; `apply_to_egui` repaints every panel, toolbar,
-        // and dialog from it next frame, and the chart background/grid follow
-        // the matching config colors.
-        self.theme = if self.theme.dark {
-            Theme::light()
-        } else {
-            Theme::dark()
-        };
-        let cfg = self.chart.config_mut();
-        cfg.background_color = self.theme.chart.bg;
-        cfg.text_color = self.theme.chart.axis_text;
-        cfg.grid_color = self.theme.chart.grid_line;
-    }
-
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        use egui_charts::config::CrosshairStyle;
+        use egui_charts::ui::drawing_toolbar::{
+            DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType,
+        };
+        let dm = self.chart.drawings();
+        let magnet_type = if !dm.options.strong_magnet {
+            MagnetType::Weak
+        } else if self.drawing_toolbar.state.magnet_type == MagnetType::OHLC {
+            // OHLC is an alias of strong snapping; retain the user's menu choice.
+            MagnetType::OHLC
+        } else {
+            MagnetType::Strong
+        };
+        self.drawing_toolbar
+            .sync_from_domain_state(&DrawingToolbarDomainState {
+                sel_tool: dm.active_tool,
+                magnet_mode: dm.options.magnet_mode,
+                magnet_type,
+                current_cursor_type: match self.chart.chart_options().crosshair.style {
+                    CrosshairStyle::Full => CursorType::Cross,
+                    CrosshairStyle::Dot => CursorType::Dot,
+                    CrosshairStyle::Arrow => CursorType::Arrow,
+                    CrosshairStyle::Demonstration => CursorType::Demonstration,
+                },
+                eraser_mode_enabled: dm.eraser_mode,
+                stay_in_drawing_mode: dm.stay_in_drawing_mode,
+                drawing_color: dm.options.default_color,
+            });
         let drawings = &self.chart.drawings().drawings;
         self.drawing_toolbar.state.lock_all =
             !drawings.is_empty() && drawings.iter().all(|d| d.locked);
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
-            .exact_size(56.0)
+            .exact_size(54.0)
             .show_separator_line(false)
             .frame(
                 panel_frame(bg)
@@ -1379,8 +1437,10 @@ impl DemoApp {
             .unwrap_or_else(|| bars.len().saturating_sub(1));
         let last = bars.get(index);
         let mut info = DataWindowInfo::new(self.state.symbol.clone())
-            .with_price_decimals(self.chart.instrument().and_then(|i| i.price_decimals))
             .with_timeframe(self.state.timeframe.as_str().to_string());
+        if let Some(instrument) = self.chart.instrument() {
+            info = info.with_instrument(instrument);
+        }
         if let Some(b) = last {
             info = info.with_ohlcv(b.open, b.high, b.low, b.close, b.volume);
             info = info.with_timestamp(self.chart.format_time(b.time));
@@ -1471,6 +1531,14 @@ impl DemoApp {
                 let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
                 self.chart.disable_tracking_mode();
                 self.chart.apply_synced_time_scale(spacing, 0.5);
+                if self.layout.sync.sync_date_range
+                    && let Some(range) = self.chart.visible_time_range()
+                {
+                    let mut charts: Vec<_> =
+                        self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+                    charts.insert(self.layout_slot, &mut self.chart);
+                    self.layout.apply_date_range(&mut charts, range);
+                }
             }
             TimeframeToolbarAction::OpenDatePicker => self.date_picker.open(),
             TimeframeToolbarAction::OpenTimezoneMenu => {
@@ -1591,7 +1659,9 @@ impl DemoApp {
                             "Footprint requires a time-based chart", egui::FontId::proportional(14.0), self.theme.ui.text);
                     }
                 } else {
-                    self.chart.show(ui);
+                    let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+                    charts.insert(self.layout_slot, &mut self.chart);
+                    self.layout.show(ui, &mut charts);
                 }
                 if let Some(id) = self.chart.take_indicator_settings_request() {
                     self.open_indicator_settings(id);
@@ -1608,6 +1678,7 @@ impl DemoApp {
                 }
             });
         self.replay_control.set_dock_rect(chart.response.rect);
+        self.activate_chart_slot(self.layout.active());
         // Right-click context actions resolve after the chart is shown.
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(action);
@@ -1944,12 +2015,122 @@ fn apply_settings_state(
     config.show_symbol_prev_close = state.scales_and_lines.show_prev_close_label;
     config.show_prev_close_line = state.scales_and_lines.show_prev_close;
     config.show_countdown = state.scales_and_lines.show_countdown;
+    config.show_bid_ask = state.scales_and_lines.show_bid_ask;
+    config.show_high_low = state.scales_and_lines.show_high_low;
+    chart.price_scale_mut().options_mut().scale_margins = egui_charts::scales::PriceScaleMargins {
+        top: f64::from(state.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
+        bottom: f64::from(state.margins.bottom_percent.clamp(0.0, 100.0)) / 100.0,
+    };
+    if state.margins.right_bars != chart.chart_options().time_scale.right_offset.max(0.0) as u32 {
+        chart.set_right_margin(state.margins.right_bars as f32);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// External chart modes and completed drawings are reflected before the toolbar is painted.
+    #[test]
+    fn drawing_toolbar_follows_chart_modes_and_completed_tools() {
+        use egui_charts::config::CrosshairStyle;
+        use egui_charts::drawings::DrawingToolType;
+        use egui_charts::ui::drawing_toolbar::{MagnetType, categories::cursors::CursorType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let frame = |app: &mut DemoApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.show_drawing_toolbar(ui, egui::Color32::BLACK);
+            })
+            .drop_without_applying_deltas();
+        };
+        for (style, cursor, magnet) in [
+            (CrosshairStyle::Full, CursorType::Cross, MagnetType::Weak),
+            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::Strong),
+            (CrosshairStyle::Arrow, CursorType::Arrow, MagnetType::Weak),
+            (
+                CrosshairStyle::Demonstration,
+                CursorType::Demonstration,
+                MagnetType::Strong,
+            ),
+            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
+        ] {
+            if magnet == MagnetType::OHLC {
+                app.drawing_toolbar.state.magnet_type = magnet;
+            }
+            app.chart.set_crosshair_style(style);
+            let dm = app.chart.drawings_mut();
+            dm.options.magnet_mode = true;
+            dm.options.strong_magnet = magnet != MagnetType::Weak;
+            dm.set_active_tool(Some(DrawingToolType::TrendLine));
+            frame(&mut app);
+            assert_eq!(
+                app.drawing_toolbar.state.sel_tool,
+                Some(DrawingToolType::TrendLine)
+            );
+            assert_eq!(app.drawing_toolbar.state.current_cursor_type, cursor);
+            assert!(app.drawing_toolbar.state.magnet_mode);
+            assert_eq!(app.drawing_toolbar.state.magnet_type, magnet);
+            let dm = app.chart.drawings_mut();
+            dm.start_drawing_with_coords(
+                DrawingToolType::TrendLine,
+                egui::pos2(1.0, 2.0),
+                |x| x,
+                f64::from,
+            );
+            dm.add_point_with_coords(egui::pos2(3.0, 4.0), |x| x, f64::from);
+            assert!(dm.active_tool.is_none());
+            frame(&mut app);
+            assert!(app.drawing_toolbar.state.sel_tool.is_none());
+            app.chart.drawings_mut().set_eraser_mode(true);
+            frame(&mut app);
+            assert!(app.drawing_toolbar.state.eraser_mode_enabled);
+            app.chart.drawings_mut().set_eraser_mode(false);
+            app.chart.drawings_mut().options.magnet_mode = false;
+            frame(&mut app);
+            assert!(!app.drawing_toolbar.state.eraser_mode_enabled);
+            assert!(!app.drawing_toolbar.state.magnet_mode);
+        }
+    }
+
+    /// A narrow first layout and later resizes retain the configured zoom and live edge.
+    #[test]
+    fn opening_view_keeps_default_spacing_across_resizes() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for scale in [1.0, 2.0] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.live.set_paused(true);
+                *app.chart.config_mut() = theme.apply_to_config(app.chart.config().clone());
+                for width in [140.0, 0.0, 80.0, 320.0, 1440.0] {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            app.chart.show(ui);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                    let time_scale = app.chart.state().time_scale();
+                    assert_eq!(
+                        time_scale.bar_spacing(),
+                        6.1,
+                        "width {width}, scale {scale}"
+                    );
+                    assert!(
+                        (time_scale.right_offset() - (65.0 - 6.1 * 0.5 - 1.0) / 6.1).abs() < 1e-5
+                    );
+                }
+            }
+        }
+    }
 
     /// Existing drawing settings survive opening and applying the dialog, and the toolbar
     /// reflects locks changed through other drawing controls rather than an optimistic toggle.
@@ -2339,6 +2520,42 @@ mod tests {
                             / ((end - start) as f32 + 0.5);
                         assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);
                         assert_eq!(app.replay.is_some(), replay);
+                    }
+                    if !replay {
+                        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+                        app.extra_charts[0].chart.set_feed_paused(true);
+                        app.layout.sync.sync_time_axis = false;
+                        frame(&mut app);
+                        let day = app.bars.last().unwrap().time.date_naive() - chrono::Days::new(2);
+                        for sync in [false, true] {
+                            app.layout.sync.sync_date_range = sync;
+                            let before = app.extra_charts[0].chart.get_time_scale_state();
+                            app.set_date_range(day, day);
+                            frame(&mut app);
+                            let range = app.chart.visible_time_range().unwrap();
+                            assert!(
+                                (range.from - day.and_hms_opt(0, 0, 0).unwrap().and_utc())
+                                    .num_seconds()
+                                    .abs()
+                                    <= 1
+                            );
+                            assert!(
+                                (range.to - day.and_hms_opt(23, 59, 59).unwrap().and_utc())
+                                    .num_seconds()
+                                    .abs()
+                                    <= 1
+                            );
+                            if sync {
+                                let other = app.extra_charts[0].chart.visible_time_range().unwrap();
+                                assert!((other.from - range.from).num_seconds().abs() <= 1);
+                                assert!((other.to - range.to).num_seconds().abs() <= 1);
+                            } else {
+                                assert_eq!(
+                                    app.extra_charts[0].chart.get_time_scale_state(),
+                                    before
+                                );
+                            }
+                        }
                     }
                 }
             }

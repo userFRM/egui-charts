@@ -147,7 +147,15 @@ impl Chart {
                 coords,
                 Some(plot.x_range()),
                 collapsed,
+                if self.config.show_right_axis {
+                    Some(crate::scales::PriceScaleId::Right)
+                } else if self.config.show_left_axis {
+                    Some(crate::scales::PriceScaleId::Left)
+                } else {
+                    None
+                },
             ) {
+                self.measured_axis_width = self.measured_axis_width.max(panel.measured_axis_width);
                 let PaneInteraction {
                     panel_rect,
                     chart_rect,

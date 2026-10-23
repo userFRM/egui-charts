@@ -1,8 +1,11 @@
 use super::context::{ChartMapping, RenderContext, StyleColors};
 use super::labels::price_decimals;
 use crate::config::{TooltipMode, TooltipOptions};
-use crate::model::{Bar, percent_change};
-use crate::scales::{PriceMap, TimeFormatter};
+use crate::model::{Bar, Instrument, percent_change};
+use crate::scales::{
+    DefaultPriceFormatter, PriceFormatter, PriceMap, TimeFormatter, VolumeFormatter,
+    instrument_price_precision,
+};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 /// Tooltip Renderers
@@ -27,6 +30,7 @@ pub fn render_tooltip_with_options(
     visible_data: &[Bar],
     formatter: &dyn TimeFormatter,
     bar_seconds: i64,
+    instrument: Option<&Instrument>,
 ) {
     match options.mode {
         TooltipMode::Floating => {
@@ -40,6 +44,7 @@ pub fn render_tooltip_with_options(
                 colors.bar_color(candle.close >= candle.open),
                 formatter,
                 bar_seconds,
+                instrument,
             );
         }
         TooltipMode::Tracking => {
@@ -50,6 +55,7 @@ pub fn render_tooltip_with_options(
                 options,
                 formatter,
                 bar_seconds,
+                instrument,
             );
         }
         TooltipMode::Magnifier => {
@@ -78,11 +84,15 @@ pub fn render_floating_tooltip(
     value_color: egui::Color32,
     formatter: &dyn TimeFormatter,
     bar_seconds: i64,
+    instrument: Option<&Instrument>,
 ) {
     let options = &options.resolved(painter.ctx());
     let price = |price: f64| {
-        let decimals = price_decimals(price).min(options.price_precision);
-        format!("{price:.decimals$}")
+        let decimals = instrument.and_then(instrument_price_precision).map_or_else(
+            || price_decimals(price).min(options.price_precision),
+            usize::from,
+        );
+        DefaultPriceFormatter::with_precision(decimals).format(price)
     };
     let mut rows = Vec::new();
 
@@ -101,16 +111,23 @@ pub fn render_floating_tooltip(
         let reference = previous_close.unwrap_or(candle.open);
         let change = candle.close - reference;
         let change_pct = percent_change(reference, candle.close);
-        rows.push(("Change", format!("{change:+.2} ({change_pct:+.2}%)")));
+        rows.push((
+            "Change",
+            format!(
+                "{change:+.*} ({change_pct:+.2}%)",
+                instrument
+                    .and_then(instrument_price_precision)
+                    .map_or(2, usize::from)
+            ),
+        ));
     }
     if options.show_volume {
-        let volume = if candle.volume.abs() >= 1_000_000.0 {
-            format!("{:.2}M", candle.volume / 1_000_000.0)
-        } else if candle.volume.abs() >= 1_000.0 {
-            format!("{:.2}K", candle.volume / 1_000.0)
-        } else {
-            format!("{:.0}", candle.volume)
-        };
+        let volume = VolumeFormatter {
+            precision: instrument
+                .and_then(|instrument| instrument.volume_decimals)
+                .map_or(2, usize::from),
+        }
+        .format(candle.volume);
         rows.push(("Vol", volume));
     }
 
@@ -233,6 +250,7 @@ pub fn render_tracking_tooltip(
     options: &TooltipOptions,
     formatter: &dyn TimeFormatter,
     bar_seconds: i64,
+    instrument: Option<&Instrument>,
 ) {
     let options = &options.resolved(painter.ctx());
     let bar_height = options.tracking_bar_height;
@@ -242,7 +260,9 @@ pub fn render_tracking_tooltip(
     painter.rect_filled(bar_rect, 0.0, options.tracking_bar_background);
 
     // Build tracking text
-    let precision = options.price_precision.min(4); // Use shorter precision for tracking bar
+    let precision = instrument
+        .and_then(instrument_price_precision)
+        .map_or(options.price_precision.min(4), usize::from);
     let mut parts = Vec::new();
 
     if options.show_time {
@@ -257,7 +277,15 @@ pub fn render_tracking_tooltip(
     }
 
     if options.show_volume {
-        parts.push(format!("Vol: {:.0}", candle.volume));
+        parts.push(format!(
+            "Vol: {}",
+            VolumeFormatter {
+                precision: instrument
+                    .and_then(|instrument| instrument.volume_decimals)
+                    .map_or(2, usize::from)
+            }
+            .format(candle.volume)
+        ));
     }
 
     if options.show_change {

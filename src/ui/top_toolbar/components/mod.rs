@@ -32,7 +32,7 @@ pub use chart_grid_selector::ChartGridSelector;
 pub use sync_button::SyncButton;
 
 // From layout_menu
-pub use layout_menu::{LayoutAction, LayoutInfo, LayoutMenu, LayoutMenuConfig};
+pub use layout_menu::{LayoutAction, LayoutMenu, LayoutMenuConfig};
 
 // From settings_menu (ChartType comes from chart_type_selector - single source of truth)
 pub use settings_menu::{

@@ -172,7 +172,7 @@ impl Chart {
         }
 
         // Handle keyboard shortcuts for drawing manipulation
-        selection::handle_keyboard_shortcuts(ui, drawing_manager);
+        selection::handle_keyboard_shortcuts(ui, drawing_manager, response.has_focus());
 
         drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);
 

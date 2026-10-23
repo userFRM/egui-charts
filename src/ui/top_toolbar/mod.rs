@@ -33,7 +33,6 @@ pub use components::{
     IndicatorParams,
     IndicatorTab,
     LayoutAction,
-    LayoutInfo,
     LayoutMenu,
     LayoutMenuConfig,
     PrecisionMode,
