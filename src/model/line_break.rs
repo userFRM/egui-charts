@@ -44,11 +44,11 @@ pub enum LineDirection {
 
 /// A single line (block) in a Line Break chart.
 ///
-/// Each line spans from its open price (the previous line's close) to
-/// its close price, colored by direction.
+/// A continuation line opens at the previous line's close, a reversal line
+/// at the previous line's open; it closes at the bar's close.
 #[derive(Debug, Clone)]
 pub struct LineBreakLine {
-    /// Open price (previous line's close)
+    /// Open price: the previous line's close for a continuation, its open for a reversal
     pub open: f64,
     /// Close price
     pub close: f64,
@@ -132,7 +132,7 @@ pub fn to_line_break_lines(data: &[Bar], config: &LineBreakConfig) -> Vec<LineBr
 
                     if bar.close < reversal_low {
                         lines.push(LineBreakLine {
-                            open: last_line.close,
+                            open: last_line.open,
                             close: bar.close,
                             direction: LineDirection::Down,
                             ts: bar.time,
@@ -160,7 +160,7 @@ pub fn to_line_break_lines(data: &[Bar], config: &LineBreakConfig) -> Vec<LineBr
 
                     if bar.close > reversal_high {
                         lines.push(LineBreakLine {
-                            open: last_line.close,
+                            open: last_line.open,
                             close: bar.close,
                             direction: LineDirection::Up,
                             ts: bar.time,
@@ -311,5 +311,43 @@ mod tests {
 
         let signal = detect_signal(&lines);
         assert_eq!(signal, LineBreakSignal::BearishReversal);
+    }
+
+    #[test]
+    fn reversal_lines_open_at_the_last_line_open() {
+        // (first open, closes after the first bar, expected (open, close) of every line)
+        let rows = [
+            (
+                10.0,
+                [11.0, 12.0, 13.0, 9.0],
+                [(10.0, 11.0), (11.0, 12.0), (12.0, 13.0), (12.0, 9.0)],
+            ),
+            (
+                13.0,
+                [12.0, 11.0, 10.0, 14.0],
+                [(13.0, 12.0), (12.0, 11.0), (11.0, 10.0), (11.0, 14.0)],
+            ),
+        ];
+        for (open, closes, expected) in rows {
+            let t0 = Utc::now();
+            let bars: Vec<Bar> = closes
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| {
+                    let o = if i == 0 { open } else { c };
+                    Bar {
+                        time: t0,
+                        open: o,
+                        high: o.max(c),
+                        low: o.min(c),
+                        close: c,
+                        volume: 0.0,
+                    }
+                })
+                .collect();
+            let lines = to_line_break_lines(&bars, &LineBreakConfig::default());
+            let got: Vec<(f64, f64)> = lines.iter().map(|l| (l.open, l.close)).collect();
+            assert_eq!(got, expected);
+        }
     }
 }
