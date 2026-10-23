@@ -257,7 +257,9 @@ fn render_row_content(
     };
     let vis_response = ui.allocate_rect(vis_rect, Sense::click());
     if ui.is_rect_visible(vis_rect) {
-        let icon_color = if vis_response.hovered() {
+        let icon_color = if is_selected {
+            ui.visuals().selection.stroke.color
+        } else if vis_response.hovered() {
             ui.visuals().widgets.hovered.fg_stroke.color
         } else {
             ui.visuals().widgets.noninteractive.fg_stroke.color
@@ -282,7 +284,9 @@ fn render_row_content(
         };
         let lock_response = ui.allocate_rect(lock_rect, Sense::click());
         if ui.is_rect_visible(lock_rect) {
-            let icon_color = if lock_response.hovered() {
+            let icon_color = if is_selected {
+                ui.visuals().selection.stroke.color
+            } else if lock_response.hovered() {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
                 ui.visuals().widgets.noninteractive.fg_stroke.color
@@ -302,7 +306,15 @@ fn render_row_content(
 
     // Delete button
     let del_rect = Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-    let del_response = ui.put(del_rect, egui::Label::new("X").sense(Sense::click()));
+    let button_color = if is_selected {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().text_color()
+    };
+    let del_response = ui.put(
+        del_rect,
+        egui::Label::new(egui::RichText::new("X").color(button_color)).sense(Sense::click()),
+    );
     if del_response.clicked() {
         *action = if item.source_type == SourceType::Indicator {
             ObjectTreeAction::RemoveIndicator(item.id)
@@ -316,7 +328,10 @@ fn render_row_content(
     // Settings/Properties button
     let settings_rect =
         Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-    let settings_response = ui.put(settings_rect, egui::Label::new("S").sense(Sense::click()));
+    let settings_response = ui.put(
+        settings_rect,
+        egui::Label::new(egui::RichText::new("S").color(button_color)).sense(Sense::click()),
+    );
     if settings_response.clicked() {
         *action = if item.source_type == SourceType::Indicator {
             ObjectTreeAction::OpenIndicatorSettings(item.id)
