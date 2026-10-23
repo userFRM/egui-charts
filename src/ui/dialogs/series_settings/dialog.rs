@@ -136,18 +136,7 @@ impl SeriesSettingsDialog {
         });
 
         // Footer
-        let (ok, cancel) = DialogFooter::new("Ok")
-            .secondary("Cancel")
-            .show_with_left(ui, |ui| {
-                // Template dropdown (placeholder)
-                egui::ComboBox::from_id_salt("template")
-                    .selected_text("Template")
-                    .width(DESIGN_TOKENS.sizing.dialog.input_width)
-                    .show_ui(ui, |ui| {
-                        let _ = ui.selectable_label(false, "Default");
-                        let _ = ui.selectable_label(false, "Save as...");
-                    });
-            });
+        let (ok, cancel) = DialogFooter::new("Ok").secondary("Cancel").show(ui);
         if ok && let Some(id) = self.series_id {
             action = SeriesSettingsAction::Apply(id, Box::new(self.settings.clone()));
             self.is_open = false;
@@ -208,8 +197,20 @@ mod tests {
                             )),
                             _ => None,
                         });
+                        let inert_colour_controls = output.shapes.iter().any(|shape| {
+                            matches!(
+                                &shape.shape, egui::Shape::Text(text)
+                                if matches!(text.galley.text(), "Border (up)" | "Wick (up)")
+                            )
+                        });
                         output.drop_without_applying_deltas();
                         if frame > 0 {
+                            if kind == ChartType::Renko {
+                                assert!(
+                                    !inert_colour_controls,
+                                    "Renko must only offer colours its renderer reads"
+                                );
+                            }
                             let ok = ok.expect("apply button is painted");
                             assert!(
                                 screen.contains_rect(ok.1) && ok.0.contains_rect(ok.1),

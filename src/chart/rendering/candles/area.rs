@@ -386,9 +386,9 @@ mod tests {
                     100.0,
                     inverted,
                 );
-                let bars: Vec<_> = (0..=60)
+                let bars: Vec<_> = (0..=59)
                     .map(|i| {
-                        let price = first + (last - first) * f64::from(i) / 60.0;
+                        let price = first + (last - first) * f64::from(i) / 59.0;
                         Bar::new(
                             chrono::DateTime::UNIX_EPOCH,
                             price,
@@ -415,7 +415,7 @@ mod tests {
                         &map,
                         map.price_to_y(100.0),
                         0.0,
-                        |i, _| 10.0 + i as f32 / 2.0,
+                        |i, _| 10.0 + i as f32 * 30.0 / 59.0,
                         &style,
                         PriceSource::Close,
                     );
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn area_gradient_uses_visible_high_and_reaches_the_plot_bottom() {
-        // 80 points from y=20 to y=100: y=60 is halfway, so 45% becomes 22.5%.
+        // From y=20 to y=100, y=60 is halfway, so 45% becomes 22.5%.
         // Moving the visible high to y=40 keeps the same endpoint opacities.
         for top in [20.0, 40.0] {
             let ctx = Context::default();

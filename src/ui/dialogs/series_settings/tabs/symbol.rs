@@ -288,6 +288,10 @@ impl SymbolTab {
         Self::color_picker(ui, &mut settings.bearish_color);
         ui.end_row();
 
+        if settings.chart_type.is_time_independent() {
+            return;
+        }
+
         // Border colors
         ui.label("Border (up)");
         Self::optional_color_picker(

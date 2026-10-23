@@ -119,7 +119,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Series settings reserve room for their footer and scroll within narrow and short windows. ([#562](https://github.com/userFRM/egui-charts/issues/562), [#633](https://github.com/userFRM/egui-charts/issues/633))
+- Series settings reserve room for their footer and scroll within narrow and short windows. Price-based types omit unsupported border and wick colour controls, and the inactive Template menu is removed. ([#562](https://github.com/userFRM/egui-charts/issues/562), [#633](https://github.com/userFRM/egui-charts/issues/633))
 
 - Baseline dashes keep their spacing across short segments and base crossings. ([#562](https://github.com/userFRM/egui-charts/issues/562))
 - Renko wicks retain unfinished price moves beyond the last completed brick when the next brick reverses direction. ([#633](https://github.com/userFRM/egui-charts/issues/633))
