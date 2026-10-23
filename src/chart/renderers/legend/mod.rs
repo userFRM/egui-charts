@@ -290,7 +290,7 @@ impl<'a> Legend<'a> {
                             |decimals| {
                                 crate::scales::PriceFormatter::format(
                                     &crate::scales::VolumeFormatter {
-                                        precision: usize::from(decimals.min(16)),
+                                        precision: usize::from(decimals),
                                     },
                                     self.bar.volume,
                                 )
@@ -421,7 +421,6 @@ impl<'a> Legend<'a> {
         self.instrument
             .and_then(crate::scales::instrument_price_precision)
             .map_or_else(|| price_decimals(price), usize::from)
-            .min(16)
     }
 }
 

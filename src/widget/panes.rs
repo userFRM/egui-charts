@@ -127,6 +127,9 @@ impl Chart {
                 _ => IndicatorPaneConfig::default(),
             };
 
+            config.price_precision = self
+                .instrument()
+                .and_then(crate::scales::instrument_price_precision);
             config.show_name = self.config.show_indicator_labels;
             config.show_values = self.config.show_indicator_last_val;
             config.inputs = if self.config.show_indicator_inputs {

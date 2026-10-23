@@ -501,6 +501,7 @@ mod tests {
         for (tick, price, decimals, explicit) in [
             (0.25, 125.25, 2, None),
             (0.00001, 1.23456, 5, None),
+            (1e-18, 3e-18, 18, None),
             (1.0, 100.0, 0, None),
             (0.01, 0.0, 2, None),
             (0.25, 125.25, 4, Some(4)),
@@ -508,6 +509,8 @@ mod tests {
             let ctx = Context::default();
             let mut chart = chart(&[price], &[price]);
             chart.config_mut().show_volume = false;
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::new(crate::studies::MACD::default()));
             let mut instrument = Instrument::new("SAMPLE").with_tick_size(tick);
             instrument.price_decimals = explicit;
             chart.set_instrument(Some(instrument));
@@ -545,6 +548,122 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn study_axis_tags_follow_visible_last_values_and_separate_collisions() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use egui::Color32;
+        for (overlay, shown) in [(true, true), (false, true), (true, false), (false, false)] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.config_mut().show_indicator_last_val = shown;
+            chart.config_mut().show_symbol_last_val = false;
+            chart.config_mut().show_volume = false;
+            let colors = [
+                Color32::from_rgb(41, 98, 255),
+                Color32::from_rgb(255, 167, 38),
+            ];
+            chart.add_indicator(Box::new(
+                CustomIndicator::new("Colliding", |bars| {
+                    vec![IndicatorValue::Multiple(vec![105.0, 105.0, f64::NAN]); bars.len()]
+                })
+                .with_overlay(overlay)
+                .with_line_cnt(3)
+                .with_colors(vec![colors[0], colors[1], Color32::RED]),
+            ));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = if overlay {
+                chart.get_rendered_price_rect()
+            } else {
+                chart.get_rendered_indicator_panes()[0].chart_rect
+            };
+            let tags: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Rect(rect)
+                        if colors.contains(&rect.fill) && rect.rect.left() > plot.right() =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(tags.len(), if shown { 2 } else { 0 }, "overlay={overlay}");
+            if shown {
+                for tag in &tags {
+                    assert!((tag.left() - plot.right() - 5.0).abs() < 0.1);
+                    assert!(tag.top() >= plot.top() && tag.bottom() <= plot.bottom());
+                    let text = painted
+                        .iter()
+                        .find_map(|shape| match shape {
+                            Shape::Text(text)
+                                if tag.contains_rect(Rect::from_min_size(
+                                    text.pos,
+                                    text.galley.size(),
+                                )) =>
+                            {
+                                Some(text)
+                            }
+                            _ => None,
+                        })
+                        .expect("value text inside its tag");
+                    assert_eq!(text.galley.job.sections[0].format.color, Color32::WHITE);
+                }
+                let separation = (tags[0].center().y - tags[1].center().y).abs();
+                assert!((separation - (tags[0].height() + tags[1].height()) / 2.0).abs() < 0.01);
+            }
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn measured_axis_keeps_wide_tags_inside_shared_plot_insets() {
+        use crate::model::Instrument;
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.set_instrument(Some(Instrument::new("SAMPLE").with_price_decimals(8)));
+        chart.set_session_quote(Some(crate::model::quote::SessionQuote::new(
+            105.0, "REGULAR",
+        )));
+        chart.add_indicator(Box::new(crate::studies::RSI::default()));
+        let mut widget = Rect::NOTHING;
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    widget = chart.show(ui).rect;
+                });
+            },
+        );
+        output.drop_without_applying_deltas();
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        assert!((plot.left() - widget.left()).abs() <= 8.0);
+        for pane in chart.get_rendered_indicator_panes() {
+            assert_eq!(pane.chart_rect.x_range(), plot.x_range());
+        }
+        let widest = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Rect(rect)
+                    if rect.rect.left() > plot.right()
+                        && rect.rect.height() < 40.0
+                        && rect.fill.a() > 0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.width().total_cmp(&b.width()))
+            .expect("axis tag");
+        assert!((widest.left() - plot.right() - 5.0).abs() < 0.1);
+        assert!((widget.right() - widest.right() - 8.0).abs() < 0.1);
     }
 
     /// A narrow legend wraps whole fields before the plot's axis inset.

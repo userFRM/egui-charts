@@ -18,6 +18,8 @@ enum Action {
     PreviousClose,
     Studies,
     Countdown,
+    BidAsk,
+    HighLow,
     Timezone(TimezoneMode),
     ExtendedHours,
     SessionBreaks,
@@ -58,12 +60,18 @@ impl AxisMenus {
         let price = (config.show_right_axis
             && Rect::from_min_max(
                 Pos2::new(plot.right(), plot.top()),
-                Pos2::new(plot.right() + config.right_axis_width, bottom),
+                Pos2::new(
+                    plot.right() + config.right_axis_width.max(chart.measured_axis_width),
+                    bottom,
+                ),
             )
             .contains(pos))
             || (config.show_left_axis
                 && Rect::from_min_max(
-                    Pos2::new(plot.left() - config.left_axis_width, plot.top()),
+                    Pos2::new(
+                        plot.left() - config.left_axis_width.max(chart.measured_axis_width),
+                        plot.top(),
+                    ),
                     Pos2::new(plot.left(), bottom),
                 )
                 .contains(pos));
@@ -181,6 +189,8 @@ impl AxisMenus {
                     Action::Countdown,
                     config.show_countdown,
                 ),
+                row("Bid and ask", Action::BidAsk, config.show_bid_ask),
+                row("High and low", Action::HighLow, config.show_high_low),
                 MenuEntry::Separator,
                 row("Scale settings…", Action::Settings, false),
             ]);
@@ -242,6 +252,8 @@ impl AxisMenus {
                 Action::Countdown => {
                     chart.config_mut().show_countdown = !chart.config().show_countdown
                 }
+                Action::BidAsk => chart.config_mut().show_bid_ask = !chart.config().show_bid_ask,
+                Action::HighLow => chart.config_mut().show_high_low = !chart.config().show_high_low,
                 Action::Timezone(zone) => chart.chart_options.time_scale.timezone = zone,
                 Action::ExtendedHours => chart.set_extended_hours(!chart.extended_hours()),
                 Action::SessionBreaks => {

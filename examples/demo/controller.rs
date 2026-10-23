@@ -556,6 +556,20 @@ impl DemoApp {
         settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
         settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
         settings.scales_and_lines.show_countdown = config.show_countdown;
+        settings.scales_and_lines.show_bid_ask = config.show_bid_ask;
+        settings.scales_and_lines.show_high_low = config.show_high_low;
+        settings.margins.top_percent =
+            (self.chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
+        settings.margins.bottom_percent = (self
+            .chart
+            .state()
+            .price_scale()
+            .options()
+            .scale_margins
+            .bottom
+            * 100.0) as f32;
+        settings.margins.right_bars =
+            self.chart.chart_options().time_scale.right_offset.max(0.0) as u32;
         let scale = self.chart.state().price_scale();
         settings.scales_and_lines.auto_scale = !scale.is_manual();
         settings.scales_and_lines.log_scale =
@@ -1947,6 +1961,15 @@ fn apply_settings_state(
     config.show_symbol_prev_close = state.scales_and_lines.show_prev_close_label;
     config.show_prev_close_line = state.scales_and_lines.show_prev_close;
     config.show_countdown = state.scales_and_lines.show_countdown;
+    config.show_bid_ask = state.scales_and_lines.show_bid_ask;
+    config.show_high_low = state.scales_and_lines.show_high_low;
+    chart.price_scale_mut().options_mut().scale_margins = egui_charts::scales::PriceScaleMargins {
+        top: f64::from(state.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
+        bottom: f64::from(state.margins.bottom_percent.clamp(0.0, 100.0)) / 100.0,
+    };
+    if state.margins.right_bars != chart.chart_options().time_scale.right_offset.max(0.0) as u32 {
+        chart.set_right_margin(state.margins.right_bars as f32);
+    }
 }
 
 #[cfg(test)]

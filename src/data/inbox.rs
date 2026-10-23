@@ -122,6 +122,12 @@ impl Updates {
 }
 
 impl Inbox {
+    /// Current time in a subscription's server clock, including between pushes.
+    #[cfg(feature = "widget")]
+    pub(crate) fn server_time(&self, id: SubscriptionId) -> Option<DateTime<Utc>> {
+        Utc::now().checked_add_signed(self.state().subscriptions.get(&id)?.offset)
+    }
+
     /// Called from the pushing thread by the first push after each drain.
     pub(crate) fn set_waker(&self, waker: impl Fn() + Send + Sync + 'static) {
         let _ = self.waker.set(Box::new(waker));

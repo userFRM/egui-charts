@@ -33,6 +33,11 @@ pub(crate) fn paint_axis_tag(
     text_color: Color32,
     fill: Color32,
 ) -> Rect {
+    let max_x = if align == Align2::LEFT_CENTER {
+        max_x - 8.0
+    } else {
+        max_x
+    };
     let theme = painter.ctx().active_theme();
     let font = axis_font(painter.ctx());
     let galley = painter.layout_no_wrap(text, font, text_color);
@@ -71,6 +76,92 @@ fn price_tag_anchor(plot: Rect, axis_right: f32, y: f32) -> (Pos2, Align2) {
             Pos2::new(plot.right() + 5.0 + TAG_PADDING.x, y),
             Align2::LEFT_CENTER,
         )
+    }
+}
+
+/// Paints a later value beside the nearest free vertical slot, preserving earlier tags.
+/// Tags that cannot fit inside the pane are omitted.
+pub(crate) fn render_axis_value(
+    painter: &Painter,
+    plot: Rect,
+    axis_right: f32,
+    y: f32,
+    text: String,
+    colors: (Color32, Color32),
+    occupied: &[Option<Rect>],
+) -> Option<Rect> {
+    let (text_color, fill) = colors;
+    let height = painter
+        .layout_no_wrap(text.clone(), axis_font(painter.ctx()), Color32::WHITE)
+        .size()
+        .y
+        + 2.0 * TAG_PADDING.y;
+    if !y.is_finite() || height > plot.height() {
+        return None;
+    }
+    let clamp = |y: f32| y.clamp(plot.top() + height / 2.0, plot.bottom() - height / 2.0);
+    let free = |y: f32| {
+        occupied.iter().flatten().all(|rect| {
+            y + height / 2.0 <= rect.top() + 0.001 || y - height / 2.0 >= rect.bottom() - 0.001
+        })
+    };
+    let centre = std::iter::once(clamp(y))
+        .chain(occupied.iter().flatten().flat_map(|rect| {
+            [
+                clamp(rect.top() - height / 2.0),
+                clamp(rect.bottom() + height / 2.0),
+            ]
+        }))
+        .filter(|y| free(*y))
+        .min_by(|a, b| (a - y).abs().total_cmp(&(b - y).abs()))?;
+    let (anchor, align) = price_tag_anchor(plot, axis_right, centre);
+    Some(paint_axis_tag(
+        painter, anchor, align, axis_right, text, text_color, fill,
+    ))
+}
+
+/// Last-bar values of visible study lines, in the same units and colours as their plot.
+pub(crate) fn render_study_tags(
+    painter: &Painter,
+    plot: Rect,
+    map: &PriceMap,
+    study: &dyn crate::studies::Indicator,
+    axis_right: f32,
+    occupied: &mut Vec<Option<Rect>>,
+) {
+    use crate::studies::IndicatorValue;
+    if !study.is_visible() {
+        return;
+    }
+    let values = study.values();
+    let values = match values.last() {
+        Some(IndicatorValue::Single(value)) => std::slice::from_ref(value),
+        Some(IndicatorValue::Multiple(values)) => values.as_slice(),
+        _ => return,
+    };
+    let colors = study.colors();
+    let transform = map.transform();
+    for (line, value) in values.iter().enumerate().take(study.line_cnt()) {
+        if !value.is_finite()
+            || study.line_style(line).width <= 0.0
+            || !map.range().contains(transform.to_scale(*value))
+        {
+            continue;
+        }
+        let label = transform.label(
+            transform.to_scale(*value),
+            map.price_precision().unwrap_or(2),
+        );
+        let color = colors.get(line).copied().unwrap_or(Color32::WHITE);
+        occupied.push(render_axis_value(
+            painter,
+            plot,
+            axis_right,
+            map.price_to_y(*value),
+            label,
+            (Color32::WHITE, color),
+            occupied,
+        ));
     }
 }
 
@@ -138,7 +229,7 @@ pub fn render_price_line(
 }
 
 // Keep white text on financial colours; pale custom fills still need dark text.
-fn tag_text_color(fill: Color32) -> Color32 {
+pub(crate) fn tag_text_color(fill: Color32) -> Color32 {
     if contrast(Color32::WHITE, fill) >= 2.0 {
         Color32::WHITE
     } else {
@@ -206,7 +297,7 @@ pub fn price_axis_width(painter: &Painter, price_map: &PriceMap, tag_labels: &[&
         .fold(0.0, f32::max)
         + 5.0
         + TAG_PADDING.x * 2.0
-        + 2.0
+        + 8.0
 }
 
 /// Paints independent current close, session and volume readouts, returning their rectangles
@@ -226,7 +317,7 @@ pub fn render_quote_tags(
     axis_right: f32,
 ) -> [Option<Rect>; 3] {
     render_quote_tags_with_countdown(
-        painter, price_rect, price_map, close, session, volume, axis_right, None, None,
+        painter, price_rect, price_map, close, session, volume, axis_right, None, None, 0.0,
     )
 }
 
@@ -241,6 +332,7 @@ pub(crate) fn render_quote_tags_with_countdown(
     axis_right: f32,
     countdown: Option<&str>,
     volume_precision: Option<u8>,
+    reserved_top: f32,
 ) -> [Option<Rect>; 3] {
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
@@ -308,7 +400,7 @@ pub(crate) fn render_quote_tags_with_countdown(
             2,
             price_rect.bottom() - height / 2.0,
             VolumeFormatter {
-                precision: usize::from(volume_precision.unwrap_or(2).min(16)),
+                precision: usize::from(volume_precision.unwrap_or(2)),
             }
             .format(value),
             color,
@@ -321,13 +413,15 @@ pub(crate) fn render_quote_tags_with_countdown(
             .y
             + TAG_PADDING.y * 2.0
     };
-    while rows.iter().map(|row| row_height(&row.2)).sum::<f32>() > price_rect.height() {
+    while rows.iter().map(|row| row_height(&row.2)).sum::<f32>()
+        > price_rect.height() - reserved_top
+    {
         if rows.pop().is_none() {
             break;
         }
     }
     rows.sort_by(|a, b| a.1.total_cmp(&b.1));
-    let mut next = price_rect.top();
+    let mut next = price_rect.top() + reserved_top;
     for row in &mut rows {
         let height = row_height(&row.2);
         row.1 = row.1.max(next + height / 2.0);
@@ -632,6 +726,7 @@ mod tests {
                         pane.right() + width,
                         countdown,
                         None,
+                        0.0,
                     );
                 });
                 let labels: Vec<_> = output

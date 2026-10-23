@@ -342,7 +342,7 @@ impl DataWindowInfo {
     /// Applies the instrument's price and volume precision to this readout.
     pub fn with_instrument(mut self, instrument: &crate::model::Instrument) -> Self {
         self.price_precision = crate::scales::instrument_price_precision(instrument);
-        self.volume_precision = instrument.volume_decimals.map(|decimals| decimals.min(16));
+        self.volume_precision = instrument.volume_decimals;
         self
     }
 
