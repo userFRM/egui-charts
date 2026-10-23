@@ -1,4 +1,4 @@
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 /// Chandelier Exit
 /// Trailing stop-loss indicator based on Wilder's ATR
@@ -38,25 +38,10 @@ impl ChandelierExit {
         self.colors = colors;
         self
     }
-}
 
-impl Default for ChandelierExit {
-    fn default() -> Self {
-        Self::new(22, 3.0)
-    }
-}
-
-impl Indicator for ChandelierExit {
-    fn name(&self) -> &str {
-        "Chandelier"
-    }
-
-    fn desc(&self) -> &str {
-        "Chandelier Exit - ATR-based trailing stop"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::with_capacity(data.len());
 
         let mut atr = ATR::new(self.period);
         atr.calculate(data);
@@ -77,12 +62,36 @@ impl Indicator for ChandelierExit {
                     // Short exit = Lowest Low + ATR * multiplier
                     let short_exit = lowest + atr * self.multiplier;
 
-                    self.values
-                        .push(IndicatorValue::Multiple(vec![long_exit, short_exit]));
+                    values.push(IndicatorValue::Multiple(vec![long_exit, short_exit]));
                 }
-                _ => self.values.push(IndicatorValue::None),
+                _ => values.push(IndicatorValue::None),
             }
         }
+        values
+    }
+}
+
+impl Default for ChandelierExit {
+    fn default() -> Self {
+        Self::new(22, 3.0)
+    }
+}
+
+impl Indicator for ChandelierExit {
+    fn name(&self) -> &str {
+        "Chandelier"
+    }
+
+    fn desc(&self) -> &str {
+        "Chandelier Exit - ATR-based trailing stop"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| [b.high, b.low, b.close].iter().all(|p| p.is_finite()),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

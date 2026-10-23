@@ -23,6 +23,7 @@
 //! obv.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -51,6 +52,31 @@ impl OnBalanceVolume {
         self.color = color;
         self
     }
+
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::with_capacity(data.len());
+
+        if data.is_empty() {
+            return values;
+        }
+
+        // The first bar has no previous close, so the running total starts at 0.
+        let mut obv = 0.0;
+        values.push(IndicatorValue::Single(obv));
+
+        // Subsequent bars
+        for i in 1..data.len() {
+            if data[i].close > data[i - 1].close {
+                obv += data[i].volume;
+            } else if data[i].close < data[i - 1].close {
+                obv -= data[i].volume;
+            }
+            // If close == prev_close, OBV stays the same
+            values.push(IndicatorValue::Single(obv));
+        }
+        values
+    }
 }
 
 impl Default for OnBalanceVolume {
@@ -69,26 +95,11 @@ impl Indicator for OnBalanceVolume {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // The first bar has no previous close, so the running total starts at 0.
-        let mut obv = 0.0;
-        self.values.push(IndicatorValue::Single(obv));
-
-        // Subsequent bars
-        for i in 1..data.len() {
-            if data[i].close > data[i - 1].close {
-                obv += data[i].volume;
-            } else if data[i].close < data[i - 1].close {
-                obv -= data[i].volume;
-            }
-            // If close == prev_close, OBV stays the same
-            self.values.push(IndicatorValue::Single(obv));
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.close.is_finite() && b.volume.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -144,30 +155,45 @@ mod tests {
     #[test]
     fn test_obv_matches_reference() {
         // (closes, volumes, expected OBV)
-        let cases: &[(&[f64], &[f64], &[f64])] = &[
+        type Case = (&'static [f64], &'static [f64], &'static [Option<f64>]);
+        let cases: &[Case] = &[
             // Up, down, unchanged, a zero-volume up bar, then down.
             (
                 &[10.0, 11.0, 10.5, 10.5, 12.0, 11.0],
                 &[1000.0, 1500.0, 700.0, 900.0, 0.0, 400.0],
-                &[0.0, 1500.0, 800.0, 800.0, 800.0, 400.0],
+                &[
+                    Some(0.0),
+                    Some(1500.0),
+                    Some(800.0),
+                    Some(800.0),
+                    Some(800.0),
+                    Some(400.0),
+                ],
             ),
             // Flat series.
             (
                 &[10.0, 10.0, 10.0],
                 &[1000.0, 2000.0, 3000.0],
-                &[0.0, 0.0, 0.0],
+                &[Some(0.0), Some(0.0), Some(0.0)],
             ),
             // Single bar.
-            (&[10.0], &[5000.0], &[0.0]),
+            (&[10.0], &[5000.0], &[Some(0.0)]),
+            // A NaN volume has no value; the next bar compares with the close before it.
+            (
+                &[10.0, 11.0, 12.0, 13.0, 14.0],
+                &[100.0, 200.0, f64::NAN, 400.0, 500.0],
+                &[Some(0.0), Some(200.0), None, Some(600.0), Some(1100.0)],
+            ),
         ];
         for (closes, volumes, expected) in cases {
             let mut obv = OnBalanceVolume::new();
             obv.calculate(&bars(closes, volumes));
-            let got: Vec<f64> = obv
+            let got: Vec<Option<f64>> = obv
                 .values()
                 .iter()
                 .map(|v| match v {
-                    IndicatorValue::Single(x) => *x,
+                    IndicatorValue::Single(x) => Some(*x),
+                    IndicatorValue::None => None,
                     other => panic!("unexpected value {other:?}"),
                 })
                 .collect();

@@ -26,6 +26,7 @@
 //! kama.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -112,6 +113,45 @@ impl KAMA {
         let sc = er * (fast_sc - slow_sc) + slow_sc;
         sc * sc
     }
+
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::with_capacity(data.len());
+
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        // First values are None
+        for _ in 0..self.period - 1 {
+            values.push(IndicatorValue::None);
+        }
+
+        // Initialize KAMA with first valid SMA
+        let first_prices: Vec<f64> = data[0..self.period].iter().map(|bar| bar.close).collect();
+        let mut kama = first_prices.iter().sum::<f64>() / self.period as f64;
+        values.push(IndicatorValue::Single(kama));
+
+        // N + 1 closes give the N price changes the efficiency ratio sums.
+        for i in self.period..data.len() {
+            let prices: Vec<f64> = data[i - self.period..=i]
+                .iter()
+                .map(|bar| bar.close)
+                .collect();
+
+            let er = Self::efficiency_ratio(&prices);
+            let sc = self.smoothing_constant(er);
+
+            let close = data[i].close;
+            kama = kama + sc * (close - kama);
+
+            values.push(IndicatorValue::Single(kama));
+        }
+        values
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -131,40 +171,7 @@ impl Indicator for KAMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // First values are None
-        for _ in 0..self.period - 1 {
-            self.values.push(IndicatorValue::None);
-        }
-
-        // Initialize KAMA with first valid SMA
-        let first_prices: Vec<f64> = data[0..self.period].iter().map(|bar| bar.close).collect();
-        let mut kama = first_prices.iter().sum::<f64>() / self.period as f64;
-        self.values.push(IndicatorValue::Single(kama));
-
-        // N + 1 closes give the N price changes the efficiency ratio sums.
-        for i in self.period..data.len() {
-            let prices: Vec<f64> = data[i - self.period..=i]
-                .iter()
-                .map(|bar| bar.close)
-                .collect();
-
-            let er = Self::efficiency_ratio(&prices);
-            let sc = self.smoothing_constant(er);
-
-            let close = data[i].close;
-            kama = kama + sc * (close - kama);
-
-            self.values.push(IndicatorValue::Single(kama));
-        }
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -266,6 +273,21 @@ mod tests {
                 &[None, None, Some(7.0), Some(7.0), Some(7.0)],
             ),
             ("short", 5, &[1.0, 2.0, 3.0], &[None, None, None]),
+            // The NaN close has no value; the next efficiency ratio spans the closes around it.
+            (
+                "NaN close",
+                2,
+                &[1.0, 2.0, f64::NAN, 4.0, 5.0, 6.0, 7.0],
+                &[
+                    None,
+                    Some(1.5),
+                    None,
+                    Some(2.611111111111111),
+                    Some(3.6728395061728394),
+                    Some(4.707133058984911),
+                    Some(5.726185032769395),
+                ],
+            ),
         ];
 
         for (name, period, closes, expected) in cases {

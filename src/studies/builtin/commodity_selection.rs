@@ -1,4 +1,4 @@
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::{ADX, ATR, Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -59,25 +59,10 @@ impl CommoditySelectionIndex {
         self.color = color;
         self
     }
-}
 
-impl Default for CommoditySelectionIndex {
-    fn default() -> Self {
-        Self::new(14)
-    }
-}
-
-impl Indicator for CommoditySelectionIndex {
-    fn name(&self) -> &str {
-        "CSI"
-    }
-
-    fn desc(&self) -> &str {
-        "Commodity Selection Index - Pos sizing metric"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::with_capacity(data.len());
 
         let mut adx = ADX::new(self.period);
         adx.calculate(data);
@@ -97,11 +82,36 @@ impl Indicator for CommoditySelectionIndex {
                 Some(IndicatorValue::Single(v)) => Some(*v),
                 _ => None,
             };
-            self.values.push(match (adxr, atr_i) {
+            values.push(match (adxr, atr_i) {
                 (Some(adxr), Some(atr)) => IndicatorValue::Single(adxr * atr * scale),
                 _ => IndicatorValue::None,
             });
         }
+        values
+    }
+}
+
+impl Default for CommoditySelectionIndex {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
+impl Indicator for CommoditySelectionIndex {
+    fn name(&self) -> &str {
+        "CSI"
+    }
+
+    fn desc(&self) -> &str {
+        "Commodity Selection Index - Pos sizing metric"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| [b.high, b.low, b.close].iter().all(|p| p.is_finite()),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

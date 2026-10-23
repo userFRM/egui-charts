@@ -478,19 +478,18 @@ mod tests {
         use chrono::{TimeZone, Utc};
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
-        let normal: Vec<Bar> = (0..200)
-            .map(|i| {
-                let c = 100.0 + 10.0 * (i as f64 / 7.0).sin();
-                Bar {
-                    time: Utc.timestamp_opt(i * 60, 0).unwrap(),
-                    open: c - 0.5,
-                    high: c + 1.0,
-                    low: c - 1.0,
-                    close: c,
-                    volume: 1000.0 + i as f64,
-                }
-            })
-            .collect();
+        let bar = |i: i64| {
+            let c = 100.0 + 10.0 * (i as f64 / 7.0).sin();
+            Bar {
+                time: Utc.timestamp_opt(i * 60, 0).unwrap(),
+                open: c - 0.5,
+                high: c + 1.0,
+                low: c - 1.0,
+                close: c,
+                volume: 1000.0 + i as f64,
+            }
+        };
+        let normal: Vec<Bar> = (0..200).map(bar).collect();
         let edit = |f: fn(usize, &mut Bar)| -> Vec<Bar> {
             let mut bars = normal.clone();
             bars.iter_mut().enumerate().for_each(|(i, b)| f(i, b));
@@ -652,6 +651,97 @@ mod tests {
                 failures.push(format!(
                     "{} with float parameters at 0.0 loses values",
                     study.name()
+                ));
+            }
+        }
+
+        // One non-finite bar must not blank the rest of the series: wherever the series without
+        // it has a finite last value, the series with it has one too, whether the bar has NaN
+        // prices, an infinite high, a NaN volume or a NaN open. 600 bars keep every window at
+        // the last bar clear of bar 100. Each study listed still carries the bar to the end,
+        // under the issue that tracks its fix; the list may only shrink.
+        const CARRY_NON_FINITE: &[(&str, u32)] = &[
+            ("EMA", 647),
+            ("DEMA", 647),
+            ("TEMA", 647),
+            ("SMMA", 647),
+            ("GMMA", 647),
+            ("MD", 647),
+            ("VIDYA", 647),
+            ("ZLEMA", 647),
+            ("EMA Cross", 647),
+            ("MACD", 647),
+            ("VW-MACD", 647),
+            ("StochRSI", 647),
+            ("TRIX", 647),
+            ("Elder Ray", 647),
+            ("Force Index", 647),
+            ("Mass Index", 647),
+            ("TSI", 647),
+            ("SMI", 647),
+            ("STC", 647),
+            ("PPO", 647),
+            ("DMI", 647),
+            ("Keltner", 647),
+            ("CV", 647),
+            ("Vol Index", 647),
+            ("VWAP", 647),
+            ("AVWAP", 647),
+            ("A/D", 647),
+            ("CVD", 647),
+            ("VPT", 647),
+            ("PVT Enhanced", 647),
+            ("PVI", 647),
+            ("WAD", 647),
+            ("ASI", 647),
+            ("Volume Osc", 647),
+            ("Vol Profile VR", 647),
+            ("Vol Profile FR", 647),
+        ];
+        let long: Vec<Bar> = (0..600).map(bar).collect();
+        let mut without = long.clone();
+        without.remove(100);
+        let mut nan = long.clone();
+        (nan[100].high, nan[100].low, nan[100].close) = (f64::NAN, f64::NAN, f64::NAN);
+        let mut infinite = long.clone();
+        infinite[100].high = f64::INFINITY;
+        let mut no_volume = long.clone();
+        no_volume[100].volume = f64::NAN;
+        let mut no_open = long.clone();
+        no_open[100].open = f64::NAN;
+        let last = |study: &mut Box<dyn Indicator>, bars: &[Bar]| {
+            catch_unwind(AssertUnwindSafe(|| study.calculate(bars))).ok()?;
+            study.values().last().map(finite)
+        };
+        for mut study in builtins_with(|_| 14, |v| v) {
+            let Some(clean) = last(&mut study, &without) else {
+                continue;
+            };
+            let carries = [&nan, &infinite, &no_volume, &no_open].iter().any(|bars| {
+                let hostile = last(&mut study, bars).unwrap_or_default();
+                clean
+                    .iter()
+                    .enumerate()
+                    .any(|(k, c)| *c && !hostile.get(k).copied().unwrap_or(false))
+            });
+            let listed = CARRY_NON_FINITE
+                .iter()
+                .find(|(name, _)| *name == study.name());
+            match (carries, listed) {
+                (true, None) => failures.push(format!(
+                    "{} carries one non-finite bar to the end of the series",
+                    study.name()
+                )),
+                (false, Some((name, issue))) => failures.push(format!(
+                    "{name} no longer carries a non-finite bar; remove it from CARRY_NON_FINITE (#{issue})"
+                )),
+                _ => {}
+            }
+        }
+        for (name, issue) in CARRY_NON_FINITE {
+            if !registered.iter().any(|r| r == name) {
+                failures.push(format!(
+                    "{name} in CARRY_NON_FINITE is not a study (#{issue})"
                 ));
             }
         }

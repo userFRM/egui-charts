@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Fisher Transform
 /// Converts prices into a Gaussian normal distribution
@@ -33,32 +34,16 @@ impl FisherTransform {
         self.colors = colors;
         self
     }
-}
 
-/// Construct with the conventional default parameters.
-impl Default for FisherTransform {
-    fn default() -> Self {
-        Self::new(9)
-    }
-}
-
-impl Indicator for FisherTransform {
-    fn name(&self) -> &str {
-        "Fisher Transform"
-    }
-
-    fn desc(&self) -> &str {
-        "Fisher Transform - Identifies price reversals with Gaussian distribution"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::with_capacity(data.len());
 
         if data.len() < self.period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate HL2 (typical price simplified)
@@ -110,14 +95,39 @@ impl Indicator for FisherTransform {
         // Store results
         for (fisher, signal) in fisher_values {
             if fisher.is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else if signal.is_nan() || signal == 0.0 {
-                self.values.push(IndicatorValue::Single(fisher));
+                values.push(IndicatorValue::Single(fisher));
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![fisher, signal]));
+                values.push(IndicatorValue::Multiple(vec![fisher, signal]));
             }
         }
+        values
+    }
+}
+
+/// Construct with the conventional default parameters.
+impl Default for FisherTransform {
+    fn default() -> Self {
+        Self::new(9)
+    }
+}
+
+impl Indicator for FisherTransform {
+    fn name(&self) -> &str {
+        "Fisher Transform"
+    }
+
+    fn desc(&self) -> &str {
+        "Fisher Transform - Identifies price reversals with Gaussian distribution"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

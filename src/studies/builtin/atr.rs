@@ -16,6 +16,7 @@
 //! atr.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -58,6 +59,47 @@ impl ATR {
         let lc = (bar.low - prev_close).abs();
         hl.max(hc).max(lc)
     }
+
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::with_capacity(data.len());
+
+        if data.is_empty() {
+            return values;
+        }
+
+        // Calculate True Range for all bars
+        let mut true_ranges = Vec::with_capacity(data.len());
+        true_ranges.push(data[0].high - data[0].low); // First TR is just high - low
+
+        for i in 1..data.len() {
+            let tr = Self::true_range(&data[i], data[i - 1].close);
+            true_ranges.push(tr);
+        }
+
+        // Calculate ATR using Wilder's smoothing method
+        let multiplier = 1.0 / self.period as f64;
+
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else if i == self.period - 1 {
+                // Initial ATR is simple avg
+                let sum: f64 = true_ranges[..=i].iter().sum();
+                let atr = sum / self.period as f64;
+                values.push(IndicatorValue::Single(atr));
+            } else {
+                // Subsequent ATR uses smoothing
+                if let IndicatorValue::Single(prev_atr) = values[i - 1] {
+                    let atr = prev_atr + multiplier * (true_ranges[i] - prev_atr);
+                    values.push(IndicatorValue::Single(atr));
+                } else {
+                    values.push(IndicatorValue::None);
+                }
+            }
+        }
+        values
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -77,42 +119,11 @@ impl Indicator for ATR {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // Calculate True Range for all bars
-        let mut true_ranges = Vec::with_capacity(data.len());
-        true_ranges.push(data[0].high - data[0].low); // First TR is just high - low
-
-        for i in 1..data.len() {
-            let tr = Self::true_range(&data[i], data[i - 1].close);
-            true_ranges.push(tr);
-        }
-
-        // Calculate ATR using Wilder's smoothing method
-        let multiplier = 1.0 / self.period as f64;
-
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else if i == self.period - 1 {
-                // Initial ATR is simple avg
-                let sum: f64 = true_ranges[..=i].iter().sum();
-                let atr = sum / self.period as f64;
-                self.values.push(IndicatorValue::Single(atr));
-            } else {
-                // Subsequent ATR uses smoothing
-                if let IndicatorValue::Single(prev_atr) = self.values[i - 1] {
-                    let atr = prev_atr + multiplier * (true_ranges[i] - prev_atr);
-                    self.values.push(IndicatorValue::Single(atr));
-                } else {
-                    self.values.push(IndicatorValue::None);
-                }
-            }
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| [b.high, b.low, b.close].iter().all(|p| p.is_finite()),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -179,9 +190,11 @@ mod tests {
         assert!((tr - 12.0).abs() < 0.001); // |low - prev| = |98 - 110| = 12
     }
 
-    /// A bar's ATR does not depend on whether a later bar exists: with length 1 the first bar has its range.
+    /// Wilder's ATR worked by hand. A bar's ATR does not depend on whether a later bar exists:
+    /// with length 1 the first bar has its range. A bar with a non-finite price has no value,
+    /// and the next true range uses the close before it.
     #[test]
-    fn length_one_has_a_value_on_a_single_bar() {
+    fn matches_wilder_by_hand() {
         let bar = |high, low, close| Bar {
             time: Utc::now(),
             open: close,
@@ -191,20 +204,45 @@ mod tests {
             volume: 1000.0,
         };
         let first = bar(102.0, 98.0, 100.0);
+        // Length 2 around a bad bar: ranges 4, max(2, 3, 1) = 3, then from the close of 102
+        // max(4, 6, 2) = 6 and max(2, 1, 1) = 2; ATR (4 + 3) / 2 = 3.5, (3.5 + 6) / 2 = 4.75,
+        // (4.75 + 2) / 2 = 3.375.
+        let around = |bad: Bar| {
+            vec![
+                first.clone(),
+                bar(103.0, 101.0, 102.0),
+                bad,
+                bar(108.0, 104.0, 106.0),
+                bar(107.0, 105.0, 106.0),
+            ]
+        };
+        let skipped = vec![None, Some(3.5), None, Some(4.75), Some(3.375)];
         // Ranges by hand: 102 - 98 = 4; for the second bar max(103 - 99, |103 - 100|, |99 - 100|) = 4.
-        let cases: [(Vec<Bar>, Vec<f64>); 2] = [
-            (vec![first.clone()], vec![4.0]),
-            (vec![first, bar(103.0, 99.0, 101.0)], vec![4.0, 4.0]),
+        let cases: [(usize, Vec<Bar>, Vec<Option<f64>>); 4] = [
+            (1, vec![first.clone()], vec![Some(4.0)]),
+            (
+                1,
+                vec![first.clone(), bar(103.0, 99.0, 101.0)],
+                vec![Some(4.0), Some(4.0)],
+            ),
+            (
+                2,
+                around(bar(f64::NAN, f64::NAN, f64::NAN)),
+                skipped.clone(),
+            ),
+            (2, around(bar(f64::INFINITY, 103.0, 104.0)), skipped),
         ];
-        for (data, expected) in cases {
-            let mut atr = ATR::new(1);
+        for (period, data, expected) in cases {
+            let mut atr = ATR::new(period);
             atr.calculate(&data);
             assert_eq!(atr.values().len(), expected.len());
-            for (got, want) in atr.values().iter().zip(expected) {
-                assert!(
-                    matches!(got, IndicatorValue::Single(v) if (v - want).abs() < 1e-12),
-                    "{got:?} != {want}"
-                );
+            for (i, (got, want)) in atr.values().iter().zip(expected).enumerate() {
+                let ok = match (got, want) {
+                    (IndicatorValue::None, None) => true,
+                    (IndicatorValue::Single(v), Some(w)) => (v - w).abs() < 1e-12,
+                    _ => false,
+                };
+                assert!(ok, "ATR({period}) bar {i}: {got:?} != {want:?}");
             }
         }
     }

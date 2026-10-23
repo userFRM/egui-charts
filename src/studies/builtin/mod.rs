@@ -43,6 +43,9 @@
 //! [`CorrelationCoefficient`], [`LinearRegression`], [`StandardError`],
 //! [`RankCorrelationIndex`], [`MajorityRule`]
 
+use crate::model::Bar;
+use crate::studies::IndicatorValue;
+
 mod bollinger_bands;
 mod ema;
 mod macd;
@@ -626,6 +629,25 @@ pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
 /// raise a length of 0 to 1.
 fn clamp_param(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
+}
+
+/// `compute` run over the bars whose inputs `finite` accepts, the other bars given no
+/// value, so an unusable bar leaves running state unchanged instead of spoiling every
+/// later bar. Clean data is not copied.
+fn over_finite_bars(
+    data: &[Bar],
+    finite: impl Fn(&Bar) -> bool,
+    compute: impl FnOnce(&[Bar]) -> Vec<IndicatorValue>,
+) -> Vec<IndicatorValue> {
+    if data.iter().all(&finite) {
+        return compute(data);
+    }
+    let kept: Vec<_> = data.iter().filter(|b| finite(b)).cloned().collect();
+    let mut values = compute(&kept).into_iter();
+    data.iter()
+        .map(|b| if finite(b) { values.next() } else { None })
+        .map(|v| v.unwrap_or(IndicatorValue::None))
+        .collect()
 }
 
 /// Most price rows a volume profile computes.

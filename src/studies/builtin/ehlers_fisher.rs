@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Ehlers Fisher Transform (John Ehlers version)
 /// Converts prices into a Gaussian normal distribution
@@ -36,31 +37,16 @@ impl EhlersFisher {
         self.colors = colors;
         self
     }
-}
 
-impl Default for EhlersFisher {
-    fn default() -> Self {
-        Self::new(10)
-    }
-}
-
-impl Indicator for EhlersFisher {
-    fn name(&self) -> &str {
-        "Ehlers Fisher"
-    }
-
-    fn desc(&self) -> &str {
-        "Ehlers Fisher Transform - Enhanced price distribution"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::with_capacity(data.len());
 
         if data.len() < self.period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate midprice (HL2)
@@ -104,14 +90,38 @@ impl Indicator for EhlersFisher {
         // Store results
         for (fisher, trigger) in fisher_values {
             if fisher.is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else if trigger.is_nan() || trigger == 0.0 {
-                self.values.push(IndicatorValue::Single(fisher));
+                values.push(IndicatorValue::Single(fisher));
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![fisher, trigger]));
+                values.push(IndicatorValue::Multiple(vec![fisher, trigger]));
             }
         }
+        values
+    }
+}
+
+impl Default for EhlersFisher {
+    fn default() -> Self {
+        Self::new(10)
+    }
+}
+
+impl Indicator for EhlersFisher {
+    fn name(&self) -> &str {
+        "Ehlers Fisher"
+    }
+
+    fn desc(&self) -> &str {
+        "Ehlers Fisher Transform - Enhanced price distribution"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

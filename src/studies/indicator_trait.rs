@@ -56,6 +56,15 @@ pub enum IndicatorValue {
 /// 4. The rendering layer queries [`is_overlay`](Indicator::is_overlay),
 ///    [`colors`](Indicator::colors), [`line_names`](Indicator::line_names),
 ///    etc. for drawing.
+///
+/// # Non-finite bars
+///
+/// A bar whose inputs, the fields a study reads, are not finite has no value, and the
+/// study computes every other bar as if that bar were not in the series, so running
+/// state carries over it unchanged. A window study may also leave the windows that
+/// contain it without a value. The chart's datafeed drops such bars before they reach a
+/// study, so this matters to direct callers of [`calculate`](Indicator::calculate).
+/// Some built-in recursive and cumulative studies do not follow this yet.
 pub trait Indicator: Send {
     /// Return the short display name of this indicator (e.g. `"SMA"`, `"RSI"`, `"MACD"`).
     fn name(&self) -> &str;
