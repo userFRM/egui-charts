@@ -401,9 +401,9 @@ impl TimeframeSelector {
         }
     }
 
-    /// Widths of the widest interval code and the widest description in the menu.
-    fn column_widths(&self, ui: &Ui, theme: &Theme) -> (f32, f32) {
-        let font = egui::FontId::proportional(theme.text.body);
+    /// Width of the widest interval label in the menu.
+    fn label_width(&self, ui: &Ui) -> f32 {
+        let font = egui::FontId::proportional(14.0);
         let width = |text: String| {
             ui.painter()
                 .layout_no_wrap(text, font.clone(), Color32::PLACEHOLDER)
@@ -413,13 +413,8 @@ impl TimeframeSelector {
         Timeframe::all_presets()
             .iter()
             .chain(&self.custom_timeframes)
-            .chain(&self.favorites)
-            .fold((0.0, 0.0), |(code, description), tf| {
-                (
-                    f32::max(code, width(tf.display())),
-                    f32::max(description, width(tf.display_long())),
-                )
-            })
+            .map(|tf| width(tf.display_long()))
+            .fold(0.0, f32::max)
     }
 
     fn menu_ui(&mut self, ui: &mut Ui, theme: &Theme, max_height: f32) -> TimeframeAction {
@@ -432,7 +427,7 @@ impl TimeframeSelector {
         spacing.scroll.fade.strength = 0.0;
         let bar = spacing.scroll.allocated_width();
 
-        let (_, desc_w) = self.column_widths(ui, theme);
+        let desc_w = self.label_width(ui);
         ui.set_width((desc_w + 64.0 + bar).max(self.config.dropdown_width).max(
             if self.show_custom_input {
                 CUSTOM_FORM_W
