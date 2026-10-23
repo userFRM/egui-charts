@@ -325,9 +325,14 @@ impl DrawingManager {
         HandleService::hit_test_handle(drawing, point, self.options.handle_config.size)
     }
 
-    /// Begins a handle drag operation, saving the drawing's current state for undo.
+    /// Begins a handle drag operation, saving the drawing's current state for undo. A locked
+    /// drawing is not dragged.
     pub fn start_drag_handle(&mut self, drawing_id: usize, handle: HandlePos) {
-        if let Some(drawing) = self.drawings.iter().find(|d| d.id == drawing_id) {
+        if let Some(drawing) = self
+            .drawings
+            .iter()
+            .find(|d| d.id == drawing_id && !d.locked)
+        {
             self.dragging_handle = Some((drawing_id, handle));
             self.drag_old_state = Some(drawing.clone());
         }
@@ -552,8 +557,11 @@ impl DrawingManager {
     ///
     /// The deleted drawing is pushed to the undo history and a cloud sync
     /// delete action is queued. If the deleted drawing was selected, the
-    /// selection is cleared.
+    /// selection is cleared. A locked drawing is not deleted.
     pub fn delete_drawing(&mut self, id: usize) {
+        if self.drawings.iter().any(|d| d.id == id && d.locked) {
+            return;
+        }
         if let Some(drawing) = self.drawings.iter().find(|d| d.id == id).cloned() {
             self.drawings.retain(|d| d.id != id);
             self.history.push_delete(drawing);
@@ -573,11 +581,11 @@ impl DrawingManager {
         }
     }
 
-    /// Removes all drawings and clears the current drawing and selection.
+    /// Removes every drawing that is not locked and clears the current drawing and selection.
     ///
     /// Note: This does not push to the undo history (it is a destructive reset).
     pub fn clear_all(&mut self) {
-        self.drawings.clear();
+        self.drawings.retain(|d| d.locked);
         self.cancel_curr_drawing();
         self.selection.deselect_all();
     }
@@ -830,6 +838,29 @@ mod tests {
             assert_eq!(manager.drawings.len(), 1, "{tool:?}");
             assert_eq!(manager.drawings[0].chart_points, want, "{tool:?}");
         }
+    }
+
+    /// A locked drawing keeps its place when one of its handles is dragged and survives a
+    /// delete, which is how the eraser, the Delete key and the menus remove a drawing.
+    #[test]
+    fn a_locked_drawing_is_neither_moved_nor_deleted() {
+        let mut manager = DrawingManager::new();
+        let mut line = Drawing::new(3, DrawingToolType::TrendLine);
+        line.chart_points = vec![ChartPoint::new(10.0, 10.0), ChartPoint::new(20.0, 20.0)];
+        line.update_screen_coords(|bar| bar, |price| price as f32);
+        line.locked = true;
+        manager.drawings.push(line);
+
+        manager.start_drag_handle(3, HandlePos::Start);
+        manager.update_drag_handle(Pos2::new(50.0, 50.0), |x| x, f64::from);
+        manager.end_drag_handle();
+        manager.delete_drawing(3);
+
+        assert_eq!(manager.drawings.len(), 1);
+        assert_eq!(
+            manager.drawings[0].chart_points[0],
+            ChartPoint::new(10.0, 10.0)
+        );
     }
 
     #[test]

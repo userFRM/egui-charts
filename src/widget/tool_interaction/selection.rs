@@ -57,7 +57,13 @@ pub fn handle_selection<F1, F2>(
 
         // Handle eraser mode hover preview
         if cursor_modes.eraser.active {
-            let hit = drawing_manager.hit_test(pos);
+            // A locked drawing cannot be erased, so it is not offered.
+            let hit = drawing_manager.hit_test(pos).filter(|&id| {
+                drawing_manager
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == id && !d.locked)
+            });
             cursor_modes.eraser.set_hover(hit);
 
             if hit.is_some() {
