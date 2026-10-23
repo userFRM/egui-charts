@@ -215,6 +215,8 @@ pub struct PriceScale {
     transform: PriceTransform,
     /// The user zoomed or set the range, so autoscale leaves it alone until reset.
     manual: bool,
+    /// Larger magnitude of the data at the last fit, in scale units
+    level: f64,
 }
 
 impl PriceScale {
@@ -225,6 +227,7 @@ impl PriceScale {
             range: PriceRange::new(0.0, 100.0),
             transform: PriceTransform::default(),
             manual: false,
+            level: 0.0,
         }
     }
 
@@ -272,10 +275,18 @@ impl PriceScale {
     ///
     /// Non-finite bounds (no drawable data) keep the current range.
     pub fn autoscale(&mut self, min: f64, max: f64) {
-        if self.manual || !min.is_finite() || !max.is_finite() {
+        if !min.is_finite() || !max.is_finite() {
             return;
         }
-        let span = auto_scale_span(min, max);
+        self.level = min.abs().max(max.abs());
+        if self.manual {
+            return;
+        }
+        let span = match self.transform.mode {
+            // Log units measure ratios: flat data gets 0.01, which is 1% of the price.
+            PriceScaleMode::Logarithmic if max - min <= 1e-9 => 0.01,
+            _ => auto_scale_span(min, max),
+        };
         let margins = self.options.scale_margins;
         self.range = PriceRange::new(min - span * margins.bottom, max + span * margins.top);
     }
@@ -294,14 +305,14 @@ impl PriceScale {
     /// `anchor` is in the units of the transform the last fit returned.
     ///
     /// One call changes the span by at most 20 times either way. Zooming in stops at a
-    /// span of 1e-6 of the larger bound's magnitude (1e-6 when both bounds are 0), and
-    /// a result that is not finite leaves the range unchanged.
+    /// millionth of the price level: 1e-6 log units on a logarithmic scale, 1e-4 percentage
+    /// or index points in the relative modes, and for prices 1e-6 of the larger magnitude of
+    /// the data at the last fit or of the range. A result that is not finite leaves the range
+    /// unchanged.
     pub fn zoom(&mut self, factor: f64, anchor: f64) {
         let PriceRange { min, max } = self.range;
         let span = auto_scale_span(min, max);
-        // 1e-6 of the level: far above f64 rounding (~1e-16), at or below common tick sizes.
-        let level = min.abs().max(max.abs());
-        let floor = if level > 0.0 { level * 1e-6 } else { 1e-6 };
+        let floor = self.min_span();
         // Never widen a range that is already narrower than the floor.
         let new_span = (span * factor)
             .clamp(span * 0.05, span * 20.0)
@@ -311,6 +322,25 @@ impl PriceScale {
         let new_max = new_min + new_span;
         if (new_max - new_min).is_finite() {
             self.set_range(new_min, new_max);
+        }
+    }
+
+    /// The narrowest span zooming reaches, in scale units: a millionth of the price level,
+    /// far above f64 rounding (~1e-16) and at or below common tick sizes. The level is the
+    /// price on a logarithmic scale and the base in the relative modes, which do not shrink
+    /// with a view that crosses 0; for prices it is the larger magnitude of the data at the last
+    /// fit and of the range (1e-6 when both are 0).
+    pub(crate) fn min_span(&self) -> f64 {
+        match self.transform.mode {
+            PriceScaleMode::Logarithmic => 1e-6,
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100 => 1e-4,
+            PriceScaleMode::Normal => {
+                let level = self
+                    .level
+                    .max(self.range.min.abs())
+                    .max(self.range.max.abs());
+                if level > 0.0 { level * 1e-6 } else { 1e-6 }
+            }
         }
     }
 
@@ -496,20 +526,40 @@ mod tests {
             );
         }
 
-        let mut s = scale_with(90.0, 110.0);
-        for _ in 0..200 {
-            s.zoom((-1.0f64).exp(), 100.0);
-        }
-        // 1e-6 of a price of 100.
-        assert!(s.range().max - s.range().min >= 1e-4, "{:?}", s.range());
+        // Zoomed all the way in, the span is a millionth of the price level: of the visible data
+        // (at most 110, or 0.5 across zero), of the base (100) in percentage and index points,
+        // and of the price (1e-6 log units) on a logarithmic scale, also around ln 1 = 0.
+        use PriceScaleMode::*;
+        let ln = f64::ln;
+        // (mode, data in scale units, anchor, expected span)
+        for (mode, (lo, hi), anchor, floor) in [
+            (Normal, (90.0, 110.0), 100.0, 1.1e-4),
+            (Normal, (-0.5, 0.5), 0.0, 5e-7),
+            (Percentage, (-5.0, 5.0), 0.0, 1e-4),
+            (IndexedTo100, (95.0, 105.0), 100.0, 1e-4),
+            (Logarithmic, (ln(0.95), ln(1.05)), 0.0, 1e-6),
+        ] {
+            let mut s = PriceScale::new(PriceScaleOptions::default());
+            s.rebase(PriceTransform { mode, base: 50.0 });
+            s.autoscale(lo, hi);
+            for _ in 0..200 {
+                s.zoom((-1.0f64).exp(), anchor);
+            }
+            let span = s.range().max - s.range().min;
+            assert!(
+                (span - floor).abs() < floor * 1e-6,
+                "{mode:?} ({lo}, {hi}): {:?}",
+                s.range()
+            );
 
-        for _ in 0..1000 {
-            s.zoom(1.0f64.exp(), 100.0);
+            for _ in 0..1000 {
+                s.zoom(1.0f64.exp(), anchor);
+            }
+            let r = s.range();
+            assert!(
+                r.min.is_finite() && r.max.is_finite() && r.min < r.max,
+                "{mode:?}: {r:?}"
+            );
         }
-        let r = s.range();
-        assert!(
-            r.min.is_finite() && r.max.is_finite() && r.min < r.max,
-            "{r:?}"
-        );
     }
 }

@@ -528,7 +528,10 @@ impl Chart {
         );
         let transform = self.state.fit_price_scale();
         let (a, b) = (transform.to_scale(p), transform.to_scale(q));
-        self.state.price_scale_mut().set_range(a.min(b), a.max(b));
+        let scale = self.state.price_scale_mut();
+        // Widened around its middle to the span zooming stops at.
+        let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
+        scale.set_range(a.min(b) - pad, a.max(b) + pad);
 
         true // Zoom successfully applied
     }
@@ -785,5 +788,23 @@ mod tests {
         let (start, end) = (Pos2::new(x, y), Pos2::new(x + 25.0, y + 100.0));
         assert!(one_bar.execute_box_zoom(start, end, rect, rect.width()));
         assert_eq!(one_bar.state.time_scale().bar_spacing(), rect.width());
+
+        // A box over a range narrower than the zoom floor widens to it: a millionth of the
+        // visible data's highest price, 110.
+        let ctx = egui::Context::default();
+        let mut narrow = chart(&[95.0, 100.0], &[105.0, 110.0]);
+        narrow.state.price_scale_mut().set_range(100.0, 100.00001);
+        frame(&ctx, &mut narrow, 0.0, Vec::new());
+        let rect = narrow.last_rendered_price_rect;
+        let (start, end) = (
+            Pos2::new(rect.right() - 150.0, rect.top() + 100.0),
+            Pos2::new(rect.right() - 50.0, rect.top() + 200.0),
+        );
+        assert!(narrow.execute_box_zoom(start, end, rect, rect.width()));
+        let range = narrow.state.price_scale().range();
+        assert!(
+            (range.max - range.min - 1.1e-4).abs() < 1e-10,
+            "{range:?}, expected a span of 1.1e-4"
+        );
     }
 }

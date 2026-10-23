@@ -359,22 +359,29 @@ mod tests {
     /// which would put any other price (a drawing anchor) ~1e14 px away.
     #[test]
     fn flat_data_auto_scales_relative_to_price_level() {
-        let bars = (0..50)
-            .map(|i| {
-                let t = Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap();
-                Bar::new(t, 100.0, 100.0, 100.0, 100.0, 1.0)
-            })
-            .collect();
-        let mut state = ChartState::new(BarData::from_bars(bars));
-        state.time_scale_mut().set_width(800.0);
-        state.fit_price_scale();
-        let (min, max) = (
-            state.price_scale().range().min,
-            state.price_scale().range().max,
-        );
-        assert!(min < 100.0 && 100.0 < max, "({min}, {max})");
-        // At least one cent at a price of 100, at most the price itself.
-        assert!((0.01..=100.0).contains(&(max - min)), "({min}, {max})");
+        for (mode, price) in [
+            (PriceScaleMode::Normal, 100.0),
+            (PriceScaleMode::Logarithmic, 1.0001),
+        ] {
+            let bars = (0..50)
+                .map(|i| {
+                    let t = Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap();
+                    Bar::new(t, price, price, price, price, 1.0)
+                })
+                .collect();
+            let mut state = ChartState::new(BarData::from_bars(bars));
+            state.time_scale_mut().set_width(800.0);
+            state.price_scale_mut().options_mut().mode = mode;
+            let transform = state.fit_price_scale();
+            let range = state.price_scale().range();
+            let (min, max) = (transform.to_price(range.min), transform.to_price(range.max));
+            assert!(min < price && price < max, "{mode:?}: ({min}, {max})");
+            // At least a ten-thousandth of the price (one cent at 100), at most the price itself.
+            assert!(
+                (price * 1e-4..=price).contains(&(max - min)),
+                "{mode:?}: ({min}, {max})"
+            );
+        }
     }
 
     /// A range scaled by hand keeps every price at its pixel while the chart scrolls,
