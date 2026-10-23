@@ -81,12 +81,8 @@ fn color_swatch(
     color: Color32,
     id: &str,
 ) -> Option<Color32> {
-    if !state.is_open {
-        // The custom editor starts from the current colour, not the state's transparent default.
-        state.custom_color = color;
-    }
     state.sel_color = color;
-    ColorPicker::new(state, id).show(ui)
+    ColorPicker::new(state, id).show(ui).inner
 }
 
 /// Swatches that draw each preset width, then a stepper for any width from 1 to 10 px.

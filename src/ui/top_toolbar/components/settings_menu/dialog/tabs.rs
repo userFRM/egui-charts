@@ -86,6 +86,7 @@ impl SettingsDialog {
                                 "bg_color",
                             )
                             .show(ui)
+                            .inner
                             {
                                 dialog.settings.chart_basic_styles.background_color = color;
                             }
@@ -96,6 +97,7 @@ impl SettingsDialog {
                                 "bg_grad_top",
                             )
                             .show(ui)
+                            .inner
                             {
                                 dialog.settings.chart_basic_styles.background_gradient_top = color;
                             }
@@ -104,6 +106,7 @@ impl SettingsDialog {
                                 "bg_grad_bot",
                             )
                             .show(ui)
+                            .inner
                             {
                                 dialog
                                     .settings
@@ -139,6 +142,7 @@ impl SettingsDialog {
                         if let Some(color) =
                             ColorPicker::new(&mut dialog.color_picker_states.grid_h, "grid_h")
                                 .show(ui)
+                                .inner
                         {
                             dialog.settings.grid_lines.horizontal_color = color;
                         }
@@ -147,6 +151,7 @@ impl SettingsDialog {
                         && let Some(color) =
                             ColorPicker::new(&mut dialog.color_picker_states.grid_v, "grid_v")
                                 .show(ui)
+                                .inner
                     {
                         dialog.settings.grid_lines.vertical_color = color;
                     }
@@ -157,6 +162,7 @@ impl SettingsDialog {
                     if let Some(color) =
                         ColorPicker::new(&mut dialog.color_picker_states.crosshair, "crosshair")
                             .show(ui)
+                            .inner
                     {
                         dialog.settings.crosshair.color = color;
                     }
@@ -217,6 +223,7 @@ impl SettingsDialog {
                     if let Some(color) =
                         ColorPicker::new(&mut dialog.color_picker_states.watermark, "watermark")
                             .show(ui)
+                            .inner
                     {
                         dialog.settings.watermark.color = color;
                     }
@@ -231,6 +238,7 @@ impl SettingsDialog {
                     if let Some(color) =
                         ColorPicker::new(&mut dialog.color_picker_states.scales_text, "scales_text")
                             .show(ui)
+                            .inner
                     {
                         dialog.settings.scales_appearance.text_color = color;
                     }
@@ -242,6 +250,7 @@ impl SettingsDialog {
                         "scales_lines",
                     )
                     .show(ui)
+                    .inner
                     {
                         dialog.settings.scales_appearance.lines_color = color;
                     }
@@ -333,12 +342,14 @@ impl SettingsDialog {
                     if let Some(color) =
                         ColorPicker::new(&mut dialog.color_picker_states.body_up, "body_up")
                             .show(ui)
+                            .inner
                     {
                         dialog.settings.candle_colors.body_up = color;
                     }
                     if let Some(color) =
                         ColorPicker::new(&mut dialog.color_picker_states.body_down, "body_down")
                             .show(ui)
+                            .inner
                     {
                         dialog.settings.candle_colors.body_down = color;
                     }
@@ -348,12 +359,14 @@ impl SettingsDialog {
                     if let Some(color) =
                         ColorPicker::new(&mut dialog.color_picker_states.border_up, "border_up")
                             .show(ui)
+                            .inner
                     {
                         dialog.settings.candle_colors.border_up = color;
                     }
                     if let Some(color) =
                         ColorPicker::new(&mut dialog.color_picker_states.border_down, "border_down")
                             .show(ui)
+                            .inner
                     {
                         dialog.settings.candle_colors.border_down = color;
                     }
@@ -363,12 +376,14 @@ impl SettingsDialog {
                     if let Some(color) =
                         ColorPicker::new(&mut dialog.color_picker_states.wick_up, "wick_up")
                             .show(ui)
+                            .inner
                     {
                         dialog.settings.candle_colors.wick_up = color;
                     }
                     if let Some(color) =
                         ColorPicker::new(&mut dialog.color_picker_states.wick_down, "wick_down")
                             .show(ui)
+                            .inner
                     {
                         dialog.settings.candle_colors.wick_down = color;
                     }
@@ -643,7 +658,9 @@ impl SettingsDialog {
 
                 self.draw_setting_row_with_controls(ui, "Color", style, |ui, dialog| {
                     if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.alert, "alert").show(ui)
+                        ColorPicker::new(&mut dialog.color_picker_states.alert, "alert")
+                            .show(ui)
+                            .inner
                     {
                         dialog.settings.alerts.alert_color = color;
                     }
