@@ -6,9 +6,6 @@ mod realtime_btn;
 pub use box_zoom::render_box_zoom;
 pub use realtime_btn::render_realtime_btn;
 
-// Re-export directly from renderers (no wrapper needed)
-pub use crate::chart::renderers::{render_legend, render_ohlc_info};
-
 use crate::chart::renderers::{ChartMapping, RenderContext};
 use crate::config::CrosshairOptions;
 use crate::scales::{PriceMap, TimeFormatter};

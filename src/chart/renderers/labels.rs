@@ -5,7 +5,6 @@ use crate::scales::{
     PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkGenerator,
     TickMarkGeneratorConfig, TickMarkType, TimeFormatter,
 };
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use chrono::Duration;
 use egui::layers::ShapeIdx;
@@ -306,70 +305,9 @@ pub(crate) fn price_decimals(price: f64) -> usize {
     }
 }
 
-/// Formats a header price with [`price_decimals`].
-fn format_price(price: f64) -> String {
-    let decimals = price_decimals(price);
-    format!("{price:.decimals$}")
-}
-
-/// Renders OHLC info header
-pub fn render_ohlc_info(
-    painter: &egui::Painter,
-    rect: Rect,
-    visible_data: &[Bar],
-    padding: f32,
-    text_color: Color32,
-    show_volume: bool,
-) {
-    if visible_data.is_empty() {
-        return;
-    }
-
-    let candle = &visible_data[visible_data.len() - 1];
-
-    let mut info = format!(
-        "open: {}  close: {}  high: {}  low: {}",
-        format_price(candle.open),
-        format_price(candle.close),
-        format_price(candle.high),
-        format_price(candle.low)
-    );
-
-    if show_volume {
-        info.push_str(&format!("  volume: {:.2}", candle.volume));
-    }
-
-    painter.text(
-        Pos2::new(rect.min.x + padding, rect.min.y + 10.0),
-        egui::Align2::LEFT_TOP,
-        info,
-        FontId::proportional(typography::MD),
-        text_color,
-    );
-}
-
 #[path = "legend/mod.rs"]
 mod legend;
 pub use legend::{Legend, LegendStatus, QuoteSide};
-
-/// Paints a bounded series title and OHLC readout, wrapping between whole fields.
-/// Use [`Legend::show`] for metadata, quotes and interactive supplementary rows.
-pub fn render_legend(
-    painter: &egui::Painter,
-    rect: Rect,
-    symbol: &str,
-    timeframe: &str,
-    visible_data: &[Bar],
-    prev_close: Option<f64>,
-    colors: &StyleColors,
-    padding: f32,
-) {
-    if let Some(bar) = visible_data.last() {
-        legend::paint_series(
-            painter, rect, symbol, timeframe, bar, prev_close, colors, padding,
-        );
-    }
-}
 
 /// Formats text at weight 600 when the face has a weight axis.
 fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
@@ -389,120 +327,94 @@ mod tests {
     /// A narrow legend wraps whole fields before the plot's axis inset.
     #[test]
     fn legend_fields_stay_inside_the_plot() {
-        use crate::chart::renderers::StyleColors;
         use crate::theme::apply_to_egui;
         use egui::Vec2;
 
         for (_, theme) in crate::theme::presets() {
-            for component in [false, true] {
-                for width in [300.0, 400.0, 1200.0] {
-                    let ctx = Context::default();
-                    apply_to_egui(&ctx, &theme);
-                    let plot = Rect::from_min_size(Pos2::new(52.0, 40.0), Vec2::new(width, 400.0));
-                    let badge = ctx.load_texture(
-                        "instrument",
-                        egui::ColorImage::filled([18, 18], egui::Color32::BLUE),
-                        Default::default(),
-                    );
-                    let statuses = [super::LegendStatus {
-                        text: "S",
-                        color: theme.ui.text,
-                        background: theme.ui.panel_bg_secondary,
-                    }];
-                    let bar = Bar::new(
-                        Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
-                        749.37,
-                        751.09,
-                        749.13,
-                        750.74,
-                        275_540.0,
-                    );
-                    let colors = StyleColors {
-                        bullish: theme.chart.candle_up,
-                        bearish: theme.chart.candle_down,
-                        text: theme.chart.axis_text,
-                        bullish_border: None,
-                        bearish_border: None,
-                        bullish_wick: None,
-                        bearish_wick: None,
-                        candle_border_width: 0.0,
-                    };
-                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                        if component {
-                            let mut legend = super::Legend::new("Sample equity fund", "1h", &bar);
-                            legend.previous_close = Some(749.42);
-                            legend.badge = Some(egui::ImageSource::Texture(
-                                (badge.id(), Vec2::splat(18.0)).into(),
-                            ));
-                            legend.statuses = &statuses;
-                            legend.show_volume = false;
-                            legend.show(ui, plot);
-                        } else {
-                            super::render_legend(
-                                ui.painter(),
-                                plot,
-                                "Sample equity fund",
-                                "1h",
-                                std::slice::from_ref(&bar),
-                                Some(749.42),
-                                &colors,
-                                8.0,
-                            );
-                        }
-                    });
-                    output.textures_delta.clear();
-                    let text: Vec<_> = output
-                        .shapes
-                        .iter()
-                        .filter_map(|shape| match &shape.shape {
-                            Shape::Text(text) => Some(text),
-                            _ => None,
-                        })
-                        .collect();
-                    assert!(!text.is_empty());
-                    for shape in &output.shapes {
-                        if let Shape::Mesh(mesh) = &shape.shape
-                            && mesh.texture_id == badge.id()
-                        {
-                            assert!(plot.shrink(8.0).contains_rect(shape.clip_rect));
-                        }
+            for width in [300.0, 400.0, 1200.0] {
+                let ctx = Context::default();
+                apply_to_egui(&ctx, &theme);
+                let plot = Rect::from_min_size(Pos2::new(52.0, 40.0), Vec2::new(width, 400.0));
+                let badge = ctx.load_texture(
+                    "instrument",
+                    egui::ColorImage::filled([18, 18], egui::Color32::BLUE),
+                    Default::default(),
+                );
+                let statuses = [super::LegendStatus {
+                    text: "S",
+                    color: theme.ui.text,
+                    background: theme.ui.panel_bg_secondary,
+                }];
+                let bar = Bar::new(
+                    Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                    749.37,
+                    751.09,
+                    749.13,
+                    750.74,
+                    275_540.0,
+                );
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let mut legend = super::Legend::new("Sample equity fund", "1h", &bar);
+                    legend.previous_close = Some(749.42);
+                    legend.badge = Some(egui::ImageSource::Texture(
+                        (badge.id(), Vec2::splat(18.0)).into(),
+                    ));
+                    legend.statuses = &statuses;
+                    legend.show_volume = false;
+                    legend.show(ui, plot);
+                });
+                output.textures_delta.clear();
+                let text: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!text.is_empty());
+                for shape in &output.shapes {
+                    if let Shape::Mesh(mesh) = &shape.shape
+                        && mesh.texture_id == badge.id()
+                    {
+                        assert!(plot.shrink(8.0).contains_rect(shape.clip_rect));
                     }
-                    for text in &text {
-                        let bounds = Rect::from_min_size(text.pos, text.galley.size());
-                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                }
+                for text in &text {
+                    let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                             Shape::Rect(rect) if rect.fill == theme.chart.bg && rect.rect.height() >= 22.0 && rect.rect.contains_rect(bounds)
                         )), "missing row backdrop for {}", text.galley.text());
-                        assert!(
-                            bounds.right() <= plot.right() - 8.0 + 0.1,
-                            "{width}: {} at {bounds:?}",
-                            text.galley.text()
-                        );
-                    }
-                    for field in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"] {
-                        assert!(
-                            text.iter().any(|text| text.galley.text() == field),
-                            "{width}: missing whole field {field}"
-                        );
-                    }
-                    let centres: Vec<_> = text
-                        .iter()
-                        .map(|text| text.pos.y + text.galley.size().y / 2.0)
-                        .collect();
-                    if width == 1200.0 {
-                        assert!(centres.iter().all(|y| (*y - centres[0]).abs() < 0.1));
-                    } else {
-                        assert!(centres.iter().any(|y| *y > centres[0]));
-                    }
-                    for field in text
-                        .iter()
-                        .filter(|text| text.galley.text().starts_with("O "))
-                    {
-                        let sections = &field.galley.job.sections;
-                        assert_eq!(sections[0].format.color, theme.ui.text_secondary);
-                        assert_eq!(sections[1].format.color, theme.chart.candle_up);
-                    }
-                    output.drop_without_applying_deltas();
+                    assert!(
+                        bounds.right() <= plot.right() - 8.0 + 0.1,
+                        "{width}: {} at {bounds:?}",
+                        text.galley.text()
+                    );
                 }
+                for field in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"] {
+                    assert!(
+                        text.iter().any(|text| text.galley.text() == field),
+                        "{width}: missing whole field {field}"
+                    );
+                }
+                let centres: Vec<_> = text
+                    .iter()
+                    .map(|text| text.pos.y + text.galley.size().y / 2.0)
+                    .collect();
+                if width == 1200.0 {
+                    assert!(centres.iter().all(|y| (*y - centres[0]).abs() < 0.1));
+                } else {
+                    assert!(centres.iter().any(|y| *y > centres[0]));
+                }
+                for field in text
+                    .iter()
+                    .filter(|text| text.galley.text().starts_with("O "))
+                {
+                    let sections = &field.galley.job.sections;
+                    assert_eq!(sections[0].format.color, theme.ui.text_secondary);
+                    assert_eq!(sections[1].format.color, theme.chart.candle_up);
+                }
+                output.drop_without_applying_deltas();
             }
         }
     }

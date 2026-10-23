@@ -260,6 +260,11 @@ pub struct Chart {
     pub(crate) zoom_just_applied: bool,
     /// Current symbol being displayed (for legend)
     pub(crate) symbol: String,
+    /// Metadata supplied directly by a host without a feed.
+    legend_instrument: Option<crate::model::Instrument>,
+    /// Current quote, independent of the historical readout.
+    quote: Option<crate::model::Level1Quote>,
+    quote_action: Option<QuoteSide>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
     pub(crate) timeframe: Option<Timeframe>,
     /// The feed the chart loads from, if it was built with one.
@@ -405,6 +410,27 @@ impl Default for ChartLayoutRects {
 }
 
 impl Chart {
+    /// Supplies instrument metadata for a chart without a feed, including price precision.
+    /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
+    pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
+        self.legend_instrument = instrument;
+        let precision = self
+            .instrument()
+            .and_then(|instrument| instrument.price_decimals);
+        self.state.price_scale_mut().set_price_precision(precision);
+    }
+
+    /// Supplies the current bid and ask, independently of the hovered historical bar.
+    /// Pass `None` when quotes are unavailable or the symbol changes.
+    pub fn set_quote(&mut self, quote: Option<crate::model::Level1Quote>) {
+        self.quote = quote;
+    }
+
+    /// Takes the last legend quote click. No order is submitted by the chart.
+    pub fn take_quote_action(&mut self) -> Option<QuoteSide> {
+        self.quote_action.take()
+    }
+
     /// Calculate the layout sub-rects for a given widget rect.
     ///
     /// Given the overall widget area, this computes where the price chart,

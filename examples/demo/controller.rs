@@ -173,6 +173,7 @@ impl DemoApp {
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
         options.time_scale.bar_spacing = 6.1;
+        options.tooltip.enabled = false;
         // A full-history range must also fit in a narrow window.
         options.time_scale.min_bar_spacing = 0.01;
         // The scale reserves half a slot and one pixel after the last centre.
@@ -328,6 +329,19 @@ impl DemoApp {
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
+        let spec = DemoSymbol::find(&self.state.symbol);
+        self.chart.set_instrument(Some(egui_charts::model::Instrument::new(spec.symbol)
+            .with_description(format!("{} (synthetic)", spec.company_name))
+            .with_exchange(spec.exchange)
+            .with_price_decimals(2)));
+        self.chart.set_quote(self.bars.last().map(|bar| egui_charts::model::Level1Quote {
+            ts: bar.time,
+            symbol: self.state.symbol.clone(),
+            bid: (bar.close * 100.0).round() / 100.0 - 0.02,
+            ask: (bar.close * 100.0).round() / 100.0 + 0.02,
+            bid_size: 100.0,
+            ask_size: 100.0,
+        }));
     }
 
     // --- replay ------------------------------------------------------------
@@ -1189,6 +1203,9 @@ impl DemoApp {
             .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
                 self.chart.show(ui);
+                if let Some(side) = self.chart.take_quote_action() {
+                    self.notify(format!("{side:?} quote selected; synthetic data, no order submitted"));
+                }
             });
         self.replay_control.set_dock_rect(chart.response.rect);
         // Right-click context actions resolve after the chart is shown.

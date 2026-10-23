@@ -278,35 +278,6 @@ impl<'a> Legend<'a> {
     }
 }
 
-/// Paints the source-compatible series readout without interactive supplementary rows.
-pub(super) fn paint_series(
-    painter: &egui::Painter,
-    rect: Rect,
-    symbol: &str,
-    timeframe: &str,
-    bar: &Bar,
-    previous_close: Option<f64>,
-    colors: &StyleColors,
-    padding: f32,
-) {
-    let bounds = Rect::from_min_max(
-        rect.min + Vec2::new(padding.max(8.0), 8.0),
-        rect.max - Vec2::splat(8.0),
-    );
-    if !bounds.is_positive() {
-        return;
-    }
-    let painter = painter.with_clip_rect(bounds);
-    let mut layout = Layout::new(&painter, bounds, colors);
-    let title = if timeframe.is_empty() {
-        symbol.to_owned()
-    } else {
-        format!("{symbol} · {timeframe}")
-    };
-    layout.text(title, typography::XXL, colors.text, bounds.width());
-    layout.ohlc(bar, previous_close, price_decimals(bar.close));
-}
-
 struct Layout<'a> {
     painter: &'a egui::Painter,
     bounds: Rect,

@@ -787,38 +787,6 @@ impl Chart {
 
         let time_labels = painter.add(egui::Shape::Noop);
 
-        // Draw OHLC info header (legend if symbol is set)
-        if self.config.show_ohlc_info {
-            if !self.symbol.is_empty() {
-                // Calculate prev_close from second-to-last bar for change calculation
-                let prev_close = if visible_data.len() >= 2 {
-                    Some(visible_data[visible_data.len() - 2].close)
-                } else {
-                    None
-                };
-                rendering::render_legend(
-                    &painter.with_clip_rect(price_rect),
-                    price_rect,
-                    &self.symbol,
-                    &self.timeframe.map(|tf| tf.as_str()).unwrap_or_default(),
-                    visible_data,
-                    prev_close,
-                    &colors,
-                    8.0,
-                );
-            } else {
-                // Fallback to basic OHLC info
-                rendering::render_ohlc_info(
-                    &painter.with_clip_rect(price_rect),
-                    price_rect,
-                    visible_data,
-                    8.0,
-                    self.config.text_color,
-                    self.chart_type.supports_volume(),
-                );
-            }
-        }
-
         // Handle drawing tools
         if time_based {
             // Clone/extract values before mutable borrow of self
@@ -980,6 +948,34 @@ impl Chart {
                         );
                     }
                 }
+            }
+        }
+
+        if self.config.show_ohlc_info {
+            let visible_data = self.state.visible_data();
+            let selected = response
+                .hover_pos()
+                .filter(|pos| price_rect.contains(*pos))
+                .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
+                .map(|index| start_idx + index)
+                .unwrap_or_else(|| self.state.data().bars.len().saturating_sub(1));
+            if let Some(bar) = self.state.data().bars.get(selected) {
+                let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
+                let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
+                legend.instrument = self.instrument();
+                legend.quote = self.quote.as_ref();
+                legend.previous_close = selected
+                    .checked_sub(1)
+                    .and_then(|index| self.state.data().bars.get(index))
+                    .map(|bar| bar.close);
+                legend.bar_index = selected;
+                legend.studies = if time_based {
+                    self.studies.indicators()
+                } else {
+                    &[]
+                };
+                legend.show_volume = show_volume;
+                self.quote_action = ui.push_id(shown.id, |ui| legend.show(ui, price_rect)).inner;
             }
         }
 

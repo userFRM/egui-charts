@@ -127,6 +127,10 @@ impl Chart {
         }
         if symbol != self.symbol {
             self.pending_scroll_time = None;
+            self.legend_instrument = None;
+            self.quote = None;
+            self.quote_action = None;
+            self.state.price_scale_mut().set_price_precision(None);
         }
         self.symbol = symbol;
     }
@@ -159,9 +163,12 @@ impl Chart {
         self.timeframe
     }
 
-    /// The feed's description of the symbol, once it answered.
+    /// The feed's description of the symbol, or metadata supplied with `set_instrument`.
     pub fn instrument(&self) -> Option<&Instrument> {
-        self.feed_link.as_ref()?.instrument.as_ref()
+        self.feed_link
+            .as_ref()
+            .and_then(|link| link.instrument.as_ref())
+            .or(self.legend_instrument.as_ref())
     }
 
     /// The trades of `series` the feed sent, oldest first, at most 100,000. Empty for any id but
