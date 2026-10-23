@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The interval menu groups full interval names in 32 px rows with trailing favourite marks and neutral selection, retaining custom interval entry and model selection.
+
 - Top toolbar tooltips use compact dark surfaces below their controls, with platform-specific shortcut chips for alerts. Symbol, interval and chart-type triggers now identify their actions on hover.
 
 - `Chart::set_instrument`, `set_legend_badge`, `set_legend_statuses` and `set_quote` connect host metadata and current bid/ask to the responsive legend. Historical OHLC and study values follow the pointer independently of quotes, including over the axis add cell. `take_quote_action` retains buy/sell intents until taken; changing symbols clears supplied metadata and quotes. The demo labels generated data with SIM and records quote intents without submitting orders.
