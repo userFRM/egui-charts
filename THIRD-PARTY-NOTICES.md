@@ -61,3 +61,7 @@ Some interface icons under `assets/icons/` are taken from [Lucide](https://githu
 | `ui/watchlist.svg` | `list-plus.svg` |
 | `ui/zoom-in.svg` | `zoom-in.svg` |
 | `ui/zoom-out.svg` | `zoom-out.svg` |
+
+## Fonts in the web demo
+
+The library embeds no fonts: an application chooses its own, or enables egui's `default_fonts` feature (through `eframe`, as the bundled examples do). The web demo under `examples/demo` enables it, so its WebAssembly module contains egui's default fonts: Hack Regular (MIT License and Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0) and egui-icons, a five-glyph subset of emoji-icon-font (MIT License). Their notices and licences are in [`examples/demo/LICENSE-fonts.txt`](examples/demo/LICENSE-fonts.txt). The demo's build publishes that file and the Lucide licence next to the demo page.
