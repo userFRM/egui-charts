@@ -388,22 +388,22 @@ impl UiExt for Ui {
     // ==========================================================================
 
     fn error_label(&mut self, text: impl Into<String>) -> Response {
-        let color = DESIGN_TOKENS.semantic.extended.error;
+        let color = self.active_theme().ui.error;
         self.colored_label(color, text.into())
     }
 
     fn warning_label(&mut self, text: impl Into<String>) -> Response {
-        let color = DESIGN_TOKENS.semantic.extended.warning;
+        let color = self.active_theme().ui.warning;
         self.colored_label(color, text.into())
     }
 
     fn success_label(&mut self, text: impl Into<String>) -> Response {
-        let color = DESIGN_TOKENS.semantic.extended.success;
+        let color = self.active_theme().ui.success;
         self.colored_label(color, text.into())
     }
 
     fn info_label(&mut self, text: impl Into<String>) -> Response {
-        let color = DESIGN_TOKENS.semantic.extended.info;
+        let color = self.active_theme().ui.info;
         self.colored_label(color, text.into())
     }
 

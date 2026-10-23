@@ -30,9 +30,16 @@
 //! ```
 
 use crate::ext::UiExt;
-use crate::ui_kit::dialog::titled_window_size;
-use egui::Context;
+use crate::theme::ThemeExt;
+use crate::ui_kit::FormGrid;
+use crate::ui_kit::dialog::{DialogFooter, dialog_frame, title_row};
+use egui::{Context, Id, Key, Modifiers, RichText};
 use std::path::PathBuf;
+
+/// Id of the file path field, so a failed export can focus it.
+fn path_field() -> Id {
+    Id::NULL.with("egui_charts::export_dialog::path")
+}
 
 /// Export format options
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,7 +231,7 @@ impl ExportDialog {
 
     /// Shows the export dialog and returns the user's action
     ///
-    /// This displays a modal dialog with export configuration options.
+    /// This displays a dialog with export configuration options.
     /// Returns [`ExportResponse`] indicating what action the user took.
     ///
     /// # Example
@@ -251,63 +258,109 @@ impl ExportDialog {
         }
 
         let mut response = ExportResponse::None;
+        // Escape and Enter belong to a focused widget or an open popup first. egui drops focus and
+        // closes popups on Escape before the frame runs, so their state is read from the previous
+        // frame. Only a fresh press acts: the repeats of a key held after it left a field or
+        // closed a popup must not go on to close the dialog.
+        let busy_id = Id::NULL.with("egui_charts::export_dialog::busy");
+        let busy = ctx.data(|d| d.get_temp::<bool>(busy_id)).unwrap_or(false);
 
         // Centred horizontally like the crate's other dialogs, but movable. The top edge is the
         // pivot, so the window grows downwards as its content changes instead of around its centre.
         let r = ctx.content_rect();
-        let frame = egui::Frame::window(&ctx.global_style());
+        let frame = dialog_frame(&ctx.global_style());
         egui::Window::new("Export Chart")
-            .collapsible(false)
+            .title_bar(false)
             .resizable(false)
-            // egui's default content size from before 0.35, frame and title bar excluded.
-            .default_size(titled_window_size(ctx, &frame, egui::vec2(340.0, 420.0)))
+            .default_width(340.0 + frame.total_margin().sum().x)
+            .frame(frame)
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(egui::pos2(r.center().x, r.top() + r.height() * 0.2))
-            .show(ctx, |ui| {
-                self.draw_format_selection(ui);
-                self.draw_export_options(ui);
-                self.draw_save_path(ui);
-                self.draw_status(ui);
-                response = self.draw_action_buttons(ui);
-            });
+            .show(ctx, |ui| response = self.draw_contents(ui));
 
-        if matches!(response, ExportResponse::Export { .. }) {
-            self.close();
+        let consume = |key| {
+            ctx.input_mut(|i| {
+                let fresh = i.events.iter().any(|e| {
+                    matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, modifiers, .. }
+                        if *k == key && modifiers.is_none())
+                });
+                fresh && i.consume_key(Modifiers::NONE, key)
+            })
+        };
+        if matches!(response, ExportResponse::None) && !busy {
+            if consume(Key::Escape) {
+                response = ExportResponse::Closed;
+            } else if consume(Key::Enter) {
+                response = self.request_export(ctx);
+            }
+        }
+
+        let busy = ctx.memory(|m| m.focused().is_some()) || egui::Popup::is_any_open(ctx);
+        ctx.data_mut(|d| d.insert_temp(busy_id, busy));
+
+        match response {
+            ExportResponse::Closed | ExportResponse::Export { .. } => self.close(),
+            ExportResponse::None => {}
         }
         response
     }
 
-    fn draw_format_selection(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Format:");
-            for &format in &self.formats {
-                ui.radio_value(&mut self.config.format, format, format.as_str());
+    fn draw_contents(&mut self, ui: &mut egui::Ui) -> ExportResponse {
+        let theme = ui.active_theme();
+        if title_row(ui, "Export chart", true) {
+            return ExportResponse::Closed;
+        }
+
+        let mut response = ExportResponse::None;
+        FormGrid::new("export_form").show(ui, |ui| {
+            let label = ui.label("Format");
+            ui.horizontal(|ui| {
+                for &format in &self.formats {
+                    ui.radio_value(&mut self.config.format, format, format.as_str());
+                }
+            })
+            .response
+            .labelled_by(label.id);
+            ui.end_row();
+
+            if self.config.format != ExportFormat::Clipboard {
+                let hint = format!(
+                    "File path, such as chart_export.{}",
+                    self.config.format.file_extension().unwrap_or("png")
+                );
+                let label = ui.label("File");
+                let field = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.save_path)
+                            .id(path_field())
+                            .hint_text(hint)
+                            .desired_width(f32::INFINITY),
+                    )
+                    .labelled_by(label.id);
+                if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    response = self.request_export(ui.ctx());
+                }
+                ui.end_row();
             }
         });
-        ui.separator();
-    }
 
-    fn draw_export_options(&self, ui: &mut egui::Ui) {
         if self.config.format.is_data_format() {
-            ui.label("Exports the bar data: time, open, high, low, close, and volume.");
-            ui.separator();
+            ui.add_space(theme.spacing.md);
+            ui.label(
+                RichText::new("Exports the bar data: time, open, high, low, close, and volume.")
+                    .size(theme.text.small)
+                    .color(theme.ui.text_secondary),
+            );
         }
-    }
+        self.draw_status(ui);
 
-    fn draw_save_path(&mut self, ui: &mut egui::Ui) {
-        if self.config.format == ExportFormat::Clipboard {
-            return;
+        let (export, cancel) = DialogFooter::new("Export").secondary("Cancel").show(ui);
+        if export {
+            response = self.request_export(ui.ctx());
+        } else if cancel {
+            response = ExportResponse::Closed;
         }
-
-        let hint = format!(
-            "chart_export.{}",
-            self.config.format.file_extension().unwrap_or("png")
-        );
-        ui.horizontal(|ui| {
-            ui.label("Save to:");
-            ui.add(egui::TextEdit::singleline(&mut self.save_path).hint_text(hint));
-        });
-        ui.separator();
+        response
     }
 
     fn draw_status(&self, ui: &mut egui::Ui) {
@@ -321,35 +374,27 @@ impl ExportDialog {
                 ui.success_label("Export successful!");
             }
             ExportStatus::Error(msg) => {
+                ui.add_space(ui.active_theme().spacing.md);
                 ui.error_label(format!("Error: {msg}"));
             }
         }
-        ui.separator();
     }
 
-    fn draw_action_buttons(&mut self, ui: &mut egui::Ui) -> ExportResponse {
-        let mut response = ExportResponse::None;
-        ui.horizontal(|ui| {
-            if ui.button("Export").clicked() {
-                let to_clipboard = self.config.format == ExportFormat::Clipboard;
-                let path = self.save_path.trim();
-                if to_clipboard || !path.is_empty() {
-                    response = ExportResponse::Export {
-                        config: self.config.clone(),
-                        save_path: (!to_clipboard).then(|| PathBuf::from(path)),
-                    };
-                    self.export_status = ExportStatus::Exporting;
-                } else {
-                    self.export_status =
-                        ExportStatus::Error("Please enter a save path".to_string());
-                }
-            }
-            if ui.button("Cancel").clicked() {
-                response = ExportResponse::Closed;
-                self.close();
-            }
-        });
-        response
+    /// The export response for the current choices, or `None` with an error status and the path
+    /// field focused when a file format has no path.
+    fn request_export(&mut self, ctx: &Context) -> ExportResponse {
+        let to_clipboard = self.config.format == ExportFormat::Clipboard;
+        let path = self.save_path.trim();
+        if to_clipboard || !path.is_empty() {
+            self.export_status = ExportStatus::Exporting;
+            return ExportResponse::Export {
+                config: self.config.clone(),
+                save_path: (!to_clipboard).then(|| PathBuf::from(path)),
+            };
+        }
+        self.export_status = ExportStatus::Error("Please enter a save path".to_string());
+        ctx.memory_mut(|m| m.request_focus(path_field()));
+        ExportResponse::None
     }
 
     /// Marks the current export as successful
@@ -365,7 +410,7 @@ impl ExportDialog {
     ///
     /// # Arguments
     ///
-    /// * `error` - A desc of what went wrong
+    /// * `error` - A description of what went wrong
     pub fn mark_error(&mut self, error: String) {
         self.export_status = ExportStatus::Error(error);
     }
@@ -379,7 +424,7 @@ impl ExportDialog {
 /// Quick export button widget for inline export actions
 ///
 /// A simple button that can trigger exports without opening the full dialog.
-/// Useful for toolbar actions or quick access btns.
+/// Useful for toolbar actions or quick access buttons.
 ///
 /// # Example
 ///
@@ -439,7 +484,7 @@ impl ExportButton {
 ///             }
 ///             ExportFormat::Csv => {
 ///                 // Export bar data as CSV bytes
-///                 Ok(b"ts,open,high,low,close,volume\n".to_vec())
+///                 Ok(b"time,open,high,low,close,volume\n".to_vec())
 ///             }
 ///         }
 ///     }
