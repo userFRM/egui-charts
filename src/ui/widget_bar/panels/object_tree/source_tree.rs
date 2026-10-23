@@ -23,6 +23,8 @@ pub fn render_source_tree(
 ) -> ObjectTreeAction {
     let mut action = ObjectTreeAction::None;
 
+    state.hovered_id = None;
+
     // Filter sources
     let filter_lower = state.filter_text.to_lowercase();
 
@@ -53,10 +55,10 @@ fn render_grouped_tree(
     let mut action = ObjectTreeAction::None;
 
     let mut data_source_count = 0;
-    for item in sources
-        .iter_mut()
-        .filter(|s| s.source_type == SourceType::DataSource && matches_filter(s, filter, state))
-    {
+    for item in sources.iter_mut() {
+        if item.source_type != SourceType::DataSource || !matches_filter(item, filter, state) {
+            continue;
+        }
         data_source_count += 1;
         let item_action = render_item_row(ui, item, config, state, 0);
         if !item_action.is_none() {
