@@ -27,7 +27,7 @@ impl Default for AlertDialogConfig {
     fn default() -> Self {
         Self {
             width: DESIGN_TOKENS.sizing.dialog.alert_width,
-            height: DESIGN_TOKENS.sizing.dialog.default_height,
+            height: 420.0,
             tab_height: DESIGN_TOKENS.sizing.settings_dialog.tab_height,
             content_padding: DESIGN_TOKENS.spacing.xl,
             row_spacing: DESIGN_TOKENS.spacing.lg,

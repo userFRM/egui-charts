@@ -447,6 +447,38 @@ mod tests {
                 );
             }
         }
+        for size in [egui::vec2(1440.0, 900.0), egui::vec2(600.0, 360.0)] {
+            let ctx = Context::default();
+            let mut dialog = AlertDialog::new();
+            dialog.open("BTCUSD".into());
+            dialog.active_tab = AlertTab::Indicator;
+            for frame in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        dialog.show(ui.ctx());
+                    },
+                );
+                let visible = |label| {
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == label
+                    && shape.clip_rect.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                ))
+                };
+                let footer = visible("Create");
+                let message = visible("Message:");
+                output.drop_without_applying_deltas();
+                if frame > 0 {
+                    assert!(footer, "footer is reachable at {size:?}");
+                    if size.y == 900.0 {
+                        assert!(message, "the default height fits the tallest form");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
