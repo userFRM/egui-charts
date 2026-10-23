@@ -44,7 +44,7 @@ use std::sync::{Arc, mpsc};
 
 use crate::sampledata::{
     DemoSymbol, bar_count_for_timeframe, chart_type_from_name, generate_sample_bars,
-    timeframe_from_display, visible_bars_for_range,
+    visible_bars_for_range,
 };
 
 /// Object-tree ids for indicators are offset into a high range so a single
@@ -663,11 +663,7 @@ impl DemoApp {
                     self.size_price_based_charts();
                 }
             }
-            TopToolbarAction::IntervalSelected(display) => {
-                if let Some(tf) = timeframe_from_display(&display) {
-                    self.switch_timeframe(tf);
-                }
-            }
+            TopToolbarAction::IntervalSelected(tf) => self.switch_timeframe(tf),
             TopToolbarAction::OpenSymbolSearch | TopToolbarAction::OpenCompare => {
                 self.symbol_search.open();
             }

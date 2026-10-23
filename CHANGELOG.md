@@ -353,6 +353,9 @@ All notable changes to this project are documented in this file. The format is b
 - While bars stream, studies that do not update incrementally are recalculated at most four times a second, so `Chart::indicators` can return values up to 0.25 s old; they catch up within 0.25 s of the last change. Incremental studies update every frame, and a series replaced with `set_data` updates every study at once.
 - While the view is scrolled back, new bars no longer move the visible bars.
 - `Exportable::export_png` takes no arguments, since the export has no size or background options. Migration: `export_png(w, h, transparent)` becomes `export_png()`.
+- `TopToolbarAction::IntervalSelected` carries a `model::Timeframe` instead of the menu label, so every interval the menu offers, a custom one included, reaches the host: before, 12 of the 21 labels had no `Timeframe::from_resolution` mapping, and `FromStr` read bare minute labels as custom timeframes. Migration: match on the value instead of parsing the label; an interval with no preset of its length arrives as `Timeframe::Custom(seconds)`.
+- `HideMenu::show_submenu` takes whether to show the positions and orders rows. Migration: pass `true` to keep them.
+- `TopToolbar` and `WidgetBar` have a private field and can no longer be built with a struct literal. Migration: start from `TopToolbar::default()` or `WidgetBar::default()` and set the public fields.
 
 ### Removed
 
@@ -417,6 +420,7 @@ All notable changes to this project are documented in this file. The format is b
 - The drawing context menu's Copy entry and `DrawingContextMenuAction::Copy`: there is no drawing clipboard. Migration: match `Clone` to duplicate a drawing.
 - `MenuItem::submenu` and `MenuItem::is_submenu`, with the `ContextMenuSizingTokens::submenu_arrow_font_size` token of their arrow: no menu row opens a submenu.
 - `ExportConfig::{include_title, include_timestamp, include_watermark, width, height, transparent_background}` and the export dialog's checkboxes and size options for them, which no export applied, and `ExportFormat::Svg` with `Exportable::export_svg`, which nothing rendered. Migration: build `ExportConfig { format }`; an image export has the size of the chart on screen.
+- `TimeframeUnit::Tick` and the tick intervals of the interval menu: no data contract carries tick bars.
 
 ## [0.2.0] - 2026-06-04
 

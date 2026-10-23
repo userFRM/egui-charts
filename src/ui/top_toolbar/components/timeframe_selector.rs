@@ -39,7 +39,6 @@ impl DropdownColors {
 /// Timeframe unit
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeframeUnit {
-    Tick,
     Second,
     Minute,
     Hour,
@@ -51,7 +50,6 @@ pub enum TimeframeUnit {
 impl TimeframeUnit {
     pub fn short_name(&self) -> &'static str {
         match self {
-            TimeframeUnit::Tick => "T",
             TimeframeUnit::Second => "S",
             TimeframeUnit::Minute => "",
             TimeframeUnit::Hour => "H",
@@ -63,7 +61,6 @@ impl TimeframeUnit {
 
     pub fn name(&self) -> &'static str {
         match self {
-            TimeframeUnit::Tick => "ticks",
             TimeframeUnit::Second => "seconds",
             TimeframeUnit::Minute => "minutes",
             TimeframeUnit::Hour => "hours",
@@ -98,7 +95,6 @@ impl Timeframe {
     pub fn display_long(&self) -> String {
         let unit_name = if self.value == 1 {
             match self.unit {
-                TimeframeUnit::Tick => "tick",
                 TimeframeUnit::Second => "second",
                 TimeframeUnit::Minute => "minute",
                 TimeframeUnit::Hour => "hour",
@@ -112,14 +108,32 @@ impl Timeframe {
         format!("{} {}", self.value, unit_name)
     }
 
+    /// The model timeframe this entry selects: the preset of the same length, else a custom
+    /// one. `None` only for a zero value.
+    pub(crate) fn to_model(self) -> Option<crate::model::Timeframe> {
+        let unit_seconds: u64 = match self.unit {
+            TimeframeUnit::Second => 1,
+            TimeframeUnit::Minute => 60,
+            TimeframeUnit::Hour => 3_600,
+            TimeframeUnit::Day => 86_400,
+            TimeframeUnit::Week => 604_800,
+            // The model's month is 30 days.
+            TimeframeUnit::Month => 2_592_000,
+        };
+        // At most `u32::MAX` months, so neither product overflows a `u64`.
+        let seconds = u64::from(self.value) * unit_seconds;
+        let custom = crate::model::Timeframe::Custom(std::num::NonZeroU64::new(seconds)?);
+        Some(
+            crate::model::Timeframe::all()
+                .into_iter()
+                .find(|tf| tf.duration_ms() as u64 == seconds * 1000)
+                .unwrap_or(custom),
+        )
+    }
+
     /// Get all predefined timeframes
     pub fn all_presets() -> Vec<Timeframe> {
         vec![
-            // Ticks
-            Timeframe::new(1, TimeframeUnit::Tick),
-            Timeframe::new(10, TimeframeUnit::Tick),
-            Timeframe::new(100, TimeframeUnit::Tick),
-            Timeframe::new(1000, TimeframeUnit::Tick),
             // Seconds
             Timeframe::new(1, TimeframeUnit::Second),
             Timeframe::new(5, TimeframeUnit::Second),
@@ -606,7 +620,6 @@ impl TimeframeSelector {
         item_height: f32,
     ) {
         let units = [
-            (TimeframeUnit::Tick, "Ticks"),
             (TimeframeUnit::Second, "Seconds"),
             (TimeframeUnit::Minute, "Minutes"),
             (TimeframeUnit::Hour, "Hours"),
@@ -698,5 +711,44 @@ impl TimeframeSelector {
         );
 
         response.clicked()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Timeframe as Model;
+
+    #[test]
+    fn every_preset_maps_to_a_model_timeframe() {
+        let custom = |s| Model::Custom(std::num::NonZeroU64::new(s).unwrap());
+        let expected = vec![
+            Model::Sec1,
+            Model::Sec5,
+            Model::Sec10,
+            custom(15),
+            Model::Sec30,
+            custom(45),
+            Model::Min1,
+            custom(120),
+            custom(180),
+            Model::Min5,
+            custom(600),
+            Model::Min15,
+            Model::Min30,
+            custom(2700),
+            Model::Hour1,
+            custom(7200),
+            custom(10800),
+            Model::Hour4,
+            Model::Day1,
+            Model::Week1,
+            Model::Month1,
+        ];
+        let mapped: Vec<_> = Timeframe::all_presets()
+            .iter()
+            .map(|tf| tf.to_model())
+            .collect();
+        assert_eq!(mapped, expected.into_iter().map(Some).collect::<Vec<_>>());
     }
 }

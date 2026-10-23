@@ -367,8 +367,10 @@ impl TopToolbar {
     ) {
         match control {
             S::Interval => {
-                if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui) {
-                    *action = TopToolbarAction::IntervalSelected(tf.display());
+                if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui)
+                    && let Some(tf) = tf.to_model()
+                {
+                    *action = TopToolbarAction::IntervalSelected(tf);
                 }
                 return;
             }

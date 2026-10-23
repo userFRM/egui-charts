@@ -205,11 +205,6 @@ pub fn chart_type_from_name(name: &str) -> Option<egui_charts::model::ChartType>
     }
 }
 
-/// Map a top-toolbar interval display string to a `Timeframe`.
-pub fn timeframe_from_display(display: &str) -> Option<Timeframe> {
-    Timeframe::from_resolution(display)
-}
-
 /// Map a bottom-toolbar `DateRange` preset to a visible-bar count, so the
 /// preset actually re-zooms the chart's visible window.
 pub fn visible_bars_for_range(

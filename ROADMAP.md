@@ -359,7 +359,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 ### Top Toolbar
 - [x] Symbol search pill (custom-drawn with icons)
 - [x] Compare/Add symbol button renders and emits OpenCompare (no compare overlay)
-- [x] Timeframe selector dropdown grouped by unit (only 9 of 25 presets map to a Timeframe)
+- [x] Timeframe selector dropdown grouped by unit (every preset and custom interval emits a `Timeframe`)
 - [x] Chart type selector dropdown (all 19 types with icons + descriptions)
 - [x] Indicators button
 - [x] Alert, Replay, Undo, Redo buttons

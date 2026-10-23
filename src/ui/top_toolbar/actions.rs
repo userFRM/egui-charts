@@ -11,8 +11,8 @@ pub enum TopToolbarAction {
     OpenSymbolSearch,
     /// Open compare/add symbol dialog
     OpenCompare,
-    /// Chart interval changed (e.g. "1D", "1W")
-    IntervalSelected(String),
+    /// Chart interval chosen in the interval menu, a preset or a custom interval
+    IntervalSelected(crate::model::Timeframe),
     /// Chart style changed (e.g. "Candles", "Line")
     ChartStyleSelected(String),
     /// Open indicators dialog
