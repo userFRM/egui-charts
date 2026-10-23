@@ -178,10 +178,10 @@ impl TimeframeToolbar {
                 .iter()
                 .map(|range| self.range_btn_width(ui, range.label()))
                 .sum();
+            let mut time_text = self.state.formatted_time();
             let mut reserved = DESIGN_TOKENS.spacing.lg;
             if !self.hidden.contains(&Control::TimeZone) {
-                reserved += self.text_btn_width(ui, &self.state.formatted_time())
-                    + DESIGN_TOKENS.spacing.lg;
+                reserved += self.text_btn_width(ui, &time_text) + DESIGN_TOKENS.spacing.lg;
             }
             if !self.hidden.contains(&Control::Session) {
                 reserved += self.text_btn_width(ui, self.state.session_type.label());
@@ -191,14 +191,29 @@ impl TimeframeToolbar {
                     + stroke::HAIRLINE
                     + self.text_btn_width(ui, "ADJ");
             }
+            let compact =
+                self.range_btn_width(ui, "Ranges") + reserved + 48.0 > ui.available_width();
+            if compact && !self.hidden.contains(&Control::TimeZone) {
+                reserved -= self.text_btn_width(ui, &time_text);
+                time_text.truncate(8);
+                reserved += self.text_btn_width(ui, &time_text);
+            }
             if ranges_width + reserved + 48.0 > ui.available_width() {
                 let response = ui.add(
-                    egui::Button::new(egui::RichText::new("Ranges").size(self.config.font_size))
-                        .frame(false),
+                    egui::Button::new(
+                        egui::RichText::new(if compact { "…" } else { "Ranges" })
+                            .size(self.config.font_size),
+                    )
+                    .frame(false),
                 );
+                let response = response.on_hover_text("Date ranges");
                 egui::Popup::menu(&response).show(|ui| {
                     for range in ranges {
-                        if ui.button(range.label()).clicked() {
+                        if ui
+                            .button(range.label())
+                            .on_hover_text(range.tooltip())
+                            .clicked()
+                        {
                             self.state.set_date_range(range);
                             result_action = TimeframeToolbarAction::DateRangeChanged(range);
                             ui.close();
@@ -237,8 +252,15 @@ impl TimeframeToolbar {
             // Right section: Timezone, Session, Dividends
             // Timezone button with time
             if !self.hidden.contains(&Control::TimeZone) {
-                let time_text = self.state.formatted_time();
-                if self.text_btn(ui, &time_text, "Timezone", false).clicked() {
+                if self
+                    .text_btn(
+                        ui,
+                        &time_text,
+                        &format!("Timezone: {}", self.state.timezone),
+                        false,
+                    )
+                    .clicked()
+                {
                     result_action = TimeframeToolbarAction::OpenTimezoneMenu;
                 }
                 ui.space_lg();
@@ -575,6 +597,8 @@ mod tests {
             (Theme::dark(), 900.0, 14.0, "UTC"),
             (Theme::light(), 600.0, 14.0, "America/New_York"),
             (Theme::dark(), 640.0, 14.0, "America/New_York"),
+            (Theme::light(), 320.0, 14.0, "UTC"),
+            (Theme::dark(), 320.0, 14.0, "America/New_York"),
         ] {
             for hidden in [
                 vec![],
@@ -615,9 +639,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        expected = ui.available_rect_before_wrap().max.x
-                            - padding
-                            - toolbar.text_btn_width(ui, &last) / 2.0;
+                        expected = ui.available_rect_before_wrap().max.x - padding;
                         toolbar.show_contents(ui);
                     },
                 );
@@ -625,10 +647,18 @@ mod tests {
                     .shapes
                     .iter()
                     .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == last => Some(text),
+                        egui::Shape::Text(text)
+                            if text.galley.text() == last
+                                || last.starts_with(&format!("{} ", text.galley.text())) =>
+                        {
+                            Some(text)
+                        }
                         _ => None,
                     })
                     .expect("the last visible control must be drawn");
+                expected -= (text.galley.size().x + 2.0 * toolbar.config.btn_padding_h)
+                    .max(DESIGN_TOKENS.sizing.button_md)
+                    / 2.0;
                 let center = text.pos.x + text.galley.size().x / 2.0;
                 output.drop_without_applying_deltas();
                 assert!(
