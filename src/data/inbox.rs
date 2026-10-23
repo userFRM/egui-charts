@@ -10,7 +10,7 @@ use super::merge::{Origin, fold, valid};
 use super::trades::{self, Trades};
 use super::{FeedError, FeedStatus, SubscriptionId};
 use crate::model::{Bar, BarClock, OrderBook, Tick};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -42,6 +42,8 @@ struct Live {
     clock: BarClock,
     /// Open of the newest slot pushed, kept across drains: trades of older slots are late.
     forming: Option<DateTime<Utc>>,
+    /// Feed clock minus system clock, as last reported; zero until then.
+    offset: TimeDelta,
     book: Book,
     taken: TakenIds,
     updates: Updates,
@@ -91,7 +93,8 @@ pub(crate) struct Updates {
     pub(crate) late_ticks: u64,
     /// Trades whose id is among those the subscription remembers, dropped.
     pub(crate) repeated_ticks: u64,
-    /// Bars and ticks that failed validation, dropped.
+    /// Bars and ticks that failed validation or were stamped too far ahead of the feed's clock,
+    /// dropped.
     pub(crate) rejected: u64,
     /// Depth snapshots and deltas that failed validation, dropped.
     pub(crate) rejected_depth: u64,
@@ -138,6 +141,7 @@ impl Inbox {
         let live = Live {
             clock,
             forming: None,
+            offset: TimeDelta::zero(),
             book: Book::default(),
             taken: TakenIds {
                 order: VecDeque::new(),
@@ -288,16 +292,19 @@ pub struct Sink {
 impl Sink {
     /// A bar of the subscribed timeframe, stamped with its open or any instant inside it:
     /// replaces the bar it shares a slot with, appends a newer one, corrects an older one. A bar
-    /// of a day or longer is stamped inside its UTC period, as [`HistoryPage::bars`] describes.
+    /// of a day or longer is stamped inside its UTC period, as [`HistoryPage::bars`] describes. A
+    /// bar stamped too far ahead of the feed's current time is rejected, as
+    /// [`Sink::set_server_time`] describes.
     ///
     /// [`HistoryPage::bars`]: super::HistoryPage::bars
     pub fn push_bar(&self, bar: Bar) {
+        let system = Utc::now();
         self.update(|live| {
-            if !valid(&bar) {
+            let slot = live.clock.bar_open(bar.time);
+            if !valid(&bar) || live.ahead(slot, system) {
                 live.updates.rejected += 1;
                 return;
             }
-            let slot = live.clock.bar_open(bar.time);
             live.forming = live.forming.max(Some(slot));
             live.updates.bars.insert(slot, (bar, Origin::Live));
         });
@@ -308,20 +315,22 @@ impl Sink {
     /// history page. A feed must therefore not push trades that its history already counts; a feed
     /// that cannot tell pushes bars instead. Trades older than the forming bar are dropped, and so is
     /// a trade whose id is among those of the last trades the subscription folded, as many as its
-    /// trade store holds.
+    /// trade store holds. A trade stamped too far ahead of the feed's current time is rejected, as
+    /// [`Sink::set_server_time`] describes.
     pub fn push_tick(&self, tick: Tick) {
+        let system = Utc::now();
         self.update(|live| {
             let (open, price) = (live.clock.bar_open(tick.ts), tick.price);
             let ticks = Bar::new(open, price, price, price, price, tick.size);
+            let ahead = live.ahead(open, system);
             let updates = &mut live.updates;
-            if !trades::valid(&tick) {
+            if !trades::valid(&tick) || ahead {
                 updates.rejected += 1;
             } else if live.forming.is_some_and(|forming| open < forming) {
                 updates.late_ticks += 1;
             } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
                 updates.repeated_ticks += 1;
             } else {
-                live.forming = Some(open);
                 match updates.bars.entry(open) {
                     Entry::Occupied(mut pending) => {
                         let (bar, origin) = pending.get_mut();
@@ -338,6 +347,7 @@ impl Sink {
                         slot.insert((ticks, Origin::Ticks(1)));
                     }
                 }
+                live.forming = Some(open);
                 if let Some(id) = tick.id {
                     live.taken.insert(id);
                 }
@@ -364,6 +374,26 @@ impl Sink {
     /// [`Datafeed::request_depth_snapshot`]: super::Datafeed::request_depth_snapshot
     pub fn push_depth_delta(&self, sequence: u64, changes: OrderBook) {
         self.update(|live| live.depth(|depth| depth.delta(sequence, changes)));
+    }
+
+    /// The feed's current time, from a clock other than the times it pushes, such as its server's
+    /// heartbeat or time message: reporting the time of the trade or bar about to be pushed would
+    /// let a wrong time through. The time runs on with the system clock until the next call; until
+    /// the first, the system clock stands in.
+    ///
+    /// A bar or trade is rejected when its slot opens more than one slot after the slot of this
+    /// time and more than a minute after this time, or more than two weeks for bars of a day or
+    /// longer, which a feed stamps on their trading date. A time in the wrong unit, such as
+    /// milliseconds read as seconds, therefore cannot make every later trade late, while a system
+    /// clock a few seconds slow rejects nothing. A replay or simulation calls this before its first
+    /// push, whenever its clock jumps, and at least once per bar while its clock runs at another
+    /// speed.
+    pub fn set_server_time(&self, now: DateTime<Utc>) {
+        let offset = now - Utc::now();
+        // Not a push: the chart shows nothing new, so it is not woken.
+        if let Some(live) = self.inbox.state().subscriptions.get_mut(&self.id) {
+            live.offset = offset;
+        }
     }
 
     /// The connection status. The latest one wins.
@@ -394,6 +424,30 @@ impl Sink {
 }
 
 impl Live {
+    /// Whether the slot opening at `open` is too far ahead of the feed's current time, `system`
+    /// being the system clock's, by the rule of [`Sink::set_server_time`].
+    fn ahead(&self, open: DateTime<Utc>, system: DateTime<Utc>) -> bool {
+        let Some(now) = system.checked_add_signed(self.offset) else {
+            return false;
+        };
+        // A system clock may lag the exchange by seconds, and a bar of a day or longer is stamped
+        // on its trading date, which can be days ahead.
+        let allowance =
+            if self.clock.timeframe().duration_ms() < TimeDelta::days(1).num_milliseconds() {
+                TimeDelta::minutes(1)
+            } else {
+                TimeDelta::weeks(2)
+            };
+        let beyond = now
+            .checked_add_signed(allowance)
+            .is_some_and(|limit| open > limit);
+        // The slot before `open`'s is later than now's: `open` is two or more slots ahead.
+        beyond
+            && open
+                .checked_sub_signed(TimeDelta::milliseconds(1))
+                .is_some_and(|before| self.clock.bar_open(before) > self.clock.bar_open(now))
+    }
+
     fn depth(&mut self, apply: impl FnOnce(&mut Book) -> Result<(), Lost>) {
         match apply(&mut self.book) {
             // The book holds a snapshot newer than any loss, so a pending request is moot.
@@ -566,6 +620,68 @@ mod tests {
             [(bar(0, [100.0, 100.0, 100.0, 100.0, 4.0]), Origin::Ticks(4))]
         );
         assert_eq!(updates.repeated_ticks, 1);
+    }
+
+    /// Guards the forming bar against a push stamped far ahead, such as a millisecond time read as
+    /// seconds: it must be rejected without making the later trades late. A push within the bound
+    /// must be kept: the trades of a feed clock running ahead of the system clock, a trade on short
+    /// bars from a feed whose clock is seconds ahead, a daily bar stamped on a trading date days
+    /// ahead.
+    #[test]
+    fn a_push_far_ahead_of_the_feed_clock_is_rejected() {
+        let inbox = Arc::new(Inbox::default());
+        let sink = subscribe(&inbox);
+        let far = DateTime::from_timestamp(1_710_496_805_000, 0).unwrap();
+        sink.push_tick(tick(at(0, 5), 100.0, 1.0));
+        sink.push_tick(tick(far, 101.0, 1.0));
+        sink.push_bar(Bar::new(far, 101.0, 101.0, 101.0, 101.0, 1.0));
+        sink.push_tick(tick(at(0, 6), 102.0, 1.0));
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert_eq!(
+            Vec::from_iter(updates.bars.into_values()),
+            [(bar(0, [100.0, 102.0, 100.0, 102.0, 2.0]), Origin::Ticks(2))]
+        );
+        let prices = Vec::from_iter(updates.trades.iter().map(|trade| trade.price));
+        assert_eq!(prices, [100.0, 102.0]);
+        assert_eq!((updates.rejected, updates.late_ticks), (2, 0));
+
+        let time = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
+        // (timeframe, feed clock, pushes bars rather than trades, pushed times, kept slots, rejected)
+        #[rustfmt::skip]
+        let cases = [
+            // 00:02 is two slots and 90 s ahead.
+            (Timeframe::Min1, "2100-01-01T00:00:30Z", false,
+                &["2100-01-01T00:00:40Z", "2100-01-01T00:01:59Z", "2100-01-01T00:02:00Z"][..],
+                &["2100-01-01T00:00:00Z", "2100-01-01T00:01:00Z"][..], 1),
+            // Five slots but seconds ahead is kept; 61 s ahead is rejected.
+            (Timeframe::Sec1, "2100-01-01T00:00:00Z", false,
+                &["2100-01-01T00:00:05Z", "2100-01-01T00:01:01Z"],
+                &["2100-01-01T00:00:05Z"], 1),
+            // A trading date three days ahead is kept; fifteen days ahead is rejected.
+            (Timeframe::Day1, "2100-01-01T12:00:00Z", true,
+                &["2100-01-04T00:00:00Z", "2100-01-16T00:00:00Z"],
+                &["2100-01-04T00:00:00Z"], 1),
+        ];
+        for (timeframe, now, bars, pushes, kept, rejected) in cases {
+            let inbox = Arc::new(Inbox::default());
+            let sink = inbox.subscribe(BarClock::new(timeframe), 100);
+            sink.set_server_time(time(now));
+            for &push in pushes {
+                let ts = time(push);
+                if bars {
+                    sink.push_bar(Bar::new(ts, 1.0, 1.0, 1.0, 1.0, 1.0));
+                } else {
+                    sink.push_tick(tick(ts, 1.0, 1.0));
+                }
+            }
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let kept = Vec::from_iter(kept.iter().map(|&slot| time(slot)));
+            assert_eq!(
+                (Vec::from_iter(updates.bars.into_keys()), updates.rejected),
+                (kept, rejected),
+                "{timeframe:?}"
+            );
+        }
     }
 
     /// Guards against updates of a replaced subscription (an older symbol or timeframe) leaking

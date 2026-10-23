@@ -41,6 +41,11 @@ impl BarClock {
         DateTime::from_timestamp_millis(ms - (ms - anchor).rem_euclid(period)).unwrap_or(t)
     }
 
+    /// The timeframe of the bars.
+    pub(crate) fn timeframe(&self) -> Timeframe {
+        self.timeframe
+    }
+
     /// Whether `a` and `b` fall in the same bar, so a feed may stamp a bar with any instant
     /// inside it.
     pub fn same_bar(&self, a: DateTime<Utc>, b: DateTime<Utc>) -> bool {
