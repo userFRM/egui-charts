@@ -848,6 +848,16 @@ impl eframe::App for DemoApp {
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
+        // Sync the transport from the controller, then route its actions back.
+        if let Some(replay) = self.replay.as_ref() {
+            self.replay_control.sync_from(
+                replay.state.is_active(),
+                replay.state.is_playing(),
+                replay.state.speed.multiplier(),
+                replay.state.curr_bar,
+                replay.state.total_bars,
+            );
+        }
         if self.replay.is_none() {
             let delay = self.live.advance(chrono::Utc::now());
             if !self.live.paused() {
@@ -867,6 +877,8 @@ impl eframe::App for DemoApp {
 
         // Dialogs consume their keys before chart commands and the replay transport.
         if !self.keyboard_dialog_open() {
+            let action = self.replay_control.shortcut(&ctx);
+            self.handle_replay_control(action);
             self.handle_keyboard(&ctx);
         }
         if self.keyboard_dialog_open() {
@@ -1728,16 +1740,6 @@ impl DemoApp {
         if self.replay.is_none() {
             return;
         }
-        // Sync the transport from the controller, then route its actions back.
-        if let Some(replay) = self.replay.as_ref() {
-            self.replay_control.sync_from(
-                replay.state.is_active(),
-                replay.state.is_playing(),
-                replay.state.speed.multiplier(),
-                replay.state.curr_bar,
-                replay.state.total_bars,
-            );
-        }
         let action = self.replay_control.show(ctx);
         self.handle_replay_control(action);
     }
@@ -2259,6 +2261,7 @@ mod tests {
     /// Quick search executes catalogue entries as well as opening settings.
     #[test]
     fn quick_search_executes_studies_tools_and_settings() {
+        use eframe::App;
         use egui::{Event, Key, Modifiers, RawInput};
         for (query, same_frame) in ["RSI", "Trend Line", "Chart settings"]
             .into_iter()
@@ -2298,15 +2301,16 @@ mod tests {
             ] {
                 ctx.run_ui(
                     RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
                         events: std::iter::once(Event::ModifiersChanged(modifiers))
                             .chain(events)
                             .collect(),
                         ..Default::default()
                     },
-                    |ui| {
-                        app.handle_keyboard(ui.ctx());
-                        app.show_dialogs(ui.ctx());
-                    },
+                    |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
                 )
                 .drop_without_applying_deltas();
             }
@@ -2314,7 +2318,8 @@ mod tests {
                 "RSI" => assert!(
                     app.chart
                         .indicators()
-                        .any(|(_, study)| study.name() == "RSI")
+                        .any(|(_, study)| study.name() == "RSI"),
+                    "query {query}, same frame {same_frame}"
                 ),
                 "Trend Line" => assert_eq!(
                     app.chart.drawings().active_tool,
@@ -2327,7 +2332,7 @@ mod tests {
 
     /// The dialog gets Escape before the chart or replay transport.
     #[test]
-    fn escape_in_shortcuts_leaves_drawing_selection_and_replay_intact() {
+    fn dialogs_keep_drawing_and_replay_keys_with_their_owner() {
         use eframe::App;
         use egui_charts::drawings::{Drawing, DrawingToolType};
         for replay in [false, true] {
@@ -2336,6 +2341,10 @@ mod tests {
             app.live.set_paused(true);
             if replay {
                 app.start_replay();
+                app.replay
+                    .as_mut()
+                    .unwrap()
+                    .handle_action(ReplayAction::Pause);
             }
             app.chart
                 .drawings_mut()
@@ -2346,16 +2355,21 @@ mod tests {
                 .drawings_mut()
                 .set_active_tool(Some(DrawingToolType::TrendLine));
             app.keyboard_shortcuts.open();
-            for pass in 0..3 {
+            let before = app.replay.as_ref().map(|replay| replay.state.curr_bar);
+            for pass in 0..4 {
                 ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
                             egui::vec2(1440.0, 900.0),
                         )),
-                        events: if pass == 2 {
+                        events: if pass >= 2 {
                             vec![egui::Event::Key {
-                                key: egui::Key::Escape,
+                                key: if pass == 2 {
+                                    egui::Key::Escape
+                                } else {
+                                    egui::Key::ArrowRight
+                                },
                                 physical_key: None,
                                 pressed: true,
                                 repeat: false,
@@ -2378,6 +2392,9 @@ mod tests {
             );
             assert_eq!(app.replay.is_some(), replay);
             assert_eq!(app.replay_control.is_visible(), replay);
+            if let Some(before) = before {
+                assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, before + 1);
+            }
         }
     }
 
