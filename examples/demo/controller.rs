@@ -1159,11 +1159,14 @@ impl DemoApp {
             DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
             DrawingToolbarAction::ToggleMagnet => {
                 dm.options.magnet_mode = !dm.options.magnet_mode;
+                dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
+                    != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
             }
-            DrawingToolbarAction::SetMagnetType(_) => {
-                // Magnet strength maps to the same snap behavior; ensure on.
+            DrawingToolbarAction::SetMagnetType(kind) => {
                 dm.options.magnet_mode = true;
+                dm.options.strong_magnet =
+                    kind != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
             }
             DrawingToolbarAction::ToggleEraserMode => {

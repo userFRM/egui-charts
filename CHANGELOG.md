@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Strong drawing magnet snaps to the nearest open, high, low or close of the bar under the pointer even outside the weak magnet's pixel threshold. Weak magnet retains nearby bar, overlay and drawing targets. Both apply during placement and handle drags, and the drawing toolbar passes the selected strength to the chart. Migration: `DrawingManagerOptions` literals need `strong_magnet`, or `..Default::default()`; set it with `magnet_mode` for strong snapping. ([#139](https://github.com/userFRM/egui-charts/issues/139))
+
 - Drawing bodies, previews, selected handles and eraser highlights are clipped to the price pane and the caller's clip rectangle. Patterns projected past the pane edge no longer paint across the time axis or other panes. The chart's separate axis labels keep their own painters. ([#653](https://github.com/userFRM/egui-charts/issues/653))
 
 - Selection handles follow the drawing's visibility on the current interval, so a selected drawing hidden by its interval settings leaves no handles behind. Chart interval synchronization, drawing rendering and hit filtering were already applied. ([#140](https://github.com/userFRM/egui-charts/issues/140))
