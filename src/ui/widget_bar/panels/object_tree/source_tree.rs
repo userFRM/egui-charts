@@ -52,6 +52,18 @@ fn render_grouped_tree(
 ) -> ObjectTreeAction {
     let mut action = ObjectTreeAction::None;
 
+    let mut data_source_count = 0;
+    for item in sources
+        .iter_mut()
+        .filter(|s| s.source_type == SourceType::DataSource && matches_filter(s, filter, state))
+    {
+        data_source_count += 1;
+        let item_action = render_item_row(ui, item, config, state, 0);
+        if !item_action.is_none() {
+            action = item_action;
+        }
+    }
+
     // Count items per type
     let indicator_count = sources
         .iter()
@@ -118,7 +130,7 @@ fn render_grouped_tree(
     }
 
     // Empty state
-    if indicator_count == 0 && drawing_count == 0 && template_count == 0 {
+    if data_source_count + indicator_count + drawing_count + template_count == 0 {
         render_empty_state(ui, state.has_filter());
     }
 
@@ -264,4 +276,37 @@ fn render_empty_state(ui: &mut Ui, has_filter: bool) {
         }
     });
     ui.space_xl();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn main_series_is_rendered_in_both_views_and_with_a_type_filter() {
+        for grouped in [true, false] {
+            for filtered in [true, false] {
+                let ctx = egui::Context::default();
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let mut state = ObjectTreeState::new();
+                    state.filter_type = filtered.then_some(SourceType::DataSource);
+                    let mut sources = [SourceItem::data_source(1, "SIM · 1D")];
+                    render_source_tree(
+                        ui,
+                        &mut sources,
+                        &ObjectTreeConfig {
+                            group_by_type: grouped,
+                            ..Default::default()
+                        },
+                        &mut state,
+                    );
+                });
+                output.textures_delta.clear();
+                assert!(output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "SIM · 1D")
+                }), "main series missing: grouped={grouped}, filtered={filtered}");
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 }
