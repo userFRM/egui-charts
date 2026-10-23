@@ -1,16 +1,16 @@
 //! Market quotes and order-book data structures.
 //!
-//! This module provides a pluggable system for consuming real-time market
-//! microstructure data at three granularity levels:
+//! Market microstructure data at three granularity levels:
 //!
-//! | Level | Trait | Data |
-//! |-------|-------|------|
-//! | Tick | [`TickSource`] | Individual trades (time & sales) |
-//! | L1 | [`QuoteSource`] | Best bid/ask (top-of-book) |
-//! | L2 | [`OrderBookSource`] | Full depth-of-market order book |
+//! | Level | Type | Data |
+//! |-------|------|------|
+//! | Tick | [`Tick`] | Individual trades (time & sales) |
+//! | L1 | [`Level1Quote`] | Best bid/ask (top-of-book) |
+//! | L2 | [`OrderBook`] | Full depth-of-market order book |
 //!
-//! Implement the appropriate trait to feed live data into the chart widget.
-//! All traits require `Send + Sync` so sources can be polled from any thread.
+//! A feed pushes trades and the order book into the chart through
+//! [`Sink`](crate::data::Sink). [`QuoteSource`] supplies Level 1 quotes, which
+//! the host application polls and displays itself.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -247,50 +247,7 @@ pub trait QuoteSource: Send + Sync {
     fn latest_quote(&self, symbol: &str) -> Option<&Level1Quote>;
 }
 
-/// Provider of Level 2 depth-of-market order book snapshots.
-///
-/// Implement this trait to supply full order-book data; the chart does not
-/// consume order-book sources yet. Each snapshot contains all visible bid
-/// and ask levels up to the requested `depth`.
-pub trait OrderBookSource: Send + Sync {
-    /// Subscribe to order book for a symbol
-    fn subscribe_order_book(
-        &mut self,
-        symbol: String,
-        depth: usize,
-    ) -> Result<(), QuoteSourceError>;
-
-    /// Unsubscribe from order book
-    fn unsubscribe_order_book(&mut self, symbol: String) -> Result<(), QuoteSourceError>;
-
-    /// Poll for latest order book snapshots
-    fn poll_order_books(&mut self) -> Vec<OrderBook>;
-
-    /// Get latest order book for a symbol
-    fn latest_order_book(&self, symbol: &str) -> Option<&OrderBook>;
-}
-
-/// Provider of tick-by-tick trade data (time & sales).
-///
-/// Implement this trait to stream individual trade executions into the
-/// chart. Tick data enables volume-at-price analysis and cumulative delta
-/// overlays.
-pub trait TickSource: Send + Sync {
-    /// Subscribe to tick data for a symbol
-    fn subscribe_ticks(&mut self, symbol: String) -> Result<(), QuoteSourceError>;
-
-    /// Unsubscribe from tick data
-    fn unsubscribe_ticks(&mut self, symbol: String) -> Result<(), QuoteSourceError>;
-
-    /// Poll for latest ticks
-    fn poll_ticks(&mut self) -> Vec<Tick>;
-
-    /// Get accumulated ticks for a symbol
-    fn get_ticks(&self, symbol: &str, limit: usize) -> Vec<Tick>;
-}
-
-/// Error returned by [`QuoteSource`], [`OrderBookSource`], and [`TickSource`]
-/// operations.
+/// Error returned by [`QuoteSource`] operations.
 #[derive(Debug, Clone)]
 pub enum QuoteSourceError {
     /// Symbol not found or invalid

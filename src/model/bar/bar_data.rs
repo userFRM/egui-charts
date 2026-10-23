@@ -4,13 +4,6 @@
 
 use super::bar::Bar;
 
-/// Maximum bars to keep in memory per chart
-/// Prevents unbounded memory growth for streaming data
-pub const MAX_BARS: usize = 10_000;
-
-/// Maximum bars visible at once (prevent CPU overload)
-pub const MAX_VISIBLE_BARS: usize = 2_000;
-
 /// Container for multiple bars with utility methods
 ///
 /// This container provides common operations over bar collections.
@@ -64,24 +57,6 @@ impl BarData {
     /// Clear all bars
     pub fn clear(&mut self) {
         self.bars.clear();
-    }
-
-    /// Trim old bars when exceeding MAX_BARS limit
-    ///
-    /// This prevents unbounded memory growth when streaming data.
-    /// Removes oldest bars first.
-    pub fn trim_to_limit(&mut self) {
-        if self.bars.len() > MAX_BARS {
-            let excess = self.bars.len() - MAX_BARS;
-            self.bars.drain(0..excess);
-            log::debug!("Trimmed {} old bars, {} remaining", excess, self.bars.len());
-        }
-    }
-
-    /// Push a bar and automatically trim if limit exceeded
-    pub fn push_with_limit(&mut self, bar: Bar) {
-        self.bars.push(bar);
-        self.trim_to_limit();
     }
 
     /// Get the first bar

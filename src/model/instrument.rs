@@ -1,8 +1,54 @@
 //! Instrument metadata reported by a feed or a search service.
 
-use super::SymbolType;
 use chrono::{NaiveTime, Weekday};
 use chrono_tz::Tz;
+use serde::{Deserialize, Serialize};
+
+/// Symbol type categories for instrument classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum SymbolType {
+    #[default]
+    Stock,
+    Index,
+    Forex,
+    Futures,
+    Crypto,
+    Cfd,
+    Bond,
+    Fund,
+    Option,
+    Commodity,
+    Economic,
+    Dr,
+    Right,
+    Warrant,
+    Expression,
+    Spread,
+}
+
+impl std::fmt::Display for SymbolType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stock => write!(f, "stock"),
+            Self::Index => write!(f, "index"),
+            Self::Forex => write!(f, "forex"),
+            Self::Futures => write!(f, "futures"),
+            Self::Crypto => write!(f, "crypto"),
+            Self::Cfd => write!(f, "cfd"),
+            Self::Bond => write!(f, "bond"),
+            Self::Fund => write!(f, "fund"),
+            Self::Option => write!(f, "option"),
+            Self::Commodity => write!(f, "commodity"),
+            Self::Economic => write!(f, "economic"),
+            Self::Dr => write!(f, "dr"),
+            Self::Right => write!(f, "right"),
+            Self::Warrant => write!(f, "warrant"),
+            Self::Expression => write!(f, "expression"),
+            Self::Spread => write!(f, "spread"),
+        }
+    }
+}
 
 /// What a feed or a search service reports about a symbol. Build it with [`Instrument::new`] and the `with_` setters;
 /// fields left out stay unknown.
@@ -157,5 +203,18 @@ impl SessionWindow {
             open,
             close,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_symbol_type_display() {
+        assert_eq!(SymbolType::Stock.to_string(), "stock");
+        assert_eq!(SymbolType::Crypto.to_string(), "crypto");
+        assert_eq!(SymbolType::Futures.to_string(), "futures");
+        assert_eq!(SymbolType::Forex.to_string(), "forex");
     }
 }

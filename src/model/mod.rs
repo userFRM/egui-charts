@@ -32,7 +32,6 @@ pub mod session;
 mod signal;
 mod strategy;
 mod symbol;
-pub mod symbol_info;
 mod timeframe;
 mod timescale;
 pub mod tpo;
@@ -49,7 +48,7 @@ pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
-pub use instrument::{Instrument, Session, SessionWindow, TimezoneId};
+pub use instrument::{Instrument, Session, SessionWindow, SymbolType, TimezoneId};
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
@@ -59,8 +58,7 @@ pub use markers::{Marker, MarkerPos, MarkerShape};
 pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_columns};
 pub use price_source::PriceSource;
 pub use quote::{
-    Level1Quote, OrderBook, OrderBookLevel, OrderBookSource, QuoteSource, QuoteSourceError, Tick,
-    TickSource, TradeSide,
+    Level1Quote, OrderBook, OrderBookLevel, QuoteSource, QuoteSourceError, Tick, TradeSide,
 };
 pub use range_bar::{
     RangeBar, RangeBarConfig, TickData as RangeTickData, to_range_bars_from_ohlc,
@@ -76,7 +74,6 @@ pub use strategy::{
     StrategyExit, StrategyPerformance, StrategyReport, StrategySide, StrategyTrade,
 };
 pub use symbol::Symbol;
-pub use symbol_info::{DataStatus, LibrarySymbolInfo, SubsessionInfo, SymbolFormat, SymbolType};
 pub use timeframe::Timeframe;
 pub use timescale::{LogicalRange, TimeScale};
 pub use tpo::{

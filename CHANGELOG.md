@@ -369,6 +369,9 @@ All notable changes to this project are documented in this file. The format is b
 - `ChartBuilder::{with_data_src, with_auto_fetch, with_auto_fetch_on_symbol_change, with_auto_fetch_on_timeframe_change}`: use `with_feed`; a feed always reloads on a change.
 - `ChartBuilder::{with_left_price_scale, with_left_axis_width, with_right_axis_width}`, which set fields the chart never read.
 - `ui::context_menu::ContextMenuAction::RemoveIndicator`, which no menu produced. Remove a study with `Chart::remove_series`.
+- `model::TickSource` and `model::OrderBookSource`, which the chart never polled: push trades with `Sink::push_tick` and the order book with `Sink::push_depth_snapshot` and `Sink::push_depth_delta`.
+- `model::LibrarySymbolInfo`, `DataStatus`, `SymbolFormat`, `SubsessionInfo` and the `model::symbol_info` module, which nothing read: describe an instrument with `model::Instrument`. `SymbolType` is unchanged at `model::SymbolType`.
+- `model::bar::{MAX_BARS, MAX_VISIBLE_BARS}` and `BarData::{trim_to_limit, push_with_limit}`, which nothing applied.
 
 ## [0.2.0] - 2026-06-04
 
