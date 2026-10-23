@@ -26,7 +26,7 @@ use std::cell::Cell;
 use std::collections::HashSet;
 
 /// Width of the category sidebar.
-const SIDEBAR_WIDTH: f32 = 140.0;
+const SIDEBAR_WIDTH: f32 = 200.0;
 
 /// Indicator Dialog
 ///
@@ -156,6 +156,8 @@ impl IndicatorDialog {
         let action = Modal::new("indicator_dialog", "Indicators")
             .width(config.width)
             .height(config.height)
+            .rounding(16.0)
+            .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
                 self.draw_content(ui, &config, theme)
             })
@@ -174,17 +176,22 @@ impl IndicatorDialog {
         config: &IndicatorDialogConfig,
         theme: &Theme,
     ) -> IndicatorDialogAction {
-        let search = self.search.show(ui).response;
+        let search = ui
+            .scope(|ui| {
+                ui.spacing_mut().interact_size.y = 40.0;
+                ui.style_mut().override_font_id = Some(FontId::proportional(16.0));
+                self.search.show(ui).response
+            })
+            .inner;
         if std::mem::take(&mut self.focus_search) {
             search.request_focus();
         }
         self.focus_first_row = search.has_focus() && ui.input(|i| i.key_pressed(Key::ArrowDown));
         ui.add_space(theme.spacing.lg);
 
-        TabBar::new(IndicatorTab::all(), &mut self.active_tab).show(ui);
-
         // Profiles and patterns have no categories.
         if self.active_tab != IndicatorTab::Indicators {
+            TabBar::new(IndicatorTab::all(), &mut self.active_tab).show(ui);
             self.draw_empty_state(ui);
             return IndicatorDialogAction::None;
         }
@@ -195,17 +202,32 @@ impl IndicatorDialog {
         SidebarLayout::new(SIDEBAR_WIDTH).show(
             ui,
             |ui| {
-                for item in IndicatorCategory::all() {
-                    if SidebarTab::new(item.name(), category.get() == *item)
+                ui.visuals_mut().selection.bg_fill = theme.ui.btn_bg_hover;
+                ui.visuals_mut().selection.stroke.color = theme.ui.text;
+                for item in [IndicatorCategory::Favorites, IndicatorCategory::BuiltIns] {
+                    ui.add_space(16.0);
+                    ui.label(
+                        RichText::new(if item == IndicatorCategory::Favorites {
+                            "PERSONAL"
+                        } else {
+                            "BUILT-IN"
+                        })
+                        .size(11.0)
+                        .color(theme.ui.text_secondary),
+                    );
+                    ui.add_space(8.0);
+                    if SidebarTab::new(item.name(), category.get() == item)
                         .icon(item.icon())
                         .show(ui)
                     {
-                        category.set(*item);
+                        category.set(item);
                     }
                 }
             },
             |ui| {
                 self.sel_category = category.get();
+                TabBar::new(IndicatorTab::all(), &mut self.active_tab).show(ui);
+                ui.add_space(12.0);
                 action = self.draw_results(ui, config, theme);
             },
         );
@@ -364,7 +386,7 @@ impl IndicatorDialog {
         };
         let star_res = Self::draw_favorite_star(ui, config, rect, is_favorite);
         let text_right = Self::draw_item_badges(ui, theme, rect, indicator, secondary);
-        Self::draw_item_text(ui, theme, rect, text_right, indicator, text, secondary);
+        Self::draw_item_text(ui, rect, text_right, indicator, text);
         draw_focus_ring(ui, &response);
 
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
@@ -408,31 +430,15 @@ impl IndicatorDialog {
         star_res.on_hover_text(tooltip)
     }
 
-    /// The name over the description, centred as a block on the row and cut off before `right`.
-    fn draw_item_text(
-        ui: &Ui,
-        theme: &Theme,
-        rect: Rect,
-        right: f32,
-        indicator: &IndicatorInfo,
-        text: Color32,
-        secondary: Color32,
-    ) {
-        let painter = ui.painter();
+    /// The name centred on the row and cut off before `right`.
+    fn draw_item_text(ui: &Ui, rect: Rect, right: f32, indicator: &IndicatorInfo, text: Color32) {
         let x = rect.min.x + DESIGN_TOKENS.sizing.button_md;
-        let line = |s: &str, size: f32, color: Color32| {
-            let mut job =
-                LayoutJob::simple_singleline(s.to_owned(), FontId::proportional(size), color);
-            job.wrap = TextWrapping::truncate_at_width(right - x);
-            painter.layout_job(job)
-        };
-        let name = line(&indicator.name, theme.text.body, text);
-        let desc = line(&indicator.desc, theme.text.small, secondary);
-        let gap = theme.spacing.xs;
-        let top = rect.center().y - (name.size().y + gap + desc.size().y) / 2.0;
-        let desc_top = top + name.size().y + gap;
-        painter.galley(Pos2::new(x, top), name, text);
-        painter.galley(Pos2::new(x, desc_top), desc, secondary);
+        let mut job =
+            LayoutJob::simple_singleline(indicator.name.clone(), FontId::proportional(14.0), text);
+        job.wrap = TextWrapping::truncate_at_width(right - x);
+        let name = ui.painter().layout_job(job);
+        let top = rect.center().y - name.size().y / 2.0;
+        ui.painter().galley(Pos2::new(x, top), name, text);
     }
 
     /// Outlined badges, right-aligned inside the row padding. Returns where the row text must end.

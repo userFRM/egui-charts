@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The indicator dialog uses an 840 px surface, a 40 px search field, a wider category column and single-line study names. Categories with no provider are omitted from the sidebar; favourite and study configuration actions are retained. Filter fields respect the host interaction height.
+
 - Quick search uses the shared 480 px modal with a search header and close button. The demo connects its quick-search button and Ctrl/Cmd+K to the existing command palette for symbol search, indicators, settings and export. Shared dialog titles use 20 px text.
 
 - The compare dialog uses the shared modal frame, a wide search header, a close control and a single list of 56 px symbol rows. Its configured fill remains supported through `Modal::fill`.

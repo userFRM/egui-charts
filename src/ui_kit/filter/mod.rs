@@ -161,6 +161,7 @@ fn search_field(
             TextEdit::singleline(query)
                 .hint_text(placeholder)
                 .desired_width(f32::INFINITY)
+                .min_size(Vec2::new(0.0, ui.spacing().interact_size.y))
                 .margin(Margin {
                     left: margin(show_icon),
                     right: margin(show_clear),
