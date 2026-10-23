@@ -39,7 +39,7 @@ impl Chart {
             } else {
                 after
             };
-            Some(index as f64)
+            Some(bars.partition_point(|bar| bar.time < bars[index].time) as f64)
         });
     }
 
@@ -128,7 +128,7 @@ fn segment(bars: &[Bar], index: usize) -> (usize, usize) {
         return (index, right);
     }
     let left = bars.partition_point(|bar| bar.time < bars[index].time);
-    (left.saturating_sub(1), index)
+    (if left == 0 { index } else { left - 1 }, index)
 }
 
 pub(super) fn time_at(bars: &[Bar], index: f64) -> Option<DateTime<Utc>> {
@@ -136,8 +136,12 @@ pub(super) fn time_at(bars: &[Bar], index: f64) -> Option<DateTime<Utc>> {
         return None;
     }
     let at = index.floor().clamp(0.0, (bars.len() - 1) as f64) as usize;
-    let (left, right) = segment(bars, at);
-    let step = if bars[left].time == bars[right].time {
+    let (left, right) = if index >= 0.0 && at + 1 < bars.len() {
+        (at, at + 1)
+    } else {
+        segment(bars, at)
+    };
+    let step = if left == right {
         1.0
     } else {
         seconds(bars[right].time - bars[left].time) / (right - left) as f64
@@ -178,7 +182,9 @@ mod tests {
             .iter()
             .map(|&t| Bar::new(time(t), 10.0, 11.0, 9.0, 10.0, 1.0))
             .collect();
-        let mut chart = Chart::new(BarData::from_bars(bars));
+        let mut chart = Chart::new(BarData::new());
+        // Shown price-based elements can repeat a timestamp, unlike cleaned input bars.
+        chart.state.set_data(BarData::from_bars(bars));
         chart.state.time_scale_mut().set_width(width);
         chart
     }
@@ -194,6 +200,7 @@ mod tests {
             (vec![60, 120, 240, 300], Some(120), Some(1.0)),
             (vec![60, 120, 240, 300], Some(180), Some(1.0)),
             (vec![60, 120, 120, 300], Some(120), Some(1.0)),
+            (vec![60, 120, 120, 300], Some(180), Some(1.0)),
             (vec![60, 120, 240, 300], Some(0), None),
             (vec![60, 120, 240, 300], Some(360), None),
             (vec![], Some(120), None),
@@ -207,6 +214,10 @@ mod tests {
                 receiver.synced_crosshair_bar_idx, expected,
                 "{times:?} {hovered:?}"
             );
+        }
+        let repeated = chart(&[0, 60, 60, 120], 501.0);
+        for (index, seconds) in [(0.5, 30), (1.5, 60), (2.5, 90), (3.5, 150)] {
+            assert_eq!(time_at(repeated.state.shown(), index), Some(time(seconds)));
         }
         let mut source = chart(&[0, 60, 120, 180, 240, 300], 1001.0);
         // Pixel edges at source indices 0.5 and 4.5 represent 30 and 270 seconds.
