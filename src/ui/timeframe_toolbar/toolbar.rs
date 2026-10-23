@@ -149,8 +149,15 @@ impl TimeframeToolbar {
             &mut self.config,
             TimeframeToolbarConfig::from_theme,
         );
-        // Update time on each frame
         self.state.update_time();
+        if !self.hidden.contains(&Control::TimeZone) {
+            // Use the same instant for the label and the next whole-second deadline.
+            let nanos = self.state.curr_time.unwrap().timestamp_subsec_nanos();
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_nanos(
+                    1_000_000_000 - u64::from(nanos),
+                ));
+        }
 
         // Background and border are handled by parent Frame in platform.rs
         ResponsiveToolbar::horizontal("timeframe_toolbar_scroll")
@@ -495,6 +502,30 @@ impl TimeframeToolbar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_clock_schedules_the_next_whole_second() {
+        use std::time::Duration;
+        for visible in [true, false] {
+            let ctx = egui::Context::default();
+            let mut toolbar = TimeframeToolbar::new();
+            toolbar.set_control_visible(Control::TimeZone, visible);
+            for frame in 0..5 {
+                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    toolbar.show(ui);
+                });
+                if frame == 4 {
+                    let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+                    let expected = Duration::from_nanos(
+                        1_000_000_000
+                            - u64::from(toolbar.state.curr_time.unwrap().timestamp_subsec_nanos()),
+                    );
+                    assert_eq!(delay, if visible { expected } else { Duration::MAX });
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 
     #[test]
     fn active_modes_and_open_calendar_use_the_accent() {

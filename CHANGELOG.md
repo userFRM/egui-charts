@@ -125,6 +125,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The bottom-bar clock requests a repaint at the next whole second while visible, so it keeps advancing without pointer or feed activity. Hidden clocks schedule no wake-up. ([#536](https://github.com/userFRM/egui-charts/issues/536))
+
 - Bottom-bar session and dividend controls show their selected state and describe the current mode. The calendar stays selected while the date picker is open, and range tips use singular interval units. ([#303](https://github.com/userFRM/egui-charts/issues/303))
 
 - The demo alerts panel shares the panel header and New alert icon button, with a centred empty state and Create alert action. Demo notices use the shared opaque, padded toast component; screenshot completion keeps its saved-path feedback. ([#304](https://github.com/userFRM/egui-charts/issues/304))
