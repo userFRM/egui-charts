@@ -1314,6 +1314,7 @@ impl DemoApp {
             .unwrap_or_else(|| bars.len().saturating_sub(1));
         let last = bars.get(index);
         let mut info = DataWindowInfo::new(self.state.symbol.clone())
+            .with_price_decimals(self.chart.instrument().and_then(|i| i.price_decimals))
             .with_timeframe(self.state.timeframe.as_str().to_string());
         if let Some(b) = last {
             info = info.with_ohlcv(b.open, b.high, b.low, b.close, b.volume);

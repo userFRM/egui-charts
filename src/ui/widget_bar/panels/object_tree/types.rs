@@ -324,6 +324,8 @@ pub struct DataWindowInfo {
     pub change_percent: f64,
     /// Previous close price
     pub prev_close: f64,
+    /// Instrument price decimals; `None` keeps magnitude-based formatting.
+    pub price_decimals: Option<u8>,
 }
 
 impl DataWindowInfo {
@@ -342,6 +344,12 @@ impl DataWindowInfo {
         self.low = low;
         self.close = close;
         self.volume = volume;
+        self
+    }
+
+    /// Set the instrument precision used for prices and absolute change.
+    pub fn with_price_decimals(mut self, decimals: Option<u8>) -> Self {
+        self.price_decimals = decimals;
         self
     }
 

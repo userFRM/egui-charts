@@ -5,7 +5,9 @@
 
 use egui::{RichText, Ui};
 
+use crate::icons::icons;
 use crate::theme::ThemeExt;
+use crate::ui_kit::IconButton;
 
 use super::types::DataWindowInfo;
 use crate::ext::UiExt;
@@ -20,8 +22,16 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
     // Header with collapse button
     ui.horizontal(|ui| {
         // Collapse/expand button
-        let icon = if is_expanded { "v" } else { ">" };
-        if ui.small_button(icon).clicked() {
+        let icon = if is_expanded {
+            &icons::CHEVRON_DOWN
+        } else {
+            &icons::CHEVRON_RIGHT
+        };
+        if IconButton::new(icon)
+            .tooltip("Toggle Data Window")
+            .show(ui)
+            .clicked()
+        {
             is_expanded = !is_expanded;
         }
 
@@ -45,16 +55,18 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
         ui.indent("data_window_content", |ui| {
             ui.space_xs();
 
-            // Timestamp and timeframe row
-            ui.horizontal(|ui| {
+            egui::Grid::new("bar_time").num_columns(2).show(ui, |ui| {
                 if !data.timestamp.is_empty() {
-                    ui.hint_label(&data.timestamp);
+                    ui.hint_label("Time");
+                    ui.label(&data.timestamp);
+                    ui.end_row();
                 }
                 if !data.timeframe.is_empty() {
-                    ui.hint_label(&data.timeframe);
+                    ui.hint_label("Interval");
+                    ui.label(&data.timeframe);
+                    ui.end_row();
                 }
             });
-
             ui.space_xs();
 
             // OHLCV grid
@@ -76,32 +88,36 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
     };
 
     egui::Grid::new("ohlcv_grid")
-        .num_columns(4)
+        .num_columns(2)
         .spacing([DESIGN_TOKENS.spacing.md, DESIGN_TOKENS.spacing.xs])
         .min_col_width(50.0)
         .show(ui, |ui| {
-            // Row 1: Open, High
             ui.hint_label("O");
-            ui.label(format_price(data.open));
+            ui.label(format_price(data.open, data.price_decimals));
+            ui.end_row();
             ui.hint_label("H");
-            ui.label(format_price(data.high));
+            ui.label(format_price(data.high, data.price_decimals));
             ui.end_row();
 
-            // Row 2: Low, Close
             ui.hint_label("L");
-            ui.label(format_price(data.low));
+            ui.label(format_price(data.low, data.price_decimals));
+            ui.end_row();
             ui.hint_label("C");
-            ui.label(RichText::new(format_price(data.close)).color(change_color));
+            ui.label(
+                RichText::new(format_price(data.close, data.price_decimals)).color(change_color),
+            );
             ui.end_row();
 
-            // Row 3: Volume, Change
             ui.hint_label("Vol");
             ui.label(format_volume(data.volume));
+            ui.end_row();
             ui.hint_label("Chg");
             ui.label(
                 RichText::new(format!(
-                    "{:+.2} ({:+.2}%)",
-                    data.change, data.change_percent
+                    "{:+.*} ({:+.2}%)",
+                    usize::from(data.price_decimals.unwrap_or(2)),
+                    data.change,
+                    data.change_percent
                 ))
                 .color(change_color)
                 .small(),
@@ -112,7 +128,13 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
 
 /// Format price with decimals chosen by its magnitude, so a negative price
 /// keeps the decimals of the positive price of the same size
-fn format_price(price: f64) -> String {
+fn format_price(price: f64, decimals: Option<u8>) -> String {
+    if !price.is_finite() {
+        return "\u{2014}".to_owned();
+    }
+    if let Some(decimals) = decimals {
+        return format!("{:.*}", usize::from(decimals), price);
+    }
     if price == 0.0 {
         return "\u{2014}".to_string();
     }
@@ -156,12 +178,20 @@ mod tests {
 
     #[test]
     fn test_format_price() {
-        assert_eq!(format_price(50000.0), "50000");
-        assert_eq!(format_price(1234.5), "1234.5");
-        assert_eq!(format_price(99.99), "99.99");
-        assert_eq!(format_price(1.2345), "1.2345");
-        assert_eq!(format_price(0.001234), "0.001234");
-        assert_eq!(format_price(-37.63), "-37.63");
+        assert_eq!(format_price(50000.0, None), "50000");
+        assert_eq!(format_price(1234.5, None), "1234.5");
+        assert_eq!(format_price(99.99, None), "99.99");
+        assert_eq!(format_price(1.2345, None), "1.2345");
+        assert_eq!(format_price(0.001234, None), "0.001234");
+        assert_eq!(format_price(-37.63, None), "-37.63");
+        for (price, decimals, expected) in [
+            (50000.25, 2, "50000.25"),
+            (-37.625, 3, "-37.625"),
+            (0.0, 2, "0.00"),
+            (1.2345, 4, "1.2345"),
+        ] {
+            assert_eq!(format_price(price, Some(decimals)), expected);
+        }
     }
 
     #[test]

@@ -3,9 +3,8 @@
 //! Ties together all subcomponents into the complete Object Tree panel.
 
 use crate::icons::icons;
-use crate::styles::icons as icon_sizes;
-use crate::ui_kit::PanelHeader;
-use egui::{Frame, RichText, TextEdit, Ui, Vec2, vec2};
+use crate::ui_kit::{IconButton, PanelHeader, filter::filter_input};
+use egui::{Frame, RichText, Ui, Vec2, vec2};
 
 use super::actions::ObjectTreeAction;
 use super::config::ObjectTreeConfig;
@@ -133,12 +132,17 @@ impl ObjectTreePanel {
             ui.space_sm();
 
             // Source tree
-            let tree_action = render_source_tree(ui, sources, &self.config, &mut self.state);
+            let mut tree_config = self.config.clone();
+            tree_config.max_height = tree_config
+                .max_height
+                .min((ui.available_height() - 42.0).max(0.0));
+            let tree_action = render_source_tree(ui, sources, &tree_config, &mut self.state);
             if !tree_action.is_none() {
                 action = tree_action;
             }
 
-            // Footer
+            // Keep the footer at the panel bottom even when the tree has a height cap.
+            ui.add_space((ui.available_height() - 42.0).max(0.0));
             ui.separator();
             self.show_footer(ui, sources);
         });
@@ -156,7 +160,10 @@ impl ObjectTreePanel {
             .no_separator()
             .show(ui, |ui| {
                 // Settings menu
-                ui.menu_button("S", |ui| {
+                let settings = IconButton::new(&icons::SETTINGS)
+                    .tooltip("Object tree settings")
+                    .show(ui);
+                egui::Popup::menu(&settings).show(|ui| {
                     ui.checkbox(&mut self.config.show_data_window, "Show Data Window");
                     ui.checkbox(&mut self.config.group_by_type, "Group by Type");
                     ui.checkbox(&mut self.config.show_color_indicators, "Show Colors");
@@ -164,81 +171,86 @@ impl ObjectTreePanel {
                 });
 
                 // Expand all
-                if ui.small_button("+").on_hover_text("Expand all").clicked() {
+                if IconButton::new(&icons::CHEVRON_DOWN)
+                    .tooltip("Expand all")
+                    .show(ui)
+                    .clicked()
+                {
                     self.state.expand_all_groups();
                 }
 
                 // Collapse all
-                if ui.small_button("-").on_hover_text("Collapse all").clicked() {
+                if IconButton::new(&icons::CHEVRON_UP)
+                    .tooltip("Collapse all")
+                    .show(ui)
+                    .clicked()
+                {
                     self.state.collapse_all_groups();
                 }
 
                 // Bulk actions menu
-                ui.menu_button(
-                    icons::UI_MORE_HORIZONTAL.as_image(Vec2::splat(icon_sizes::SM)),
-                    |ui| {
-                        if ui.button("Show All").clicked() {
-                            *action = ObjectTreeAction::ShowAll;
-                            ui.close();
-                        }
-                        if ui.button("Hide All").clicked() {
-                            *action = ObjectTreeAction::HideAll;
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Lock All").clicked() {
-                            *action = ObjectTreeAction::LockAll;
-                            ui.close();
-                        }
-                        if ui.button("Unlock All").clicked() {
-                            *action = ObjectTreeAction::UnlockAll;
-                            ui.close();
-                        }
-                        ui.separator();
-                        if self.state.selection_count() > 0
-                            && ui.button("Delete Selected").clicked()
-                        {
-                            *action = ObjectTreeAction::DeleteSelected;
-                            ui.close();
-                        }
-                    },
-                );
+                let more = IconButton::new(&icons::UI_MORE_HORIZONTAL)
+                    .tooltip("Object actions")
+                    .show(ui);
+                egui::Popup::menu(&more).show(|ui| {
+                    if ui.button("Show All").clicked() {
+                        *action = ObjectTreeAction::ShowAll;
+                        ui.close();
+                    }
+                    if ui.button("Hide All").clicked() {
+                        *action = ObjectTreeAction::HideAll;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Lock All").clicked() {
+                        *action = ObjectTreeAction::LockAll;
+                        ui.close();
+                    }
+                    if ui.button("Unlock All").clicked() {
+                        *action = ObjectTreeAction::UnlockAll;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if self.state.selection_count() > 0 && ui.button("Delete Selected").clicked() {
+                        *action = ObjectTreeAction::DeleteSelected;
+                        ui.close();
+                    }
+                });
             });
     }
 
     /// Render filter controls
     fn show_filter_controls(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            // Search input
-            let _search_response = ui.add_sized(
-                vec2(120.0, 20.0),
-                TextEdit::singleline(&mut self.state.filter_text).hint_text("Filter..."),
-            );
-
-            // Type filter dropdown
-            ui.combo_select_width(
-                "object_tree_type_filter",
-                &mut self.state.filter_type,
-                [
-                    None,
-                    Some(SourceType::DataSource),
-                    Some(SourceType::Indicator),
-                    Some(SourceType::Drawing),
-                    Some(SourceType::Template),
-                ],
-                |v| match v {
-                    None => "All".to_string(),
-                    Some(st) => st.display_name().to_string(),
-                },
-                95.0,
-            );
-
-            // Clear filter button
-            if self.state.has_filter()
-                && ui.small_button("X").on_hover_text("Clear filter").clicked()
-            {
-                self.state.clear_filter();
-            }
+            let combo_width = 108.0;
+            let field_width =
+                (ui.available_width() - combo_width - ui.spacing().item_spacing.x).max(0.0);
+            ui.allocate_ui(vec2(field_width, 28.0), |ui| {
+                ui.spacing_mut().interact_size.y = 24.0;
+                filter_input(ui, &mut self.state.filter_text);
+            });
+            ui.spacing_mut().interact_size.y = 28.0;
+            egui::ComboBox::from_id_salt("object_tree_type_filter")
+                .width(combo_width)
+                .selected_text(self.state.filter_type.map_or("All", |t| t.display_name()))
+                .icon(|ui, rect, visuals, _| {
+                    icons::CHEVRON_DOWN
+                        .as_image_tinted(Vec2::splat(12.0), visuals.fg_stroke.color)
+                        .paint_at(ui, rect);
+                })
+                .show_ui(ui, |ui| {
+                    ui.set_min_width(combo_width - 2.0 * ui.spacing().menu_margin.leftf());
+                    for source_type in [
+                        None,
+                        Some(SourceType::DataSource),
+                        Some(SourceType::Indicator),
+                        Some(SourceType::Drawing),
+                        Some(SourceType::Template),
+                    ] {
+                        let label = source_type.map_or("All", |t| t.display_name());
+                        ui.selectable_value(&mut self.state.filter_type, source_type, label);
+                    }
+                });
         });
     }
 
@@ -270,8 +282,8 @@ impl ObjectTreePanel {
                         String::new()
                     }
                 ))
-                .weak()
-                .small(),
+                .color(ui.visuals().weak_text_color())
+                .size(11.0),
             );
         });
     }
