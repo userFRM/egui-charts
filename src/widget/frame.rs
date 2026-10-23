@@ -547,8 +547,22 @@ impl Chart {
             .build();
 
         if self.config.show_vertical_grid {
-            // Simple bar-index-based vertical grid - moves 1:1 with chart
-            rendering::render_vertical_grid(&painter, chart_rect, &coords, self.config.grid_color);
+            if time_based {
+                renderers::render_time_grid(
+                    &RenderContext::new(&painter, chart_rect),
+                    visible_data,
+                    &coords,
+                    formatter.as_ref(),
+                    self.config.grid_color,
+                );
+            } else {
+                rendering::render_vertical_grid(
+                    &painter,
+                    chart_rect,
+                    &coords,
+                    self.config.grid_color,
+                );
+            }
         }
 
         // Session-break layer: day/session dividers and optional alternating

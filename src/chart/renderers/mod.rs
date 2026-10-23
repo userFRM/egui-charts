@@ -24,8 +24,8 @@ pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 
 pub use crosshair::render_crosshair_full;
 pub use indicator::IndicatorRenderer;
-pub(crate) use labels::price_decimals;
 pub use labels::{Legend, LegendStatus, QuoteSide, render_price_labels, render_time_labels};
+pub(crate) use labels::{price_decimals, render_time_grid};
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,

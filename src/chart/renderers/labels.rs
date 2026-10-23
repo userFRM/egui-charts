@@ -62,9 +62,18 @@ pub fn render_price_labels_at_pos(
     let labels: Vec<Shape> = marks
         .into_iter()
         .filter_map(|mark| {
-            let galley = context
-                .painter
-                .layout_no_wrap(mark.label, font.clone(), colors.text);
+            let galley = if mark.weight >= 80 {
+                context
+                    .painter
+                    .layout_job(egui::text::LayoutJob::single_section(
+                        mark.label,
+                        semibold(font.clone(), colors.text),
+                    ))
+            } else {
+                context
+                    .painter
+                    .layout_no_wrap(mark.label, font.clone(), colors.text)
+            };
             let rect = alignment.anchor_size(Pos2::new(x_offset, mark.y_coord), galley.size());
             (rect.top() >= context.rect.top()
                 && rect.bottom() <= context.rect.bottom()
@@ -122,7 +131,7 @@ fn generate_time_marks(
     };
 
     let zoom_factor = (coords.bar_spacing / 8.0).clamp(0.5, 2.5);
-    let min_spacing = (100.0 / zoom_factor).clamp(60.0, 140.0);
+    let min_spacing = 80.0;
     let max_marks = ((context.rect.width() / min_spacing).ceil() as usize + 2).clamp(6, 24);
 
     let config = TickMarkGeneratorConfig {
@@ -222,6 +231,30 @@ fn time_to_idx(
     i0 as f32 + frac * (i1 as f32 - i0 as f32)
 }
 
+/// Paints time grid lines from the same calendar marks as the axis labels.
+pub(crate) fn render_time_grid(
+    context: &RenderContext,
+    visible_data: &[Bar],
+    coords: &ChartMapping,
+    formatter: &dyn TimeFormatter,
+    color: Color32,
+) {
+    let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter);
+    for mark in marks {
+        let index = time_to_idx(mark.time, &bars);
+        let delta = coords.base_idx as f32 + coords.right_offset - index;
+        let x = context.rect.right() - (delta + 0.5) * coords.bar_spacing - 1.0;
+        if x >= context.rect.left() && x <= context.rect.right() {
+            crate::chart::rendering::grid::render_grid_line(
+                context.painter,
+                Pos2::new(x, context.rect.top()),
+                Pos2::new(x, context.rect.bottom()),
+                egui::Stroke::new(0.5, color),
+            );
+        }
+    }
+}
+
 /// Renders time labels on the bottom using tick marks
 /// Labels are spaced to prevent overlap
 pub fn render_time_labels(
@@ -268,7 +301,10 @@ pub fn render_time_labels(
         }
 
         let y = context.rect.max.y + TIME_LABEL_GAP;
-        let galley = if mark.mark_type == TickMarkType::Year {
+        let galley = if matches!(
+            mark.mark_type,
+            TickMarkType::DayOfMonth | TickMarkType::Month | TickMarkType::Year
+        ) {
             context
                 .painter
                 .layout_job(egui::text::LayoutJob::single_section(
