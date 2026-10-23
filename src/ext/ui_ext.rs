@@ -447,7 +447,7 @@ impl UiExt for Ui {
 
     fn clickable_label(&mut self, text: impl Into<String>) -> Response {
         let text = text.into();
-        let color = self.active_theme().ui.accent;
+        let color = self.visuals().hyperlink_color;
         self.add(egui::Label::new(RichText::new(text).color(color)).sense(Sense::click()))
     }
 
