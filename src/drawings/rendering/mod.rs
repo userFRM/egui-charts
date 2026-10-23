@@ -160,7 +160,7 @@ impl Drawing {
             DrawingToolType::VerticalLine => self.render_vertical_line(painter, rect, stroke),
             DrawingToolType::CrossLine => self.render_cross_line(painter, rect, color, stroke),
             DrawingToolType::TrendAngle => self.render_trend_angle(painter, color, stroke),
-            DrawingToolType::InfoLine => self.render_info_line(painter),
+            DrawingToolType::InfoLine => self.render_info_line(painter, view),
 
             // Shapes (8 tools)
             DrawingToolType::Rect => self.render_rect(painter, color, stroke),
@@ -242,10 +242,10 @@ impl Drawing {
             }
 
             // Measurers (4 tools)
-            DrawingToolType::Measure => self.render_measure(painter),
+            DrawingToolType::Measure => self.render_measure(painter, view),
             DrawingToolType::PriceRange => self.render_price_range(painter, rect),
-            DrawingToolType::DateRange => self.render_date_range(painter, rect),
-            DrawingToolType::DateAndPriceRange => self.render_date_and_price_range(painter, rect),
+            DrawingToolType::DateRange => self.render_date_range(painter, rect, view),
+            DrawingToolType::DateAndPriceRange => self.render_date_and_price_range(painter, view),
 
             // Annotations (7 tools)
             DrawingToolType::TextLabel => self.render_text_label(painter),

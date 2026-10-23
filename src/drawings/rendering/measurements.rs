@@ -2,14 +2,17 @@
 //!
 //! Includes: measure, price range, date range, date and price range, info line, and bars pattern.
 
-use crate::drawings::domain::Drawing;
-use crate::model::percent_change;
+use super::{ChartView, bars_between};
+use crate::chart::renderers::price_decimals;
+use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::model::{Bar, percent_change};
+use crate::scales::{PriceFormatter, VolumeFormatter};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
 impl Drawing {
-    pub(crate) fn render_measure(&self, painter: &egui::Painter) {
+    pub(crate) fn render_measure(&self, painter: &egui::Painter, view: &ChartView) {
         // Need at least 1 point (preview adds 2nd point via update_last_point)
         if self.points.is_empty() {
             return;
@@ -98,9 +101,6 @@ impl Drawing {
                 Stroke::NONE,
             ));
 
-            // Calculate percentage (price_diff already calculated above)
-            let price_pct = percent_change(cp1.price, cp2.price);
-
             // Draw arrow at top/bottom of vertical line based on direction
             if price_diff < 0.0 {
                 // Measuring down: arrow at bottom pointing down
@@ -141,34 +141,7 @@ impl Drawing {
                 line_stroke,
             );
 
-            // Calculate bars (time) difference
-            let bars_diff = (cp2.bar_idx - cp1.bar_idx).abs() as i32;
-
-            // Format time duration (assuming 1 bar = 1 minute for intraday charts)
-            let total_minutes = bars_diff;
-            let hours = total_minutes / 60;
-            let minutes = total_minutes % 60;
-            let time_str = if hours > 0 {
-                format!("{hours}h {minutes}m")
-            } else {
-                format!("{minutes}m")
-            };
-
-            // Calculate pips/points (scaled price difference)
-            let pips = (price_diff.abs() * 100.0).round() as i32;
-
-            // Build info text (3 lines)
-            // Line 1: "2.21 (0.86%) 221"
-            // Line 2: "73 bars, 1h 13m"
-            // Line 3: "Vol 895.43K"
-            let info = format!(
-                "{:.2} ({:.2}%) {}\n{} bars, {}\nVol --",
-                price_diff.abs(),
-                price_pct.abs(), // No + sign, just absolute percentage
-                pips,
-                bars_diff,
-                time_str
-            );
+            let info = self.measurement_label(view.bars).unwrap_or_default();
 
             // Draw info box at the top-left corner of rect
             let font = egui::FontId::proportional(typography::SM);
@@ -242,17 +215,7 @@ impl Drawing {
             Stroke::new(stroke::HAIRLINE, color),
         );
 
-        // Price difference info - use actual prices from chart_points
-        let info = if self.chart_points.len() >= 2 {
-            let cp1 = &self.chart_points[0];
-            let cp2 = &self.chart_points[1];
-            let price_diff = cp2.price - cp1.price;
-            let price_pct = percent_change(cp1.price, cp2.price);
-            format!("{price_diff:+.2} ({price_pct:+.2}%)")
-        } else {
-            let dy = (p2.y - p1.y).abs();
-            format!("Δ: {dy:.1}")
-        };
+        let info = self.measurement_label(&[]).unwrap_or_default();
 
         painter.text(
             Pos2::new(mid_x + 10.0, (p1.y + p2.y) / 2.0),
@@ -266,7 +229,12 @@ impl Drawing {
         painter.circle_filled(p2, DESIGN_TOKENS.rounding.md, color);
     }
 
-    pub(crate) fn render_date_range(&self, painter: &egui::Painter, chart_rect: Rect) {
+    pub(crate) fn render_date_range(
+        &self,
+        painter: &egui::Painter,
+        chart_rect: Rect,
+        view: &ChartView,
+    ) {
         if self.points.len() < 2 {
             if !self.points.is_empty() {
                 painter.circle_filled(
@@ -312,16 +280,7 @@ impl Drawing {
             Stroke::new(stroke::HAIRLINE, color),
         );
 
-        // Time difference info - use actual bar counts from chart_points
-        let info = if self.chart_points.len() >= 2 {
-            let cp1 = &self.chart_points[0];
-            let cp2 = &self.chart_points[1];
-            let bars_diff = (cp2.bar_idx - cp1.bar_idx).abs() as i32;
-            format!("{bars_diff} bars")
-        } else {
-            let dx = (p2.x - p1.x).abs();
-            format!("Δ: {dx:.1}")
-        };
+        let info = self.measurement_label(view.bars).unwrap_or_default();
 
         painter.text(
             Pos2::new((p1.x + p2.x) / 2.0, mid_y - 10.0),
@@ -344,7 +303,7 @@ impl Drawing {
 
     // === NEW TOOL RENDER FUNCTIONS ===
 
-    pub(crate) fn render_date_and_price_range(&self, painter: &egui::Painter, _chart_rect: Rect) {
+    pub(crate) fn render_date_and_price_range(&self, painter: &egui::Painter, view: &ChartView) {
         if self.points.len() < 2 {
             return;
         }
@@ -368,19 +327,7 @@ impl Drawing {
             StrokeKind::Outside,
         );
 
-        // Labels - use actual financial values from chart_points
-        let info = if self.chart_points.len() >= 2 {
-            let cp1 = &self.chart_points[0];
-            let cp2 = &self.chart_points[1];
-            let bars_diff = (cp2.bar_idx - cp1.bar_idx).abs() as i32;
-            let price_diff = cp2.price - cp1.price;
-            let price_pct = percent_change(cp1.price, cp2.price);
-            format!("{bars_diff} bars | {price_diff:+.2} ({price_pct:+.2}%)")
-        } else {
-            let dx = (p2.x - p1.x).abs();
-            let dy = (p2.y - p1.y).abs();
-            format!("Δx:{dx:.0} Δy:{dy:.0}")
-        };
+        let info = self.measurement_label(view.bars).unwrap_or_default();
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -390,7 +337,7 @@ impl Drawing {
         );
     }
 
-    pub(crate) fn render_info_line(&self, painter: &egui::Painter) {
+    pub(crate) fn render_info_line(&self, painter: &egui::Painter, view: &ChartView) {
         if self.points.len() < 2 {
             return;
         }
@@ -410,49 +357,10 @@ impl Drawing {
         painter.circle_filled(start, DESIGN_TOKENS.rounding.md, color);
         painter.circle_filled(end, DESIGN_TOKENS.rounding.md, color);
 
-        // Calculate info values
-        let (info_text, is_positive) = if self.chart_points.len() >= 2 {
-            let cp1 = &self.chart_points[0];
-            let cp2 = &self.chart_points[1];
-            let bars_diff = (cp2.bar_idx - cp1.bar_idx).abs() as i32;
-            let price_diff = cp2.price - cp1.price;
-            let price_pct = percent_change(cp1.price, cp2.price);
-
-            // Calculate time duration (assuming 1 bar = 1 minute for intraday)
-            let total_minutes = bars_diff;
-            let hours = total_minutes / 60;
-            let minutes = total_minutes % 60;
-            let time_str = if hours > 0 {
-                format!("{hours}h {minutes}m")
-            } else {
-                format!("{minutes}m")
-            };
-
-            // Calculate angle
-            let dx = end.x - start.x;
-            let dy = end.y - start.y;
-            let angle_deg = dy.atan2(dx).to_degrees();
-
-            // Info format: 3 lines
-            // Line 1: Price change with percentage
-            // Line 2: Bars and time
-            // Line 3: Angle
-            (
-                format!(
-                    "{price_diff:+.2} ({price_pct:+.2}%)\n{bars_diff} bars, {time_str}\n{angle_deg:.1}°"
-                ),
-                price_diff >= 0.0,
-            )
-        } else {
-            let dx = end.x - start.x;
-            let dy = end.y - start.y;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let angle_deg = dy.atan2(dx).to_degrees();
-            (
-                format!("D:{dist:.1}\nΔx:{dx:.0} Δy:{dy:.0}\n{angle_deg:.1}°"),
-                dy <= 0.0,
-            )
+        let Some(info_text) = self.measurement_label(view.bars) else {
+            return;
         };
+        let is_positive = self.chart_points[1].price >= self.chart_points[0].price;
 
         // Calculate midpoint for info box positioning
         let mid = Pos2::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
@@ -507,4 +415,165 @@ impl Drawing {
     }
 
     // Note: render_bars_pattern is now in trading.rs with full projection features
+
+    /// Label of the measuring tools: the price change from the first anchor to the second and
+    /// its percentage, the bars between them and the time they span, the volume traded over them,
+    /// and for the info line the angle of the line on screen. Each anchor counts at its nearest
+    /// bar: anchors N bars apart span N bars of time and the volume of the N + 1 bars from one to
+    /// the other, both included.
+    pub(crate) fn measurement_label(&self, bars: &[Bar]) -> Option<String> {
+        let [a, b, ..] = &self.chart_points[..] else {
+            return None;
+        };
+        let change = b.price - a.price;
+        let pct = percent_change(a.price, b.price);
+        let decimals = price_decimals(a.price);
+        let change = format!("{change:+.decimals$} ({pct:+.2}%)");
+        let (from, to) = (a.bar_idx.round(), b.bar_idx.round());
+        let mut span = format!("{} bars", (to - from).abs() as i64);
+        if let Some(ms) = elapsed_ms(bars, from, to) {
+            span = format!("{span}, {}", format_duration(ms));
+        }
+        let volume = bars_between(bars, from, to)
+            .map(|(_, bars)| {
+                let volume = bars
+                    .iter()
+                    .map(|bar| bar.volume)
+                    .filter(|v| v.is_finite())
+                    .sum();
+                format!("\nVol {}", VolumeFormatter::default().format(volume))
+            })
+            .unwrap_or_default();
+        Some(match self.tool_type {
+            DrawingToolType::Measure | DrawingToolType::DateAndPriceRange => {
+                format!("{change}\n{span}{volume}")
+            }
+            DrawingToolType::PriceRange => change,
+            DrawingToolType::DateRange => format!("{span}{volume}"),
+            DrawingToolType::InfoLine => {
+                let [start, end, ..] = self.points[..] else {
+                    return None;
+                };
+                // Screen y grows downward, so a rising line has a positive angle.
+                let angle = (start.y - end.y).atan2(end.x - start.x).to_degrees();
+                format!("{change}\n{span}\n{angle:.1}°")
+            }
+            _ => return None,
+        })
+    }
+}
+
+/// Milliseconds from bar `a` to bar `b`, from the bars' times. An index past either end of the
+/// series is placed at the most common spacing of the bars at that end; `None` with fewer than
+/// two bars.
+fn elapsed_ms(bars: &[Bar], a: f32, b: f32) -> Option<i64> {
+    let time = |index: f32| {
+        let last = bars.len().checked_sub(1)?;
+        let ms = |i: usize| bars[i].time.timestamp_millis();
+        let index = index.round() as i64;
+        let (edge, step) = match usize::try_from(index) {
+            Ok(i) if i <= last => return Some(ms(i)),
+            _ if last == 0 => return None,
+            Ok(_) => (last, spacing(bars.iter().rev())),
+            Err(_) => (0, spacing(bars.iter())),
+        };
+        Some(ms(edge).saturating_add((index - edge as i64).saturating_mul(step)))
+    };
+    Some(time(b)?.saturating_sub(time(a)?))
+}
+
+/// The most common time between consecutive bars among the first eleven
+/// `bars` yields, so that a weekend or a gap next to the end of the series does
+/// not set the step of the bars placed past it.
+fn spacing<'a>(bars: impl Iterator<Item = &'a Bar>) -> i64 {
+    let times: Vec<i64> = bars
+        .take(11)
+        .map(|bar| bar.time.timestamp_millis())
+        .collect();
+    let mut steps: Vec<i64> = times.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+    steps.sort_unstable();
+    steps
+        .chunk_by(|a, b| a == b)
+        .max_by_key(|run| run.len())
+        .map_or(0, |run| run[0])
+}
+
+/// A duration in its two largest units: days and hours, hours and minutes, or minutes, and
+/// seconds below a minute.
+fn format_duration(ms: i64) -> String {
+    let secs = ms.unsigned_abs() / 1000;
+    match (secs / 86_400, secs / 3600 % 24, secs / 60 % 60) {
+        (0, 0, 0) => format!("{secs}s"),
+        (0, 0, m) => format!("{m}m"),
+        (0, h, 0) => format!("{h}h"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, 0, _) => format!("{d}d"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::ChartPoint;
+    use crate::drawings::rendering::sample_bars;
+
+    /// Hourly bars with volumes 100, 200, 150, 300, 250, 400 and 50, the last one 49 h after the
+    /// one before it, at 54 h, as across a weekend. Prices change from the first anchor to the
+    /// second with their sign, durations come from the bar times (past the last bar at their
+    /// common spacing of 1 h, so bar 30 is at 54 + 24 = 78 h, 3d 6h), volume is the sum over the bars from one anchor
+    /// to the other, and a line that rises on screen has a positive angle: 10 px up over 300 px
+    /// is atan(10 / 300) = 1.9 degrees.
+    #[test]
+    fn measurement_labels_use_bar_times_volumes_and_signed_values() {
+        let mut bars = sample_bars();
+        for (i, bar) in bars.iter_mut().enumerate() {
+            bar.time = chrono::DateTime::from_timestamp(i as i64 * 3600, 0).unwrap();
+        }
+        bars[6].time = chrono::DateTime::from_timestamp(54 * 3600, 0).unwrap();
+        let cases = [
+            (
+                DrawingToolType::Measure,
+                (1.0, 100.0),
+                (4.0, 95.0),
+                "-5.00 (-5.00%)\n3 bars, 3h\nVol 900.00",
+            ),
+            (
+                DrawingToolType::InfoLine,
+                (0.0, 100.0),
+                (30.0, 110.0),
+                "+10.00 (+10.00%)\n30 bars, 3d 6h\n1.9°",
+            ),
+            (
+                DrawingToolType::DateRange,
+                (2.0, 100.0),
+                (5.0, 100.0),
+                "3 bars, 3h\nVol 1.10K",
+            ),
+            // Fractional anchors count at their nearest bars, 1 and 4.
+            (
+                DrawingToolType::DateRange,
+                (1.4, 100.0),
+                (3.6, 100.0),
+                "3 bars, 3h\nVol 900.00",
+            ),
+            (
+                DrawingToolType::DateAndPriceRange,
+                (5.0, 200.0),
+                (2.0, 210.0),
+                "+10.00 (+5.00%)\n3 bars, 3h\nVol 1.10K",
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (tool, (b1, p1), (b2, p2), want) in cases {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.chart_points = vec![ChartPoint::new(b1, p1), ChartPoint::new(b2, p2)];
+            drawing.update_screen_coords(|bar| bar * 10.0, |price| 500.0 - price as f32);
+            let got = drawing.measurement_label(&bars);
+            if got.as_deref() != Some(want) {
+                wrong.push(format!("{tool:?}: got {got:?}, want {want:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
 }
