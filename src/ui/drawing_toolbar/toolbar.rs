@@ -1217,14 +1217,14 @@ mod tests {
     /// switch tools while the user types.
     #[test]
     fn a_tool_shortcut_selects_the_tool_unless_a_text_field_has_focus() {
-        let alt_t = Event::Key {
-            key: Key::T,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: Modifiers::ALT,
-        };
-        let press_alt_t = |text_focused: bool| {
+        let press_alt_t = |text_focused: bool, modifiers| {
+            let alt_t = Event::Key {
+                key: Key::T,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
             let ctx = Context::default();
             let mut toolbar = DrawingToolbar::new();
             let mut text = String::new();
@@ -1249,9 +1249,16 @@ mod tests {
             frame(vec![alt_t.clone()])
         };
         assert_eq!(
-            press_alt_t(false),
+            press_alt_t(false, Modifiers::ALT),
             DrawingToolbarAction::SelectTool(DrawingToolType::TrendLine)
         );
-        assert_eq!(press_alt_t(true), DrawingToolbarAction::None);
+        assert_eq!(
+            press_alt_t(true, Modifiers::ALT),
+            DrawingToolbarAction::None
+        );
+        assert_eq!(
+            press_alt_t(false, Modifiers::ALT.plus(Modifiers::SHIFT)),
+            DrawingToolbarAction::None
+        );
     }
 }

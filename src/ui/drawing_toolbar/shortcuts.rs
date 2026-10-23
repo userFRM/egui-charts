@@ -1,6 +1,8 @@
 //! Keyboard shortcuts for drawing tools.
 
+use crate::config::KeyboardAction;
 use crate::drawings::DrawingToolType;
+use crate::widget::ShortcutMap;
 use egui::{Context, KeyboardShortcut, ModifierNames};
 
 /// Keyboard shortcuts for drawing tools
@@ -27,11 +29,11 @@ pub struct DrawingToolShortcuts {
 impl Default for DrawingToolShortcuts {
     fn default() -> Self {
         Self {
-            shortcuts: crate::widget::ShortcutMap::default()
+            shortcuts: ShortcutMap::default()
                 .bindings
                 .into_iter()
                 .filter_map(|(key, action)| {
-                    if let crate::config::KeyboardAction::DrawingTool(tool) = action {
+                    if let KeyboardAction::DrawingTool(tool) = action {
                         Some((key, tool))
                     } else {
                         None
@@ -75,37 +77,31 @@ impl DrawingToolShortcuts {
     /// assert_eq!(triggered, Some(DrawingToolType::TrendLine));
     /// ```
     pub fn check(&self, ctx: &Context) -> Option<DrawingToolType> {
-        let map = ctx.data(|data| {
-            data.get_temp::<crate::widget::ShortcutMap>(egui::Id::NULL.with("chart_shortcuts"))
-        });
-        let shortcuts = map.map(|map| {
-            map.bindings
-                .into_iter()
-                .filter_map(|(key, action)| {
-                    if let crate::config::KeyboardAction::DrawingTool(tool) = action {
-                        Some((key, tool))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-        });
-        for (shortcut, tool) in shortcuts.as_ref().unwrap_or(&self.shortcuts) {
-            if ctx.input_mut(|i| i.consume_shortcut(shortcut)) {
-                return Some(*tool);
-            }
+        let map = ctx
+            .data(|data| data.get_temp::<ShortcutMap>(egui::Id::NULL.with("chart_shortcuts")))
+            .unwrap_or_else(|| ShortcutMap {
+                bindings: self
+                    .shortcuts
+                    .iter()
+                    .map(|(key, tool)| (*key, KeyboardAction::DrawingTool(*tool)))
+                    .collect(),
+            });
+        match map.consume(ctx, |action| {
+            matches!(action, KeyboardAction::DrawingTool(_))
+        }) {
+            Some((KeyboardAction::DrawingTool(tool), _)) => Some(tool),
+            _ => None,
         }
-        None
     }
 
     /// The shortcut that selects `tool`, written the way the platform writes it ("Alt+T"), for
     /// the hint next to the tool in a flyout.
     pub(super) fn hint(&self, ctx: &Context, tool: DrawingToolType) -> Option<String> {
-        if let Some(map) = ctx.data(|data| {
-            data.get_temp::<crate::widget::ShortcutMap>(egui::Id::NULL.with("chart_shortcuts"))
-        }) {
+        if let Some(map) =
+            ctx.data(|data| data.get_temp::<ShortcutMap>(egui::Id::NULL.with("chart_shortcuts")))
+        {
             return map
-                .shortcut(crate::config::KeyboardAction::DrawingTool(tool))
+                .shortcut(KeyboardAction::DrawingTool(tool))
                 .map(|shortcut| ctx.format_shortcut(&shortcut));
         }
         self.shortcuts

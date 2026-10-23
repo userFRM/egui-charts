@@ -34,7 +34,7 @@ impl ShortcutMap {
     }
 
     /// Consume the first bound key press, leaving other input for its owner.
-    fn consume(
+    pub(crate) fn consume(
         &self,
         ctx: &Context,
         accepts: impl Fn(KeyboardAction) -> bool,
