@@ -89,6 +89,8 @@ cargo bench --bench frame_time
 
 The scenarios are one chart of 5,000,000 bars zoomed out and zoomed in, four charts of 100,000 bars, and eight charts of 100,000 bars with ten studies each, in a 1920 by 1080 window with the pointer over the charts. `FRAME_TIME_FRAMES` sets the number of measured frames (default 300, after 60 warm-up frames), and arguments run only the scenarios whose name contains one of them, for example `cargo bench --bench frame_time -- "zoomed out"`. `benches/bare_chart.rs` times the frame of the `bare_chart` example in the same way.
 
+A second table prints the first frame and the median and 95th percentile of steady, tick and new-bar frames for candles and the five price-based chart types on 1,000,000 one-minute bars; `-- price-based` runs it alone.
+
 To compare two commits, build the bench on each and run the two binaries in turn, so that changes in machine load and clock speed affect both alike. `cargo bench --no-run` prints the path of the binary it builds:
 
 ```sh

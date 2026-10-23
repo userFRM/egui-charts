@@ -34,24 +34,30 @@ pub fn run(
             events: vec![Event::PointerMoved(pointer)],
             ..Default::default()
         };
-        let start = Instant::now();
-        let mut out = ctx.run_ui(input, &mut ui);
-        let painted = start.elapsed();
-        out.textures_delta.clear(); // no renderer uploads the font atlas
-        let shapes = out.shapes.iter().map(|s| count(&s.shape)).sum();
-        let start = Instant::now();
-        // Dropped inside the timing, as a renderer drops it every frame.
-        std::hint::black_box(ctx.tessellate(out.shapes, out.pixels_per_point));
-        let tessellate = start.elapsed();
+        let sample = measure(&ctx, input, &mut ui);
         if i >= WARMUP {
-            samples.push(Sample {
-                frame: painted + tessellate,
-                tessellate,
-                shapes,
-            });
+            samples.push(sample);
         }
     }
     samples
+}
+
+/// Measures one frame, including tessellation, on an existing context.
+pub fn measure(ctx: &egui::Context, input: RawInput, ui: impl FnMut(&mut egui::Ui)) -> Sample {
+    let start = Instant::now();
+    let mut out = ctx.run_ui(input, ui);
+    let painted = start.elapsed();
+    out.textures_delta.clear(); // no renderer uploads the font atlas
+    let shapes = out.shapes.iter().map(|s| count(&s.shape)).sum();
+    let start = Instant::now();
+    // Dropped inside the timing, as a renderer drops it every frame.
+    std::hint::black_box(ctx.tessellate(out.shapes, out.pixels_per_point));
+    let tessellate = start.elapsed();
+    Sample {
+        frame: painted + tessellate,
+        tessellate,
+        shapes,
+    }
 }
 
 fn count(shape: &Shape) -> usize {
