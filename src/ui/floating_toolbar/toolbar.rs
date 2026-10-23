@@ -151,17 +151,20 @@ impl FloatingSelectionToolbar {
             }
         }
 
-        // Clamp position to viewport bounds
+        // Clamp position to viewport bounds. `min` then `max` (not `f32::clamp`, which panics
+        // when min > max) places the toolbar at the viewport's min edge on an axis it does not fit.
         let screen_rect = ui.ctx().input(|i| i.viewport_rect());
         let toolbar_size = self.toolbar_size();
         self.position.x = self
             .position
             .x
-            .clamp(screen_rect.min.x, screen_rect.max.x - toolbar_size.x);
+            .min(screen_rect.max.x - toolbar_size.x)
+            .max(screen_rect.min.x);
         self.position.y = self
             .position
             .y
-            .clamp(screen_rect.min.y, screen_rect.max.y - toolbar_size.y);
+            .min(screen_rect.max.y - toolbar_size.y)
+            .max(screen_rect.min.y);
 
         // Clone data we need inside closures
         let color_slots_len = self.color_slots.len();
@@ -425,5 +428,37 @@ impl FloatingSelectionToolbar {
         let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
         icon.as_image_tinted(size, tint)
             .paint_at(ui, Rect::from_center_size(rect.center(), size));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A viewport smaller than the toolbar (204 x 32 px without colour slots) must not panic and
+    /// pins the toolbar to the viewport's min edge on each axis that does not fit.
+    #[test]
+    fn show_survives_viewport_smaller_than_toolbar() {
+        for (w, h, expected) in [
+            (100.0, 100.0, Pos2::new(0.0, 10.0)),
+            (800.0, 20.0, Pos2::new(10.0, 0.0)),
+            (100.0, 20.0, Pos2::ZERO),
+        ] {
+            let ctx = egui::Context::default();
+            let mut toolbar = FloatingSelectionToolbar::new();
+            toolbar.show_at(Pos2::new(10.0, 10.0));
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(w, h))),
+                ..Default::default()
+            };
+            // egui asserts that a frame's texture delta is consumed before the next frame.
+            ctx.run_ui(raw.clone(), |_| {}).textures_delta.clear();
+            ctx.run_ui(raw, |ui| {
+                toolbar.show(ui);
+            })
+            .textures_delta
+            .clear();
+            assert_eq!(toolbar.position, expected, "viewport {w}x{h}");
+        }
     }
 }
