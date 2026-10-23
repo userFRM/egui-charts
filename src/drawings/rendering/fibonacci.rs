@@ -447,20 +447,20 @@ impl Drawing {
                 DESIGN_TOKENS.semantic.extended.bearish, // Red (resistance)
                 DESIGN_TOKENS.semantic.indicators.ma,    // Orange
                 DESIGN_TOKENS.semantic.extended.caution, // Amber
-                DESIGN_TOKENS.semantic.indicators.bb_upper, // Purple (50% pivot)
+                DESIGN_TOKENS.semantic.drawings.fib_50,  // Purple (50% pivot)
                 DESIGN_TOKENS.semantic.indicators.ema,   // Blue
                 DESIGN_TOKENS.semantic.extended.bullish, // Teal (support)
                 DESIGN_TOKENS.semantic.extended.bullish, // Teal (target)
             ]
         } else {
             [
-                DESIGN_TOKENS.semantic.extended.bullish,    // Teal
-                DESIGN_TOKENS.semantic.extended.bullish,    // Green
-                DESIGN_TOKENS.semantic.indicators.ema,      // Blue
-                DESIGN_TOKENS.semantic.indicators.bb_upper, // Purple
-                DESIGN_TOKENS.semantic.extended.caution,    // Amber
-                DESIGN_TOKENS.semantic.indicators.ma,       // Orange
-                DESIGN_TOKENS.semantic.extended.bearish,    // Red
+                DESIGN_TOKENS.semantic.extended.bullish, // Teal
+                DESIGN_TOKENS.semantic.extended.bullish, // Green
+                DESIGN_TOKENS.semantic.indicators.ema,   // Blue
+                DESIGN_TOKENS.semantic.drawings.fib_50,  // Purple
+                DESIGN_TOKENS.semantic.extended.caution, // Amber
+                DESIGN_TOKENS.semantic.indicators.ma,    // Orange
+                DESIGN_TOKENS.semantic.extended.bearish, // Red
             ]
         };
 
