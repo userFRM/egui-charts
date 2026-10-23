@@ -42,7 +42,7 @@ pub fn render_item_row(
 
     // Render if visible
     if ui.is_rect_visible(rect) {
-        render_row_content(ui, rect, item, config, state, indent, &mut action);
+        render_row_content(ui, &response, item, config, state, indent, &mut action);
     }
 
     if config.enable_context_menu {
@@ -116,15 +116,16 @@ fn handle_interactions(
 /// Render the row content (background, icons, text, buttons)
 fn render_row_content(
     ui: &mut Ui,
-    rect: Rect,
+    response: &egui::Response,
     item: &SourceItem,
     config: &ObjectTreeConfig,
     state: &mut ObjectTreeState,
     indent: f32,
     action: &mut ObjectTreeAction,
 ) {
+    let rect = response.rect;
     let is_selected = state.is_selected(item.id);
-    let is_hovered = state.hovered_id == Some(item.id);
+    let is_hovered = response.hovered();
     let is_dragging = state.dragging_id == Some(item.id);
 
     let center_y = rect.center().y;

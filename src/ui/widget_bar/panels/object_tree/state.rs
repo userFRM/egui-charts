@@ -2,7 +2,7 @@
 //!
 //! Tracks selection, expansion, filtering, and other UI state.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::types::SourceType;
 
@@ -38,6 +38,9 @@ pub struct ObjectTreeState {
     pub drag_start_pos: Option<egui::Pos2>,
     /// Drop target position (index)
     pub drop_target: Option<usize>,
+
+    /// Display-name overrides, keyed by stable tree id. The host may save these with its layout.
+    pub labels: HashMap<usize, String>,
 
     // === Rename ===
     /// Currently renaming item ID

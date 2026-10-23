@@ -98,13 +98,29 @@ impl ObjectTreePanel {
         sources: &mut [SourceItem],
     ) -> ObjectTreeAction {
         let mut action = ObjectTreeAction::None;
+        for source in sources.iter_mut() {
+            if let Some(label) = self.state.labels.get(&source.id) {
+                source.label = Some(label.clone());
+            }
+        }
 
-        // Collect source IDs for keyboard shortcuts
-        let source_ids: Vec<usize> = sources.iter().map(|s| s.id).collect();
+        if self.config.group_by_type {
+            sources.sort_by_key(|s| {
+                let group = match s.source_type {
+                    SourceType::DataSource => 0,
+                    SourceType::Indicator => 1,
+                    SourceType::Drawing => 2,
+                    SourceType::Template => 3,
+                };
+                (group, std::cmp::Reverse(s.z_index))
+            });
+        } else {
+            sources.sort_by_key(|s| std::cmp::Reverse(s.z_index));
+        }
 
         // Handle keyboard shortcuts
         if self.config.enable_keyboard_shortcuts {
-            let kb_action = handle_keyboard_shortcuts(ui, &mut self.state, &source_ids);
+            let kb_action = handle_keyboard_shortcuts(ui, &mut self.state, sources);
             if !kb_action.is_none() {
                 action = kb_action;
             }
@@ -146,6 +162,23 @@ impl ObjectTreePanel {
             ui.separator();
             self.show_footer(ui, sources);
         });
+
+        if let Some(id) = self.state.renaming_id {
+            use crate::ui_kit::modal::dialogs::{PromptDialog, PromptResult};
+            let mut open = true;
+            match PromptDialog::new(ui.scope_id().with(("rename_object", id)), "Rename object")
+                .initial_value(&self.state.rename_text)
+                .show(ui.ctx(), &mut open)
+            {
+                PromptResult::Submitted(name) if !name.trim().is_empty() => {
+                    self.state.labels.insert(id, name.clone());
+                    self.state.cancel_rename();
+                    action = ObjectTreeAction::Rename(id, name);
+                }
+                PromptResult::Cancelled | PromptResult::Submitted(_) => self.state.cancel_rename(),
+                PromptResult::None => {}
+            }
+        }
 
         // Handle selection state updates
         self.handle_selection_action(&action, sources);
@@ -269,21 +302,24 @@ impl ObjectTreePanel {
                 .filter(|s| s.source_type == SourceType::Drawing)
                 .count();
 
-            ui.label(
-                RichText::new(format!(
-                    "{} objects • {} indicators • {} drawings • {} visible{}",
-                    total,
-                    indicators,
-                    drawings,
-                    visible,
-                    if selected > 0 {
-                        format!(" • {selected} selected")
-                    } else {
-                        String::new()
-                    }
-                ))
-                .color(ui.visuals().weak_text_color())
-                .size(11.0),
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "{} objects • {} indicators • {} drawings • {} visible{}",
+                        total,
+                        indicators,
+                        drawings,
+                        visible,
+                        if selected > 0 {
+                            format!(" • {selected} selected")
+                        } else {
+                            String::new()
+                        }
+                    ))
+                    .color(ui.visuals().weak_text_color())
+                    .size(11.0),
+                )
+                .wrap(),
             );
         });
     }

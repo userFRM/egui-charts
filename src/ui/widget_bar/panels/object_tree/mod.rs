@@ -48,6 +48,7 @@
 //! Feature-complete object tree panel.
 
 mod actions;
+mod chart_actions;
 mod config;
 mod context_menu;
 mod data_window;

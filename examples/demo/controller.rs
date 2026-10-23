@@ -56,16 +56,20 @@ struct SavedIndicators {
 
 /// Object-tree ids for indicators are offset into a high range so a single
 /// `usize` id space cleanly distinguishes indicators from drawings (which use
-/// small monotonic ids from the drawing manager). The main series is id 0.
-const MAIN_SERIES_ID: usize = 0;
-const INDICATOR_ID_BASE: usize = 1_000_000;
+/// small monotonic ids from the drawing manager). The main series reserves the last id.
+const MAIN_SERIES_ID: usize = usize::MAX;
+const INDICATOR_ID_BASE: usize = usize::MAX / 2;
 
 fn indicator_tree_id(id: SeriesId) -> usize {
     INDICATOR_ID_BASE + id.0
 }
 
 fn indicator_from_tree_id(id: usize) -> Option<SeriesId> {
-    id.checked_sub(INDICATOR_ID_BASE).map(SeriesId)
+    if id == MAIN_SERIES_ID {
+        None
+    } else {
+        id.checked_sub(INDICATOR_ID_BASE).map(SeriesId)
+    }
 }
 
 /// Which right-hand side panel is open, if any.
@@ -701,19 +705,6 @@ impl DemoApp {
         });
     }
 
-    fn set_all_drawings_visible(&mut self, visible: bool) {
-        let dm = self.chart.drawings_mut();
-        let ids: Vec<usize> = dm
-            .drawings
-            .iter()
-            .filter(|d| d.visible != visible)
-            .map(|d| d.id)
-            .collect();
-        for id in ids {
-            dm.edit_drawing(id, |d| d.visible = visible);
-        }
-    }
-
     fn clone_drawing(&mut self, id: usize) {
         let dm = self.chart.drawings_mut();
         if let Some(src) = dm.drawings.iter().find(|d| d.id == id).cloned() {
@@ -1286,7 +1277,8 @@ impl DemoApp {
         // Live indicators.
         for (id, ind) in self.chart.indicators() {
             let color = ind.colors().first().copied().unwrap_or(egui::Color32::GRAY);
-            let mut item = SourceItem::indicator(indicator_tree_id(id), ind.name(), color);
+            let mut item =
+                SourceItem::indicator(indicator_tree_id(id), ind.name(), color).with_series_id(id);
             item.visible = ind.is_visible();
             items.push(item);
         }
@@ -1296,6 +1288,7 @@ impl DemoApp {
             let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
             item.visible = d.visible;
             item.locked = d.locked;
+            item.z_index = d.z_order;
             items.push(item);
         }
         items
@@ -1325,39 +1318,13 @@ impl DemoApp {
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
+        if self
+            .object_tree
+            .apply_to_chart(&mut self.chart, &action, sources)
+        {
+            return;
+        }
         match action {
-            ObjectTreeAction::ToggleVisibility(id) => {
-                let chart = &mut self.chart;
-                if let Some(study) = indicator_from_tree_id(id) {
-                    let now = chart
-                        .indicators()
-                        .find(|(id, _)| *id == study)
-                        .is_none_or(|(_, i)| i.is_visible());
-                    chart.set_indicator_visible(study, !now);
-                } else {
-                    chart
-                        .drawings_mut()
-                        .edit_drawing(id, |d| d.visible = !d.visible);
-                }
-            }
-            ObjectTreeAction::ToggleLock(id) => {
-                self.chart
-                    .drawings_mut()
-                    .edit_drawing(id, |d| d.locked = !d.locked);
-            }
-            ObjectTreeAction::Delete(id) | ObjectTreeAction::RemoveIndicator(id) => {
-                let chart = &mut self.chart;
-                if let Some(study) = indicator_from_tree_id(id) {
-                    chart.remove_series(study);
-                } else {
-                    chart.drawings_mut().delete_drawing(id);
-                }
-            }
-            ObjectTreeAction::Select(id) => {
-                if indicator_from_tree_id(id).is_none() {
-                    self.chart.drawings_mut().select(id);
-                }
-            }
             ObjectTreeAction::ChangeColor(id, color) => {
                 let chart = &mut self.chart;
                 if let Some(study) = indicator_from_tree_id(id) {
@@ -1372,35 +1339,15 @@ impl DemoApp {
                 }
             }
             ObjectTreeAction::OpenProperties(id) | ObjectTreeAction::OpenIndicatorSettings(id) => {
-                if indicator_from_tree_id(id).is_some() {
+                if id == MAIN_SERIES_ID {
+                    self.open_series_settings_dialog();
+                } else if indicator_from_tree_id(id).is_some() {
                     self.indicator_dialog.open();
                 } else {
                     self.open_drawing_props_for(id);
                 }
             }
-            ObjectTreeAction::Duplicate(id) => {
-                if indicator_from_tree_id(id).is_none() {
-                    self.clone_drawing(id);
-                }
-            }
-            ObjectTreeAction::BringToFront(id) => {
-                self.chart.drawings_mut().bring_to_front(id);
-            }
-            ObjectTreeAction::SendToBack(id) => {
-                self.chart.drawings_mut().send_to_back(id);
-            }
-            ObjectTreeAction::HideAll => self.set_all_drawings_visible(false),
-            ObjectTreeAction::ShowAll => self.set_all_drawings_visible(true),
-            ObjectTreeAction::RemoveAllDrawings => {
-                self.chart.drawings_mut().clear_all();
-            }
-            ObjectTreeAction::RemoveAllIndicators => self.remove_all_indicators(),
-            ObjectTreeAction::ClearSelection => {
-                self.chart.drawings_mut().deselect();
-            }
-            _ => {
-                let _ = sources;
-            }
+            _ => {}
         }
     }
 
@@ -1920,6 +1867,81 @@ fn apply_settings_state(
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn object_tree_applies_layer_bulk_and_focus_actions() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        for id in 1..=3 {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 200.0)];
+            drawing.completed = true;
+            app.chart.drawings_mut().add_synced_drawing(drawing);
+        }
+        let ids: Vec<_> = app.chart.drawings().drawings.iter().map(|d| d.id).collect();
+        let sources = app.build_source_items();
+        assert_eq!(
+            sources
+                .iter()
+                .map(|s| s.id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            sources.len()
+        );
+        app.handle_object_tree(ObjectTreeAction::ToggleVisibility(ids[0]), &sources);
+        assert!(!app.chart.drawings().drawings[0].visible);
+        let sources = app.build_source_items();
+        app.handle_object_tree(ObjectTreeAction::ToggleVisibility(ids[0]), &sources);
+        assert!(app.chart.drawings().drawings[0].visible);
+        // Tied layers still have a stable paint order. Move across exactly one neighbour.
+        for drawing in &mut app.chart.drawings_mut().drawings {
+            drawing.z_order = 0;
+        }
+        for (action, expected) in [
+            (
+                ObjectTreeAction::MoveUp(ids[0]),
+                vec![ids[1], ids[0], ids[2]],
+            ),
+            (ObjectTreeAction::MoveDown(ids[0]), ids.clone()),
+            (
+                ObjectTreeAction::BringToFront(ids[0]),
+                vec![ids[1], ids[2], ids[0]],
+            ),
+            (ObjectTreeAction::SendToBack(ids[0]), ids.clone()),
+        ] {
+            let sources = app.build_source_items();
+            app.handle_object_tree(action, &sources);
+            let mut actual: Vec<_> = app
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| (d.z_order, d.id))
+                .collect();
+            actual.sort_by_key(|(z, _)| *z);
+            assert_eq!(
+                actual.iter().map(|(_, id)| *id).collect::<Vec<_>>(),
+                expected
+            );
+        }
+        let sources = app.build_source_items();
+        app.handle_object_tree(ObjectTreeAction::ZoomTo(ids[0]), &sources);
+        // Prices 100..200 with ten percent on either side give 90..210.
+        assert_eq!(app.chart.state().price_scale().range().min, 90.0);
+        assert_eq!(app.chart.state().price_scale().range().max, 210.0);
+        let study = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+        app.object_tree.state_mut().select(ids[0]);
+        app.object_tree
+            .state_mut()
+            .toggle_selection(indicator_tree_id(study));
+        let sources = app.build_source_items();
+        app.handle_object_tree(ObjectTreeAction::DeleteSelected, &sources);
+        assert_eq!(app.chart.drawings().drawings.len(), 2);
+        assert!(!app.chart.indicators().any(|(id, _)| id == study));
+    }
 
     #[test]
     fn opening_settings_keeps_the_charts_current_display() {

@@ -2,6 +2,8 @@
 //!
 //! Renders the hierarchical tree of indicators and drawings.
 
+use crate::icons::icons;
+use crate::ui_kit::{IconButton, buttons::ButtonSize};
 use egui::{RichText, ScrollArea, Ui};
 
 use egui::Vec2;
@@ -156,8 +158,17 @@ fn render_group(
     // Group header
     ui.horizontal(|ui| {
         // Expand/collapse button
-        let icon = if is_expanded { "v" } else { ">" };
-        if ui.small_button(icon).clicked() {
+        let icon = if is_expanded {
+            &icons::CHEVRON_DOWN
+        } else {
+            &icons::CHEVRON_RIGHT
+        };
+        if IconButton::new(icon)
+            .size(ButtonSize::SM)
+            .tooltip(format!("Toggle {name}"))
+            .show(ui)
+            .clicked()
+        {
             state.toggle_group(name);
         }
 
@@ -167,13 +178,20 @@ fn render_group(
             .1;
         source_type
             .icon()
-            .as_image(Vec2::splat(DESIGN_TOKENS.sizing.icon_sm))
+            .as_image_tinted(
+                Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
+                ui.visuals().widgets.noninteractive.fg_stroke.color,
+            )
             .paint_at(ui, icon_rect);
         ui.strong_label(name);
 
         // Item count badge
         if config.show_item_counts {
-            ui.hint_label(format!("({count})"));
+            ui.label(
+                RichText::new(format!("({count})"))
+                    .size(11.0)
+                    .color(ui.visuals().weak_text_color()),
+            );
         }
     });
 

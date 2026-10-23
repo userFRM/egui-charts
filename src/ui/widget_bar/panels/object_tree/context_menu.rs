@@ -114,7 +114,7 @@ pub(super) fn render_item_menu(
 pub fn handle_keyboard_shortcuts(
     ui: &Ui,
     state: &mut ObjectTreeState,
-    _source_ids: &[usize],
+    sources: &[SourceItem],
 ) -> ObjectTreeAction {
     if ui.memory(|m| m.focused().is_some()) || egui::Popup::is_any_open(ui.ctx()) {
         return ObjectTreeAction::None;
@@ -150,8 +150,9 @@ pub fn handle_keyboard_shortcuts(
         }
         if let Some(&id) = state.selected_ids.iter().next()
             && i.consume_key(modifiers, Key::F2)
+            && let Some(source) = sources.iter().find(|s| s.id == id)
         {
-            state.renaming_id = Some(id);
+            state.start_rename(id, source.display_name());
         }
         ObjectTreeAction::None
     })
@@ -199,7 +200,11 @@ mod tests {
                     if focused {
                         ui.memory_mut(|m| m.request_focus(egui::Id::unique("other field")));
                     }
-                    let action = handle_keyboard_shortcuts(ui, &mut state, &[1]);
+                    let action = handle_keyboard_shortcuts(
+                        ui,
+                        &mut state,
+                        &[SourceItem::data_source(1, "Name")],
+                    );
                     assert_eq!(action.is_none(), focused, "{key:?}, focused={focused}");
                     assert_eq!(
                         ui.input(|i| i.key_pressed(key)),
