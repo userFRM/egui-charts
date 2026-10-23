@@ -119,6 +119,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Charts defer initial visible-bar and resize calculations while the plot is collapsed, preserving zoom and the right edge when a hidden or tiny canvas becomes visible. Pixel right offsets use the first usable bar spacing, and locked resizes retain fractional visible ranges. ([#781](https://github.com/userFRM/egui-charts/issues/781))
+
 - Study selection follows histogram and circle geometry in overlays and panes. The applied-study editor keeps its controls and footer inside narrow and short windows in both themes. ([#169](https://github.com/userFRM/egui-charts/issues/169))
 
 - Study output uses `IndicatorValues`, one contiguous `Vec<f64>` per output line, with NaN for missing values. Rendering, hit testing, snapping and autoscaling read the columns directly. Migration: `Indicator::values` implementations return `&IndicatorValues`; read `line(index)`, `columns()` or `value(line, bar)` instead of indexing rows. `to_rows()` explicitly allocates the former owned row format for exports. Custom calculation closures still accept owned rows and their stored results are converted to columns. Numeric definitions and streaming update results are unchanged. ([#180](https://github.com/userFRM/egui-charts/issues/180))
