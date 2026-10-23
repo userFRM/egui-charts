@@ -374,7 +374,6 @@ impl DrawingToolbar {
         let response = draw_tool_button(ui, cursor_icon, cursor_tooltip, is_selected);
         self.menu_button(ui, "Cursors", &response);
 
-        ui.add_space(self.config.padding);
         action
     }
 
@@ -461,8 +460,6 @@ impl DrawingToolbar {
             // Simple button without arrow
             let response = draw_tool_button(ui, tool_icon, tooltip, has_sel);
             self.menu_button(ui, category, &response);
-
-            ui.add_space(self.config.padding);
         }
 
         action
@@ -482,7 +479,6 @@ impl DrawingToolbar {
             self.select_tool(DrawingToolType::Measure);
             action = a;
         }
-        ui.space_sm();
 
         // Zoom In
         if let Some(a) = ZoomInButton::show(ui, self.state.zoom_mode_active) {
@@ -491,11 +487,10 @@ impl DrawingToolbar {
         }
 
         // Zoom Out (only if history)
-        if self.state.has_zoom_history {
-            ui.space_sm();
-            if let Some(a) = ZoomOutButton::show(ui) {
-                action = a;
-            }
+        if self.state.has_zoom_history
+            && let Some(a) = ZoomOutButton::show(ui)
+        {
+            action = a;
         }
 
         // Separator
@@ -504,27 +499,23 @@ impl DrawingToolbar {
         // Magnet button
         let response = MagnetButton::show(ui, self.state.magnet_mode);
         self.menu_button(ui, "Magnet", &response);
-        ui.space_sm();
 
         // Keep Drawing
         if let Some(a) = StayInDrawingButton::show(ui, self.state.stay_in_drawing_mode) {
             self.state.stay_in_drawing_mode = !self.state.stay_in_drawing_mode;
             action = a;
         }
-        ui.space_sm();
 
         // Lock All Drawings
         if let Some(a) = LockButton::show(ui, self.state.lock_all) {
             self.state.lock_all = !self.state.lock_all;
             action = a;
         }
-        ui.space_sm();
 
         // Templates
         if !self.hidden.contains(&Control::Templates) {
             let response = TemplatesButton::show(ui);
             self.menu_button(ui, "Templates", &response);
-            ui.space_sm();
         }
 
         // Hide dropdown
@@ -537,7 +528,6 @@ impl DrawingToolbar {
         // Remove dropdown
         let response = RemoveMenu::show(ui);
         self.menu_button(ui, "Remove", &response);
-        ui.space_sm();
 
         action
     }
@@ -1003,6 +993,77 @@ impl DrawingToolbar {
 mod tests {
     use super::*;
     use egui::{Context, Event, Key, Modifiers, RawInput};
+
+    /// The bar keeps a 28 px icon grid on a 38 px pitch, with the same selected fill.
+    #[test]
+    fn drawing_bar_icons_keep_their_grid_pitch_and_state_colours() {
+        use egui::{Color32, Pos2, Shape, vec2};
+
+        for selected in [None, Some(DrawingToolType::TrendLine)] {
+            let ctx = Context::default();
+            egui_extras::install_image_loaders(&ctx);
+            let mut theme = crate::theme::Theme::dark();
+            theme.ui.text = Color32::GREEN;
+            theme.ui.accent_text = Color32::YELLOW;
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut toolbar = DrawingToolbar::new();
+            toolbar.state.sel_tool = selected;
+            let mut origin = Pos2::ZERO;
+            let mut output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(52.0, 1200.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    origin = ui.cursor().min;
+                    toolbar.render_toolbar_content(ui);
+                },
+            );
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let icons: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.brush.is_some() => Some((r.rect, r.fill)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(icons.len(), 16);
+            for (i, y) in [
+                23.0, 61.0, 99.0, 137.0, 175.0, 213.0, 251.0, 289.0, 344.0, 382.0, 437.0, 475.0,
+                513.0, 551.0, 589.0, 644.0,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let colour = if (i == 0 && selected.is_none()) || (i == 1 && selected.is_some()) {
+                    theme.ui.accent_text
+                } else {
+                    theme.ui.text
+                };
+                assert_eq!(
+                    icons[i],
+                    (
+                        Rect::from_center_size(origin + vec2(26.0, y), vec2(28.0, 28.0)),
+                        colour
+                    ),
+                    "icon {i}, selected {selected:?}"
+                );
+            }
+            let selected_y = if selected.is_none() { 6.0 } else { 44.0 };
+            assert!(shapes.iter().any(|s| matches!(
+                &s.shape,
+                Shape::Rect(r) if r.fill == theme.ui.accent
+                    && r.rect == Rect::from_min_size(origin + vec2(9.0, selected_y), vec2(34.0, 34.0))
+            )));
+            assert!(shapes.iter().any(|s| matches!(
+                &s.shape,
+                Shape::Rect(r) if r.fill == Color32::from_gray(74)
+                    && r.rect == Rect::from_min_size(origin + vec2(9.0, 316.0), vec2(33.0, 1.0))
+            )));
+        }
+    }
 
     /// The name dialog that "Save as Template..." opens, with its name still empty, stays open
     /// until it is cancelled.
