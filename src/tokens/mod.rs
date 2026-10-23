@@ -175,7 +175,6 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
             shortcut_width: 70.0,
             char_width: 7.5,
             screen_edge_padding: 4.0,
-            submenu_arrow_font_size: 8.0,
         },
         symbol_header: SymbolHeaderSizingTokens {
             height: 28.0,

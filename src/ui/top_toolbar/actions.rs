@@ -7,8 +7,6 @@ use super::components::layout_menu::LayoutAction;
 pub enum TopToolbarAction {
     /// No action taken
     None,
-    /// Open main menu (burger menu)
-    OpenMenu,
     /// Open symbol search dialog
     OpenSymbolSearch,
     /// Open compare/add symbol dialog
@@ -25,8 +23,6 @@ pub enum TopToolbarAction {
     CreateAlert,
     /// Toggle replay mode on/off
     ToggleReplay,
-    /// Open the trading panel
-    OpenTradingPanel,
     /// Undo last action
     Undo,
     /// Redo last undone action
@@ -37,8 +33,6 @@ pub enum TopToolbarAction {
     OpenSettings,
     /// Save current chart layout
     Save,
-    /// Publish chart idea
-    Publish,
     /// Toggle fullscreen mode
     ToggleFullscreen,
     /// Toggle light/dark theme

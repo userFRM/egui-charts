@@ -3,8 +3,8 @@
 //!
 //! The chart engine is pure: widgets return `Action` enums and never touch the
 //! chart themselves. This controller is the host half that consumes those
-//! actions. Controls that need a broker, an account or a multi-chart layout show
-//! a notice instead, and the context menu entries it does not model do nothing.
+//! actions. Controls that need a trading account or template storage show a
+//! notice instead, and the context menu entries it does not model do nothing.
 
 use eframe::egui;
 use egui_charts::Chart;
@@ -697,21 +697,10 @@ impl DemoApp {
             TopToolbarAction::Save => self.export_dialog.open(),
             // Light/dark toggle is a real, cheap visual change.
             TopToolbarAction::ThemeToggle => self.toggle_theme(),
-            // The burger menu and layout-setup button both open the chart-object
-            // panel in this single-chart context.
-            TopToolbarAction::OpenMenu | TopToolbarAction::Layout(_) => {
+            // The layout-setup button opens the chart-object panel in this
+            // single-chart context.
+            TopToolbarAction::Layout(_) => {
                 self.open_panel = Some(SidePanel::ObjectTree);
-            }
-            // The remaining controls need a broker (trading) or a backend
-            // (publish). The
-            // library toolbar renders them unconditionally and exposes no
-            // per-button visibility flag, so rather than swallow the click we
-            // surface an honest notice describing the missing dependency.
-            TopToolbarAction::OpenTradingPanel => {
-                self.notify("Trading panel needs a broker connection, which the demo does not have")
-            }
-            TopToolbarAction::Publish => {
-                self.notify("Publishing needs an account backend, which the demo does not have")
             }
             TopToolbarAction::None => {}
         }
@@ -1108,8 +1097,7 @@ impl DemoApp {
             ContextMenuAction::CopyPrice(price) => {
                 log::info!("[demo] copy price {price}");
             }
-            // Remaining items (paste, table view, broker orders) are not
-            // modeled in this demo.
+            // Sell limit and buy stop need a broker, which the demo does not have.
             _ => {}
         }
     }
@@ -1133,9 +1121,7 @@ impl DemoApp {
         match action {
             DrawingContextMenuAction::Delete => dm.delete_drawing(id),
             DrawingContextMenuAction::Edit => self.open_drawing_props_for(id),
-            DrawingContextMenuAction::Clone | DrawingContextMenuAction::Copy => {
-                self.clone_drawing(id)
-            }
+            DrawingContextMenuAction::Clone => self.clone_drawing(id),
             DrawingContextMenuAction::Lock => {
                 if let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id) {
                     d.locked = !d.locked;

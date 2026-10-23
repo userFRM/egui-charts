@@ -32,8 +32,6 @@ pub enum ContextMenuAction {
     None,
     /// Copy price value to clipboard
     CopyPrice(f64),
-    /// Paste from clipboard
-    Paste,
     /// Add a price alert on a symbol
     AddAlert { symbol: String, price: f64 },
     /// Place a sell limit order
@@ -48,12 +46,6 @@ pub enum ContextMenuAction {
         price: f64,
         quantity: u32,
     },
-    /// Add a generic order
-    AddOrder { symbol: String, price: f64 },
-    /// Lock the vertical cursor line at a time position
-    LockVerticalCursor,
-    /// Switch to table view
-    TableView,
     /// Open the object tree panel
     ObjectTree,
     /// Remove all indicators from the chart
@@ -85,7 +77,6 @@ pub struct MenuItem<A = ContextMenuAction> {
     pub enabled: bool,
     /// Destructive rows paint in the theme's danger colours.
     pub danger: bool,
-    pub is_submenu: bool,
 }
 
 impl<A> MenuItem<A> {
@@ -97,7 +88,6 @@ impl<A> MenuItem<A> {
             action,
             enabled: true,
             danger: false,
-            is_submenu: false,
         }
     }
 
@@ -122,10 +112,6 @@ impl<A> MenuItem<A> {
         self
     }
 
-    pub fn submenu(mut self) -> Self {
-        self.is_submenu = true;
-        self
-    }
 }
 
 /// Menu entry - either an item or separator
@@ -227,22 +213,16 @@ pub(crate) fn show_menu<A: Clone>(
         job.wrap = TextWrapping::truncate_at_width(max_width);
         ctx.fonts_mut(|f| f.layout_job(job))
     };
-    // Each item's label and its trailing text: the shortcut, or the submenu arrow.
+    // Each item's label and its shortcut.
     let rows: Vec<_> = entries
         .iter()
         .map(|entry| match entry {
-            MenuEntry::Item(item) => {
-                let trailing = match item.shortcut {
-                    Some(s) => Some((ctx.format_shortcut(&s), t.shortcut_font_size)),
-                    None => item
-                        .is_submenu
-                        .then(|| (">".to_owned(), t.submenu_arrow_font_size)),
-                };
-                Some((
-                    layout(item.label.clone(), t.font_size, MAX_LABEL_WIDTH),
-                    trailing.map(|(text, size)| layout(text, size, f32::INFINITY)),
-                ))
-            }
+            MenuEntry::Item(item) => Some((
+                layout(item.label.clone(), t.font_size, MAX_LABEL_WIDTH),
+                item.shortcut.map(|s| {
+                    layout(ctx.format_shortcut(&s), t.shortcut_font_size, f32::INFINITY)
+                }),
+            )),
             MenuEntry::Separator => None,
         })
         .collect();
@@ -389,7 +369,7 @@ fn draw_item<A>(
         ui.painter().galley(pos, trailing, trailing_color);
     }
 
-    response.clicked() && item.enabled && !item.is_submenu
+    response.clicked() && item.enabled
 }
 
 fn draw_separator(ui: &mut Ui, theme: &Theme, width: f32, pad: f32) {
@@ -492,7 +472,6 @@ impl ChartContextMenu {
                 format!("Copy price {price_str}"),
                 ContextMenuAction::CopyPrice(self.click_price),
             )),
-            MenuEntry::Item(MenuItem::new("Paste", ContextMenuAction::Paste)),
             MenuEntry::Separator,
         ];
         // Trading items need an instrument, so they are offered only with a symbol.
@@ -531,28 +510,11 @@ impl ChartContextMenu {
                     )
                     .with_icon(&embedded_icons::LONG_POS),
                 ),
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add order on {symbol} at {price_str}…"),
-                        ContextMenuAction::AddOrder {
-                            symbol: symbol.clone(),
-                            price: self.click_price,
-                        },
-                    )
-                    .with_icon(&embedded_icons::PLUS),
-                ),
                 MenuEntry::Separator,
             ]);
         }
         items.extend([
-            // Cursor section
-            MenuEntry::Item(MenuItem::new(
-                "Lock vertical cursor line by time",
-                ContextMenuAction::LockVerticalCursor,
-            )),
-            MenuEntry::Separator,
             // View section
-            MenuEntry::Item(MenuItem::new("Table view", ContextMenuAction::TableView)),
             MenuEntry::Item(MenuItem::new("Object Tree…", ContextMenuAction::ObjectTree)),
             MenuEntry::Separator,
             // Indicator management

@@ -28,8 +28,6 @@ pub enum DrawingContextMenuAction {
     Lock,
     /// Toggle drawing visibility
     Hide,
-    /// Copy drawing to clipboard
-    Copy,
     /// Clone drawing with offset
     Clone,
     /// Delete drawing
@@ -149,8 +147,6 @@ impl DrawingContextMenu {
                 }),
             ),
             MenuEntry::Separator,
-            // Clipboard operations
-            MenuEntry::Item(MenuItem::new("Copy", DrawingContextMenuAction::Copy)),
             MenuEntry::Item(MenuItem::new("Clone", DrawingContextMenuAction::Clone)),
             MenuEntry::Separator,
             // Delete (last item, potentially destructive)

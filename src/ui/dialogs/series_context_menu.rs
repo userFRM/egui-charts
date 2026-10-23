@@ -1,6 +1,6 @@
 //! Series context menu - right-click menu when series is selected.
 //!
-//! Provides a full menu structure with icons, shortcuts, and submenus.
+//! Offers an alert, an indicator, the clicked price and the series settings.
 
 use crate::chart::series::SeriesId;
 use crate::config::KeyboardAction;
@@ -21,32 +21,10 @@ pub enum SeriesContextMenuAction {
     None,
     /// Add a price alert
     AddAlert,
-    /// Add a trading order
-    AddOrder,
     /// Add an indicator
     AddIndicator,
-    /// Add a financial metric overlay
-    AddFinancialMetric,
-    /// Show security information
-    SecurityInfo,
-    /// Show metrics submenu
-    Metrics,
     /// Copy the clicked price to clipboard
     CopyPrice,
-    /// Paste from clipboard
-    Paste,
-    /// Switch to table view
-    TableView,
-    /// Change visual ordering of overlays
-    VisualOrder,
-    /// Move series to another pane
-    MoveTo,
-    /// Pin series to a specific price scale
-    PinToScale,
-    /// Add symbol to a watchlist
-    AddToWatchlist,
-    /// Add a text note for the symbol
-    AddTextNote,
     /// Open series settings dialog
     OpenSettings,
 }
@@ -135,25 +113,16 @@ impl SeriesContextMenu {
         };
 
         let mut items = Vec::new();
-        // Alerts, orders, watchlists and notes need an instrument.
+        // An alert needs an instrument.
         if has_symbol {
-            items.extend([
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add alert on {symbol} at {price_str}…"),
-                        SeriesContextMenuAction::AddAlert,
-                    )
-                    .with_icon(&embedded_icons::ALERTS)
-                    .with_shortcut(KeyboardAction::CreateAlert.shortcut()),
-                ),
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add order on {symbol} at {price_str}…"),
-                        SeriesContextMenuAction::AddOrder,
-                    )
-                    .with_icon(&embedded_icons::PLUS),
-                ),
-            ]);
+            items.push(MenuEntry::Item(
+                MenuItem::new(
+                    format!("Add alert on {symbol} at {price_str}…"),
+                    SeriesContextMenuAction::AddAlert,
+                )
+                .with_icon(&embedded_icons::ALERTS)
+                .with_shortcut(KeyboardAction::CreateAlert.shortcut()),
+            ));
         }
         items.extend([
             MenuEntry::Item(
@@ -163,78 +132,17 @@ impl SeriesContextMenu {
                 )
                 .with_icon(&embedded_icons::INDICATORS),
             ),
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Add financial metric{}…", of_symbol("for")),
-                    SeriesContextMenuAction::AddFinancialMetric,
-                )
-                .with_icon(&embedded_icons::BAR_CHART),
-            ),
             MenuEntry::Separator,
-            // Info section
-            MenuEntry::Item(
-                MenuItem::new("Security info…", SeriesContextMenuAction::SecurityInfo)
-                    .with_icon(&embedded_icons::INFO),
-            ),
-            MenuEntry::Item(
-                MenuItem::new("Metrics", SeriesContextMenuAction::Metrics)
-                    .with_icon(&embedded_icons::LAYOUT_GRID)
-                    .submenu(),
-            ),
-            MenuEntry::Separator,
-            // Edit section
             MenuEntry::Item(MenuItem::new(
                 format!("Copy price {price_str}"),
                 SeriesContextMenuAction::CopyPrice,
             )),
-            MenuEntry::Item(MenuItem::new("Paste", SeriesContextMenuAction::Paste).disabled()),
             MenuEntry::Separator,
-            // View section
-            MenuEntry::Item(MenuItem::new(
-                "Table view",
-                SeriesContextMenuAction::TableView,
-            )),
-            MenuEntry::Separator,
-            // Layout section
             MenuEntry::Item(
-                MenuItem::new("Visual order", SeriesContextMenuAction::VisualOrder).submenu(),
+                MenuItem::new("Settings…", SeriesContextMenuAction::OpenSettings)
+                    .with_icon(&embedded_icons::SETTINGS_GEAR),
             ),
-            MenuEntry::Item(MenuItem::new("Move to", SeriesContextMenuAction::MoveTo).submenu()),
-            MenuEntry::Item(
-                MenuItem::new(
-                    "Pin to scale (now right)",
-                    SeriesContextMenuAction::PinToScale,
-                )
-                .submenu(),
-            ),
-            MenuEntry::Separator,
         ]);
-        if has_symbol {
-            items.extend([
-                // Watchlist & notes section
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add {symbol} to watchlist"),
-                        SeriesContextMenuAction::AddToWatchlist,
-                    )
-                    .with_icon(&embedded_icons::WATCHLIST)
-                    .submenu(),
-                ),
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add text note for {symbol}"),
-                        SeriesContextMenuAction::AddTextNote,
-                    )
-                    .with_icon(&embedded_icons::TEXT),
-                ),
-                MenuEntry::Separator,
-            ]);
-        }
-        // Settings (last item)
-        items.push(MenuEntry::Item(
-            MenuItem::new("Settings…", SeriesContextMenuAction::OpenSettings)
-                .with_icon(&embedded_icons::SETTINGS_GEAR),
-        ));
         items
     }
 

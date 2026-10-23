@@ -1,21 +1,21 @@
 //! Top Toolbar Widget
 //!
 //! The symbol search pill, interval and chart type dropdowns, indicators, alert, replay,
-//! undo and redo on the left; theme, layouts, save, search, settings, fullscreen, screenshot,
-//! trade and publish on the right. When the strip is too narrow, Indicators, Alert and Replay
+//! undo and redo on the left; theme, layouts, save, search, settings, fullscreen and screenshot
+//! on the right. When the strip is too narrow, Indicators, Alert and Replay
 //! lose their labels, then the least important controls move into an overflow menu at the right.
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 use crate::ui_kit::list_item::ListItem;
-use egui::{Rect, Sense, Ui, Vec2};
+use egui::Ui;
 
 use crate::ext::UiExt;
 
 use super::{
     actions::TopToolbarAction,
-    buttons::{PillButtonFilled, PillButtonOutlined, TextIconButton, ToolbarIconButton, Trigger},
+    buttons::{TextIconButton, ToolbarIconButton, Trigger},
     components::{
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
         layout_menu::{LayoutAction, LayoutMenu},
@@ -30,7 +30,6 @@ use crate::tokens::DESIGN_TOKENS;
 /// A place in the strip, holding one control.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Slot {
-    Menu,
     Symbol,
     Compare,
     Interval,
@@ -48,15 +47,12 @@ enum Slot {
     Settings,
     Fullscreen,
     Screenshot,
-    Trade,
-    Publish,
 }
 
 use Slot as S;
 
 /// Left part of the strip, in groups divided by separators.
 const LEFT: &[&[Slot]] = &[
-    &[S::Menu],
     &[S::Symbol, S::Compare],
     &[S::Interval],
     &[S::ChartType],
@@ -73,17 +69,12 @@ const RIGHT: &[&[Slot]] = &[
         S::Settings,
         S::Fullscreen,
         S::Screenshot,
-        S::Trade,
-        S::Publish,
     ],
 ];
 
 /// Controls that move into the overflow menu when the strip is too narrow, the first to go
 /// first. Quick search opens the same dialog as the symbol pill.
-const OVERFLOW_ORDER: [Slot; 11] = [
-    S::Menu,
-    S::Trade,
-    S::Publish,
+const OVERFLOW_ORDER: [Slot; 8] = [
     S::Compare,
     S::Templates,
     S::Save,
@@ -120,7 +111,6 @@ impl Slot {
     fn entry(self) -> Option<(&'static Icon, &'static str, TopToolbarAction)> {
         use TopToolbarAction as A;
         Some(match self {
-            S::Menu => (&embedded_icons::MENU, "Menu", A::OpenMenu),
             S::Symbol => (
                 &embedded_icons::QUICK_SEARCH,
                 "Symbol search",
@@ -168,12 +158,6 @@ impl Slot {
                 "Take Screenshot",
                 A::TakeScreenshot,
             ),
-            S::Trade => (
-                &embedded_icons::LONG_POS,
-                "Open Trading Panel",
-                A::OpenTradingPanel,
-            ),
-            S::Publish => (&embedded_icons::IDEAS, "Publish Idea", A::Publish),
             S::Interval | S::ChartType => return None,
         })
     }
@@ -290,14 +274,11 @@ impl TopToolbar {
     fn control_width(&self, ui: &Ui, control: Slot, compact: bool, symbol: &str) -> f32 {
         let icon_button = ButtonSize::MD.pixels();
         match control {
-            S::Menu => DESIGN_TOKENS.sizing.button_dialog,
             S::Symbol => Self::symbol_trigger(symbol).width(ui),
             S::Interval => self.timeframe_selector.trigger().width(ui),
             S::ChartType => self.chart_type_selector.trigger().width(ui),
             S::Compare | S::Templates | S::Layouts => self.config.btn_size,
             S::Save => Self::save_button(&self.config).width(ui),
-            S::Trade => Self::trade_button().width(ui),
-            S::Publish => Self::publish_button().width(ui),
             c if c.compacts() && !compact => c.entry().map_or(icon_button, |(_, label, _)| {
                 labelled_button_width(ui, label)
             }),
@@ -385,7 +366,6 @@ impl TopToolbar {
         action: &mut TopToolbarAction,
     ) {
         match control {
-            S::Menu => return self.show_menu_button(ui, action),
             S::Interval => {
                 if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui) {
                     *action = TopToolbarAction::IntervalSelected(tf.display());
@@ -409,8 +389,6 @@ impl TopToolbar {
                 ToolbarIconButton::new(icon, label, &self.config).show(ui)
             }
             S::Save => Self::save_button(&self.config).show(ui),
-            S::Trade => Self::trade_button().show(ui),
-            S::Publish => Self::publish_button().show(ui),
             S::Undo => IconButton::new(icon)
                 .enabled(self.state.can_undo)
                 .tooltip(if self.state.can_undo {
@@ -468,51 +446,6 @@ impl TopToolbar {
     fn save_button(config: &TopToolbarConfig) -> TextIconButton<'static> {
         TextIconButton::new("Save", &embedded_icons::CHEVRON_DOWN, "Save Chart", config)
     }
-
-    fn trade_button() -> PillButtonFilled {
-        PillButtonFilled::new("Trade", "Open Trading Panel")
-    }
-
-    fn publish_button() -> PillButtonOutlined {
-        PillButtonOutlined::new("Publish", "Publish Idea")
-    }
-
-    /// Menu button (burger icon)
-    /// Click area centered in ~52px width, with optional notification badge
-    fn show_menu_button(&self, ui: &mut Ui, action: &mut TopToolbarAction) {
-        let btn_size = DESIGN_TOKENS.sizing.button_dialog;
-        let icon_size = DESIGN_TOKENS.sizing.icon_lg;
-
-        let (rect, response) = ui.allocate_exact_size(Vec2::splat(btn_size), Sense::click());
-
-        if ui.is_rect_visible(rect) {
-            // Hover background
-            if response.hovered() {
-                ui.painter().rect_filled(
-                    rect,
-                    DESIGN_TOKENS.rounding.button,
-                    ui.visuals().widgets.hovered.bg_fill,
-                );
-            }
-
-            // Menu icon
-            let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
-            let icon_color = if response.hovered() {
-                ui.visuals().widgets.active.fg_stroke.color
-            } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
-            };
-            embedded_icons::MENU
-                .as_image_tinted(Vec2::splat(icon_size), icon_color)
-                .paint_at(ui, icon_rect);
-        }
-
-        if response.clicked() {
-            *action = TopToolbarAction::OpenMenu;
-        }
-
-        response.on_hover_text("Menu");
-    }
 }
 
 impl TopToolbar {
@@ -525,7 +458,7 @@ impl TopToolbar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Event, PointerButton, Pos2, RawInput, pos2, vec2};
+    use egui::{Event, PointerButton, Pos2, RawInput, Rect, pos2, vec2};
 
     /// Actions from clicking the strip every 4 px along its middle, one click at a time.
     fn click_along(ctx: &egui::Context, toolbar: &mut TopToolbar) -> Vec<TopToolbarAction> {

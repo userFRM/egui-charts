@@ -198,7 +198,6 @@ pub struct ContextMenuSizingTokens {
     pub shortcut_width: f32,
     pub char_width: f32,
     pub screen_edge_padding: f32,
-    pub submenu_arrow_font_size: f32,
 }
 
 #[derive(Clone, Debug)]
