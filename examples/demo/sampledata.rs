@@ -140,35 +140,6 @@ impl DemoSymbol {
     }
 }
 
-/// Map a top-toolbar chart-style label to a `ChartType`.
-pub fn chart_type_from_name(name: &str) -> Option<egui_charts::model::ChartType> {
-    use egui_charts::model::ChartType;
-    match name.to_lowercase().as_str() {
-        "bars" => Some(ChartType::Bars),
-        "candles" | "candlestick" => Some(ChartType::Candles),
-        "hollow candles" | "hollow" => Some(ChartType::HollowCandles),
-        "line" => Some(ChartType::Line),
-        "line with markers" => Some(ChartType::LineWithMarkers),
-        "step line" => Some(ChartType::StepLine),
-        "area" => Some(ChartType::Area),
-        "hlc area" => Some(ChartType::HlcArea),
-        "baseline" => Some(ChartType::Baseline),
-        "columns" => Some(ChartType::Columns),
-        "heikin ashi" | "heikin" => Some(ChartType::Heikin),
-        "renko" => Some(ChartType::Renko),
-        "kagi" => Some(ChartType::Kagi),
-        "line break" => Some(ChartType::LineBreak),
-        "point and figure" | "point & figure" => Some(ChartType::PointAndFigure),
-        "range" => Some(ChartType::Range),
-        "high-low" | "high low" => Some(ChartType::HighLow),
-        "volume candles" => Some(ChartType::VolumeCandles),
-        "time price opportunity" | "tpo" | "market profile" => {
-            Some(ChartType::TimePriceOpportunity)
-        }
-        _ => None,
-    }
-}
-
 /// Trading windows shared by the synthetic feed and its session controls.
 pub fn sample_session() -> egui_charts::model::Session {
     use chrono::{

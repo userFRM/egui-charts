@@ -3,9 +3,10 @@
 //! Floating toolbar for object customization.
 
 use crate::ext::UiExt;
-use crate::icons::{Icon, icons};
+use crate::icons::icons;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
+use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2};
 
 /// Action that can be triggered from the floating toolbar
 #[derive(Clone, Debug, PartialEq)]
@@ -182,23 +183,12 @@ impl FloatingSelectionToolbar {
             .order(egui::Order::Foreground)
             .interactable(true)
             .show(ui.ctx(), |ui| {
-                let toolbar_bg = ui.visuals().panel_fill;
-                let border_color = ui.style().visuals.widgets.noninteractive.bg_stroke.color;
-
-                egui::Frame::new()
-                    .fill(toolbar_bg)
-                    .stroke(Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color))
+                egui::Frame::popup(ui.style())
                     .corner_radius(DESIGN_TOKENS.rounding.md)
                     .inner_margin(egui::Margin::symmetric(
                         DESIGN_TOKENS.spacing.md as i8,
                         DESIGN_TOKENS.spacing.sm as i8,
                     ))
-                    .shadow(egui::epaint::Shadow {
-                        offset: [0, 2],
-                        blur: 8,
-                        spread: 0,
-                        color: Color32::from_black_alpha(40),
-                    })
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.sm;
@@ -239,13 +229,20 @@ impl FloatingSelectionToolbar {
                             }
 
                             // Settings button (gear icon)
-                            if Self::render_icon_button(ui, &icons::SETTINGS, "Settings").clicked()
+                            if IconButton::new(&icons::SETTINGS)
+                                .size(ButtonSize::SM)
+                                .tooltip("Settings")
+                                .show(ui)
+                                .clicked()
                             {
                                 inner_action = Some(FloatingToolbarAction::OpenSettings);
                             }
 
                             // Duplicate button
-                            if Self::render_icon_button(ui, &icons::DUPLICATE, "Duplicate")
+                            if IconButton::new(&icons::DUPLICATE)
+                                .size(ButtonSize::SM)
+                                .tooltip("Duplicate")
+                                .show(ui)
                                 .clicked()
                             {
                                 inner_action = Some(FloatingToolbarAction::Duplicate);
@@ -260,7 +257,12 @@ impl FloatingSelectionToolbar {
                                 &icons::UNLOCK
                             };
                             let lock_tooltip = if is_locked { "Unlock" } else { "Lock" };
-                            if Self::render_icon_button(ui, lock_icon, lock_tooltip).clicked() {
+                            if IconButton::new(lock_icon)
+                                .size(ButtonSize::SM)
+                                .tooltip(lock_tooltip)
+                                .show(ui)
+                                .clicked()
+                            {
                                 inner_action = Some(FloatingToolbarAction::ToggleLock);
                             }
 
@@ -271,14 +273,24 @@ impl FloatingSelectionToolbar {
                                 &icons::EYE_HIDE
                             };
                             let vis_tooltip = if is_visible { "Hide" } else { "Show" };
-                            if Self::render_icon_button(ui, vis_icon, vis_tooltip).clicked() {
+                            if IconButton::new(vis_icon)
+                                .size(ButtonSize::SM)
+                                .tooltip(vis_tooltip)
+                                .show(ui)
+                                .clicked()
+                            {
                                 inner_action = Some(FloatingToolbarAction::ToggleVisibility);
                             }
 
                             Self::render_separator(ui);
 
-                            // Delete button (red on hover)
-                            if Self::render_delete_button(ui).clicked() {
+                            // Delete button
+                            if IconButton::new(&icons::TRASH)
+                                .size(ButtonSize::SM)
+                                .tooltip("Delete")
+                                .show(ui)
+                                .clicked()
+                            {
                                 inner_action = Some(FloatingToolbarAction::Delete);
                             }
 
@@ -360,82 +372,128 @@ impl FloatingSelectionToolbar {
             Sense::hover(),
         );
         let painter = ui.painter();
-        let color = ui.style().visuals.widgets.noninteractive.bg_stroke.color;
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
         painter.line_segment(
             [
                 Pos2::new(rect.center().x, rect.min.y),
                 Pos2::new(rect.center().x, rect.max.y),
             ],
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, color.gamma_multiply(0.5)),
+            stroke,
         );
         ui.space_xs();
-    }
-
-    fn render_icon_button(ui: &mut Ui, icon: &Icon, tooltip: &str) -> Response {
-        let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_btn);
-        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
-
-        let painter = ui.painter();
-        let is_hovered = response.hovered();
-
-        // Background with hover effect
-        if is_hovered {
-            painter.rect_filled(
-                rect,
-                DESIGN_TOKENS.rounding.sm,
-                ui.style().visuals.widgets.hovered.bg_fill,
-            );
-        }
-
-        let text_color = if is_hovered {
-            ui.style().visuals.strong_text_color()
-        } else {
-            ui.style().visuals.text_color().gamma_multiply(0.8)
-        };
-        Self::paint_icon(ui, rect, icon, text_color);
-
-        response.on_hover_text(tooltip)
-    }
-
-    fn render_delete_button(ui: &mut Ui) -> Response {
-        let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_btn);
-        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
-
-        let painter = ui.painter();
-        let is_hovered = response.hovered();
-
-        // Red background on hover
-        if is_hovered {
-            painter.rect_filled(
-                rect,
-                DESIGN_TOKENS.rounding.sm,
-                DESIGN_TOKENS.semantic.status.error.gamma_multiply(0.3),
-            );
-        }
-
-        // Icon - red when hovered
-        let text_color = if is_hovered {
-            DESIGN_TOKENS.semantic.status.error
-        } else {
-            ui.style().visuals.text_color().gamma_multiply(0.8)
-        };
-        Self::paint_icon(ui, rect, &icons::TRASH, text_color);
-
-        response.on_hover_text("Delete")
-    }
-
-    fn paint_icon(ui: &Ui, rect: Rect, icon: &Icon, tint: Color32) {
-        let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
-        icon.as_image_tinted(size, tint)
-            .paint_at(ui, Rect::from_center_size(rect.center(), size));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Keyboard navigation announces each action, including the current lock and visibility state.
+    #[test]
+    fn action_buttons_have_accessible_names() {
+        for locked in [false, true] {
+            let ctx = egui::Context::default();
+            let mut toolbar = FloatingSelectionToolbar::new();
+            toolbar.show_at(Pos2::new(100.0, 100.0));
+            toolbar.set_locked(locked);
+            toolbar.set_object_visible(!locked);
+            let mut frame = |tab| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events: if tab {
+                            vec![egui::Event::Key {
+                                key: egui::Key::Tab,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            }]
+                        } else {
+                            vec![]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        toolbar.show(ui);
+                    },
+                )
+            };
+            frame(false).drop_without_applying_deltas();
+            frame(false).drop_without_applying_deltas();
+            for label in [
+                "Settings",
+                "Duplicate",
+                if locked { "Unlock" } else { "Lock" },
+                if locked { "Show" } else { "Hide" },
+                "Delete",
+            ] {
+                let mut output = frame(true);
+                let events = std::mem::take(&mut output.platform_output.events);
+                output.drop_without_applying_deltas();
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| { event.widget_info().label.as_deref() == Some(label) }),
+                    "missing accessible name: {label}"
+                );
+            }
+        }
+    }
+
+    /// Floating surfaces and group rules follow each preset's popup and separator visuals.
+    #[test]
+    fn surface_and_separators_follow_the_popup_theme() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let style = ctx.global_style();
+            let mut toolbar = FloatingSelectionToolbar::new();
+            toolbar.show_at(Pos2::new(100.0, 100.0));
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            ctx.run_ui(raw.clone(), |ui| {
+                toolbar.show(ui);
+            })
+            .drop_without_applying_deltas();
+            let mut output = ctx.run_ui(raw, |ui| {
+                toolbar.show(ui);
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let shapes: Vec<_> = shapes
+                .into_iter()
+                .flat_map(|shape| match shape.shape {
+                    egui::Shape::Vec(shapes) => shapes,
+                    shape => vec![shape],
+                })
+                .collect();
+            assert!(shapes.iter().any(|shape| matches!(shape,
+                egui::Shape::Rect(rect) if rect.fill == style.visuals.window_fill()
+                    && rect.stroke == style.visuals.window_stroke
+            )));
+            let shadow = style.visuals.popup_shadow;
+            if shadow != egui::epaint::Shadow::NONE {
+                assert!(shapes.iter().any(|shape| matches!(shape,
+                    egui::Shape::Rect(rect) if rect.fill == shadow.color
+                        && rect.blur_width == f32::from(shadow.blur)
+                )));
+            }
+            let separators = shapes.iter().filter(|shape| matches!(shape,
+                egui::Shape::LineSegment { points, stroke }
+                    if points[0].x == points[1].x
+                        && (points[1].y - points[0].y) == DESIGN_TOKENS.sizing.floating_toolbar.separator_height
+                        && *stroke == style.visuals.widgets.noninteractive.bg_stroke
+            )).count();
+            assert_eq!(separators, 3);
+        }
+    }
 
     /// A viewport smaller than the toolbar (204 x 32 px without colour slots) must not panic and
     /// pins the toolbar to the viewport's min edge on each axis that does not fit.

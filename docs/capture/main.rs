@@ -11,6 +11,8 @@
 #[path = "../../examples/demo/controller.rs"]
 #[expect(dead_code, reason = "the capture tool uses part of the demo")]
 mod controller;
+#[path = "../../examples/demo/panel_alerts.rs"]
+mod panel_alerts;
 #[path = "../../examples/demo/sampledata.rs"]
 #[expect(dead_code, reason = "the capture tool uses part of the demo")]
 mod sampledata;
@@ -19,7 +21,7 @@ use controller::DemoApp;
 use egui::containers::panel::PanelState;
 use egui::{Context, Rect, Vec2, ViewportId, vec2};
 use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
-use egui_charts::model::{Bar, Timeframe};
+use egui_charts::model::{Bar, ChartType as ModelChartType, Timeframe};
 use egui_charts::studies::{self, Indicator};
 use egui_charts::theme::Theme;
 use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
@@ -39,7 +41,7 @@ enum Step {
     /// Pick an interval in the top toolbar's interval menu.
     Interval(Timeframe),
     /// Pick a style in the top toolbar's chart type menu.
-    ChartType(&'static str),
+    ChartType(ModelChartType),
     /// "Remove all indicators" in the drawing toolbar.
     ClearStudies,
     /// Add a study with its default parameters.
@@ -101,10 +103,10 @@ fn scenes() -> Vec<Scene> {
             steps: vec![Symbol(SAMPLE), Drawings(retracement)],
             pointer: Some(vec2(0.62, 0.3)),
         },
-        chart_type("type-heikin-ashi", "Heikin Ashi"),
-        chart_type("type-baseline", "Baseline"),
-        chart_type("type-kagi", "Kagi"),
-        chart_type("type-point-and-figure", "Point and Figure"),
+        chart_type("type-heikin-ashi", ModelChartType::Heikin),
+        chart_type("type-baseline", ModelChartType::Baseline),
+        chart_type("type-kagi", ModelChartType::Kagi),
+        chart_type("type-point-and-figure", ModelChartType::PointAndFigure),
         scene(
             "studies",
             WIDE,
@@ -139,7 +141,7 @@ fn scenes() -> Vec<Scene> {
                 Symbol(SAMPLE),
                 Interval(Timeframe::Min30),
                 ClearStudies,
-                ChartType("TPO"),
+                ChartType(ModelChartType::TimePriceOpportunity),
             ],
         ),
         scene(
@@ -245,9 +247,7 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
     match step {
         Step::Symbol(s) => app.switch_symbol(s),
         Step::Interval(tf) => app.handle_top_toolbar(ctx, TopToolbarAction::IntervalSelected(*tf)),
-        Step::ChartType(t) => {
-            app.handle_top_toolbar(ctx, TopToolbarAction::ChartStyleSelected((*t).into()))
-        }
+        Step::ChartType(t) => app.handle_top_toolbar(ctx, TopToolbarAction::ChartStyleSelected(*t)),
         Step::ClearStudies => app.handle_drawing_toolbar(DrawingToolbarAction::RemoveAllIndicators),
         Step::Study(make) => {
             app.chart.add_indicator(make());

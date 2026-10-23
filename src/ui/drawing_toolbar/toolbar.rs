@@ -65,9 +65,19 @@ impl CursorStateData {
 /// in AppState.drawing, not UI-specific state like expanded menus.
 #[derive(Clone, Debug)]
 pub struct DrawingToolbarDomainState {
+    /// The chart's active drawing tool, or `None` after construction finishes.
     pub sel_tool: Option<DrawingToolType>,
+    /// Whether snapping is enabled.
     pub magnet_mode: bool,
+    /// The snapping strength, retained while snapping is off.
+    pub magnet_type: MagnetType,
+    /// The chart cursor used while the eraser is off.
+    pub current_cursor_type: CursorType,
+    /// Whether the chart is erasing drawings.
+    pub eraser_mode_enabled: bool,
+    /// Whether the active drawing tool remains selected after construction.
     pub stay_in_drawing_mode: bool,
+    /// Default colour for new drawings, in straight RGBA.
     pub drawing_color: [u8; 4],
 }
 
@@ -80,7 +90,7 @@ use super::{
     },
     components::{draw_separator_styled, draw_tool_button, render_svg_at_rect_themed},
     data, icons,
-    state::ToolbarState,
+    state::{MagnetType, ToolbarState},
     submenu_builder::{flyout_id, section_header, show_flyout},
     utilities::{
         HideMenu, LockButton, MagnetButton, MeasureButton, RemoveMenu, StayInDrawingButton,
@@ -129,8 +139,17 @@ impl DrawingToolbar {
     /// reflects the current application state. This makes AppState
     /// the single source of truth for domain state.
     pub fn sync_from_domain_state(&mut self, domain: &DrawingToolbarDomainState) {
+        if domain.sel_tool.is_some()
+            || domain.eraser_mode_enabled
+            || domain.current_cursor_type != self.state.current_cursor_type
+        {
+            self.state.zoom_mode_active = false;
+        }
         self.state.sel_tool = domain.sel_tool;
         self.state.magnet_mode = domain.magnet_mode;
+        self.state.magnet_type = domain.magnet_type;
+        self.state.current_cursor_type = domain.current_cursor_type;
+        self.state.eraser_mode_enabled = domain.eraser_mode_enabled;
         self.state.stay_in_drawing_mode = domain.stay_in_drawing_mode;
         self.state.drawing_color = domain.drawing_color;
     }
@@ -143,6 +162,9 @@ impl DrawingToolbar {
         DrawingToolbarDomainState {
             sel_tool: self.state.sel_tool,
             magnet_mode: self.state.magnet_mode,
+            magnet_type: self.state.magnet_type,
+            current_cursor_type: self.state.current_cursor_type,
+            eraser_mode_enabled: self.state.eraser_mode_enabled,
             stay_in_drawing_mode: self.state.stay_in_drawing_mode,
             drawing_color: self.state.drawing_color,
         }
@@ -625,13 +647,13 @@ impl DrawingToolbar {
         match &action {
             A::SelectTool(tool) => self.select_tool(*tool),
             A::SetCursorType(cursor) => {
+                self.clear_selection();
                 self.state.current_cursor_type = *cursor;
                 self.state.eraser_mode_enabled = false;
-                self.state.zoom_mode_active = false;
             }
             A::ToggleEraserMode => {
+                self.clear_selection();
                 self.state.eraser_mode_enabled = !self.state.eraser_mode_enabled;
-                self.state.zoom_mode_active = false;
             }
             A::ToggleValuesTooltip => {
                 self.state.values_tooltip_on_long_press = !self.state.values_tooltip_on_long_press;
@@ -1003,6 +1025,70 @@ impl DrawingToolbar {
 mod tests {
     use super::*;
     use egui::{Context, Event, Key, Modifiers, RawInput};
+
+    /// Host snapshots restore modes, clear conflicting zoom and retain menus and tool history.
+    #[test]
+    fn domain_snapshots_restore_magnet_cursor_and_eraser_modes() {
+        for (magnet, cursor, eraser, tool, zoom) in [
+            (
+                MagnetType::Weak,
+                CursorType::Arrow,
+                false,
+                Some(DrawingToolType::HorizontalLine),
+                false,
+            ),
+            (MagnetType::Strong, CursorType::Dot, false, None, false),
+            (MagnetType::OHLC, CursorType::Arrow, true, None, false),
+            (MagnetType::Strong, CursorType::Arrow, false, None, true),
+        ] {
+            let mut source = DrawingToolbar::new();
+            source.state.magnet_mode = true;
+            source.state.magnet_type = magnet;
+            source.state.current_cursor_type = cursor;
+            source.state.eraser_mode_enabled = eraser;
+            source.state.sel_tool = tool;
+            let mut target = DrawingToolbar::new();
+            target.select_tool(DrawingToolType::TrendLine);
+            target.clear_selection();
+            target.state.zoom_mode_active = true;
+            target.state.expanded_category = Some("Magnet".into());
+            target.sync_from_domain_state(&source.get_domain_state());
+            assert_eq!(target.state.magnet_type, magnet);
+            assert_eq!(target.state.current_cursor_type, cursor);
+            assert_eq!(target.state.eraser_mode_enabled, eraser);
+            assert!(target.state.magnet_mode);
+            assert_eq!(target.state.sel_tool, tool);
+            assert_eq!(target.state.zoom_mode_active, zoom);
+            assert_eq!(target.state.expanded_category.as_deref(), Some("Magnet"));
+            assert_eq!(
+                target.state.recent.front(),
+                Some(&DrawingToolType::TrendLine)
+            );
+        }
+    }
+
+    /// Cursor, eraser and drawing picks leave the previous mode before a host synchronises.
+    #[test]
+    fn flyout_picks_leave_the_previous_drawing_mode() {
+        use DrawingToolType::TrendLine;
+        use DrawingToolbarAction::{SelectTool, SetCursorType, ToggleEraserMode};
+
+        let mut toolbar = DrawingToolbar::new();
+        toolbar.select_tool(TrendLine);
+        for (action, tool, eraser) in [
+            (SetCursorType(CursorType::Dot), None, false),
+            (SelectTool(TrendLine), Some(TrendLine), false),
+            (ToggleEraserMode, None, true),
+            (SelectTool(TrendLine), Some(TrendLine), false),
+            (ToggleEraserMode, None, true),
+            (ToggleEraserMode, None, false),
+        ] {
+            assert_eq!(toolbar.apply_pick(action.clone()), Some(action));
+            assert_eq!(toolbar.state.sel_tool, tool);
+            assert_eq!(toolbar.state.eraser_mode_enabled, eraser);
+            assert_eq!(toolbar.state.current_cursor_type, CursorType::Dot);
+        }
+    }
 
     /// The bar keeps its grid and utility order, with distinct selection and magnet fills.
     #[test]

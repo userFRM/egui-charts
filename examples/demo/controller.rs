@@ -51,7 +51,7 @@ use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
 
-use crate::sampledata::{DemoSymbol, chart_type_from_name, visible_bars_for_range};
+use crate::sampledata::{DemoSymbol, visible_bars_for_range};
 
 struct SavedIndicators {
     name: String,
@@ -243,6 +243,12 @@ impl DemoApp {
                 tooltip: "Data Window".into(),
                 section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
             });
+        if let Some(preferences) = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "interval_preferences"))
+        {
+            top_toolbar.timeframe_selector.set_preferences(preferences);
+        }
         let mut timeframe_toolbar = TimeframeToolbar::default();
         timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
         timeframe_toolbar.state.timeframe = timeframe;
@@ -859,6 +865,14 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 
 impl eframe::App for DemoApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(
+            storage,
+            "interval_preferences",
+            &self.top_toolbar.timeframe_selector.preferences(),
+        );
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);
@@ -1068,12 +1082,10 @@ impl DemoApp {
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
-            TopToolbarAction::ChartStyleSelected(name) => {
-                if let Some(ct) = chart_type_from_name(&name) {
-                    self.state.chart_type = ct;
-                    self.chart.set_chart_type(ct);
-                    self.size_price_based_charts();
-                }
+            TopToolbarAction::ChartStyleSelected(ct) => {
+                self.state.chart_type = ct;
+                self.chart.set_chart_type(ct);
+                self.size_price_based_charts();
             }
             TopToolbarAction::IntervalSelected(tf) => self.switch_timeframe(tf),
             TopToolbarAction::OpenSymbolSearch | TopToolbarAction::OpenCompare => {
@@ -1152,6 +1164,34 @@ impl DemoApp {
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        use egui_charts::config::CrosshairStyle;
+        use egui_charts::ui::drawing_toolbar::{
+            DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType,
+        };
+        let dm = self.chart.drawings();
+        let magnet_type = if !dm.options.strong_magnet {
+            MagnetType::Weak
+        } else if self.drawing_toolbar.state.magnet_type == MagnetType::OHLC {
+            // OHLC is an alias of strong snapping; retain the user's menu choice.
+            MagnetType::OHLC
+        } else {
+            MagnetType::Strong
+        };
+        self.drawing_toolbar
+            .sync_from_domain_state(&DrawingToolbarDomainState {
+                sel_tool: dm.active_tool,
+                magnet_mode: dm.options.magnet_mode,
+                magnet_type,
+                current_cursor_type: match self.chart.chart_options().crosshair.style {
+                    CrosshairStyle::Full => CursorType::Cross,
+                    CrosshairStyle::Dot => CursorType::Dot,
+                    CrosshairStyle::Arrow => CursorType::Arrow,
+                    CrosshairStyle::Demonstration => CursorType::Demonstration,
+                },
+                eraser_mode_enabled: dm.eraser_mode,
+                stay_in_drawing_mode: dm.stay_in_drawing_mode,
+                drawing_color: dm.options.default_color,
+            });
         let drawings = &self.chart.drawings().drawings;
         self.drawing_toolbar.state.lock_all =
             !drawings.is_empty() && drawings.iter().all(|d| d.locked);
@@ -1462,6 +1502,7 @@ impl DemoApp {
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| {
+                self.timeframe_toolbar.state.date_picker_open = self.date_picker.is_open;
                 let action = self.timeframe_toolbar.show(ui);
                 self.handle_timeframe_toolbar(action);
                 self.show_timeframe_menus(ui.ctx());
@@ -1976,6 +2017,69 @@ fn apply_settings_state(
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// External chart modes and completed drawings are reflected before the toolbar is painted.
+    #[test]
+    fn drawing_toolbar_follows_chart_modes_and_completed_tools() {
+        use egui_charts::config::CrosshairStyle;
+        use egui_charts::drawings::DrawingToolType;
+        use egui_charts::ui::drawing_toolbar::{MagnetType, categories::cursors::CursorType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let frame = |app: &mut DemoApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.show_drawing_toolbar(ui, egui::Color32::BLACK);
+            })
+            .drop_without_applying_deltas();
+        };
+        for (style, cursor, magnet) in [
+            (CrosshairStyle::Full, CursorType::Cross, MagnetType::Weak),
+            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::Strong),
+            (CrosshairStyle::Arrow, CursorType::Arrow, MagnetType::Weak),
+            (
+                CrosshairStyle::Demonstration,
+                CursorType::Demonstration,
+                MagnetType::Strong,
+            ),
+            (CrosshairStyle::Dot, CursorType::Dot, MagnetType::OHLC),
+        ] {
+            if magnet == MagnetType::OHLC {
+                app.drawing_toolbar.state.magnet_type = magnet;
+            }
+            app.chart.set_crosshair_style(style);
+            let dm = app.chart.drawings_mut();
+            dm.options.magnet_mode = true;
+            dm.options.strong_magnet = magnet != MagnetType::Weak;
+            dm.set_active_tool(Some(DrawingToolType::TrendLine));
+            frame(&mut app);
+            assert_eq!(
+                app.drawing_toolbar.state.sel_tool,
+                Some(DrawingToolType::TrendLine)
+            );
+            assert_eq!(app.drawing_toolbar.state.current_cursor_type, cursor);
+            assert!(app.drawing_toolbar.state.magnet_mode);
+            assert_eq!(app.drawing_toolbar.state.magnet_type, magnet);
+            let dm = app.chart.drawings_mut();
+            dm.start_drawing_with_coords(
+                DrawingToolType::TrendLine,
+                egui::pos2(1.0, 2.0),
+                |x| x,
+                f64::from,
+            );
+            dm.add_point_with_coords(egui::pos2(3.0, 4.0), |x| x, f64::from);
+            assert!(dm.active_tool.is_none());
+            frame(&mut app);
+            assert!(app.drawing_toolbar.state.sel_tool.is_none());
+            app.chart.drawings_mut().set_eraser_mode(true);
+            frame(&mut app);
+            assert!(app.drawing_toolbar.state.eraser_mode_enabled);
+            app.chart.drawings_mut().set_eraser_mode(false);
+            app.chart.drawings_mut().options.magnet_mode = false;
+            frame(&mut app);
+            assert!(!app.drawing_toolbar.state.eraser_mode_enabled);
+            assert!(!app.drawing_toolbar.state.magnet_mode);
+        }
+    }
 
     /// A narrow first layout and later resizes retain the configured zoom and live edge.
     #[test]
