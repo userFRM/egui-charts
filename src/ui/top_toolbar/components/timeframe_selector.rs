@@ -33,7 +33,7 @@ impl TimeframeUnit {
     pub fn short_name(&self) -> &'static str {
         match self {
             TimeframeUnit::Second => "S",
-            TimeframeUnit::Minute => "",
+            TimeframeUnit::Minute => "m",
             TimeframeUnit::Hour => "h",
             TimeframeUnit::Day => "D",
             TimeframeUnit::Week => "W",
@@ -65,12 +65,9 @@ impl Timeframe {
         Self { value, unit }
     }
 
-    /// Get display string like "1D", "4h", "15"
+    /// Get display string like "1D", "4h", "15m"
     pub fn display(&self) -> String {
-        match self.unit {
-            TimeframeUnit::Minute => format!("{}", self.value),
-            _ => format!("{}{}", self.value, self.unit.short_name()),
-        }
+        format!("{}{}", self.value, self.unit.short_name())
     }
 
     /// Get long display string like "1 day", "4 hours"

@@ -116,7 +116,7 @@ impl Slot {
                 A::OpenSymbolSearch,
             ),
             S::Compare => (
-                &embedded_icons::PLUS,
+                &embedded_icons::COMPARE_ADD,
                 "Compare or Add Symbol",
                 A::OpenCompare,
             ),
@@ -136,7 +136,7 @@ impl Slot {
                 A::ThemeToggle,
             ),
             S::Layouts => (
-                &embedded_icons::LAYOUT_SETUP,
+                &embedded_icons::LAYOUT_SINGLE,
                 "Manage Layouts",
                 A::Layout(LayoutAction::OpenMenu),
             ),

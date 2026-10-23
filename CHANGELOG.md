@@ -88,6 +88,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Minute intervals retain their unit in the top toolbar. Compare and layout controls use their dedicated glyphs, and demo Search, Trade and Publish controls keep their intended order and sizes.
+
 - The presentation pointer joins successive positions and fades completely while stationary, without restarting an expired trail.
 
 - The demo supplies an independent extended-session price from its fixture. Axis button regression coverage verifies click routing without price scaling or viewport movement.

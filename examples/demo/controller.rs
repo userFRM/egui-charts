@@ -776,31 +776,67 @@ impl DemoApp {
                 let mut search = false;
                 let mut trade = false;
                 let mut publish = false;
-                let action = self.top_toolbar.show_with_slots(ui, &self.state, |ui| {
-                    let response = IconButton::new(&icons::MENU).tooltip("Menu").show(ui);
-                    egui::Popup::menu(&response).show(|ui| {
-                        for (label, action) in [
-                            ("Quick search", TopToolbarAction::OpenSymbolSearch),
-                            ("Switch theme", TopToolbarAction::ThemeToggle),
-                        ] {
-                            if ui.button(label).clicked() {
-                                menu_action = action;
-                                ui.close();
+                let action = self.top_toolbar.show_with_slots(
+                    ui,
+                    &self.state,
+                    |ui| {
+                        let response = IconButton::new(&icons::MENU).tooltip("Menu").show(ui);
+                        egui::Popup::menu(&response).show(|ui| {
+                            for (label, action) in [
+                                ("Quick search", TopToolbarAction::OpenSymbolSearch),
+                                ("Switch theme", TopToolbarAction::ThemeToggle),
+                            ] {
+                                if ui.button(label).clicked() {
+                                    menu_action = action;
+                                    ui.close();
+                                }
                             }
-                        }
-                    });
-                }, |ui| {
-                    search = IconButton::new(&icons::QUICK_SEARCH).tooltip("Quick search").show(ui).clicked();
-                    trade = ui.add(egui::Button::new("Trade").corner_radius(16)).clicked();
-                    ui.add_space(8.0);
-                    publish = ui.add(egui::Button::new("Publish").corner_radius(16)).clicked();
-                    ui.add_space(8.0);
-                });
+                        });
+                    },
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.add_space(8.0);
+                        publish = ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("Publish")
+                                        .size(14.0)
+                                        .color(self.theme.ui.panel_bg),
+                                )
+                                .fill(self.theme.ui.text)
+                                .min_size(egui::vec2(72.0, 28.0))
+                                .corner_radius(16),
+                            )
+                            .clicked();
+                        trade = ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("Trade").size(14.0))
+                                    .fill(bg)
+                                    .stroke(egui::Stroke::new(1.0, self.theme.ui.border))
+                                    .min_size(egui::vec2(60.0, 28.0))
+                                    .corner_radius(16),
+                            )
+                            .clicked();
+                        search = IconButton::new(&icons::QUICK_SEARCH)
+                            .icon_scale(24.0 / 28.0)
+                            .tooltip("Quick search")
+                            .show(ui)
+                            .clicked();
+                    },
+                );
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
-                if search { self.symbol_search.open(); }
-                if trade { self.notify("Connect a trading account to place orders; the demo uses synthetic data"); }
-                if publish { self.export_dialog.open(); }
+                if search {
+                    self.symbol_search.open();
+                }
+                if trade {
+                    self.notify(
+                        "Connect a trading account to place orders; the demo uses synthetic data",
+                    );
+                }
+                if publish {
+                    self.export_dialog.open();
+                }
             });
     }
 
