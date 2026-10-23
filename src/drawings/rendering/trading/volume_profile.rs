@@ -188,7 +188,9 @@ impl Drawing {
         let max_volume = profile.volume[poc];
 
         for (row, &volume) in profile.volume.iter().enumerate() {
-            let (top, bottom) = (y_at_row(row + 1), y_at_row(row));
+            // Ordered on screen: the upper row edge is lower down on an inverted scale.
+            let (upper, lower) = (y_at_row(row + 1), y_at_row(row));
+            let (top, bottom) = (upper.min(lower), upper.max(lower));
             let width = (volume / max_volume) as f32 * max_width;
 
             // Color coding: POC is bright, Value Area is medium, outside is dim
@@ -210,7 +212,7 @@ impl Drawing {
             );
         }
 
-        let rect = Rect::from_min_max(
+        let rect = Rect::from_two_pos(
             Pos2::new(left, y_at_row(profile.volume.len())),
             Pos2::new(right, y_at_row(0)),
         );
@@ -273,9 +275,13 @@ impl Drawing {
             Stroke::new(stroke::HAIRLINE, va_color),
         );
 
+        // Each label sits outside the value area, away from the other line;
+        // the VAH line is the lower one on an inverted scale.
+        let away = if vah_y <= val_y { 8.0 } else { -8.0 };
+
         // VAH label
         painter.text(
-            Pos2::new(rect.max.x - 25.0, vah_y - 8.0),
+            Pos2::new(rect.max.x - 25.0, vah_y - away),
             egui::Align2::CENTER_CENTER,
             "VAH",
             font.clone(),
@@ -291,7 +297,7 @@ impl Drawing {
 
         // VAL label
         painter.text(
-            Pos2::new(rect.max.x - 25.0, val_y + 8.0),
+            Pos2::new(rect.max.x - 25.0, val_y + away),
             egui::Align2::CENTER_CENTER,
             "VAL",
             font,
@@ -509,6 +515,7 @@ fn value_area(volume: &[f64], poc: usize, target: f64) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawings::domain::DrawingToolType;
     use crate::drawings::rendering::sample_bars;
 
     fn assert_close(got: f64, want: f64) {
@@ -607,6 +614,100 @@ mod tests {
                 profile.poc_and_value_area(share),
                 Some((2, value_area)),
                 "share {share}"
+            );
+        }
+    }
+
+    /// The 24 default rows of the sample bars (9 to 15) are 0.25 apart, 12.5 px
+    /// at 50 px per unit, so each row is drawn 11.5 px tall with its 1 px gap,
+    /// inside a box 300 px tall, whichever way up the scale is. The VAH and VAL
+    /// labels sit 8 px outside the value area: beyond the VAH line on the side
+    /// away from the VAL line, and the other way round.
+    #[test]
+    fn volume_profile_rows_are_drawn_on_either_scale_orientation() {
+        let bars = sample_bars();
+        let drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+        let upright = |price: f64| (16.0 - price) as f32 * 50.0;
+        let inverted = |price: f64| (price - 8.0) as f32 * 50.0;
+        for (name, price_to_y) in [
+            ("upright", &upright as &dyn Fn(f64) -> f32),
+            ("inverted", &inverted),
+        ] {
+            let view = ChartView {
+                bars: &bars,
+                revision: 0,
+                bar_to_x: &|x| x,
+                price_to_y,
+            };
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                let painter = egui::Painter::new(
+                    ui.ctx().clone(),
+                    egui::LayerId::background(),
+                    Rect::EVERYTHING,
+                );
+                drawing.draw_volume_profile(&painter, &view, 0, &bars, 100.0, 500.0);
+            });
+            let rects: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Rect(r) if r.rect.min.x == 100.0 => Some((r.rect, r.fill)),
+                    _ => None,
+                })
+                .collect();
+            // The two full-width lines are the value area edges.
+            let mut edges: Vec<f32> = output
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::LineSegment { points, .. }
+                        if points[0].x == 100.0 && points[1].x == 500.0 =>
+                    {
+                        Some(points[0].y)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let label_y = |label: &str| {
+                output.shapes.iter().find_map(|c| match &c.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == label => {
+                        Some(t.pos.y + t.galley.size().y / 2.0)
+                    }
+                    _ => None,
+                })
+            };
+            let (vah_label, val_label) = (label_y("VAH").unwrap(), label_y("VAL").unwrap());
+            output.drop_without_applying_deltas();
+            edges.sort_by(f32::total_cmp);
+            let [top, bottom] = edges[..] else {
+                panic!("{name}: value area edges {edges:?}")
+            };
+            // The higher price, VAH, is the top edge upright and the bottom one inverted.
+            let (want_vah, want_val) = if name == "upright" {
+                (top - 8.0, bottom + 8.0)
+            } else {
+                (bottom + 8.0, top - 8.0)
+            };
+            assert!(
+                (vah_label - want_vah).abs() < 1.0,
+                "{name}: VAH {vah_label}, want {want_vah}"
+            );
+            assert!(
+                (val_label - want_val).abs() < 1.0,
+                "{name}: VAL {val_label}, want {want_val}"
+            );
+            let (boxes, rows): (Vec<_>, Vec<_>) = rects
+                .into_iter()
+                .partition(|&(_, fill)| fill == Color32::TRANSPARENT);
+            assert_eq!(rows.len(), 24, "{name}");
+            for (row, _) in rows {
+                assert!((row.height() - 11.5).abs() < 1e-3, "{name}: {row:?}");
+            }
+            assert_eq!(boxes.len(), 1, "{name}");
+            let outline = boxes[0].0;
+            assert!(
+                (outline.height() - 300.0).abs() < 1e-3,
+                "{name}: {outline:?}"
             );
         }
     }

@@ -64,8 +64,9 @@ where
         // Hit test body
         let body_left = idx_to_x - bar_width / 2.0;
         let body_right = idx_to_x + bar_width / 2.0;
-        let body_top = price_to_y(bar.open.max(bar.close));
-        let body_bottom = price_to_y(bar.open.min(bar.close));
+        // Ordered on screen: the higher price is lower down on an inverted scale.
+        let (open_y, close_y) = (price_to_y(bar.open), price_to_y(bar.close));
+        let (body_top, body_bottom) = (open_y.min(close_y), open_y.max(close_y));
 
         // Ensure minimum body height for doji candles
         let body_top = body_top.min(body_bottom - 2.0);
@@ -86,8 +87,8 @@ where
 
         // Hit test wicks if enabled
         if config.include_wicks {
-            let wick_top = price_to_y(bar.high);
-            let wick_bottom = price_to_y(bar.low);
+            let (high_y, low_y) = (price_to_y(bar.high), price_to_y(bar.low));
+            let (wick_top, wick_bottom) = (high_y.min(low_y), high_y.max(low_y));
 
             // Check if click is near the wick line
             if (click_pos.x - idx_to_x).abs() <= config.line_tolerance
@@ -211,4 +212,47 @@ where
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use chrono::{TimeZone, Utc};
+
+    /// A candle opening at 100, closing at 104, from 92 to 108, on a 90..110
+    /// scale over 500 px: its body centre (102) is at y 200 upright and 300
+    /// inverted, a point on its upper wick (106) at y 100 upright and 400
+    /// inverted. The bar is the last one, at x 800 - 10 / 2 - 1 = 794.
+    #[test]
+    fn clicking_a_candle_hits_it_on_either_scale_orientation() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
+        let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let bars = [Bar::new(t, 100.0, 108.0, 92.0, 104.0, 1.0)];
+        for (inverted, body_y, wick_y) in [(false, 200.0, 100.0), (true, 300.0, 400.0)] {
+            let map = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(90.0, 110.0),
+                0.0,
+                500.0,
+                inverted,
+            );
+            let coords = ChartMapping::new(rect, 10.0, 0, 0, 0.0, map);
+            for (part, y) in [("body", body_y), ("wick", wick_y)] {
+                let hit = hit_test_candles(
+                    Pos2::new(794.0, y),
+                    &bars,
+                    0..1,
+                    &coords,
+                    |price| map.price_to_y(price),
+                    &HitTestConfig::default(),
+                );
+                assert_eq!(
+                    hit.map(|hit| hit.bar_idx),
+                    Some(0),
+                    "{part}, inverted {inverted}"
+                );
+            }
+        }
+    }
 }
