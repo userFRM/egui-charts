@@ -2,6 +2,7 @@
 //!
 //! Includes: font icon, image placeholder, tweet placeholder, and idea placeholder.
 
+use crate::chart::rendering::finite_clip;
 use crate::drawings::domain::Drawing;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -53,14 +54,22 @@ impl Drawing {
                 .gamma_multiply(0.9),
         );
 
-        // Checkerboard pattern (simplified)
+        // Checkerboard pattern (simplified), only the squares the painter can show: the anchors may
+        // make the frame far larger than the screen.
         let check_size = DESIGN_TOKENS.sizing.media.checkerboard_size;
         let check_color = DESIGN_TOKENS.semantic.extended.gray.gamma_multiply(0.8);
         let cols = (width / check_size) as i32;
         let rows = (height / check_size) as i32;
-        for row in 0..rows {
-            for col in 0..cols {
-                if (row + col) % 2 == 0 {
+        let visible = finite_clip(painter).map_or(Rect::NOTHING, |clip| frame_rect.intersect(clip));
+        // Squares overlapping `from..to` px from the frame's corner, within `0..count`; none when
+        // nothing is visible.
+        let span = |from: f32, to: f32, count: i32| {
+            (from / check_size).floor().max(0.0) as i32
+                ..((to / check_size).ceil() as i32).min(count)
+        };
+        for row in span(visible.min.y - pos.y, visible.max.y - pos.y, rows) {
+            for col in span(visible.min.x - pos.x, visible.max.x - pos.x, cols) {
+                if row % 2 == col % 2 {
                     let check_rect = Rect::from_min_size(
                         Pos2::new(
                             pos.x + col as f32 * check_size,
@@ -410,6 +419,50 @@ impl Drawing {
                 Pos2::new(pos.x, pos.y + icon_size / 2.0 + 5.0),
                 DESIGN_TOKENS.rounding.sm,
                 color,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::domain::DrawingToolType;
+    use egui::{Context, LayerId, Painter, RawInput};
+
+    /// A frame far larger than the screen must cost only the checker squares the painter can
+    /// show, also when its clip rect is unbounded (bounded by the 2,000 x 1,000 viewport).
+    #[test]
+    fn checkers_only_the_visible_part_of_a_huge_image() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, egui::vec2(2000.0, 1000.0));
+        let mut drawing = Drawing::new(1, DrawingToolType::Image);
+        drawing.points = vec![Pos2::ZERO, Pos2::new(20_000.0, 20_000.0)];
+        // 10 px squares, half of them dark, plus 10 fixed shapes (fill, border, icon, label, handles).
+        for (clip, dark_squares) in [
+            (
+                Rect::from_min_size(Pos2::ZERO, egui::vec2(1000.0, 1000.0)),
+                5_000,
+            ),
+            (Rect::EVERYTHING, 10_000),
+        ] {
+            let ctx = Context::default();
+            let input = RawInput {
+                screen_rect: Some(viewport),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |_| {
+                drawing.render_image_placeholder(&Painter::new(
+                    ctx.clone(),
+                    LayerId::background(),
+                    clip,
+                ));
+            });
+            let n = output.shapes.len();
+            output.drop_without_applying_deltas();
+            assert!(n > 10, "the visible pattern must still be drawn");
+            assert!(
+                n <= dark_squares + 10,
+                "{n} shapes for {dark_squares} visible squares"
             );
         }
     }

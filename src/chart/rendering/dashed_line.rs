@@ -1,6 +1,20 @@
-//! The dashed-line painter the chart's renderers and the drawing tools share.
+//! The dashed-line painter and the clip bound its loops use, shared by the chart and the drawing tools.
 
-use egui::{Pos2, Stroke};
+use egui::{Pos2, Rect, Stroke};
+
+/// The painter's clip rect, bounded by the viewport when it is unbounded, or `None` when neither is
+/// finite.
+///
+/// The clip is layer-local and may lie outside the viewport (egui::Scene), so the viewport only
+/// bounds an unbounded clip such as Rect::EVERYTHING, keeping loops over the visible area finite.
+pub(crate) fn finite_clip(painter: &egui::Painter) -> Option<Rect> {
+    let clip = painter.clip_rect();
+    if clip.is_finite() {
+        return Some(clip);
+    }
+    let clip = clip.intersect(painter.ctx().viewport_rect());
+    clip.is_finite().then_some(clip)
+}
 
 /// Draw a dashed line between two arbitrary points.
 ///
@@ -15,15 +29,9 @@ pub(crate) fn draw_dashed_line(
     dash_len: f32,
     gap_len: f32,
 ) {
-    // The clip is layer-local and may lie outside the viewport (egui::Scene), so the viewport
-    // only bounds an unbounded clip such as Rect::EVERYTHING, keeping the dash count finite.
-    let mut clip = painter.clip_rect();
-    if !clip.is_finite() {
-        clip = clip.intersect(painter.ctx().viewport_rect());
-        if !clip.is_finite() {
-            return;
-        }
-    }
+    let Some(clip) = finite_clip(painter) else {
+        return;
+    };
     let (x0, y0) = (f64::from(start.x), f64::from(start.y));
     let (dx, dy) = (f64::from(end.x) - x0, f64::from(end.y) - y0);
     let total_len = dx.hypot(dy);
@@ -79,7 +87,7 @@ pub(crate) fn draw_dashed_line(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Color32, Context, LayerId, Painter, RawInput, Rect, emath::TSTransform};
+    use egui::{Color32, Context, LayerId, Painter, RawInput, emath::TSTransform};
 
     /// An endpoint far off screen (a drawing anchored outside a collapsed
     /// price range) must not make the dash loop walk its full length, even
