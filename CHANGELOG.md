@@ -88,6 +88,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Choosing a timezone in the demo updates both the chart and the bottom clock through the existing timezone API.
+
 - The demo Data Window computes absolute and percentage change from the preceding bar, matching the in-pane legend.
 
 - Minute intervals retain their unit in the top toolbar. Compare and layout controls use their dedicated glyphs, and demo Search, Trade and Publish controls keep their intended order and sizes.

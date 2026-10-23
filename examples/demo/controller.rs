@@ -209,12 +209,14 @@ impl DemoApp {
             );
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
-        widget_bar.widgets.push(egui_charts::ui::widget_bar::WidgetBarWidget {
-            id: 1,
-            icon: egui_charts::icons::icons::WATCHLIST,
-            tooltip: "Data Window".into(),
-            section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
-        });
+        widget_bar
+            .widgets
+            .push(egui_charts::ui::widget_bar::WidgetBarWidget {
+                id: 1,
+                icon: egui_charts::icons::icons::WATCHLIST,
+                tooltip: "Data Window".into(),
+                section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
+            });
         let mut timeframe_toolbar = TimeframeToolbar::default();
         timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
         timeframe_toolbar.state.timeframe = timeframe;
@@ -1079,9 +1081,12 @@ impl DemoApp {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
                 SidePanel::DataWindow => {
-                    self.data_window_expanded = egui_charts::ui::widget_bar::panels::object_tree::show_data_window(
-                        ui, &self.build_data_window(), self.data_window_expanded,
-                    );
+                    self.data_window_expanded =
+                        egui_charts::ui::widget_bar::panels::object_tree::show_data_window(
+                            ui,
+                            &self.build_data_window(),
+                            self.data_window_expanded,
+                        );
                 }
             });
     }
@@ -1358,6 +1363,7 @@ impl DemoApp {
                                 std::mem::replace(&mut self.chart, Chart::new(BarData::new()));
                             self.chart = chart.with_chart_options(options);
                             self.chart.apply_synced_time_scale(spacing, offset);
+                            self.timeframe_toolbar.set_timezone(label.to_owned());
                             self.timeframe_toolbar.state.timezone_menu_open = false;
                         }
                     }
