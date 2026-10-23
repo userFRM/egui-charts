@@ -24,7 +24,6 @@ impl Drawing {
 
         let p1 = self.points[0];
         let p2 = self.points[1];
-        let p3 = self.points[2];
 
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
@@ -37,34 +36,35 @@ impl Drawing {
         // Draw first trendline
         painter.line_segment([p1, p2], stroke);
 
-        // Calculate parallel offset vector
-        let dx = p2.x - p1.x;
-        let dy = p2.y - p1.y;
-
-        // Calculate perpendicular distance from p3 to line p1-p2
-        let line_len_sq = dx * dx + dy * dy;
-        if line_len_sq < 1e-6 {
+        let Some([p4, p5]) = self.parallel_channel_second_line() else {
             return; // Degenerate line
-        }
-
-        // Project p3 onto line p1-p2
-        let t = ((p3.x - p1.x) * dx + (p3.y - p1.y) * dy) / line_len_sq;
-        let proj_x = p1.x + t * dx;
-        let proj_y = p1.y + t * dy;
-
-        // Calculate offset
-        let offset_x = p3.x - proj_x;
-        let offset_y = p3.y - proj_y;
-
-        // Draw parallel line
-        let p4 = Pos2::new(p1.x + offset_x, p1.y + offset_y);
-        let p5 = Pos2::new(p2.x + offset_x, p2.y + offset_y);
+        };
         painter.line_segment([p4, p5], stroke);
 
         // Draw conn lines (dashed)
         let dashed_stroke = Stroke::new(stroke::HAIRLINE, Color32::from_white_alpha(128));
         painter.line_segment([p1, p4], dashed_stroke);
         painter.line_segment([p2, p5], dashed_stroke);
+    }
+
+    /// The channel's second line: the base line from the first to the second
+    /// anchor, moved straight up or down in price through the third anchor, so
+    /// the channel is as wide in price at every bar. A vertical base moves
+    /// sideways instead. `None` below three anchors or when the first two coincide.
+    pub(crate) fn parallel_channel_second_line(&self) -> Option<[Pos2; 2]> {
+        let &[p1, p2, p3, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let d = p2 - p1;
+        if d.length_sq() < 1e-6 {
+            return None;
+        }
+        let offset = if d.x.abs() < 1e-3 {
+            egui::vec2(p3.x - p1.x, 0.0)
+        } else {
+            egui::vec2(0.0, p3.y - (p1.y + (p3.x - p1.x) * d.y / d.x))
+        };
+        Some([p1 + offset, p2 + offset])
     }
 
     /// Render Regression Trend - least-squares line through the closes of the
@@ -617,7 +617,41 @@ impl Moments {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawings::DrawingToolType;
     use crate::drawings::rendering::sample_bars;
+
+    /// The second line keeps the base line's slope and passes through the third
+    /// anchor straight above or below it, so the channel's price width is the
+    /// same at every bar. A vertical base moves sideways onto the third anchor.
+    #[test]
+    fn parallel_channel_second_line_passes_through_the_third_anchor_vertically() {
+        let cases = [
+            // Base y = 100 - x; at x = 0 the third anchor is 50 px below it.
+            (
+                [(0.0, 100.0), (100.0, 0.0), (0.0, 150.0)],
+                [(0.0, 150.0), (100.0, 50.0)],
+            ),
+            // Base y = 100 - x; at x = 50 the base is at 50, the third anchor 30 px above.
+            (
+                [(0.0, 100.0), (100.0, 0.0), (50.0, 20.0)],
+                [(0.0, 70.0), (100.0, -30.0)],
+            ),
+            (
+                [(50.0, 0.0), (50.0, 100.0), (80.0, 30.0)],
+                [(80.0, 0.0), (80.0, 100.0)],
+            ),
+        ];
+        for (anchors, want) in cases {
+            let mut drawing = Drawing::new(1, DrawingToolType::ParallelChannel);
+            drawing.points = anchors.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
+            let got = drawing.parallel_channel_second_line().unwrap();
+            let want = want.map(|(x, y)| Pos2::new(x, y));
+            assert!(
+                got.iter().zip(want).all(|(g, w)| g.distance(w) < 1e-3),
+                "anchors {anchors:?}: got {got:?}, want {want:?}"
+            );
+        }
+    }
 
     /// Reference: ordinary least squares of the closes of bars 0..=5 against
     /// 0..=5, residual standard deviation over n - 1, R² = 1 - SSres / SStot,

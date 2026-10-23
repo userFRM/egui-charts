@@ -371,29 +371,16 @@ impl DrawingInteraction {
                     if drawing.points.len() >= 3 {
                         let p1 = drawing.points[0];
                         let p2 = drawing.points[1];
-                        let p3 = drawing.points[2];
 
                         let dist1 = point_to_line_distance(point, p1, p2);
                         if dist1 <= hit_distance {
                             return Some(drawing.id);
                         }
 
-                        // Calculate parallel line
-                        let dx = p2.x - p1.x;
-                        let dy = p2.y - p1.y;
-                        let len_sq = dx * dx + dy * dy;
-                        if len_sq >= 1e-6 {
-                            let t = ((p3.x - p1.x) * dx + (p3.y - p1.y) * dy) / len_sq;
-                            let proj_x = p1.x + t * dx;
-                            let proj_y = p1.y + t * dy;
-                            let offset_x = p3.x - proj_x;
-                            let offset_y = p3.y - proj_y;
-                            let p4 = Pos2::new(p1.x + offset_x, p1.y + offset_y);
-                            let p5 = Pos2::new(p2.x + offset_x, p2.y + offset_y);
-                            let dist2 = point_to_line_distance(point, p4, p5);
-                            if dist2 <= hit_distance {
-                                return Some(drawing.id);
-                            }
+                        if let Some([p4, p5]) = drawing.parallel_channel_second_line()
+                            && point_to_line_distance(point, p4, p5) <= hit_distance
+                        {
+                            return Some(drawing.id);
                         }
                     }
                 }
