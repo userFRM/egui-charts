@@ -61,6 +61,7 @@ pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
     settings: StudySettings,
     timeframe: Option<Timeframe>,
+    instrument_precision: Option<u8>,
 }
 
 impl ConfiguredStudy {
@@ -71,6 +72,7 @@ impl ConfiguredStudy {
             study,
             settings,
             timeframe: None,
+            instrument_precision: None,
         }
     }
 }
@@ -102,6 +104,7 @@ impl Indicator for ConfiguredStudy {
         self.study.is_incremental()
     }
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
+        self.instrument_precision = instrument.and_then(crate::scales::instrument_price_precision);
         self.study.set_instrument(instrument)
     }
     fn set_timeframe(&mut self, timeframe: Timeframe) {
@@ -163,7 +166,10 @@ impl Indicator for ConfiguredStudy {
         Ok(())
     }
     fn precision(&self) -> Option<usize> {
-        self.settings.precision
+        self.settings
+            .precision
+            .or_else(|| self.study.precision())
+            .or(self.instrument_precision.map(usize::from))
     }
     fn line_cnt(&self) -> usize {
         self.study.line_cnt()
@@ -201,6 +207,37 @@ impl Indicator for ConfiguredStudy {
 mod tests {
     use super::*;
     use crate::studies::BollingerBands;
+
+    #[test]
+    fn automatic_precision_tracks_metadata_and_preserves_study_overrides() {
+        let mut study = ConfiguredStudy::new(Box::new(super::super::MACD::default()));
+        let instrument = Instrument::new("FX").with_tick_size(0.00001);
+        study.set_instrument(Some(&instrument));
+        assert_eq!(study.precision(), Some(5));
+        assert_eq!(study.settings().precision, None);
+        let mut settings = study.settings();
+        settings.precision = Some(3);
+        study.apply_settings(&[], settings).unwrap();
+        study.set_instrument(Some(&Instrument::new("INT").with_tick_size(1.0)));
+        assert_eq!(study.precision(), Some(3));
+        let mut settings = study.settings();
+        settings.precision = None;
+        study.apply_settings(&[], settings).unwrap();
+        assert_eq!(study.precision(), Some(0));
+        study.set_instrument(None);
+        assert_eq!(study.precision(), None);
+        for bounded in [
+            Box::new(super::super::RSI::default()) as Box<dyn Indicator>,
+            Box::new(super::super::Stochastic::default()),
+        ] {
+            let mut bounded = ConfiguredStudy::new(bounded);
+            bounded.set_instrument(Some(&instrument));
+            let mut settings = bounded.settings();
+            settings.precision = None;
+            bounded.apply_settings(&[], settings).unwrap();
+            assert_eq!(bounded.precision(), Some(2));
+        }
+    }
 
     #[test]
     fn edits_are_atomic_and_interval_visibility_preserves_the_global_toggle() {
