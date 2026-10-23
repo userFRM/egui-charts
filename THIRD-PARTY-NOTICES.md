@@ -35,12 +35,15 @@ Some interface icons under `assets/icons/` are taken from [Lucide](https://githu
 | `ui/menu.svg` | `menu.svg` |
 | `ui/more.svg` | `ellipsis.svg` |
 | `ui/move-pane.svg` | `arrow-up-down.svg` |
+| `ui/move-vertical.svg` | `move-vertical.svg` |
 | `ui/object-tree.svg` | `list-tree.svg` |
 | `ui/pause.svg` | `pause.svg` |
+| `ui/percent.svg` | `percent.svg` |
 | `ui/play.svg` | `play.svg` |
 | `ui/plus.svg` | `plus.svg` |
 | `ui/redo.svg` | `redo-2.svg` |
 | `ui/replay.svg` | `rewind.svg` |
+| `ui/rotate-ccw.svg` | `rotate-ccw.svg` |
 | `ui/scales-lines.svg` | `ruler.svg` |
 | `ui/search.svg` | `search.svg` |
 | `ui/settings.svg` | `settings.svg` |

@@ -250,6 +250,9 @@ pub mod icons {
     pub const UNLOCK: Icon = crate::icon_from_path!("ui/unlock.svg");
     pub const ZOOM_IN: Icon = crate::icon_from_path!("ui/zoom-in.svg");
     pub const ZOOM_OUT: Icon = crate::icon_from_path!("ui/zoom-out.svg");
+    pub const MOVE_VERTICAL: Icon = crate::icon_from_path!("ui/move-vertical.svg");
+    pub const PERCENT: Icon = crate::icon_from_path!("ui/percent.svg");
+    pub const ROTATE_CCW: Icon = crate::icon_from_path!("ui/rotate-ccw.svg");
     pub const MAGNET: Icon = crate::icon_from_path!("ui/magnet.svg");
     pub const TRASH: Icon = crate::icon_from_path!("ui/trash.svg");
     pub const DUPLICATE: Icon = crate::icon_from_path!("ui/duplicate.svg");

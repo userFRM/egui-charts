@@ -30,6 +30,18 @@ pub enum BackgroundStyle {
     },
 }
 
+/// When the chart shows its navigation buttons in the main pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NavigationButtons {
+    /// Always show the buttons.
+    Always,
+    /// Show the buttons while the pointer is over the main pane, price and volume.
+    #[default]
+    OnHover,
+    /// Hide the buttons.
+    Never,
+}
+
 /// Style for session break lines
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SessionBreakStyle {
@@ -226,6 +238,8 @@ pub struct ChartConfig {
     pub realtime_button_hover_color: Color32,
     /// Text color for the realtime button
     pub realtime_button_text_color: Color32,
+    /// When to show the navigation buttons.
+    pub navigation_buttons: NavigationButtons,
     /// Whether to show session break vertical lines
     pub show_session_breaks: bool,
     /// Color for session break lines
@@ -338,6 +352,7 @@ impl Default for ChartConfig {
             realtime_button_color: DESIGN_TOKENS.semantic.extended.chart_tooltip_bg,
             realtime_button_hover_color: DESIGN_TOKENS.semantic.extended.chart_axis_bg,
             realtime_button_text_color: DESIGN_TOKENS.semantic.extended.chart_text,
+            navigation_buttons: NavigationButtons::default(),
             // Session breaks disabled by default
             show_session_breaks: false,
             session_break_color: DESIGN_TOKENS.semantic.chart.grid_line_major,

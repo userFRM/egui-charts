@@ -265,6 +265,38 @@ impl Chart {
         // because constraints are calculated with stale width values.
         self.apply_timescale_config(chart_width);
 
+        let navigation_rect = self.navigation_rect(ui, chart_rect);
+        let navigation = navigation_rect
+            .filter(|_| self.navigation_visible(ui, chart_rect))
+            .map(|nav| {
+                (
+                    nav,
+                    self.interact_navigation(ui, nav, chart_rect, response.id),
+                )
+            });
+        let navigation_interaction = navigation_rect.is_some_and(|nav| {
+            self.config.navigation_buttons != crate::config::NavigationButtons::Never
+                && !self.state.data().is_empty()
+                && ui.input(|i| {
+                    (i.pointer.any_down() || i.pointer.any_released())
+                        && i.pointer
+                            .press_origin()
+                            .or_else(|| i.pointer.hover_pos())
+                            .is_some_and(|p| nav.contains(p))
+                })
+        });
+        // A button owns the whole gesture, including a drag that leaves the row. The chart's
+        // own response goes back to the caller; the gesture handlers see a hover-only one.
+        let shown = response.clone();
+        if navigation_interaction {
+            response = ui.interact(
+                Rect::NOTHING,
+                response.id.with("navigation_input"),
+                Sense::hover(),
+            );
+            response.rect = rect;
+        }
+
         // Handle tracking mode
         self.handle_tracking_mode(ui, &response);
 
@@ -440,7 +472,10 @@ impl Chart {
         let visible_data = self.state.visible_data();
 
         if visible_data.is_empty() {
-            return response;
+            if let Some((nav, buttons)) = navigation {
+                self.paint_navigation(ui, nav, buttons);
+            }
+            return shown;
         }
 
         // Largest visible volume: the volume pane and volume candles scale by it
@@ -924,10 +959,14 @@ impl Chart {
         // Draw box zoom rect
         rendering::render_box_zoom(&painter, &self.box_zoom);
 
-        // Focus ring for keyboard accessibility
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        if let Some((nav, buttons)) = navigation {
+            self.paint_navigation(ui, nav, buttons);
+        }
 
-        response
+        // Focus ring for keyboard accessibility
+        crate::styles::focus::draw_focus_ring(ui, &shown);
+
+        shown
     }
 }
 
@@ -1009,6 +1048,215 @@ mod tests {
                 })
                 .collect();
             assert_eq!(labels, [expected], "{case:?}");
+        }
+    }
+
+    fn navigation_pos(chart: &crate::widget::Chart, button: usize) -> Pos2 {
+        let rect = chart
+            .last_rendered_price_rect
+            .union(chart.last_rendered_volume_rect);
+        Pos2::new(
+            rect.center().x - 112.0 + 32.0 * button as f32,
+            rect.bottom() - 26.0,
+        )
+    }
+
+    fn navigation_click(ctx: &egui::Context, chart: &mut crate::widget::Chart, button: usize) {
+        let pos = navigation_pos(chart, button);
+        for (i, events) in [
+            vec![Event::PointerMoved(pos)],
+            vec![navigation_press(pos, true)],
+            vec![navigation_press(pos, false)],
+            Vec::new(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            frame(ctx, chart, 1.0 + i as f64 * 0.02, events);
+        }
+    }
+
+    fn navigation_press(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// On the 634 px time scale, spacing 20 shows ceil(634/20 - 1) = 31 bars.
+    /// A zoom step of 0.2 adds +/-0.2 * 20/10 to spacing and keeps the right edge
+    /// (offset -20) fixed; reset restores spacing 6 and the configured 60 px / 6 = 10 bar offset.
+    #[test]
+    fn navigation_buttons_apply_each_action() {
+        use crate::scales::PriceScaleMode::{Logarithmic, Normal, Percentage};
+        // (button, initial manual/mode, expected spacing/offset/manual/mode)
+        for (button, initial_manual, initial_mode, spacing, offset, manual, mode) in [
+            (0, false, Normal, 19.6, -20.0, false, Normal),
+            (1, false, Normal, 20.4, -20.0, false, Normal),
+            (2, false, Normal, 20.0, -51.0, false, Normal),
+            (3, false, Normal, 20.0, 11.0, false, Normal),
+            (4, true, Normal, 6.0, 10.0, false, Normal),
+            (5, false, Normal, 20.0, -20.0, true, Normal),
+            (5, true, Normal, 20.0, -20.0, false, Normal),
+            (6, false, Normal, 20.0, -20.0, false, Logarithmic),
+            (6, true, Logarithmic, 20.0, -20.0, false, Normal),
+            (7, false, Normal, 20.0, -20.0, false, Percentage),
+            (7, true, Percentage, 20.0, -20.0, false, Normal),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart =
+                chart(&[100.0], &[200.0]).with_chart_options(crate::config::ChartOptions {
+                    time_scale: crate::config::TimeScaleOptions {
+                        right_offset_pixels: Some(60.0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            assert_eq!(chart.state.time_scale().width(), 634.0);
+            chart.state.time_scale_mut().set_bar_spacing(20.0);
+            chart.state.time_scale_mut().set_right_offset(-20.0);
+            chart.apply_series_settings(&SeriesSettings {
+                price_scale_mode: initial_mode,
+                ..Default::default()
+            });
+            if initial_manual {
+                chart.state.price_scale_mut().set_range(90.0, 210.0);
+            }
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            navigation_click(&ctx, &mut chart, button);
+            let ts = chart.state.time_scale();
+            assert!(
+                (ts.bar_spacing() - spacing).abs() < 1e-4,
+                "button {button}: spacing {}",
+                ts.bar_spacing()
+            );
+            assert!(
+                (f64::from(ts.right_offset()) - offset).abs() < 1e-4,
+                "button {button}: offset {}",
+                ts.right_offset()
+            );
+            assert_eq!(
+                chart.state.price_scale().is_manual(),
+                manual,
+                "button {button}"
+            );
+            assert_eq!(
+                chart.state.price_scale().options().mode,
+                mode,
+                "button {button}"
+            );
+        }
+    }
+
+    /// The selected fill follows price-axis scaling/reset and series settings on the next frame,
+    /// and the row shows while hovering the main pane (volume included) per the visibility setting.
+    #[test]
+    fn navigation_buttons_show_visibility_and_scale_state() {
+        use crate::config::NavigationButtons::{Always, Never, OnHover};
+        use crate::scales::PriceScaleMode::{Logarithmic, Normal, Percentage};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[200.0]);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        for (i, (manual, mode, visibility, hover, selected)) in [
+            (false, Normal, OnHover, true, [true, false, false]),
+            (true, Normal, OnHover, true, [false, false, false]),
+            (false, Logarithmic, OnHover, true, [true, true, false]),
+            (false, Percentage, OnHover, true, [true, false, true]),
+            (false, Normal, OnHover, false, [false, false, false]),
+            (false, Normal, Always, false, [true, false, false]),
+            (false, Normal, Never, true, [false, false, false]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            chart.apply_series_settings(&SeriesSettings {
+                price_scale_mode: mode,
+                ..Default::default()
+            });
+            if manual {
+                chart.state.price_scale_mut().set_range(90.0, 210.0);
+            } else {
+                chart.state.price_scale_mut().reset();
+            }
+            chart.config.navigation_buttons = visibility;
+            let pointer = if hover {
+                chart.last_rendered_volume_rect.center()
+            } else {
+                chart.last_rendered_price_rect.right_top() + egui::vec2(20.0, 20.0)
+            };
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                0.1 + i as f64,
+                vec![Event::PointerMoved(pointer)],
+            );
+            for (toggle, expected) in selected.into_iter().enumerate() {
+                let center = navigation_pos(&chart, toggle + 5);
+                let active = painted.iter().any(|shape| matches!(shape, Shape::Rect(r)
+                    if r.rect.center().distance(center) < 0.1 && r.fill == ctx.global_style().visuals.selection.bg_fill));
+                assert_eq!(
+                    active, expected,
+                    "manual {manual}, mode {mode:?}, toggle {toggle}"
+                );
+            }
+        }
+    }
+
+    /// A drag starting on a button belongs to that button even after leaving the row.
+    /// Clicking it also preserves a series selection while a drawing tool is active.
+    #[test]
+    fn navigation_buttons_do_not_start_chart_gestures() {
+        use crate::drawings::DrawingToolType;
+        use crate::widget::{ChartElementId, SeriesId};
+        for (tool, box_zoom) in [
+            (None, false),
+            (Some(DrawingToolType::TrendLine), false),
+            (Some(DrawingToolType::Rect), false),
+            (None, true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.state.time_scale_mut().set_bar_spacing(20.0);
+            chart.state.time_scale_mut().set_right_offset(-20.0);
+            chart.drawings.active_tool = tool;
+            chart.zoom_mode_active = box_zoom;
+            chart
+                .selection
+                .select(ChartElementId::Series(SeriesId::MAIN), Some(50));
+            let start = navigation_pos(&chart, 5);
+            let end = start + egui::vec2(-100.0, -60.0);
+            for (i, events) in [
+                vec![Event::PointerMoved(start)],
+                vec![navigation_press(start, true)],
+                vec![Event::PointerMoved(end)],
+                vec![navigation_press(end, false)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                frame(&ctx, &mut chart, 0.1 + i as f64 * 0.02, events);
+                assert_eq!(
+                    chart.state.time_scale().right_offset(),
+                    -20.0,
+                    "{tool:?}, box zoom {box_zoom}"
+                );
+                assert!(chart.scroll_start_pos.is_none());
+                assert!(!chart.box_zoom.active);
+                assert!(chart.drawings.curr_drawing.is_none());
+                assert!(chart.drawings.drawings.is_empty());
+            }
+            navigation_click(&ctx, &mut chart, 5);
+            assert_eq!(chart.state.time_scale().right_offset(), -20.0);
+            assert!(chart.scroll_start_pos.is_none());
+            assert_eq!(
+                chart.selected_element(),
+                Some(ChartElementId::Series(SeriesId::MAIN))
+            );
+            assert!(chart.drawings.curr_drawing.is_none());
         }
     }
 }

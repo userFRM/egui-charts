@@ -1334,7 +1334,10 @@ fn line_style_from_dialog(style: DrawingLineStyle) -> egui_charts::drawings::Lin
 /// `ChartConfig`. The dialog has no direct `apply_to_config`, so the demo maps
 /// the fields users actually see changing: candle colors, background, grid.
 fn apply_settings_state(state: &ChartSettingsState, config: &mut egui_charts::config::ChartConfig) {
-    use egui_charts::ui::top_toolbar::components::settings_menu::types::GridLinesMode;
+    use egui_charts::config::NavigationButtons;
+    use egui_charts::ui::top_toolbar::components::settings_menu::types::{
+        ButtonVisibility, GridLinesMode,
+    };
 
     config.bullish_color = state.candle_colors.body_up;
     config.bearish_color = state.candle_colors.body_down;
@@ -1356,6 +1359,11 @@ fn apply_settings_state(state: &ChartSettingsState, config: &mut egui_charts::co
     config.show_vertical_grid = v;
     config.show_grid = h || v;
 
+    config.navigation_buttons = match state.btns.navigation {
+        ButtonVisibility::AlwaysVisible => NavigationButtons::Always,
+        ButtonVisibility::VisibleOnMouseOver => NavigationButtons::OnHover,
+        ButtonVisibility::Hidden => NavigationButtons::Never,
+    };
     config.show_ohlc_info = state.status_line.show_ohlc;
     config.show_volume = state.status_line.show_volume;
 }

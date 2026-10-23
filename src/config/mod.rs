@@ -25,7 +25,8 @@ mod timescale;
 mod tooltip;
 
 pub use chart::{
-    BackgroundStyle, ChartConfig, RealtimeButtonPos, SessionBreakStyle, SessionConfig, WatermarkPos,
+    BackgroundStyle, ChartConfig, NavigationButtons, RealtimeButtonPos, SessionBreakStyle,
+    SessionConfig, WatermarkPos,
 };
 pub use crosshair::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
 pub use interaction::{

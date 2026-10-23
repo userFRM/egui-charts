@@ -128,6 +128,7 @@ pub mod builder;
 mod feed;
 mod frame;
 pub(crate) mod interaction;
+mod navigation;
 pub(crate) mod pan_zoom;
 mod panes;
 mod selection;
