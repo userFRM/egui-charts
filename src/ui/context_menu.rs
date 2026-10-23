@@ -249,13 +249,10 @@ pub(crate) fn show_menu<A: Clone>(
             MenuEntry::Separator => t.separator_height,
         })
         .sum();
-    let size = Vec2::new(row_width, height) + chrome;
-    let pos = place(
-        anchor,
-        gap,
-        size,
-        ctx.content_rect().shrink(theme.spacing.lg),
-    );
+    let bounds = ctx.content_rect().shrink(theme.spacing.lg);
+    let size = (Vec2::new(row_width, height) + chrome).min(bounds.size());
+    let row_width = (size.x - chrome.x).max(0.0);
+    let pos = place(anchor, gap, size, bounds);
 
     let mut picked = None;
     egui::Area::new(id)
@@ -264,16 +261,20 @@ pub(crate) fn show_menu<A: Clone>(
         .show(ctx, |ui| {
             frame.show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
-                for (entry, row) in entries.iter().zip(rows) {
-                    match (entry, row) {
-                        (MenuEntry::Item(item), Some((label, trailing))) => {
-                            if draw_item(ui, theme, item, label, trailing, row_width, pad) {
-                                picked = Some(item.action.clone());
+                egui::ScrollArea::vertical()
+                    .max_height((size.y - chrome.y).max(0.0))
+                    .show(ui, |ui| {
+                        for (entry, row) in entries.iter().zip(rows) {
+                            match (entry, row) {
+                                (MenuEntry::Item(item), Some((label, trailing))) => {
+                                    if draw_item(ui, theme, item, label, trailing, row_width, pad) {
+                                        picked = Some(item.action.clone());
+                                    }
+                                }
+                                _ => draw_separator(ui, theme, row_width, pad),
                             }
                         }
-                        _ => draw_separator(ui, theme, row_width, pad),
-                    }
-                }
+                    });
             });
         });
 
@@ -724,10 +725,11 @@ mod tests {
             chart: &mut Chart,
             menus: &mut ChartMenus,
             events: Vec<Event>,
+            size: Vec2,
         ) -> Vec<egui::epaint::ClippedShape> {
             let mut output = ctx.run_ui(
                 RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                     events,
                     ..Default::default()
                 },
@@ -759,79 +761,117 @@ mod tests {
                 },
             ]
         };
-        for (time, left, ratio) in [
-            (false, false, false),
-            (false, true, false),
-            (true, false, false),
-            (false, false, true),
-        ] {
-            let ctx = Context::default();
-            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
-            chart.config_mut().show_left_axis = left;
-            chart.config_mut().show_right_axis = !left;
-            let mut menus = ChartMenus::default();
-            paint(&ctx, &mut chart, &mut menus, vec![]);
-            let plot = chart.get_rendered_price_rect();
-            let anchor = if time {
-                Pos2::new(plot.center().x, plot.bottom() + 10.0)
-            } else {
-                Pos2::new(
-                    if left {
-                        plot.left() - 25.0
-                    } else {
-                        plot.right() + 25.0
-                    },
-                    plot.center().y,
-                )
-            };
-            paint(
-                &ctx,
-                &mut chart,
-                &mut menus,
-                click(anchor, PointerButton::Secondary),
-            );
-            let shapes = paint(&ctx, &mut chart, &mut menus, vec![]);
-            let label = if time {
-                "Local time"
-            } else if ratio {
-                "Lock price to bar ratio"
-            } else {
-                "Percent"
-            };
-            let text = shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    Shape::Text(text) if text.galley.text() == label => Some(text),
-                    _ => None,
-                })
-                .expect("axis menu choice");
-            let pos = text.pos + text.galley.size() / 2.0;
-            paint(
-                &ctx,
-                &mut chart,
-                &mut menus,
-                click(pos, PointerButton::Primary),
-            );
-            assert!(!chart.menu_open);
-            if ratio {
-                let before = chart.state().price_scale().range().length();
-                let (spacing, offset) = chart.get_time_scale_state();
-                chart.apply_synced_time_scale(spacing * 2.0, offset);
-                paint(&ctx, &mut chart, &mut menus, vec![]);
-                // Doubling the pixels per bar halves the price span at the same pane height.
-                assert!(
-                    (chart.state().price_scale().range().length() - before / 2.0).abs() < 0.00001
+        for theme in [Theme::light(), Theme::dark()] {
+            for (time, left, ratio, short) in [
+                (false, false, false, false),
+                (false, true, false, false),
+                (true, false, false, false),
+                (false, false, true, false),
+                (false, false, false, true),
+            ] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let size = if short {
+                    Vec2::new(320.0, 240.0)
+                } else {
+                    Vec2::new(800.0, 600.0)
+                };
+                let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+                chart.config_mut().show_left_axis = left;
+                chart.config_mut().show_right_axis = !left;
+                let mut menus = ChartMenus::default();
+                paint(&ctx, &mut chart, &mut menus, vec![], size);
+                let plot = chart.get_rendered_price_rect();
+                let anchor = if time {
+                    Pos2::new(plot.center().x, plot.bottom() + 10.0)
+                } else {
+                    Pos2::new(
+                        if left {
+                            plot.left() - 25.0
+                        } else {
+                            plot.right() + 25.0
+                        },
+                        plot.center().y,
+                    )
+                };
+                paint(
+                    &ctx,
+                    &mut chart,
+                    &mut menus,
+                    click(anchor, PointerButton::Secondary),
+                    size,
                 );
-            } else if time {
-                assert_eq!(
-                    chart.chart_options().time_scale.timezone,
-                    TimezoneMode::Local
+                if short {
+                    paint(
+                        &ctx,
+                        &mut chart,
+                        &mut menus,
+                        vec![
+                            Event::PointerMoved(Pos2::new(150.0, 120.0)),
+                            Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                source: egui::MouseWheelSource::Wheel,
+                                phase: egui::TouchPhase::Move,
+                                delta: Vec2::new(0.0, -2000.0),
+                                modifiers: Default::default(),
+                            },
+                        ],
+                        size,
+                    );
+                    for _ in 0..30 {
+                        paint(&ctx, &mut chart, &mut menus, vec![], size);
+                    }
+                }
+                let shapes = paint(&ctx, &mut chart, &mut menus, vec![], size);
+                let label = if short {
+                    "High and low"
+                } else if time {
+                    "Local time"
+                } else if ratio {
+                    "Lock price to bar ratio"
+                } else {
+                    "Percent"
+                };
+                let text = shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text() == label => Some(text),
+                        _ => None,
+                    })
+                    .expect("axis menu choice");
+                let pos = text.pos + text.galley.size() / 2.0;
+                assert!(Rect::from_min_size(Pos2::ZERO, size).contains(pos));
+                paint(
+                    &ctx,
+                    &mut chart,
+                    &mut menus,
+                    click(pos, PointerButton::Primary),
+                    size,
                 );
-            } else {
-                assert_eq!(
-                    chart.state().price_scale().options().mode,
-                    PriceScaleMode::Percentage
-                );
+                assert!(!chart.menu_open);
+                if short {
+                    assert!(chart.config().show_high_low);
+                } else if ratio {
+                    let before = chart.state().price_scale().range().length();
+                    let (spacing, offset) = chart.get_time_scale_state();
+                    chart.apply_synced_time_scale(spacing * 2.0, offset);
+                    paint(&ctx, &mut chart, &mut menus, vec![], size);
+                    // Doubling the pixels per bar halves the price span at the same pane height.
+                    assert!(
+                        (chart.state().price_scale().range().length() - before / 2.0).abs()
+                            < 0.00001
+                    );
+                } else if time {
+                    assert_eq!(
+                        chart.chart_options().time_scale.timezone,
+                        TimezoneMode::Local
+                    );
+                } else {
+                    assert_eq!(
+                        chart.state().price_scale().options().mode,
+                        PriceScaleMode::Percentage
+                    );
+                }
             }
         }
     }
