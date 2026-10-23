@@ -1129,10 +1129,11 @@ impl DemoApp {
     }
 
     fn build_data_window(&self) -> DataWindowInfo {
-        let bars = self.chart.bars(SeriesId::MAIN);
+        let bars = self.chart.state().shown();
         let index = self
             .chart
             .get_hover_bar_idx()
+            .filter(|index| index.is_finite() && index.round() >= 0.0)
             .map(|index| index.round() as usize)
             .filter(|index| *index < bars.len())
             .unwrap_or_else(|| bars.len().saturating_sub(1));
@@ -1715,6 +1716,47 @@ fn apply_settings_state(state: &ChartSettingsState, config: &mut egui_charts::co
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn data_window_reads_the_hovered_rendered_element() {
+        for kind in [ChartType::Candles, ChartType::Renko] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.chart.set_chart_type(kind);
+            let frame = |app: &mut DemoApp, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        app.chart.show(ui);
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            frame(&mut app, vec![]);
+            let (start, end) = app.chart.state().visible_range();
+            let index = (start + end) / 2;
+            let map = app.chart.get_chart_mapping();
+            frame(
+                &mut app,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    map.idx_to_x(index),
+                    map.rect.center().y,
+                ))],
+            );
+            let info = app.build_data_window();
+            let bars = app.chart.state().shown();
+            assert_eq!(info.close, bars[index].close, "{kind:?}");
+            assert_eq!(info.timestamp, bars[index].time.to_rfc3339(), "{kind:?}");
+            assert_eq!(info.prev_close, bars[index - 1].close, "{kind:?}");
+        }
+    }
 
     #[test]
     fn ranges_fit_displayed_history_in_both_themes_and_window_sizes() {

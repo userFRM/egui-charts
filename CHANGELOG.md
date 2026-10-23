@@ -81,7 +81,7 @@ All notable changes to this project are documented in this file. The format is b
 ### Fixed
 
 - The demo opens at one minute in Arrow mode with axis readouts. Synthetic sessions stay continuous, with shorter wicks, varying low ordinary volumes and occasional peaks. Volume peaks use a quarter of the plot height with a flush baseline, and candle bodies use 75% of the bar pitch. Hourly data remains available; session timestamps and adjustment inputs are unchanged.
-- The in-pane legend and held values keep the chart's configured candle colours. The legend title exposes a flag and copy actions on hover. The Data Window computes change from the preceding bar, matching the legend.
+- The in-pane legend and held values keep the chart's configured candle colours. The legend title exposes a flag and copy actions on hover. The Data Window computes change from the preceding displayed element, matching the legend on both time-based and price-based charts. `ChartState::shown` exposes the series indexed by hover and selection.
 - Time axes use denser calendar marks shared with the vertical grid and semibold day, month and year labels. Round price levels use semibold labels. Minute intervals retain their unit in the toolbar, and interval picks update the trigger and selected row.
 - Dark plot and panels are black, with neutral hover fills quieter than pressed fills. Volume uses muted teal and salmon at the configured theme opacity, and both themes use dotted grids. The demo preserves its rounded chart container.
 - Cursor choices use 40 px rows, larger glyphs, a neutral selected row and a labelled values switch, with visible keyboard focus. Held values use a compact six-row panel. Eraser suppresses the previous cursor's trail and crosshair strokes.

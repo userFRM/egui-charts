@@ -159,8 +159,9 @@ impl ChartState {
         first_changed
     }
 
-    /// The series drawn on the time scale.
-    pub(crate) fn shown(&self) -> &[Bar] {
+    /// The series drawn on the time scale, one OHLC bar per element on price-based charts.
+    /// Indices returned by the chart hover and selection APIs refer to this series.
+    pub fn shown(&self) -> &[Bar] {
         self.elements.as_deref().unwrap_or(&self.data.bars)
     }
 
