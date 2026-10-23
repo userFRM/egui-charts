@@ -67,7 +67,11 @@ pub fn render_price_labels_at_pos(
                 .painter
                 .layout_no_wrap(mark.label, font.clone(), colors.text);
             let rect = alignment.anchor_size(Pos2::new(x_offset, mark.y_coord), galley.size());
-            (!under_tag(tags, rect)).then(|| Shape::galley(rect.min, galley, colors.text))
+            (rect.top() >= context.rect.top()
+                && rect.bottom() <= context.rect.bottom()
+                && context.painter.clip_rect().contains_rect(rect)
+                && !under_tag(tags, rect))
+            .then(|| Shape::galley(rect.min, galley, colors.text))
         })
         .collect();
     context.painter.set(slot, labels);
@@ -278,7 +282,11 @@ pub fn render_time_labels(
                 .layout_no_wrap(mark.label, font.clone(), text_color)
         };
         let rect = egui::Align2::CENTER_TOP.anchor_size(Pos2::new(x, y), galley.size());
-        if !under_tag(tags, rect) {
+        if rect.left() >= context.rect.left()
+            && rect.right() <= context.rect.right()
+            && context.painter.clip_rect().contains_rect(rect)
+            && !under_tag(tags, rect)
+        {
             labels.push(Shape::galley(rect.min, galley, text_color));
         }
 
@@ -550,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn time_ticks_use_secondary_text_and_keep_custom_colours() {
+    fn axis_ticks_fit_and_keep_theme_or_custom_colours() {
         use crate::theme::{apply_to_egui, presets};
         use egui::Color32;
 
@@ -563,8 +571,33 @@ mod tests {
                 if let Some(custom) = custom {
                     chart.config.text_color = custom;
                 }
-                let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+                shapes(&ctx, &mut chart, 0.0, Vec::new());
+                chart.state.time_scale_mut().set_right_offset(-17.5);
+                chart.state.price_scale_mut().set_range(100.0, 200.0);
+                chart.config.show_symbol_last_val = false;
+                let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
                 let plot = chart.get_rendered_price_rect();
+                let prices: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text)
+                            if text.pos.x > plot.right()
+                                && text.galley.text().parse::<f64>().is_ok() =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!prices.is_empty());
+                for text in prices {
+                    assert!(
+                        text.pos.y >= plot.top()
+                            && text.pos.y + text.galley.size().y <= plot.bottom(),
+                        "price tick crosses plot edge: {}",
+                        text.galley.text()
+                    );
+                }
                 let ticks: Vec<_> = painted
                     .iter()
                     .filter_map(|shape| match shape {
@@ -573,6 +606,14 @@ mod tests {
                     })
                     .collect();
                 assert!(!ticks.is_empty(), "{name}: no time ticks");
+                for text in &ticks {
+                    assert!(
+                        text.pos.x >= plot.left()
+                            && text.pos.x + text.galley.size().x <= plot.right(),
+                        "time tick crosses plot edge: {}",
+                        text.galley.text()
+                    );
+                }
                 let expected = custom.unwrap_or(theme.chart.axis_text_secondary);
                 assert!(
                     ticks.iter().all(|text| text.fallback_color == expected),
