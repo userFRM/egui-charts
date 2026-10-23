@@ -46,8 +46,8 @@ path = "examples/drawing_tools.rs"
 required-features = ["widget"]
 
 [[example]]
-name = "data_source"
-path = "examples/data_source.rs"
+name = "live_feed"
+path = "examples/live_feed.rs"
 required-features = ["widget"]
 
 [[example]]

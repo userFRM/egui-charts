@@ -56,6 +56,7 @@ All notable changes to this project are documented in this file. The format is b
 - `ChartBuilder::with_feed` drives a chart from a `data::Datafeed`. The chart asks for the instrument and the latest page of history without blocking, applies answers and live updates once per frame, asks for older pages as the user scrolls back until the feed reports the end of history, subscribes after the instrument resolves and unsubscribes on every symbol or timeframe change and when it is dropped. A push from any thread wakes the UI once per burst. `Chart::feed_state` reports loading, live status, the last error and dropped updates. After a history or instrument error the chart asks for nothing more until the symbol or timeframe changes.
 - `Chart::set_timeframe`, `Chart::symbol`, `Chart::timeframe` and `Chart::instrument`.
 - `Chart::trades` and `Chart::order_book` hold the trades and the order book the feed pushes; the chart asks the feed once for recent trades (`Datafeed::trades`) and for a new book snapshot when the book is lost.
+- `examples/live_feed.rs`: a feed that serves pages of history and streams trades from a thread.
 
 ### Fixed
 
@@ -300,7 +301,6 @@ All notable changes to this project are documented in this file. The format is b
 - The symbol header shows the last close with its change instead of the bar's open, high, low and close, which the chart legend shows. Its up and down colours default to the theme's success and error text colours, which read at 4.5:1 or better where the candle colours do not (`Color32::PLACEHOLDER` in `SymbolHeaderConfig::default`, resolved while painting), and `SymbolHeaderConfig::from_theme` sets them.
 - Widget bar icons are 20 px, as in the top toolbar, and their tooltips open to the left of the button instead of over the button below. The bottom bar's date button icon is 16 px.
 - `BarData::from_csv` requires the header row `ts,open,high,low,close,volume` (any case, spaces around names ignored) and returns an error naming it otherwise, instead of taking the first row as a header unchecked and reading the columns by position, which lost the first bar of a file without a header and swapped the columns of a file in another order. An empty file is refused too. Migration: give the file that header, with the columns in that order.
-- The `tauri_integration` example is now `data_source`, and its docs describe what it does: a chart with a sample `DataSource` in an eframe window. Its `fetch_historical` returns the newest bars before the requested end instead of the oldest, so scrolling back loads older bars instead of the start of the series again. Migration: run it with `cargo run --example data_source`.
 - Every CI job has a `timeout-minutes` limit, so a hung job fails in minutes instead of after the 6 hour default.
 - CI runs the library tests on Linux, macOS and Windows with stable Rust and on Linux with the MSRV, 1.95.0, each with all features and with `--no-default-features`.
 - `ChartState::set_data` returns the index of the first bar that differs from the previous bars, the shorter length when one series is a prefix of the other, or `None` when they are identical.
@@ -359,6 +359,7 @@ All notable changes to this project are documented in this file. The format is b
 - `ChartBuilder::extended` and `ChartBuilder::with_drawing_tools`: every chart has studies and drawings. Migration: use `ChartBuilder::new()`.
 - The consuming `Chart::config(self, config)`, whose name now reads the configuration. Migration: build with `Chart::with_config(data, config)` or set `*chart.config_mut() = config`.
 - `Chart::timescale_marks`, which was never drawn.
+- `examples/tauri_integration.rs`, replaced by `examples/live_feed.rs`.
 
 ## [0.2.0] - 2026-06-04
 

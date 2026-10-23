@@ -86,9 +86,10 @@
 //!    egui-charts = "0.2"
 //!    ```
 //!
-//! 2. Implement [`data::DataSource`] to bridge your backend (IPC, a WebSocket
-//!    or a database) to the chart's data layer, and return `true` from
-//!    [`data::DataSource::supports_historical`] if it serves history.
+//! 2. Implement [`data::Datafeed`] to bridge your backend (IPC, a WebSocket
+//!    or a database) to the chart: answer `history` through its
+//!    [`data::Reply`] and push live updates into the [`data::Sink`] that
+//!    `subscribe` receives, from any thread. `examples/live_feed.rs` shows one.
 //!
 //! 3. Build the chart once with [`chart::builder::ChartBuilder`] and
 //!    [`chart::builder::ChartBuilder::with_data_src`], then call
