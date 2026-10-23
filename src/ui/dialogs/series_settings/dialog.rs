@@ -139,7 +139,7 @@ impl SeriesSettingsDialog {
                     });
             });
         if ok && let Some(id) = self.series_id {
-            action = SeriesSettingsAction::Apply(id, self.settings.clone());
+            action = SeriesSettingsAction::Apply(id, Box::new(self.settings.clone()));
             self.is_open = false;
         }
         if cancel {

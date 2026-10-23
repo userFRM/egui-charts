@@ -309,6 +309,7 @@ pub fn render_chart_type(
             japanese::render_renko(
                 painter,
                 built.shown(ctx.start_idx, ctx.visible_data.len()),
+                params.type_params.renko_wicks,
                 params.bar_width(),
                 ctx.price_scale,
                 params.bullish_color(),

@@ -28,6 +28,10 @@ impl Chart {
         let (bars, rejected) = clean(bars, &self.clock());
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();
+        self.pending_box_sizes = self
+            .chart_type_params
+            .size_methods()
+            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
         let before = self.edge();
         let prepended = before
             .first
@@ -308,6 +312,8 @@ impl Chart {
 
     /// Shows the cached elements before input, keeping the view in the series' slots.
     pub(super) fn show_elements(&mut self) {
+        self.chart_type_params
+            .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
         let built = crate::chart::rendering::candles::price_based::elements(
             self.chart_type,
             &self.chart_type_params,

@@ -21,7 +21,8 @@ use crate::model::point_figure::{self, PnfBuilder};
 use crate::model::range_bar::{self, RangeBarBuilder};
 use crate::model::renko::{self, RenkoBuilder};
 use crate::model::{
-    Bar, ChartType, ChartTypeParams, LineBreakConfig, PointFigureConfig, PriceBuilder, SpanCache,
+    Bar, ChartType, ChartTypeParams, LineBreakConfig, PointFigureConfig, PriceBasedSource,
+    PriceBuilder, SpanCache,
 };
 
 /// A builder and the elements it has built, newest limit included.
@@ -66,9 +67,9 @@ impl<B: PriceBuilder> Built<B> {
 const CACHE_CAPACITY: usize = 16;
 
 thread_local! {
-    static RENKO: RefCell<SpanCache<Built<RenkoBuilder>, f64>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
-    static KAGI: RefCell<SpanCache<Built<KagiBuilder>, f64>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
-    static LINE_BREAK: RefCell<SpanCache<Built<LineBreakBuilder>, usize>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
+    static RENKO: RefCell<SpanCache<Built<RenkoBuilder>, (f64, PriceBasedSource, bool)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
+    static KAGI: RefCell<SpanCache<Built<KagiBuilder>, (f64, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
+    static LINE_BREAK: RefCell<SpanCache<Built<LineBreakBuilder>, (usize, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static POINT_AND_FIGURE: RefCell<SpanCache<Built<PnfBuilder>, (f64, u32)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static RANGE: RefCell<SpanCache<Built<RangeBarBuilder>, f64>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
 }
@@ -117,13 +118,22 @@ pub(super) fn renko(
     let size = params.renko_brick_size;
     cached(
         &RENKO,
-        size,
+        (size, params.renko_source, params.renko_wicks),
         full,
         revision,
         renko::MAX_BRICKS,
-        || RenkoBuilder::new(size),
-        |bars| renko::work_start(bars, size),
-        renko::RenkoBrick::to_bar,
+        || RenkoBuilder::new(size, params.renko_source),
+        |bars| renko::work_start(bars, size, params.renko_source),
+        if params.renko_wicks {
+            renko::RenkoBrick::to_bar
+        } else {
+            |brick| {
+                let mut bar = brick.to_bar();
+                bar.high = bar.open.max(bar.close);
+                bar.low = bar.open.min(bar.close);
+                bar
+            }
+        },
     )
 }
 
@@ -136,11 +146,11 @@ pub(super) fn kagi(
     let reversal = params.kagi_reversal;
     cached(
         &KAGI,
-        reversal,
+        (reversal, params.kagi_source),
         full,
         revision,
         kagi::MAX_LINES,
-        || KagiBuilder::new(reversal),
+        || KagiBuilder::new(reversal, params.kagi_source),
         |_| 0,
         kagi::KagiLine::to_bar,
     )
@@ -155,11 +165,16 @@ pub(super) fn line_break(
     let count = params.line_break_count;
     cached(
         &LINE_BREAK,
-        count,
+        (count, params.line_break_source),
         full,
         revision,
         line_break::MAX_LINES,
-        || LineBreakBuilder::new(&LineBreakConfig::new(count)),
+        || {
+            LineBreakBuilder::new(&LineBreakConfig {
+                line_cnt: count,
+                source: params.line_break_source,
+            })
+        },
         |_| 0,
         |line| Bar {
             time: line.ts,
@@ -264,6 +279,154 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn box_sizes_freeze_through_streaming_and_wait_for_history() {
+        use crate::model::{BarData, BoxSizeMethod};
+        use crate::widget::{Chart, SeriesId};
+        let mut data = bars(0, &[100.0; 4], None);
+        for (i, bar) in data.iter_mut().enumerate() {
+            bar.high += i as f64 + 1.0;
+            bar.low -= i as f64 + 1.0;
+        }
+        let paint = |chart: &mut Chart| {
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        let sizes = |chart: &Chart| {
+            let p = chart.chart_type_params();
+            [
+                p.renko_brick_size,
+                p.kagi_reversal,
+                p.range_size,
+                p.pnf_box_size,
+            ]
+        };
+        for (method, initial, recalculated) in [
+            (BoxSizeMethod::Fixed, 2.0, 2.0),
+            (
+                BoxSizeMethod::Atr {
+                    period: 3,
+                    multiplier: 1.5,
+                },
+                8.0,
+                169.0 / 3.0,
+            ),
+            (BoxSizeMethod::Percentage(1.0), 1.0, 2.0),
+        ] {
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            chart.set_chart_type_params(ChartTypeParams {
+                renko_brick_size: 2.0,
+                kagi_reversal: 2.0,
+                range_size: 2.0,
+                pnf_box_size: 2.0,
+                renko_size_method: method,
+                kagi_size_method: method,
+                range_size_method: method,
+                pnf_size_method: method,
+                ..Default::default()
+            });
+            assert_eq!(sizes(&chart), [initial; 4]);
+            chart.update(
+                SeriesId::MAIN,
+                Bar::new(
+                    data[3].time + Duration::minutes(1),
+                    200.0,
+                    202.0,
+                    198.0,
+                    200.0,
+                    1.0,
+                ),
+            );
+            for kind in [
+                ChartType::Renko,
+                ChartType::Kagi,
+                ChartType::Range,
+                ChartType::PointAndFigure,
+            ] {
+                chart.set_chart_type(kind);
+                paint(&mut chart);
+                assert_eq!(
+                    sizes(&chart),
+                    [initial; 4],
+                    "{kind:?} changed its size on append"
+                );
+            }
+            let saved = serde_json::to_string(chart.chart_type_params()).unwrap();
+            chart.set_chart_type_params(serde_json::from_str(&saved).unwrap());
+            for size in sizes(&chart) {
+                assert!((size - recalculated).abs() < 1e-12);
+            }
+        }
+        let mut chart = Chart::new(BarData::new());
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_size_method: BoxSizeMethod::Atr {
+                period: 3,
+                multiplier: 1.0,
+            },
+            ..Default::default()
+        });
+        for (i, bar) in data.into_iter().enumerate() {
+            chart.update(SeriesId::MAIN, bar);
+            paint(&mut chart);
+            assert_eq!(
+                chart.chart_type_params().renko_brick_size,
+                if i < 2 { 0.0 } else { 4.0 }
+            );
+        }
+    }
+
+    #[test]
+    fn sources_and_renko_wicks_reach_the_cached_series() {
+        let mut data = bars(0, &[100.0, 100.0, 100.0], None);
+        data[1].high = 103.0;
+        data[2].low = 97.0;
+        // High/low: Renko 100->103, then a reversal from 102 down to 97;
+        // Kagi 100->103->97; Line Break 100->100, 100->103, 100->97.
+        for (kind, count, first, last) in [
+            (ChartType::Renko, 8, (100.0, 101.0), (98.0, 97.0)),
+            (ChartType::Kagi, 2, (100.0, 103.0), (103.0, 97.0)),
+            (ChartType::LineBreak, 3, (100.0, 100.0), (100.0, 97.0)),
+        ] {
+            let close = ChartTypeParams::default();
+            let before = elements(kind, &close, &data, 0);
+            assert!(before.is_none_or(|(bars, _)| bars.len() == 1));
+            let params = ChartTypeParams {
+                renko_source: PriceBasedSource::HighLow,
+                kagi_source: PriceBasedSource::HighLow,
+                line_break_source: PriceBasedSource::HighLow,
+                ..Default::default()
+            };
+            let (built, _) = elements(kind, &params, &data, 0).unwrap();
+            assert_eq!(built.len(), count, "{kind:?}");
+            assert_eq!((built[0].open, built[0].close), first);
+            assert_eq!((built[count - 1].open, built[count - 1].close), last);
+            let restored = elements(kind, &close, &data, 0);
+            assert!(restored.is_none_or(|(bars, _)| bars.len() == 1));
+        }
+        let data = bars(10, &[100.0, 103.0, 101.5, 104.0], None);
+        let mut params = ChartTypeParams::default();
+        let (hidden, _) = elements(ChartType::Renko, &params, &data, 0).unwrap();
+        assert_eq!((hidden[3].high, hidden[3].low), (104.0, 103.0));
+        params.renko_wicks = true;
+        let (shown, _) = elements(ChartType::Renko, &params, &data, 0).unwrap();
+        assert_eq!(
+            (shown[3].open, shown[3].close, shown[3].high, shown[3].low),
+            (103.0, 104.0, 104.0, 101.5)
+        );
+        // A correction to the latest source bar extends the same unclosed wick history.
+        let mut tick = data.clone();
+        tick[3].close = 105.0;
+        tick[3].open = 105.0;
+        tick[3].high = 105.0;
+        tick[3].low = 105.0;
+        let (updated, _) = elements(ChartType::Renko, &params, &tick, 0).unwrap();
+        assert_eq!((updated[3].high, updated[3].low), (104.0, 101.5));
+        assert_eq!((updated[4].high, updated[4].low), (105.0, 104.0));
     }
 
     #[test]

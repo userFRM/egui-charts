@@ -96,6 +96,7 @@ impl Chart {
             pending_scroll_time: None,
             chart_type: ChartType::Candles,
             chart_type_params: ChartTypeParams::default(),
+            pending_box_sizes: [false; 4],
             older_bars_drawn: true,
             tracking_mode_active: false,
             mouse_in_chart: false,
@@ -338,9 +339,11 @@ impl Chart {
     /// Sets the parameters of the price-based chart types (Renko, Kagi, Range, Point and Figure,
     /// Line Break) and of the baseline.
     ///
-    /// Sizes are in price units and are used as given;
-    /// `RenkoConfig::from_atr(chart.bars(SeriesId::MAIN), 14, 1.0).brick_size` gives an ATR-based
-    /// brick. A size the chart cannot use is reported on the chart. On price-based types a change
+    /// Fixed sizes are in price units. ATR and percentage methods resolve from the loaded history
+    /// when this is called, or once enough bars arrive if history is not ready. They then stay
+    /// fixed through ticks, appends, corrections and prepends. Calling this again or replacing
+    /// the dataset with [`Chart::set_data`] recalculates them. A size the chart cannot use is
+    /// reported on the chart. On price-based types a change
     /// clears the zoom history and selection and keeps the right-edge item by time and rank.
     pub fn set_chart_type_params(&mut self, params: ChartTypeParams) {
         if self.chart_type.is_time_independent() && self.chart_type_params != params {
@@ -349,6 +352,12 @@ impl Chart {
             self.drawings.deselect();
         }
         self.chart_type_params = params;
+        self.pending_box_sizes = self
+            .chart_type_params
+            .size_methods()
+            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
+        self.chart_type_params
+            .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
     }
 
     /// Returns the parameters of the price-based chart types and of the baseline.

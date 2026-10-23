@@ -227,6 +227,7 @@ pub struct Chart {
     pub(crate) chart_type: ChartType,
     /// Parameters of the price-based chart types and the baseline
     pub(crate) chart_type_params: ChartTypeParams,
+    pending_box_sizes: [bool; 4],
     /// Whether older source bars can contribute to the shown series.
     pub(crate) older_bars_drawn: bool,
     /// Whether tracking mode is currently active
