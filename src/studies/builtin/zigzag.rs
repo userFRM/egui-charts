@@ -1,4 +1,4 @@
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -19,27 +19,34 @@ pub enum ZigZagMode {
 /// Zig Zag: the swings of at least `deviation_percent` (Merrill's filtered waves), drawn
 /// as straight lines between consecutive pivots.
 ///
-/// - A bar whose prices in the chosen mode are not finite or not positive is skipped: it is
-///   never a pivot and never confirms one, and a leg is drawn across it. A series with no
+/// - A bar whose prices in the chosen mode are not finite has no value and is not counted in
+///   `depth`, as if it were not in the series. A bar whose prices are not positive is skipped:
+///   it is never a pivot and never confirms one, and a leg is drawn across it. A series with no
 ///   positive prices has no values, because the percentage filter needs positive prices.
 ///   A deviation of 0 filters nothing, so it gives no values either.
 /// - Until the first reversal the study tracks the highest high and the lowest low. A rise
-///   of `deviation_percent` from the lowest low confirms that low as the first pivot and
-///   starts an up leg at the bar that confirms it; a fall from the highest high confirms
-///   that high and starts a down leg. When one bar confirms both, the earlier extreme is
-///   the first pivot, and the low when both are on one bar.
+///   of `deviation_percent` from the lowest low confirms that low as the first pivot; a fall
+///   from the highest high confirms that high. When one bar confirms both, the earlier
+///   extreme is the first pivot, and the low when both are on one bar.
 /// - Each bar first extends the current leg (a higher high in an up leg, a lower low in a
 ///   down leg) and only otherwise is tested for a reversal. A reversal needs at least
 ///   `depth` bars after the extreme it is measured from, so an outside bar, which both
-///   extends the leg and reverses from the old extreme, extends the leg. Pivots are at
-///   least `depth` bars apart, so a swing shorter than `depth` bars is not drawn.
+///   extends the leg and reverses from the old extreme, extends the leg.
+/// - Pivots sit on the swing extremes. When a reversal is confirmed, the new leg starts at
+///   the lowest low (for a down leg) or the highest high (for an up leg) since the pivot it
+///   reverses from, which may be before the confirming bar, and the bars after that extreme
+///   up to the confirming bar are judged against the new leg as if it had started there,
+///   so a reversal they already confirm is drawn too. `depth` is the minimum number of bars
+///   from a pivot to the bar that confirms the next reversal, not the distance between
+///   pivots: two pivots can be fewer than `depth` bars apart, and a swing shorter than
+///   `depth` bars is drawn when a later bar confirms it.
 /// - The last pivot is the extreme of the current leg, which moves while price extends it.
 ///   Bars before the first pivot and after the last have no value.
 #[derive(Clone)]
 pub struct ZigZag {
     /// Min percentage change to register a swing
     deviation_percent: f64,
-    /// Min number of bars between pivots
+    /// Min number of bars from a pivot to the bar that confirms the next reversal
     depth: usize,
     /// Price mode
     mode: ZigZagMode,
@@ -85,6 +92,111 @@ impl ZigZag {
             ZigZagMode::Typical => (bar.high + bar.low + bar.close) / 3.0,
         }
     }
+
+    /// The values over `data`, every bar of which has finite prices.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = vec![IndicatorValue::None; data.len()];
+        let (depth, deviation) = (self.depth, self.deviation_percent);
+        if deviation <= 0.0 {
+            return values;
+        }
+        // (bar, high, low) of the bars with usable prices.
+        let bars: Vec<(usize, f64, f64)> = data
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (i, self.get_price(b, true), self.get_price(b, false)))
+            .filter(|&(_, high, low)| [high, low].iter().all(|p| p.is_finite() && *p > 0.0))
+            .collect();
+        // The extremes below are (position in `bars`, price).
+        let rises = |from: (usize, f64), p: usize| {
+            bars[p].0 - bars[from.0].0 >= depth
+                && (bars[p].1 - from.1) / from.1 * 100.0 >= deviation
+        };
+        let falls = |from: (usize, f64), p: usize| {
+            bars[p].0 - bars[from.0].0 >= depth
+                && (from.1 - bars[p].2) / from.1 * 100.0 >= deviation
+        };
+        let Some(&(_, high, low)) = bars.first() else {
+            return values;
+        };
+
+        // Before the first pivot: the highest high and the lowest low.
+        let (mut top, mut bottom) = ((0, high), (0, low));
+        // Pivots in bar order, then the current leg's direction and extreme.
+        let mut pivots = Vec::new();
+        let mut trend: Option<(bool, (usize, f64))> = None;
+
+        let mut p = 1;
+        while p < bars.len() {
+            let (_, high, low) = bars[p];
+            // The pivot a reversal confirms at this bar, and whether the new leg goes up.
+            let mut reversal = None;
+            match &mut trend {
+                None => {
+                    if high > top.1 {
+                        top = (p, high);
+                    }
+                    if low < bottom.1 {
+                        bottom = (p, low);
+                    }
+                    // A bar confirming both reversals confirms the earlier extreme.
+                    let (rise, fall) = (rises(bottom, p), falls(top, p));
+                    if rise && !(fall && top.0 < bottom.0) {
+                        reversal = Some((bottom, true));
+                    } else if fall {
+                        reversal = Some((top, false));
+                    }
+                }
+                Some((up, extreme)) => {
+                    let (extends, reverses) = if *up {
+                        (high > extreme.1, falls(*extreme, p))
+                    } else {
+                        (low < extreme.1, rises(*extreme, p))
+                    };
+                    if extends {
+                        *extreme = (p, if *up { high } else { low });
+                    } else if reverses {
+                        reversal = Some((*extreme, !*up));
+                    }
+                }
+            }
+            if let Some((pivot, up)) = reversal {
+                pivots.push(pivot);
+                // The new leg starts at the swing's extreme since the pivot, not at the confirming
+                // bar; the bars after it are judged again against the leg.
+                let extreme = (pivot.0 + 1..=p)
+                    .map(|q| (q, if up { bars[q].1 } else { bars[q].2 }))
+                    .reduce(|best, c| {
+                        if (c.1 > best.1) == up && c.1 != best.1 {
+                            c
+                        } else {
+                            best
+                        }
+                    })
+                    .expect("the pivot comes before this bar");
+                trend = Some((up, extreme));
+                p = extreme.0;
+            }
+            p += 1;
+        }
+        pivots.extend(trend.map(|(_, extreme)| extreme));
+        // Back to bar numbers.
+        let pivots: Vec<(usize, f64)> = pivots
+            .into_iter()
+            .map(|(p, price)| (bars[p].0, price))
+            .collect();
+
+        // Renderers join values on adjacent bars, so fill each leg with a
+        // straight line between its pivots. A lone pivot is not a swing.
+        for leg in pivots.windows(2) {
+            let ((start, from), (end, to)) = (leg[0], leg[1]);
+            for i in start..=end {
+                let t = (i - start) as f64 / (end - start) as f64;
+                values[i] = IndicatorValue::Single(from + (to - from) * t);
+            }
+        }
+        values
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -104,78 +216,15 @@ impl Indicator for ZigZag {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = vec![IndicatorValue::None; data.len()];
-        let (depth, deviation) = (self.depth, self.deviation_percent);
-        if deviation <= 0.0 {
-            return;
-        }
-        let rises = |from: (usize, f64), i: usize, high: f64| {
-            i - from.0 >= depth && (high - from.1) / from.1 * 100.0 >= deviation
-        };
-        let falls = |from: (usize, f64), i: usize, low: f64| {
-            i - from.0 >= depth && (from.1 - low) / from.1 * 100.0 >= deviation
-        };
-        let mut bars = data
-            .iter()
-            .map(|b| (self.get_price(b, true), self.get_price(b, false)))
-            .enumerate()
-            .filter(|&(_, (high, low))| [high, low].iter().all(|p| p.is_finite() && *p > 0.0));
-        let Some((first, (high, low))) = bars.next() else {
-            return;
-        };
-
-        // Before the first pivot: the highest high and the lowest low.
-        let (mut top, mut bottom) = ((first, high), (first, low));
-        // Pivots in bar order, then the current leg's direction and extreme.
-        let mut pivots = Vec::new();
-        let mut trend: Option<(bool, (usize, f64))> = None;
-
-        for (i, (high, low)) in bars {
-            match &mut trend {
-                None => {
-                    if high > top.1 {
-                        top = (i, high);
-                    }
-                    if low < bottom.1 {
-                        bottom = (i, low);
-                    }
-                    // A bar confirming both reversals confirms the earlier extreme.
-                    let (rise, fall) = (rises(bottom, i, high), falls(top, i, low));
-                    if rise && !(fall && top.0 < bottom.0) {
-                        pivots.push(bottom);
-                        trend = Some((true, (i, high)));
-                    } else if fall {
-                        pivots.push(top);
-                        trend = Some((false, (i, low)));
-                    }
-                }
-                Some((up, extreme)) => {
-                    let (extends, reverses) = if *up {
-                        (high > extreme.1, falls(*extreme, i, low))
-                    } else {
-                        (low < extreme.1, rises(*extreme, i, high))
-                    };
-                    if extends {
-                        *extreme = (i, if *up { high } else { low });
-                    } else if reverses {
-                        pivots.push(*extreme);
-                        *up = !*up;
-                        *extreme = (i, if *up { high } else { low });
-                    }
-                }
-            }
-        }
-        pivots.extend(trend.map(|(_, extreme)| extreme));
-
-        // Renderers join values on adjacent bars, so fill each leg with a
-        // straight line between its pivots. A lone pivot is not a swing.
-        for leg in pivots.windows(2) {
-            let ((start, from), (end, to)) = (leg[0], leg[1]);
-            for i in start..=end {
-                let t = (i - start) as f64 / (end - start) as f64;
-                self.values[i] = IndicatorValue::Single(from + (to - from) * t);
-            }
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                [true, false]
+                    .iter()
+                    .all(|&high| self.get_price(b, high).is_finite())
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -250,7 +299,8 @@ mod tests {
             .collect();
         let cases: &[Case] = &[
             (
-                // Warm-up bar, NaN bar inside a leg, bars after the last pivot.
+                // Warm-up bar, NaN bar inside a leg (no value, the leg is drawn as if it were absent),
+                // bars after the last pivot.
                 "swings",
                 ZigZag::new(5.0, 1),
                 &[
@@ -274,9 +324,9 @@ mod tests {
                     Some(97.666_666_666_666_67),
                     Some(95.333_333_333_333_33),
                     Some(93.0),
-                    Some(95.0),
-                    Some(97.0),
-                    Some(99.0),
+                    None,
+                    Some(93.0 + 8.0 / 3.0),
+                    Some(93.0 + 16.0 / 3.0),
                     Some(101.0),
                     Some(98.0),
                     Some(95.0),
@@ -292,11 +342,42 @@ mod tests {
             ),
             (
                 // Bar 3 confirms both the fall from 110 and the rise from 90: the earlier
-                // extreme is the first pivot, and the next pivot is `depth` bars after it.
+                // extreme is the first pivot. The fall's low is on bar 1, and bar 3 is 2 bars
+                // after it, so it confirms the rise too: the pivots are at bars 0, 1 and 2.
                 "both reversals at once",
                 ZigZag::new(5.0, 2),
                 &[(110.0, 109.0), (95.0, 90.0), (108.0, 105.0), (106.0, 104.0)],
-                &[Some(110.0), Some(108.0), Some(106.0), Some(104.0)],
+                &[Some(110.0), Some(90.0), Some(108.0), None],
+            ),
+            (
+                // The fall from 113 bottoms at 100 on bar 5, which is only 2 bars after the top
+                // and so is confirmed on bar 6: the pivot is bar 5, not bar 6.
+                "swing extreme before the confirming bar",
+                ZigZag::new(5.0, 3),
+                &[
+                    (101.0, 100.0),
+                    (105.0, 104.0),
+                    (108.0, 107.0),
+                    (113.0, 112.0),
+                    (110.0, 104.0),
+                    (103.0, 100.0),
+                    (107.0, 106.0),
+                    (110.0, 109.0),
+                    (114.0, 113.0),
+                    (118.0, 117.0),
+                ],
+                &[
+                    Some(100.0),
+                    Some(313.0 / 3.0),
+                    Some(326.0 / 3.0),
+                    Some(113.0),
+                    Some(106.5),
+                    Some(100.0),
+                    Some(104.5),
+                    Some(109.0),
+                    Some(113.5),
+                    Some(118.0),
+                ],
             ),
             (
                 // A deviation of 0 filters nothing, so there are no swings to draw.
@@ -363,6 +444,14 @@ mod tests {
                 ZigZag::new(5.0, 1),
                 &[(5.0, 4.0), (3.0, 2.0), (1.0, 0.0), (1.02, 0.5)],
                 &[Some(5.0), Some(3.5), Some(2.0), Some(0.5)],
+            ),
+            (
+                // The NaN bar is not in the series: it has no value and is not a bar of `depth`,
+                // so bar 3 is 1 bar after the top and does not confirm a fall.
+                "NaN bar inside a leg",
+                ZigZag::new(5.0, 2),
+                &[(100.0, 99.0), (110.0, 109.0), (nan, nan), (104.0, 103.0)],
+                &[Some(99.0), Some(110.0), None, None],
             ),
             (
                 "negative prices",
