@@ -135,6 +135,7 @@ impl ChartTypeSelector {
             .id(id)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .align_alternatives(&[])
+            .frame(egui::Frame::popup(ui.style()).fill(theme.ui.panel_bg))
             .gap(theme.spacing.xs)
             .show(|ui| self.menu_ui(ui, &theme, max_height))
             .map_or(ChartTypeAction::None, |menu| menu.inner);
@@ -160,37 +161,12 @@ impl ChartTypeSelector {
         let spacing = ui.spacing_mut();
         spacing.item_spacing.y = 0.0;
         spacing.scroll.floating = false;
+        spacing.scroll.bar_width = 3.0;
         spacing.scroll.fade.strength = 0.0;
-        let bar = spacing.scroll.allocated_width();
 
-        let text_w = ChartType::all()
-            .iter()
-            .map(|ct| {
-                let width = |text: &str, size: f32| {
-                    ui.painter()
-                        .layout_no_wrap(
-                            text.to_owned(),
-                            egui::FontId::proportional(size),
-                            Color32::PLACEHOLDER,
-                        )
-                        .size()
-                        .x
-                };
-                f32::max(
-                    width(ct.name(), theme.text.body),
-                    width(ct.desc(), theme.text.small),
-                )
-            })
-            .fold(0.0, f32::max);
-        let row_w = theme.spacing.lg * 2.0
-            + icon_sizes::MD
-            + theme.spacing.lg
-            + text_w
-            + theme.spacing.lg
-            + icon_sizes::SM;
-        let overflows = ChartType::all().len() as f32 * ROW_H > max_height;
-        let bar = if overflows { bar } else { 0.0 };
-        ui.set_width((row_w + bar).max(self.config.dropdown_width));
+        ui.set_width(256.0_f32.max(self.config.dropdown_width));
+        ui.visuals_mut().selection.bg_fill = theme.ui.text;
+        ui.visuals_mut().selection.stroke.color = theme.ui.panel_bg;
         // A popup is first measured inside a 400 px high area; this lets the list use the room below.
         ui.set_max_height(max_height);
 
@@ -200,6 +176,18 @@ impl ChartTypeSelector {
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 for chart_type in ChartType::all() {
+                    if matches!(
+                        chart_type,
+                        ChartType::Line
+                            | ChartType::Area
+                            | ChartType::Columns
+                            | ChartType::TimePriceOpportunity
+                            | ChartType::LineBreak
+                    ) {
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(12.0);
+                    }
                     let content = ChartTypeRow {
                         chart_type: *chart_type,
                         theme,
@@ -222,7 +210,7 @@ impl ChartTypeSelector {
     }
 }
 
-/// One chart type row: icon, name with a one-line description, and a check on the current type.
+/// One chart type row: icon, name, and a check on the current type.
 struct ChartTypeRow<'a> {
     chart_type: ChartType,
     theme: &'a Theme,
@@ -232,16 +220,10 @@ impl ListItemContent for ChartTypeRow<'_> {
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> egui::Response {
         let theme = self.theme;
         let rect = context.rect;
-        let (icon, name, description) = if context.selected {
-            let on_selection = theme.ui.selection_text;
-            (on_selection, on_selection, on_selection)
+        let color = if context.selected {
+            theme.ui.panel_bg
         } else {
-            let icon = if context.hovered {
-                theme.ui.text
-            } else {
-                theme.ui.text_secondary
-            };
-            (icon, theme.ui.text, theme.ui.text_secondary)
+            theme.ui.text
         };
         context.response.widget_info(|| {
             WidgetInfo::selected(
@@ -258,29 +240,15 @@ impl ListItemContent for ChartTypeRow<'_> {
         );
         self.chart_type
             .icon()
-            .as_image_tinted(icon_rect.size(), icon)
+            .as_image_tinted(icon_rect.size(), color)
             .paint_at(ui, icon_rect);
 
-        // The two lines are centred as one block.
-        let name = ui.painter().layout_no_wrap(
-            self.chart_type.name().to_owned(),
-            egui::FontId::proportional(theme.text.body),
-            name,
-        );
-        let description = ui.painter().layout_no_wrap(
-            self.chart_type.desc().to_owned(),
-            egui::FontId::proportional(theme.text.small),
-            description,
-        );
-        let text_x = icon_rect.max.x + theme.spacing.lg;
-        let top = rect.center().y - (name.size().y + description.size().y) / 2.0;
-        let description_y = top + name.size().y;
-        ui.painter()
-            .galley(pos2(text_x, top), name, Color32::PLACEHOLDER);
-        ui.painter().galley(
-            pos2(text_x, description_y),
-            description,
-            Color32::PLACEHOLDER,
+        ui.painter().text(
+            pos2(icon_rect.max.x + theme.spacing.lg, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            self.chart_type.name(),
+            egui::FontId::proportional(14.0),
+            color,
         );
 
         if context.selected {
@@ -292,7 +260,7 @@ impl ListItemContent for ChartTypeRow<'_> {
                 vec2(icon_sizes::SM, icon_sizes::SM),
             );
             embedded_icons::CHECK
-                .as_image_tinted(check.size(), theme.ui.selection_text)
+                .as_image_tinted(check.size(), color)
                 .paint_at(ui, check);
         }
         menu_row_focus(ui, context.response);

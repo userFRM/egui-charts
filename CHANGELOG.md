@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Chart-type menu rows use a single 14 px name beside each icon, neutral selection and separators between type families.
+
 - The interval menu groups full interval names in 32 px rows with trailing favourite marks and neutral selection, retaining custom interval entry and model selection.
 
 - Top toolbar tooltips use compact dark surfaces below their controls, with platform-specific shortcut chips for alerts. Symbol, interval and chart-type triggers now identify their actions on hover.
