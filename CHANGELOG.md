@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Kit list rows draw their keyboard focus ring and retain visual row order under Tab. ([#277](https://github.com/userFRM/egui-charts/issues/277))
+
 - The colour picker measures its popup bounds after layout, so clicking Hex reaches the custom editor. Custom editing starts from the current colour, Escape is consumed, and closing restores the swatch view. Only selection and hover draw a 2 px ring; swatches close to the popup fill get an inside hairline. Wells, swatches and the custom row show keyboard focus. Migration: `ColorPicker::show` returns `egui::InnerResponse<Option<Color32>>`; read `.inner` for a picked colour and `.response` for the well. The unused `color_picker_btn` helper is removed; use `ColorPicker` with persistent `ColorPickerState`. ([#576](https://github.com/userFRM/egui-charts/issues/576), [#650](https://github.com/userFRM/egui-charts/issues/650), part of [#277](https://github.com/userFRM/egui-charts/issues/277))
 
 - Autocomplete keeps its popup alive while open and moves selection to the hovered suggestion before drawing any row. Only that row is highlighted, inset with rounded corners, and Enter confirms it. ([#592](https://github.com/userFRM/egui-charts/issues/592))
