@@ -230,7 +230,8 @@ impl Drawing {
             T::Measure | T::DateAndPriceRange | T::GannBox => {
                 boxed(&mut outline, Rect::from_two_pos(first, second));
             }
-            T::GannSquare | T::GannFixed => {
+            T::GannFixed => boxed(&mut outline, Rect::from_two_pos(first, second)),
+            T::GannSquare => {
                 let corner = gann::gann_square_corner(first, second);
                 boxed(&mut outline, Rect::from_two_pos(first, corner));
             }

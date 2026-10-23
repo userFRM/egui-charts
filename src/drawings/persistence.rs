@@ -136,10 +136,46 @@ impl StoredDrawing {
         if size.into_iter().any(bad) {
             return Some("position_size".into());
         }
-        let mut levels = d.fib_config.iter().flat_map(|config| &config.levels);
-        levels
-            .position(|level| bad(level.value.into()))
-            .map(|i| format!("fib_config.levels[{i}].value"))
+        for (name, values) in [
+            (
+                "fib_config.levels",
+                d.fib_config
+                    .iter()
+                    .flat_map(|c| c.levels.iter().map(|l| l.value))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "pitchfork.levels",
+                d.pitchfork
+                    .iter()
+                    .flat_map(|c| c.levels.iter().map(|l| l.value))
+                    .collect(),
+            ),
+            (
+                "gann.price_levels",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.price_levels.iter().copied())
+                    .collect(),
+            ),
+            (
+                "gann.time_levels",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.time_levels.iter().copied())
+                    .collect(),
+            ),
+        ] {
+            if let Some(i) = values.iter().position(|v| !v.is_finite()) {
+                let suffix = if name.ends_with(".levels") {
+                    ".value"
+                } else {
+                    ""
+                };
+                return Some(format!("{name}[{i}]{suffix}"));
+            }
+        }
+        None
     }
 }
 
@@ -668,6 +704,9 @@ mod tests {
         });
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
+        if tool == DrawingToolType::DoubleCurve {
+            d.chart_points.push(ChartPoint::new(12.0, 115.0));
+        }
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -676,7 +715,18 @@ mod tests {
     #[test]
     fn every_tool_round_trips_with_all_settings() {
         for &tool in DrawingToolType::all().iter().filter(|t| !t.is_cursor()) {
-            let drawing = non_default_drawing(tool);
+            let mut drawing = non_default_drawing(tool);
+            drawing.gann = Some(crate::drawings::GannConfig {
+                price_levels: vec![0.25, 0.75],
+                time_levels: vec![0.5],
+            });
+            let mut fork = crate::drawings::PitchforkConfig::default();
+            fork.levels[0].line_style = LineStyle::Dotted;
+            fork.levels[1].visible = false;
+            fork.show_background = false;
+            drawing.pitchfork = Some(fork);
+            drawing.channel_midline = true;
+
             let mut storage = DrawingStorage::new("AAPL");
             storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
             let (loaded, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
@@ -921,7 +971,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 8] = [
+        let cases: [(Spoil, &str); 11] = [
             (
                 |s| first(s).drawing.stroke_width = f32::NAN,
                 "non-finite stroke_width",
@@ -946,6 +996,37 @@ mod tests {
             (
                 |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,
                 "non-finite fib_config.levels[0].value",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .pitchfork
+                        .get_or_insert_with(Default::default)
+                        .levels[0]
+                        .value = f32::NAN
+                },
+                "non-finite pitchfork.levels[0].value",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .gann
+                        .get_or_insert_with(Default::default)
+                        .price_levels[0] = f32::INFINITY
+                },
+                "non-finite gann.price_levels[0]",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .gann
+                        .get_or_insert_with(Default::default)
+                        .time_levels[0] = f32::NAN
+                },
+                "non-finite gann.time_levels[0]",
             ),
             (|s| s.drawings.push(s.drawings[0].clone()), "duplicate id"),
             (|s| first(s).points.truncate(1), "Trend Line needs 2"),

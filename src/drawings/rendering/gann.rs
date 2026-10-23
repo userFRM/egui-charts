@@ -11,9 +11,9 @@ use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 /// times the 1x1 slope from `start` to `end`.
 fn gann_fan_line_y(start: Pos2, end: Pos2, ratio: f32, x: f32) -> f32 {
     let dy = end.y - start.y;
-    let dx = (end.x - start.x).abs();
+    let dx = end.x - start.x;
     // A vertical base has no slope; fall back to one pixel per pixel in the direction of the move.
-    let base_slope = if dx > 0.001 {
+    let base_slope = if dx.abs() > 0.001 {
         dy / dx
     } else if dy < 0.0 {
         -1.0
@@ -30,7 +30,11 @@ pub(super) const GANN_FAN_RATIOS: [f32; 9] = [8.0, 4.0, 3.0, 2.0, 1.0, 0.5, 1.0 
 /// The Gann fan's lines from `start` to the right edge of `rect`, then the
 /// line to `end`.
 pub(super) fn gann_fan_lines(start: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2]> {
-    let x = rect.max.x;
+    let x = if end.x < start.x {
+        rect.min.x
+    } else {
+        rect.max.x
+    };
     GANN_FAN_RATIOS
         .iter()
         .map(|&ratio| [start, Pos2::new(x, gann_fan_line_y(start, end, ratio, x))])
@@ -66,6 +70,30 @@ fn gann_box_angle_lines(p1: Pos2, p2: Pos2) -> Vec<[Pos2; 2]> {
 }
 
 impl Drawing {
+    fn draw_gann_grid(&self, painter: &egui::Painter, start: Pos2, end: Pos2) {
+        let config = self.gann.clone().unwrap_or_default();
+        let rect = Rect::from_two_pos(start, end);
+        for (vertical, levels) in [(true, config.time_levels), (false, config.price_levels)] {
+            for ratio in levels
+                .into_iter()
+                .filter(|r| r.is_finite() && *r > 0.0 && *r < 1.0)
+            {
+                let color = Color32::from_rgba_unmultiplied(
+                    self.color[0],
+                    self.color[1],
+                    self.color[2],
+                    if ratio == 0.5 { 120 } else { 50 },
+                );
+                let stroke = Stroke::new(DESIGN_TOKENS.stroke.extra_thin, color);
+                if vertical {
+                    painter.vline(start.x + (end.x - start.x) * ratio, rect.y_range(), stroke);
+                } else {
+                    painter.hline(rect.x_range(), start.y + (end.y - start.y) * ratio, stroke);
+                }
+            }
+        }
+    }
+
     /// Render Gann Fan - Complete 9-angle Gann fan with bi-directional support
     pub(crate) fn render_gann_fan(&self, painter: &egui::Painter, chart_rect: Rect) {
         if self.points.len() < 2 {
@@ -74,6 +102,12 @@ impl Drawing {
 
         let start = self.points[0];
         let end = self.points[1];
+        let edge = if end.x < start.x {
+            chart_rect.min.x
+        } else {
+            chart_rect.max.x
+        };
+        let painter = &painter.with_clip_rect(chart_rect);
 
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
@@ -97,14 +131,11 @@ impl Drawing {
         ];
 
         for (angle_ratio, (label, angle_color)) in GANN_FAN_RATIOS.iter().zip(&styles) {
-            let end_y = gann_fan_line_y(start, end, *angle_ratio, chart_rect.max.x);
+            let end_y = gann_fan_line_y(start, end, *angle_ratio, edge);
 
             // Only draw if within reasonable bounds
-            if end_y.is_finite()
-                && end_y >= chart_rect.min.y - 200.0
-                && end_y <= chart_rect.max.y + 200.0
-            {
-                let fan_end = Pos2::new(chart_rect.max.x, end_y);
+            if end_y.is_finite() {
+                let fan_end = Pos2::new(edge, end_y);
 
                 // Use color based on angle (1:1 is thicker)
                 let stroke_width = if (*angle_ratio - 1.0).abs() < 0.01 {
@@ -136,7 +167,11 @@ impl Drawing {
                     let gann_label_height = DESIGN_TOKENS.sizing.technical_labels.gann_label_height;
                     let label_rect = Rect::from_min_size(
                         Pos2::new(
-                            chart_rect.max.x - gann_label_width - DESIGN_TOKENS.spacing.xs,
+                            if end.x < start.x {
+                                edge + DESIGN_TOKENS.spacing.xs
+                            } else {
+                                edge - gann_label_width - DESIGN_TOKENS.spacing.xs
+                            },
                             end_y - gann_label_height / 2.0,
                         ),
                         egui::Vec2::new(gann_label_width, gann_label_height),
@@ -206,36 +241,7 @@ impl Drawing {
         let center = square_rect.center();
         let half_size = size / 2.0;
 
-        // Draw 8 divisions grid (standard Gann)
-        let divisions = 8;
-        let step = size / divisions as f32;
-
-        for i in 1..divisions {
-            let offset = step * i as f32;
-            let alpha = if i == 4 {
-                120
-            } else if i % 2 == 0 {
-                80
-            } else {
-                50
-            };
-            let grid_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], alpha);
-
-            // Vertical lines
-            painter.vline(
-                square_rect.min.x + offset,
-                square_rect.y_range(),
-                Stroke::new(DESIGN_TOKENS.stroke.extra_thin, grid_color),
-            );
-
-            // Horizontal lines
-            painter.hline(
-                square_rect.x_range(),
-                square_rect.min.y + offset,
-                Stroke::new(DESIGN_TOKENS.stroke.extra_thin, grid_color),
-            );
-        }
+        self.draw_gann_grid(painter, start, gann_square_corner(start, end));
 
         // Draw cardinal and diagonal lines from center
         let line_color =
@@ -369,42 +375,7 @@ impl Drawing {
             StrokeKind::Inside,
         );
 
-        // Draw Gann grid (8x8 divisions - standard for Gann analysis)
-        let divisions = 8;
-        let step_x = rect.width() / divisions as f32;
-        let step_y = rect.height() / divisions as f32;
-
-        // Draw vertical and horizontal grid lines
-        for i in 1..divisions {
-            let x = rect.min.x + step_x * i as f32;
-            let y = rect.min.y + step_y * i as f32;
-
-            // Use different opacity for 50% lines (quarter lines are lighter)
-            let line_alpha = if i == 4 {
-                120
-            } else if i % 2 == 0 {
-                80
-            } else {
-                40
-            };
-            let line_color = Color32::from_rgba_unmultiplied(
-                self.color[0],
-                self.color[1],
-                self.color[2],
-                line_alpha,
-            );
-
-            painter.vline(
-                x,
-                rect.y_range(),
-                Stroke::new(DESIGN_TOKENS.stroke.extra_thin, line_color),
-            );
-            painter.hline(
-                rect.x_range(),
-                y,
-                Stroke::new(DESIGN_TOKENS.stroke.extra_thin, line_color),
-            );
-        }
+        self.draw_gann_grid(painter, p1, p2);
 
         // Draw main diagonals (1:1 angles)
         let diag_color =
@@ -438,24 +409,28 @@ impl Drawing {
             .chart_axis_bg
             .gamma_multiply(0.8);
 
-        // Levels count from the first anchor's price, whichever corner it is.
-        for i in 0..=divisions {
-            if i == 0 || i == divisions || i == divisions / 2 {
-                let y = p1.y + (p2.y - p1.y) * i as f32 / divisions as f32;
-                let pct = (100.0 * i as f32 / divisions as f32) as i32;
-                let label_text = format!("{pct}%");
-                let label_pos = Pos2::new(rect.min.x - 25.0, y);
-                let label_rect =
-                    Rect::from_center_size(label_pos, egui::Vec2::new(24.0, typography::MD));
-                painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-                painter.text(
-                    label_pos,
-                    egui::Align2::CENTER_CENTER,
-                    &label_text,
-                    egui::FontId::proportional(typography::XS),
-                    label_color,
-                );
-            }
+        for level in self
+            .gann
+            .clone()
+            .unwrap_or_default()
+            .price_levels
+            .into_iter()
+            .filter(|r| r.is_finite() && (0.0..=1.0).contains(r))
+        {
+            let y = p1.y + (p2.y - p1.y) * level;
+            let label_pos = Pos2::new(rect.min.x - 25.0, y);
+            painter.rect_filled(
+                Rect::from_center_size(label_pos, egui::vec2(32.0, typography::MD)),
+                DESIGN_TOKENS.rounding.sm,
+                label_bg,
+            );
+            painter.text(
+                label_pos,
+                egui::Align2::CENTER_CENTER,
+                format!("{}%", level * 100.0),
+                egui::FontId::proportional(typography::XS),
+                label_color,
+            );
         }
 
         // Draw anchor points
@@ -492,7 +467,7 @@ impl Drawing {
             self.color[3],
         );
 
-        let corner = gann_square_corner(p1, p2);
+        let corner = p2;
         let rect = Rect::from_two_pos(p1, corner);
         let center = rect.center();
 
@@ -509,30 +484,7 @@ impl Drawing {
             StrokeKind::Inside,
         );
 
-        // Draw grid - 4x4 subdivision (16 cells, common for Gann Fixed)
-        let divisions = 4;
-        for i in 1..divisions {
-            let t = i as f32 / divisions as f32;
-            let alpha = if i == 2 { 120 } else { 80 }; // 50% line is brighter
-            let grid_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], alpha);
-
-            // Vertical lines
-            let x = rect.min.x + rect.width() * t;
-            painter.vline(
-                x,
-                rect.y_range(),
-                Stroke::new(DESIGN_TOKENS.stroke.extra_thin, grid_color),
-            );
-
-            // Horizontal lines
-            let y = rect.min.y + rect.height() * t;
-            painter.hline(
-                rect.x_range(),
-                y,
-                Stroke::new(DESIGN_TOKENS.stroke.extra_thin, grid_color),
-            );
-        }
+        self.draw_gann_grid(painter, p1, p2);
 
         // Draw main diagonals (1:1 Gann angles)
         let diag_color =
@@ -613,7 +565,20 @@ impl Drawing {
         painter.text(
             Pos2::new(label_pos.x + 14.0, label_pos.y + 7.0),
             egui::Align2::CENTER_CENTER,
-            "1:1",
+            self.chart_points
+                .first()
+                .zip(self.chart_points.get(1))
+                .map_or_else(
+                    || "n/a".to_owned(),
+                    |(a, b)| {
+                        let bars = (b.bar_idx - a.bar_idx).abs();
+                        if bars > 0.0 {
+                            format!("{:.4}/bar", (b.price - a.price).abs() / f64::from(bars))
+                        } else {
+                            "n/a".to_owned()
+                        }
+                    },
+                ),
             egui::FontId::proportional(typography::XS),
             color,
         );
@@ -685,13 +650,69 @@ mod tests {
             ("1x4", 0.25, 97.5),
             ("1x8", 0.125, 98.75),
         ];
-        let wrong: Vec<_> = cases
+        for direction in [1.0, -1.0] {
+            for (label, ratio, expected) in cases {
+                let end = Pos2::new(end.x * direction, end.y);
+                let y = gann_fan_line_y(start, end, ratio, 10.0 * direction);
+                assert!(
+                    (y - expected).abs() < 1e-3,
+                    "{label} direction {direction}: {y} != {expected}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn gann_grids_keep_chart_dimensions_and_custom_divisions() {
+        let mut drawing = Drawing::new(0, crate::drawings::DrawingToolType::GannFixed);
+        drawing.chart_points = vec![
+            crate::drawings::ChartPoint::new(2.0, 20.0),
+            crate::drawings::ChartPoint::new(12.0, 10.0),
+        ];
+        for (x_scale, y_scale) in [(10.0, 10.0), (20.0, 5.0), (5.0, 20.0)] {
+            drawing.update_screen_coords(|x| x * x_scale, |y| y as f32 * y_scale);
+            let outline = drawing.outline(Rect::EVERYTHING).unwrap();
+            assert!(
+                outline
+                    .lines
+                    .iter()
+                    .flatten()
+                    .any(|p| p.distance(drawing.points[1]) < 1e-3)
+            );
+        }
+        drawing.points = vec![Pos2::new(20.0, 200.0), Pos2::new(120.0, 100.0)];
+        let mut saved = serde_json::to_value(&drawing).unwrap();
+        saved["gann"] = serde_json::json!({"price_levels":[0.3_f32],"time_levels":[0.7_f32]});
+        let mut restored: Drawing = serde_json::from_value(saved.clone()).unwrap();
+        restored.points = drawing.points;
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap()["gann"],
+            saved["gann"]
+        );
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            restored.render_gann_fixed(ui.painter())
+        });
+        let lines: Vec<_> = output
+            .shapes
             .iter()
-            .map(|&(label, ratio, expected)| {
-                (label, gann_fan_line_y(start, end, ratio, 10.0), expected)
+            .filter_map(|s| {
+                if let egui::Shape::LineSegment { points, .. } = &s.shape {
+                    Some(*points)
+                } else {
+                    None
+                }
             })
-            .filter(|&(_, y, expected)| (y - expected).abs() >= 1e-3)
             .collect();
-        assert!(wrong.is_empty(), "(label, y, expected): {wrong:?}");
+        output.drop_without_applying_deltas();
+        for want in [
+            [Pos2::new(90.0, 100.0), Pos2::new(90.0, 200.0)],
+            [Pos2::new(20.0, 170.0), Pos2::new(120.0, 170.0)],
+        ] {
+            assert!(
+                lines.iter().any(
+                    |line| line[0].distance(want[0]) < 1e-3 && line[1].distance(want[1]) < 1e-3
+                ),
+                "missing {want:?}: {lines:?}"
+            );
+        }
     }
 }

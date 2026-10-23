@@ -9,7 +9,7 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, LineStyle,
+    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig, LineStyle,
     PitchforkConfig, PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -106,6 +106,9 @@ pub struct Drawing {
     /// Band width of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
 
+    /// Price and time divisions of Gann boxes and squares.
+    #[serde(default)]
+    pub gann: Option<GannConfig>,
     /// Whether a parallel channel draws its dashed halfway line.
     #[serde(default)]
     pub channel_midline: bool,
@@ -152,6 +155,7 @@ impl Drawing {
             regression_trend: None,
             pitchfork: None,
             channel_midline: false,
+            gann: None,
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
