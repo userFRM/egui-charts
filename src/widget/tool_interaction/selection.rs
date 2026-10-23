@@ -56,7 +56,7 @@ pub fn handle_selection<F1, F2>(
         }
 
         // Handle eraser mode hover preview
-        if cursor_modes.eraser.active {
+        if drawing_manager.eraser_mode {
             // A locked drawing cannot be erased, so it is not offered.
             let hit = drawing_manager.hit_test(pos).filter(|&id| {
                 drawing_manager
@@ -91,7 +91,7 @@ pub fn handle_selection<F1, F2>(
             }
         } else if response.clicked() {
             // Eraser mode: delete drawing on click
-            if cursor_modes.eraser.active {
+            if drawing_manager.eraser_mode {
                 if let Some(hit_id) = drawing_manager.hit_test(pos) {
                     log::info!("Eraser: deleting drawing {hit_id}");
                     drawing_manager.delete_drawing(hit_id);
@@ -127,7 +127,7 @@ pub fn render_eraser_highlight(
     drawing_manager: &DrawingManager,
     cursor_modes: &CursorModeState,
 ) {
-    if !cursor_modes.eraser.active {
+    if !drawing_manager.eraser_mode {
         return;
     }
 

@@ -346,7 +346,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 ### Drawing Toolbar
 - [x] Full sidebar with all tool categories
 - [x] Submenu rendering with icons, section headers, shortcut labels
-- [ ] Cursor submenu (Cross, Dot, Arrow, Eraser) renders; none of the four changes chart behaviour (Eraser sets a flag nothing reads)
+- [ ] Cursor submenu (Cross, Dot, Arrow, Eraser) renders and the Eraser deletes the drawing it is clicked on; Cross, Dot and Arrow do not change chart behaviour
 - [ ] Color picker popup (4x5 grid exists in code but no control opens it)
 - [x] Magnet, StayInDrawing, Lock toggles (magnet and lock have no effect yet)
 - [ ] Drawing tool favorites (star is paint-only, no toggle, favorites bar not rendered)

@@ -173,7 +173,8 @@ pub struct DrawingManager {
     /// neither drawn nor hit. [`Chart::set_timeframe`](crate::widget::Chart::set_timeframe)
     /// keeps it in step with the chart.
     pub curr_timeframe: String,
-    /// Whether eraser mode is active.
+    /// Whether a click deletes the drawing under the pointer instead of selecting it. Set it
+    /// with [`Self::set_eraser_mode`].
     pub eraser_mode: bool,
     /// Drawing ID currently hovered by the eraser cursor (for visual feedback).
     pub eraser_hover_drawing: Option<usize>,
@@ -412,10 +413,24 @@ impl DrawingManager {
     // === Tool management ===
 
     /// Sets the active drawing tool. Pass `None` to exit drawing mode and
-    /// return to selection/pointer mode. Cancels any in-progress drawing.
+    /// return to selection/pointer mode. A tool cancels any in-progress drawing and leaves
+    /// eraser mode.
     pub fn set_active_tool(&mut self, tool: Option<DrawingToolType>) {
         self.active_tool = tool;
         if tool.is_some() {
+            self.cancel_curr_drawing();
+            self.eraser_mode = false;
+        }
+    }
+
+    /// Switches eraser mode on or off. In eraser mode a click on the chart deletes the
+    /// drawing under the pointer, unless it is locked. Switching it on leaves the active tool
+    /// and cancels any in-progress drawing; choosing a tool with [`Self::set_active_tool`]
+    /// switches it off.
+    pub fn set_eraser_mode(&mut self, on: bool) {
+        self.eraser_mode = on;
+        if on {
+            self.active_tool = None;
             self.cancel_curr_drawing();
         }
     }

@@ -136,8 +136,32 @@ impl Chart {
 mod tests {
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType, TimeframeVisibility};
     use crate::model::Timeframe;
-    use crate::widget::test_frames::{chart, shapes};
-    use egui::{Color32, Context, Shape};
+    use crate::widget::test_frames::{chart, frame, shapes};
+    use egui::{Color32, Context, Event, Modifiers, PointerButton, Shape};
+
+    /// With the eraser on, a click on a drawing deletes it.
+    #[test]
+    fn an_eraser_click_deletes_the_drawing() {
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let mut line = Drawing::new(1, DrawingToolType::HorizontalLine);
+        line.chart_points = vec![ChartPoint::new(50.0, 15.0)];
+        chart.drawings_mut().drawings.push(line);
+        chart.drawings_mut().set_eraser_mode(true);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let pos = chart.drawings().drawings[0].points[0];
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let frames = [vec![Event::PointerMoved(pos)], vec![button(true)], vec![button(false)]];
+        for (i, events) in frames.into_iter().enumerate() {
+            frame(&ctx, &mut chart, 0.1 * (i + 1) as f64, events);
+        }
+        assert!(chart.drawings().drawings.is_empty());
+    }
 
     /// A drawing shown only on the daily interval is neither drawn nor hit once the chart is
     /// set to another interval.

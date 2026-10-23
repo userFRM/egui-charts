@@ -793,7 +793,7 @@ impl DemoApp {
             DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
             DrawingToolbarAction::SetCursorType(cursor) => {
                 use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
-                dm.eraser_mode = matches!(cursor, CursorType::Eraser);
+                dm.set_eraser_mode(matches!(cursor, CursorType::Eraser));
             }
             DrawingToolbarAction::ToggleMagnet => {
                 dm.options.magnet_mode = !dm.options.magnet_mode;
@@ -804,7 +804,10 @@ impl DemoApp {
                 dm.options.magnet_mode = true;
                 dm.update_snap_options();
             }
-            DrawingToolbarAction::ToggleEraserMode => dm.eraser_mode = !dm.eraser_mode,
+            DrawingToolbarAction::ToggleEraserMode => {
+                let on = !dm.eraser_mode;
+                dm.set_eraser_mode(on);
+            }
             DrawingToolbarAction::ToggleStayInDrawingMode => {
                 dm.stay_in_drawing_mode = !dm.stay_in_drawing_mode;
             }
