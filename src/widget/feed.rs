@@ -158,6 +158,23 @@ impl Chart {
         self.drawings.curr_timeframe = timeframe.as_str().into_owned();
     }
 
+    /// Requests regular hours (`false`, the default) or regular and extended hours (`true`).
+    /// A changed choice reloads history and replaces the live subscription on the next frame.
+    /// Without a feed the host supplies the selected bars with `set_data`.
+    pub fn set_extended_hours(&mut self, extended_hours: bool) {
+        if self.extended_hours != extended_hours {
+            self.extended_hours = extended_hours;
+            if let Some(link) = &mut self.feed_link {
+                link.reload_pending = true;
+            }
+        }
+    }
+
+    /// Whether history and subscriptions request extended hours.
+    pub fn extended_hours(&self) -> bool {
+        self.extended_hours
+    }
+
     /// The symbol the chart shows.
     pub fn symbol(&self) -> &str {
         &self.symbol
@@ -322,6 +339,7 @@ impl Chart {
             timeframe,
             before: None,
             count: link.initial_bars,
+            extended_hours: self.extended_hours,
         };
         let reply = link.reply(Request::History { scroll_back: false });
         link.feed.history(request, reply);
@@ -340,6 +358,7 @@ impl Chart {
             id: sink.id,
             symbol: self.symbol.clone(),
             timeframe: self.timeframe.unwrap_or_default(),
+            extended_hours: self.extended_hours,
             sink,
         };
         link.feed.subscribe(subscription);
@@ -403,6 +422,7 @@ impl Chart {
             timeframe: self.timeframe.unwrap_or_default(),
             before: Some(before),
             count: link.initial_bars.max(MIN_SCROLL_BACK_PAGE),
+            extended_hours: self.extended_hours,
         };
         self.feed.loading_history = true;
         let reply = link.reply(Request::History { scroll_back: true });
@@ -437,7 +457,7 @@ mod tests {
     enum Call {
         Resolve(String),
         History(HistoryRequest),
-        Subscribe(SubscriptionId, String, Timeframe),
+        Subscribe(SubscriptionId, String, Timeframe, bool),
         Unsubscribe(SubscriptionId),
         Trades(TradeRequest),
         Snapshot(SubscriptionId),
@@ -487,9 +507,10 @@ mod tests {
                 id,
                 symbol,
                 timeframe,
+                extended_hours,
                 sink,
             } = subscription;
-            let call = Call::Subscribe(id, symbol, timeframe);
+            let call = Call::Subscribe(id, symbol, timeframe, extended_hours);
             self.calls.lock().unwrap().push(call);
             self.sinks.lock().unwrap().push(sink);
         }
@@ -535,6 +556,7 @@ mod tests {
             timeframe,
             before,
             count: 1000,
+            extended_hours: false,
         })
     }
 
@@ -562,6 +584,44 @@ mod tests {
         match symbol {
             Some(symbol) => builder.with_symbol(symbol).build(),
             None => builder.build(),
+        }
+    }
+
+    #[test]
+    fn extended_hours_reload_history_paging_and_subscription_together() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        let mut previous = None;
+        for extended in [false, true, false] {
+            chart.set_extended_hours(extended);
+            assert_eq!(chart.extended_hours(), extended);
+            frames.run(&mut chart);
+            let calls = feed.calls();
+            if let Some(previous) = previous {
+                assert!(calls.contains(&Call::Unsubscribe(previous)));
+            }
+            assert!(calls.iter().any(|call| matches!(call, Call::History(request) if request.before.is_none() && request.extended_hours == extended)));
+            feed.page().send(page(bars(1000), false));
+            feed.resolve().send(Ok(Instrument::new("A")));
+            frames.run(&mut chart);
+            let id = feed.sink().id;
+            let mut calls = feed.calls();
+            assert!(calls.contains(&Call::Subscribe(id, "A".into(), Timeframe::Min1, extended)));
+            chart.set_extended_hours(extended);
+            frames.run(&mut chart);
+            assert!(
+                feed.calls().is_empty(),
+                "an unchanged choice must keep the stream"
+            );
+            chart.set_start_idx(0);
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            calls.extend(feed.calls());
+            assert!(calls.iter().any(|call| matches!(call, Call::History(request) if request.before.is_some() && request.extended_hours == extended)), "{extended}: {calls:?}");
+            feed.page().send(page(vec![], true));
+            frames.run(&mut chart);
+            previous = Some(id);
         }
     }
 
@@ -742,7 +802,7 @@ mod tests {
             before: None,
             count: TRADE_CAPACITY,
         });
-        let subscribe = Call::Subscribe(id, "A".into(), Timeframe::Min1);
+        let subscribe = Call::Subscribe(id, "A".into(), Timeframe::Min1, false);
         assert_eq!(feed.calls(), [subscribe, trades], "c");
         assert_eq!(chart.instrument(), Some(&Instrument::new("A")), "c");
         chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));

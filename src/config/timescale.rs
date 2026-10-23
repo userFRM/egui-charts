@@ -60,8 +60,8 @@ pub struct TimeScaleOptions {
     /// Default: false
     pub allow_shift_visible_range_on_whitespace_replacement: bool,
 
-    /// Show the time, not just the date, in the time scale and vertical crosshair label.
-    /// Default: false
+    /// Include the clock in intraday time-scale and crosshair labels.
+    /// Default: true
     pub time_visible: bool,
 
     /// Show seconds in the time scale and vertical crosshair label in hh:mm:ss format for intraday data.
@@ -100,7 +100,7 @@ impl Default for TimeScaleOptions {
             right_bar_stays_on_scroll: false,
             shift_visible_range_on_new_bar: true,
             allow_shift_visible_range_on_whitespace_replacement: false,
-            time_visible: false,
+            time_visible: true,
             seconds_visible: true,
             ticks_visible: false,
             uniform_distribution: false,

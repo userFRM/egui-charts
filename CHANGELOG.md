@@ -4,20 +4,16 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
-### Fixed
-
-- Daily axis marks use fixed calendar anchors for two-day and weekly intervals, keeping their dates stable while panning. Monthly marks remain on the first of the month at medium widths.
-
-- Horizontal arrow keys keep keyboard focus on the chart and pan on every press. Tab still moves to the next control.
-
-- `Chart::visible_bars` now applies the requested initial bar spacing on the first frame, matching `set_visible_bars`.
-
 ### Added
 
 - `Drawing::pitchfork` stores per-level colour, visibility and line style, with mirrored levels at 0, 0.5, 1 and 1.5 and filled bands by default. Hidden levels remove both adjacent bands. Old drawings use the defaults. Parallel channels support `channel_midline`, `fill_color`, `extend_left` and `extend_right`, with selection following the lines and filled area. Migration: `Drawing` struct literals set `pitchfork` and `channel_midline`, or use `Drawing::new`.
 
+- `Session::with_extended_windows` and `with_holidays` describe host-owned trading hours and closures. `ExchangeSessionProvider` starts each trading date at its earliest regular or extended window, handles overnight sessions, and resolves repeated opens to their first instant and missing opens to the clock jump. `Chart::set_session_provider` accepts host break logic.
+- Extended-hours bars are shaded independently of session dividers, including throughout a repeated hour after an overnight open. `ChartConfig::show_extended_hours` switches shading off, and `extended_hours_color` overrides the faint active-theme accent. Migration: chart configuration literals need these fields or `..Default::default()`.
+- `Chart::set_extended_hours` chooses regular hours or regular and extended hours, reloading history and the stream together. `HistoryRequest::extended_hours` and `Subscription::extended_hours` carry that choice to the host feed, including older history pages. Migration: add `extended_hours` to request and subscription literals and destructuring, or use `..` when ignoring it in a pattern. Feeds must honor the field (`false` requests regular hours); hosts supplying bars directly replace their data after a choice.
+
 - Chart settings now retain and apply title format, quote controls and independent study title/input/value visibility. `Chart::set_indicator_inputs` supplies study input captions, retained through host templates; status-line volume no longer hides the histogram. The settings dialog keeps one top edge across tabs through `Modal::top`.
-- Price scale placement and independent current/previous close labels and lines now reach rendering on either axis. Countdown visibility is honoured, with its default enabled to retain the existing displayed countdown. Migration: add `..Default::default()` to `ChartConfig`, `settings_menu::data::StatusLineOptions`, `ScalesAndLinesSettings` and `IndicatorPaneConfig` literals, or set the new visibility fields explicitly. Construct `Legend` with `Legend::new` and set its public fields; it has no `Default` implementation. Previous close is the last bar before the latest UTC date.
+- Price scale placement and independent current/previous close labels and lines now reach rendering on either axis. Countdown visibility is honoured, with its default enabled to retain the existing displayed countdown. Migration: add `..Default::default()` to `ChartConfig`, `settings_menu::data::StatusLineOptions`, `ScalesAndLinesSettings` and `IndicatorPaneConfig` literals, or set the new visibility fields explicitly. Construct `Legend` with `Legend::new` and set its public fields; it has no `Default` implementation. Previous close is the last bar before the latest trading date.
 
 - `TopToolbar::indicator_templates` accepts host-owned saved study names and ids. Its anchored menu emits save/apply intents; the demo keeps cloned study sets in memory for the session. Migration: replace `TopToolbarAction::OpenIndicatorTemplates` matches with `SaveIndicatorTemplate` and `ApplyIndicatorTemplate(id)` handlers. Opening the popup emits no action.
 
@@ -122,6 +118,22 @@ All notable changes to this project are documented in this file. The format is b
 - Inside pitchforks use the first leg midpoint and second anchor as their tines, with the first tine passing through the third anchor and the median halfway between the tines. All fork rays follow their direction, including leftward and vertical forks.
 
 - ABCD, XABCD and Cypher label every price ratio on its comparison chord, including C's retracement and D's placement. Undefined ratios on flat legs are omitted.
+
+- Session breaks and previous-session closes follow exchange windows and holidays, with chart-zone calendar boundaries when no exchange is supplied. `DailySessionProvider` now honors its configured break time, and its exchange preset follows daylight-saving changes. Migration: `DailySessionProvider` struct literals need `time_zone` or `..Default::default()`; `new` still takes UTC hours.
+
+- Time-scale clock, seconds and tick visibility flags now reach axis and crosshair rendering, and `ChartBuilder::options_chart` hides its time axis. Migration: `time_visible` defaults to `true` to preserve existing labels; `false` shows dates alone.
+
+- Floating and tracking tooltip times use the same chart-zone formatter as the crosshair, including daylight-saving changes. Exchange display mode reads the instrument zone when supplied. `Chart::format_time` gives host readouts the same format and source-bar precision on every chart type, and the demo Data Window uses it. Floating readouts paint above the legend so their time row remains visible.
+
+- Migration for standalone renderers: pass the chart-zone `TimeFormatter` and the bar duration in seconds as the final two arguments to `render_tooltip_with_options`. Pass `ticks_visible` before `slot` to `render_time_labels`; `false` preserves the previous tick-free axis.
+
+- Applying the demo's time-zone setting updates chart readouts and the bottom clock without resetting pan or zoom. Reopening settings retains the zone selected from either control.
+
+- Daily axis marks use fixed calendar anchors for two-day and weekly intervals, keeping their dates stable while panning. Month boundaries remain visible between day strides and on the first of the displayed month at medium widths and wide time ranges, including across daylight-saving changes.
+
+- Horizontal arrow keys keep keyboard focus on the chart and pan on every press. Tab still moves to the next control.
+
+- `Chart::visible_bars` now applies the requested initial bar spacing on the first frame, matching `set_visible_bars`.
 
 - Chart settings read back current status and scale controls before opening. Choosing log or percentage scale clears the other mode; legend volume remains independent of the histogram. Custom price-line tags and axis gestures follow left placement, and long session tags stay inside the chart.
 - Enlarged modals fit narrow windows, with scrollable settings content and tabs. Indicator results use a 32 px row pitch.

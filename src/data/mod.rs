@@ -144,6 +144,8 @@ pub struct HistoryRequest {
     pub before: Option<DateTime<Utc>>,
     /// Bars wanted. Fewer is fine; the chart asks again as the user scrolls back.
     pub count: usize,
+    /// Include the instrument's extended trading hours, as well as regular hours.
+    pub extended_hours: bool,
 }
 
 /// One page of history. A page without bars ends scroll-back like `end_of_history` does, so a
@@ -205,6 +207,8 @@ pub struct Subscription {
     pub id: SubscriptionId,
     pub symbol: String,
     pub timeframe: Timeframe,
+    /// Include the instrument's extended trading hours, as well as regular hours.
+    pub extended_hours: bool,
     pub sink: Sink,
 }
 

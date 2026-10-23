@@ -123,6 +123,8 @@ impl Chart {
             quote: None,
             quote_action: None,
             session_quote: None,
+            session_provider: None,
+            extended_hours: false,
             axis_hover: None,
             scale_settings_requested: false,
             events: Vec::new(),
@@ -479,6 +481,10 @@ impl ChartBuilder {
         chart_options.time_scale.ticks_visible = false;
 
         Self::new()
+            .with_config(ChartConfig {
+                show_time_labels: false,
+                ..Default::default()
+            })
             .with_chart_options(chart_options)
             .with_chart_type(ChartType::Line)
     }

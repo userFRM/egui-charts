@@ -2,7 +2,7 @@ use super::context::{ChartMapping, RenderContext, StyleColors};
 use super::labels::price_decimals;
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::model::{Bar, percent_change};
-use crate::scales::PriceMap;
+use crate::scales::{PriceMap, TimeFormatter};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 /// Tooltip Renderers
@@ -25,6 +25,8 @@ pub fn render_tooltip_with_options(
     price_scale: &PriceMap,
     coords: &ChartMapping,
     visible_data: &[Bar],
+    formatter: &dyn TimeFormatter,
+    bar_seconds: i64,
 ) {
     match options.mode {
         TooltipMode::Floating => {
@@ -36,10 +38,19 @@ pub fn render_tooltip_with_options(
                 previous_close,
                 options,
                 colors.bar_color(candle.close >= candle.open),
+                formatter,
+                bar_seconds,
             );
         }
         TooltipMode::Tracking => {
-            render_tracking_tooltip(context.painter, context.rect, candle, options);
+            render_tracking_tooltip(
+                context.painter,
+                context.rect,
+                candle,
+                options,
+                formatter,
+                bar_seconds,
+            );
         }
         TooltipMode::Magnifier => {
             render_magnifier_tooltip(
@@ -65,6 +76,8 @@ pub fn render_floating_tooltip(
     previous_close: Option<f64>,
     options: &TooltipOptions,
     value_color: egui::Color32,
+    formatter: &dyn TimeFormatter,
+    bar_seconds: i64,
 ) {
     let options = &options.resolved(painter.ctx());
     let price = |price: f64| {
@@ -74,7 +87,7 @@ pub fn render_floating_tooltip(
     let mut rows = Vec::new();
 
     if options.show_time {
-        rows.push(("Time", candle.time.format("%Y-%m-%d %H:%M:%S").to_string()));
+        rows.push(("Time", formatter.format_crosshair(candle.time, bar_seconds)));
     }
 
     if options.show_ohlc {
@@ -218,6 +231,8 @@ pub fn render_tracking_tooltip(
     chart_rect: Rect,
     candle: &Bar,
     options: &TooltipOptions,
+    formatter: &dyn TimeFormatter,
+    bar_seconds: i64,
 ) {
     let options = &options.resolved(painter.ctx());
     let bar_height = options.tracking_bar_height;
@@ -231,7 +246,7 @@ pub fn render_tracking_tooltip(
     let mut parts = Vec::new();
 
     if options.show_time {
-        parts.push(candle.time.format("%H:%M:%S").to_string());
+        parts.push(formatter.format_crosshair(candle.time, bar_seconds));
     }
 
     if options.show_ohlc {

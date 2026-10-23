@@ -269,6 +269,8 @@ pub struct Chart {
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
     session_quote: Option<crate::model::quote::SessionQuote>,
+    session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
+    extended_hours: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
     events: Vec<crate::model::Marker>,

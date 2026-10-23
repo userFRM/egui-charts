@@ -516,6 +516,7 @@ impl DemoApp {
     fn open_chart_settings_dialog(&mut self) {
         let config = self.chart.config();
         let settings = &mut self.settings_state;
+        settings.timezone = self.timeframe_toolbar.state.timezone.clone();
         settings.candle_colors.body_up = config.bullish_color;
         settings.candle_colors.body_down = config.bearish_color;
         settings.candle_colors.border_up =
@@ -604,7 +605,7 @@ impl DemoApp {
         match self.settings_dialog.show(ctx, &self.theme) {
             SettingsAction::Apply(state) => {
                 self.settings_state = state.clone();
-                apply_settings_state(&state, self.chart.config_mut());
+                apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
                 let scale = self.chart.price_scale_mut();
                 let mode = if state.scales_and_lines.log_scale {
                     egui_charts::scales::PriceScaleMode::Logarithmic
@@ -1286,7 +1287,7 @@ impl DemoApp {
             .with_timeframe(self.state.timeframe.as_str().to_string());
         if let Some(b) = last {
             info = info.with_ohlcv(b.open, b.high, b.low, b.close, b.volume);
-            info = info.with_timestamp(b.time.to_rfc3339());
+            info = info.with_timestamp(self.chart.format_time(b.time));
             if let Some(previous) = index.checked_sub(1).and_then(|index| bars.get(index)) {
                 info = info.with_prev_close(previous.close);
             }
@@ -1487,29 +1488,12 @@ impl DemoApp {
                 .resizable(false)
                 .open(&mut open)
                 .show(ctx, |ui| {
-                    for (label, timezone) in [
-                        ("UTC", egui_charts::config::TimezoneMode::Utc),
-                        (
-                            "America/New_York",
-                            egui_charts::config::TimezoneMode::nyse(),
-                        ),
-                    ] {
+                    for label in ["UTC", "America/New_York"] {
                         if ui
-                            .selectable_label(
-                                self.chart.chart_options().time_scale.timezone == timezone,
-                                label,
-                            )
+                            .selectable_label(self.timeframe_toolbar.state.timezone == label, label)
                             .clicked()
                         {
-                            let mut options = self.chart.chart_options().clone();
-                            options.time_scale.timezone = timezone;
-                            // Preserve the current pan and zoom when applying display options.
-                            let (spacing, offset) = self.chart.get_time_scale_state();
-                            let chart =
-                                std::mem::replace(&mut self.chart, Chart::new(BarData::new()));
-                            self.chart = chart.with_chart_options(options);
-                            self.chart.apply_synced_time_scale(spacing, offset);
-                            self.timeframe_toolbar.set_timezone(label.to_owned());
+                            apply_timezone(&mut self.chart, &mut self.timeframe_toolbar, label);
                             self.timeframe_toolbar.state.timezone_menu_open = false;
                         }
                     }
@@ -1818,14 +1802,39 @@ fn line_style_from_dialog(style: DrawingLineStyle) -> egui_charts::drawings::Lin
     }
 }
 
-/// Translate the settings dialog's `ChartSettingsState` into the live
-/// `ChartConfig`. The dialog has no direct `apply_to_config`, so the demo maps
-/// the fields users actually see changing: candle colors, background, grid.
-fn apply_settings_state(state: &ChartSettingsState, config: &mut egui_charts::config::ChartConfig) {
+fn apply_timezone(chart: &mut Chart, toolbar: &mut TimeframeToolbar, name: &str) {
+    use egui_charts::config::TimezoneMode;
+    let timezone = if name == "UTC" {
+        TimezoneMode::Utc
+    } else if let Ok(zone) = name.parse() {
+        TimezoneMode::Timezone(zone)
+    } else {
+        return;
+    };
+    if chart.chart_options().time_scale.timezone != timezone {
+        let mut options = chart.chart_options().clone();
+        options.time_scale.timezone = timezone;
+        // Preserve the current pan and zoom when applying display options.
+        let (spacing, offset) = chart.get_time_scale_state();
+        let previous = std::mem::replace(chart, Chart::new(BarData::new()));
+        *chart = previous.with_chart_options(options);
+        chart.apply_synced_time_scale(spacing, offset);
+    }
+    toolbar.set_timezone(name.to_owned());
+}
+
+/// Apply display settings to the live chart and its clock.
+fn apply_settings_state(
+    state: &ChartSettingsState,
+    chart: &mut Chart,
+    toolbar: &mut TimeframeToolbar,
+) {
     use egui_charts::config::NavigationButtons;
     use egui_charts::ui::top_toolbar::components::settings_menu::types::{
         ButtonVisibility, GridLinesMode,
     };
+    apply_timezone(chart, toolbar, &state.timezone);
+    let config = chart.config_mut();
 
     config.bullish_color = state.candle_colors.body_up;
     config.bearish_color = state.candle_colors.body_down;
@@ -1892,7 +1901,7 @@ mod tests {
             *app.chart.config_mut() = config.clone();
             app.handle_top_toolbar(&ctx, TopToolbarAction::OpenSettings);
             let state = app.settings_state.clone();
-            apply_settings_state(&state, app.chart.config_mut());
+            apply_settings_state(&state, &mut app.chart, &mut app.timeframe_toolbar);
             let applied = app.chart.config();
             assert!(!applied.show_quote_boxes);
             assert!(applied.show_left_axis && !applied.show_right_axis);
@@ -1962,8 +1971,25 @@ mod tests {
             let info = app.build_data_window();
             let bars = app.chart.state().shown();
             assert_eq!(info.close, bars[index].close, "{kind:?}");
-            assert_eq!(info.timestamp, bars[index].time.to_rfc3339(), "{kind:?}");
+            assert_eq!(
+                info.timestamp,
+                bars[index].time.format("%a %d %b '%y %H:%M").to_string(),
+                "{kind:?}"
+            );
             assert_eq!(info.prev_close, bars[index - 1].close, "{kind:?}");
+            let mut settings = app.settings_state.clone();
+            settings.timezone = "Europe/Paris".to_owned();
+            let view = app.chart.get_time_scale_state();
+            apply_settings_state(&settings, &mut app.chart, &mut app.timeframe_toolbar);
+            assert_eq!(
+                app.chart
+                    .format_time("2024-10-27T01:00:00Z".parse().unwrap()),
+                "Sun 27 Oct '24 02:00"
+            );
+            assert_eq!(app.timeframe_toolbar.state.timezone, "Europe/Paris");
+            assert_eq!(app.chart.get_time_scale_state(), view);
+            app.open_chart_settings_dialog();
+            assert_eq!(app.settings_state.timezone, "Europe/Paris");
         }
     }
 
