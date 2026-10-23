@@ -267,6 +267,30 @@ mod tests {
         Bar::new(t, close, close, close, close, 1.0)
     }
 
+    /// A chart built with a right offset of 20 bars keeps it while it follows the live edge
+    /// through appended bars.
+    #[test]
+    fn appended_bars_keep_the_configured_right_offset() {
+        let options = crate::config::ChartOptions {
+            time_scale: crate::config::TimeScaleOptions {
+                right_offset: 20.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..100).map(|i| bar(i * 60, 100.0)).collect(),
+        ))
+        .with_chart_options(options);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        for i in 100..103 {
+            chart.update(SeriesId::MAIN, bar(i * 60, 101.0));
+            assert_eq!(chart.state.time_scale().right_offset(), 20.0, "bar {i}");
+            frame(&ctx, &mut chart, i as f64, Vec::new());
+        }
+    }
+
     /// Guards the wiring of every bar update: the merged bars, the studies, the revision that span
     /// caches are keyed on and the count of invalid bars must describe the same series. Studies
     /// updated from a bar after the first change keep stale values, and ones not updated after a

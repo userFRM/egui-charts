@@ -67,6 +67,10 @@ pub struct TimeScale {
     bar_spacing: f32,
     /// Right offset in bars from the edge
     right_offset: f32,
+    /// Configured right offset in bars, restored at the live edge
+    live_right_offset: f32,
+    /// Configured right offset in pixels, restored at the live edge; has priority over bars
+    live_right_offset_pixels: Option<f32>,
     /// Width of the chart area in pixels
     width: f32,
     /// Total number of bars in dataset
@@ -87,6 +91,8 @@ impl TimeScale {
         Self {
             bar_spacing: 8.0,
             right_offset: 5.0, // Default: 5 bars of whitespace on the right
+            live_right_offset: 2.5,
+            live_right_offset_pixels: None,
             width: 800.0,
             bar_cnt: 0,
             min_bar_spacing: DEFAULT_MIN_BAR_SPACING,
@@ -117,14 +123,16 @@ impl TimeScale {
         // Apply spacing with clamping
         self.set_bar_spacing(bar_spacing);
 
-        // Pixels option has priority over bars
-        let right_offset = if let Some(px) = right_offset_pixels {
-            // Convert pixels to bars using current spacing
-            px / self.bar_spacing
-        } else {
-            right_offset_bars
-        };
-        self.set_right_offset(right_offset);
+        self.live_right_offset = right_offset_bars;
+        self.live_right_offset_pixels = right_offset_pixels;
+        self.set_right_offset(self.live_edge_offset());
+    }
+
+    /// The configured right offset in bars at the current spacing; the pixel
+    /// option has priority over bars.
+    fn live_edge_offset(&self) -> f32 {
+        self.live_right_offset_pixels
+            .map_or(self.live_right_offset, |px| px / self.bar_spacing)
     }
 
     /// Set the width of the chart area (must be called when chart resizes)
@@ -182,10 +190,9 @@ impl TimeScale {
     }
 
     /// Jump to latest bar position
-    /// Resets right_offset to the default sticky offset (2.5 bars)
+    /// Restores the configured right offset, as [`scroll_to_realtime`](Self::scroll_to_realtime) does.
     pub fn jump_to_latest(&mut self) {
-        const DEFAULT_RIGHT_OFFSET: f32 = 2.5;
-        self.right_offset = DEFAULT_RIGHT_OFFSET;
+        self.scroll_to_realtime();
     }
 
     /// Get current bar spacing
@@ -325,11 +332,11 @@ impl TimeScale {
     }
 
     /// Scroll to real-time (latest data)
-    /// Maintains sticky offset - keeps ~2.5 bars of whitespace on the right
-    /// for price labels and visual breathing room
+    /// Restores the right offset given to [`apply_options`](Self::apply_options)
+    /// (2.5 bars before it is called), the pixel offset converted at the
+    /// current bar spacing.
     pub fn scroll_to_realtime(&mut self) {
-        const REALTIME_OFFSET: f32 = 2.5;
-        self.right_offset = REALTIME_OFFSET;
+        self.set_right_offset(self.live_edge_offset());
     }
 
     /// Apply edge constraints
@@ -429,6 +436,37 @@ impl Default for TimeScale {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Returning to the live edge, by following it or by jumping back, restores
+    /// the configured offset: 20 bars, or 60 px, which is 10 bars at a spacing
+    /// of 6 and 5 bars once zoomed to 12.
+    #[test]
+    fn live_edge_keeps_the_configured_right_offset() {
+        type Back = fn(&mut TimeScale);
+        for (bars, pixels, spacing, expected) in [
+            (20.0, None, 6.0, 20.0),
+            (20.0, Some(60.0), 6.0, 10.0),
+            (20.0, Some(60.0), 12.0, 5.0),
+        ] {
+            let mut ts = TimeScale::new();
+            ts.set_bar_cnt(100);
+            ts.apply_options(6.0, 0.5, 0.0, true, false, bars, pixels);
+            ts.set_bar_spacing(spacing);
+            let backs: [(&str, Back); 2] = [
+                ("follow", TimeScale::scroll_to_realtime),
+                ("jump", TimeScale::jump_to_latest),
+            ];
+            for (name, back) in backs {
+                ts.scroll_bars(30.0);
+                back(&mut ts);
+                assert_eq!(
+                    ts.right_offset(),
+                    expected,
+                    "{pixels:?} at {spacing}, {name}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn inconsistent_spacing_bounds_clamp_without_panicking() {

@@ -409,10 +409,11 @@ impl Chart {
             if self.chart_options.handle_scale.axis_double_click_reset.time
                 && time_axis_rect.contains(pos)
             {
-                self.state.time_scale_mut().jump_to_latest();
+                // Spacing first: a pixel right offset is converted at the restored spacing.
                 self.state
                     .time_scale_mut()
                     .set_bar_spacing(self.chart_options.time_scale.bar_spacing);
+                self.state.time_scale_mut().jump_to_latest();
             }
             if self
                 .chart_options
@@ -651,6 +652,51 @@ mod tests {
         step(&mut chart, vec![button(pos, false)]);
         let range = chart.state.price_scale().range();
         (range.min, range.max)
+    }
+
+    /// A double-click on the time axis of a chart zoomed to twice the configured spacing of 6
+    /// returns to that spacing and to the live edge with the configured 60 px right offset,
+    /// 10 bars at a spacing of 6.
+    #[test]
+    fn time_axis_double_click_restores_the_configured_right_offset() {
+        let ctx = egui::Context::default();
+        let options = crate::config::ChartOptions {
+            time_scale: crate::config::TimeScaleOptions {
+                bar_spacing: 6.0,
+                right_offset_pixels: Some(60.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]).with_chart_options(options);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        chart.state.time_scale_mut().set_bar_spacing(12.0);
+        let (price, volume) = (
+            chart.last_rendered_price_rect,
+            chart.last_rendered_volume_rect,
+        );
+        let pos = Pos2::new(price.center().x, price.max.y.max(volume.max.y) + 5.0);
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let mut t = 0.0;
+        for events in [
+            vec![Event::PointerMoved(pos)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![button(true)],
+            vec![button(false)],
+            Vec::new(),
+        ] {
+            t += 0.02;
+            frame(&ctx, &mut chart, t, events);
+        }
+        let time_scale = chart.state.time_scale();
+        assert_eq!(time_scale.bar_spacing(), 6.0);
+        assert_eq!(time_scale.right_offset(), 10.0);
     }
 
     /// A wheel notch over the chart zooms the time axis, also with the zoom modifier (Ctrl, or

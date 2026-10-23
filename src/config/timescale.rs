@@ -10,8 +10,9 @@ use crate::scales::TimezoneMode;
 /// Controls bar spacing, scrolling constraints, and time display.
 #[derive(Debug, Clone)]
 pub struct TimeScaleOptions {
-    /// The margin space in bars from the right side of the chart.
-    /// Default: 0
+    /// The margin space in bars from the right side of the chart, kept
+    /// whenever the view returns to the live edge.
+    /// Default: 2.5
     pub right_offset: f32,
 
     /// The margin space in pixels from the right side of the chart.
@@ -33,7 +34,7 @@ pub struct TimeScaleOptions {
     pub max_bar_spacing: f32,
 
     /// Prevent scrolling to the left of the first bar.
-    /// Default: false
+    /// Default: true
     pub fix_left_edge: bool,
 
     /// Prevent scrolling to the right of the most recent bar.
