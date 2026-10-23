@@ -622,34 +622,6 @@ impl SettingsDialog {
         });
     }
 
-    pub(super) fn draw_trading_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
-        ui.horizontal(|ui| {
-            ui.add_space(30.0);
-            ui.vertical(|ui| {
-                self.draw_section_header(ui, "TRADING OPTIONS", style);
-
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.trading.show_poss,
-                    "Show positions",
-                    style.val_text,
-                );
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.trading.show_orders,
-                    "Show orders",
-                    style.val_text,
-                );
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.trading.show_executions,
-                    "Show executions",
-                    style.val_text,
-                );
-            });
-        });
-    }
-
     pub(super) fn draw_alerts_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
             ui.add_space(30.0);
@@ -679,34 +651,6 @@ impl SettingsDialog {
                     ui,
                     &mut self.settings.alerts.show_alert_labels,
                     "Show alert labels",
-                    style.val_text,
-                );
-            });
-        });
-    }
-
-    pub(super) fn draw_events_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
-        ui.horizontal(|ui| {
-            ui.add_space(30.0);
-            ui.vertical(|ui| {
-                self.draw_section_header(ui, "EVENT MARKERS", style);
-
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.events.show_dividends,
-                    "Dividends",
-                    style.val_text,
-                );
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.events.show_splits,
-                    "Splits",
-                    style.val_text,
-                );
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.events.show_earnings,
-                    "Earnings",
                     style.val_text,
                 );
             });

@@ -140,6 +140,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Series settings remove the placeholder Alerts, Trading and Events tabs. General settings remove inactive Trading and Events controls; the Alerts controls remain because the demo now applies their visibility, labels and colour to its alert overlay. Migration: remove `SeriesSettingsTab::{Alerts,Trading,Events}` and `SettingsTab::{Trading,Events}` from exhaustive matches. Host-owned trading and event settings data remain available for hosts that implement those surfaces. ([#212](https://github.com/userFRM/egui-charts/issues/212))
+
 - Active price alerts, including channel boundaries and compound price conditions, have labelled draggable levels through `chart::render_alert_levels`; a drag returns a replacement for host submission. The demo applies alert visibility, labels and colour, opens the shared dialog at the latest price and saves hovered-price alerts with Alt+A. The existing crosshair add menu remains available. The demo host evaluates its displayed synthetic feed and reports triggers and expiry through `Alerts`, so the existing popup and log show them. Evaluation, sound, background watchlists and durable storage remain host-owned. ([#210](https://github.com/userFRM/egui-charts/issues/210), [#211](https://github.com/userFRM/egui-charts/issues/211))
 - `PnlLabel::currency` uses a host-supplied `CurrencyFormatter`, retaining sign placement and zero rounding with the instrument currency and decimals. Migration: pass the formatter as the second argument, for example `PnlLabel::currency(value, &CurrencyFormatter::eur())`. ([#209](https://github.com/userFRM/egui-charts/issues/209))
 

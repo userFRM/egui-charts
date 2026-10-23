@@ -33,7 +33,7 @@ use std::collections::HashSet;
 /// Modal settings dialog with tabbed interface.
 ///
 /// Provides full chart settings configuration organized into tabs:
-/// Symbol, Status Line, Scales and Lines, Canvas, Trading, Alerts, Events.
+/// Symbol, Status Line, Scales and Lines, Canvas, Alerts.
 pub struct SettingsDialog {
     /// Whether the dialog is currently open
     pub is_open: bool,
@@ -254,7 +254,6 @@ impl SettingsDialog {
         } else {
             match self.active_tab {
                 SettingsTab::Symbol => 616.0,
-                SettingsTab::Events => 560.0,
                 SettingsTab::Alerts => 500.0,
                 _ => 840.0,
             }
@@ -343,9 +342,7 @@ impl SettingsDialog {
                                     self.draw_scales_and_lines_tab(ui, style)
                                 }
                                 SettingsTab::Canvas => self.draw_canvas_tab(ui, style),
-                                SettingsTab::Trading => self.draw_trading_tab(ui, style),
                                 SettingsTab::Alerts => self.draw_alerts_tab(ui, style),
-                                SettingsTab::Events => self.draw_events_tab(ui, style),
                             }
                         });
                 });
@@ -443,9 +440,7 @@ impl SettingsDialog {
             SettingsTab::StatusLine => &embedded_icons::SETTINGS_STATUS_LINE,
             SettingsTab::ScalesAndLines => &embedded_icons::SETTINGS_SCALES_LINES,
             SettingsTab::Canvas => &embedded_icons::SETTINGS_CANVAS,
-            SettingsTab::Trading => &embedded_icons::SETTINGS,
             SettingsTab::Alerts => &embedded_icons::ALERTS,
-            SettingsTab::Events => &embedded_icons::SETTINGS_EVENTS,
         };
 
         // Pos icon centered vertically, with left padding
@@ -810,7 +805,9 @@ mod tests {
                         }
                         _ => None,
                     });
+                    let inactive = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if matches!(text.galley.text(), "Trading" | "Events")));
                     output.drop_without_applying_deltas();
+                    assert!(!inactive, "inactive settings must not be offered");
                     assert_eq!(dialog.settings, settings);
                     assert_eq!(dialog.original_settings, settings);
                     assert_eq!(
