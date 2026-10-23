@@ -244,7 +244,7 @@ All 123 registered indicators have calculation code: no `todo!()` or `unimplemen
 Some indicators appear in more than one category below (for example Standard Error in Volatility and Statistics).
 
 ### Rendering Limitation
-All indicators use a **generic polyline renderer**. There is no indicator-specific rendering. This means:
+Studies share line renderers. Overlays also support crossing markers, direction colours, bottom fills, right extensions and labels. The remaining rendering limits are:
 - [ ] MACD, PPO and PVO histograms render as a line instead of bars
 - [ ] Ichimoku cloud renders as 5 separate lines instead of filled cloud regions
 - [ ] Parabolic SAR renders as a connected line instead of individual dots
@@ -256,7 +256,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Hamming MA
 - [x] Guppy MA (GMMA): 12 EMAs (6 short, 6 long)
 - [x] Multiple MA: SMA 20/50/100/200
-- [x] MA Cross, EMA Cross
+- [x] MA Cross, EMA Cross, SMA/EMA Cross, Triple MA and MA Ribbon, backed by independently configured average types, lengths, sources and colours with crossing markers
 - [x] MA Channel, Envelopes
 
 ### Momentum Oscillators
@@ -282,6 +282,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Vortex Indicator: VI+ and VI-
 - [x] Choppiness Index: ATR sum / range
 - [x] Linear Regression: Rolling LinReg endpoint overlay
+- [x] Linear Regression Channel: trailing fit with residual deviation bands, correlation, selectable source and optional right extension
 
 ### Volatility
 - [x] Bollinger Bands: SMA +/- k*StdDev
@@ -299,7 +300,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Standard Error, Standard Error Bands
 
 ### Volume
-- [x] OBV, VWAP (restarts at each session, week or month in the exchange zone and trading hours, with deviation bands; the indicator dialog builds it without an instrument, so its sessions follow the UTC date), Anchored VWAP
+- [x] OBV, VWAP (session, week, month, quarter, year or host-event anchors, with deviation or percentage bands; dialog-created studies inherit the chart instrument's time zone and session), Anchored VWAP
 - [x] MFI, A/D Line, CMF, Klinger Oscillator
 - [x] Ease of Movement, Net Volume (volume signed by the change from the previous close, first bar blank), Volume ROC, Volume Oscillator
 - [ ] Volume Profile Visible Range, Volume Profile Fixed Range: bin volume over the whole history; bin 0 is plotted on the price scale, so nothing visible draws
