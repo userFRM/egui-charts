@@ -88,6 +88,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The demo gives volume peaks a quarter of the plot height while ordinary synthetic volumes remain low and the baseline stays flush with the time axis.
+
 - Dark button hover fills are neutral and quieter than the pressed state on black panels.
 
 - Held values use one snapped vertical guide and a compact six-row panel; ordinary Cross mode keeps both crosshair lines.

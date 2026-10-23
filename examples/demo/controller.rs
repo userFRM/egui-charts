@@ -190,6 +190,7 @@ impl DemoApp {
             theme.apply_to_config(egui_charts::config::ChartConfig::default()),
         )
         .with_chart_options(options);
+        chart.config_mut().volume_height_fraction = 0.25;
         chart.config_mut().volume_baseline_inset = 0.0;
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
