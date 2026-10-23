@@ -1,15 +1,16 @@
 //! Keyboard shortcuts help dialog.
 //!
-//! Displays all available keyboard shortcuts organized by category
-//! in a scrollable grid layout. Triggered by `?` or `F1`.
+//! Lists the handled keyboard shortcuts by category. The host opens it on `?` or `F1`.
 
-use egui::{Context, RichText, Vec2, epaint::StrokeKind};
+use egui::{
+    Color32, Context, FontId, Frame, Id, Key, KeyboardShortcut, Margin, Modifiers, RichText, Role,
+    ScrollArea, Stroke, Ui, WidgetInfo,
+};
 
 use crate::config::KeyboardAction;
-use crate::ext::UiExt;
-use crate::styles::typography;
+use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::dialog::{DialogFrame, dialog_header};
+use crate::ui_kit::dialog::{DialogFrame, dialog_frame, dialog_header};
 
 /// Action returned by the keyboard shortcuts dialog
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,144 +61,148 @@ impl KeyboardShortcutsDialog {
 
         let mut action = KeyboardShortcutsAction::None;
 
-        DialogFrame::new(
+        DialogFrame::with_width(
             "Keyboard Shortcuts",
-            Vec2::new(
-                DESIGN_TOKENS.sizing.dialog.default_width,
-                DESIGN_TOKENS.sizing.dialog.default_height,
-            ),
+            DESIGN_TOKENS.sizing.dialog.default_width,
         )
         .show(ctx, |ui| {
             action = self.render_contents(ui);
         });
 
-        // Close on Escape
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // Escape belongs to an open popup or a focused text field first. egui closes both on
+        // Escape before this runs, so their state is read from the previous frame. Consuming the
+        // key keeps whatever reads input after the dialog from acting on the same press.
+        let blocked_id = Id::NULL.with("keyboard_shortcuts_escape_blocked");
+        let blocked = ctx
+            .data(|d| d.get_temp::<bool>(blocked_id))
+            .unwrap_or(false);
+        if !blocked && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             self.is_open = false;
             action = KeyboardShortcutsAction::Close;
         }
+        let blocked = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
+        ctx.data_mut(|d| d.insert_temp(blocked_id, blocked));
 
         action
     }
 
-    fn render_contents(&mut self, ui: &mut egui::Ui) -> KeyboardShortcutsAction {
+    fn render_contents(&mut self, ui: &mut Ui) -> KeyboardShortcutsAction {
         let mut action = KeyboardShortcutsAction::None;
+        let theme = ui.active_theme();
 
-        // Title bar
         if dialog_header(ui, "Keyboard Shortcuts") {
             action = KeyboardShortcutsAction::Close;
             self.is_open = false;
         }
-        ui.separator();
+        // The chart reads its keys only while it has keyboard focus.
+        ui.label(
+            RichText::new("Click the chart to use the chart keys.")
+                .size(theme.text.small)
+                .color(ui.visuals().weak_text_color()),
+        );
+        ui.add_space(theme.spacing.lg);
 
-        // Scrollable content area
-        egui::ScrollArea::vertical()
-            .max_height(DESIGN_TOKENS.sizing.dialog.default_height - 80.0)
-            .show(ui, |ui| {
-                ui.space_md();
+        let categories = KeyboardAction::all_by_category();
+        let font = FontId::proportional(theme.text.body);
+        let widest = ui.fonts_mut(|f| {
+            categories
+                .iter()
+                .flat_map(|(_, actions)| actions)
+                .map(|a| {
+                    f.layout_no_wrap(a.label().to_owned(), font.clone(), Color32::PLACEHOLDER)
+                        .size()
+                        .x
+                })
+                .fold(0.0, f32::max)
+        });
+        let label_w = ((widest + theme.spacing.xxl) / 4.0).ceil() * 4.0;
 
-                let categories = KeyboardAction::all_by_category();
+        // The body scrolls once the dialog would pass the frame's screen cap.
+        let cap = ui.ctx().content_rect().shrink(theme.spacing.xxxl).height()
+            - dialog_frame(ui.style()).total_margin().sum().y
+            - ui.min_rect().height()
+            - ui.spacing().item_spacing.y;
 
-                for (idx, (category_name, actions)) in categories.iter().enumerate() {
-                    if idx > 0 {
-                        ui.space_md();
+        ui.scope(|ui| {
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+            ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .max_height(cap)
+                // The window starts at egui's default height; this lets the body grow past it.
+                .min_scrolled_height(cap)
+                .show(ui, |ui| {
+                    for (idx, (name, actions)) in categories.iter().enumerate() {
+                        if idx > 0 {
+                            ui.add_space(theme.spacing.xxl - ui.spacing().item_spacing.y);
+                        }
+                        ui.label(
+                            RichText::new(*name)
+                                .size(theme.text.small)
+                                .strong()
+                                .color(theme.ui.text_secondary),
+                        );
+                        egui::Grid::new(("shortcuts", idx))
+                            .num_columns(2)
+                            .spacing([0.0, theme.spacing.sm])
+                            // With the spacing, a 24 px row pitch.
+                            .min_row_height(theme.spacing.xxl + theme.spacing.sm)
+                            .min_col_width(label_w)
+                            .show(ui, |ui| {
+                                for action in actions {
+                                    ui.label(RichText::new(action.label()).size(theme.text.body));
+                                    ui.horizontal(|ui| key_badges(ui, &theme, action.shortcuts()));
+                                    ui.end_row();
+                                }
+                            });
                     }
-
-                    self.render_category(ui, category_name, actions);
-                }
-
-                ui.space_lg();
-            });
+                });
+        });
 
         action
     }
+}
 
-    fn render_category(&self, ui: &mut egui::Ui, name: &str, actions: &[KeyboardAction]) {
-        // Section header
-        ui.horizontal(|ui| {
-            ui.space_lg();
+/// One badge per key combination, joined by a muted "or".
+fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
+    for (idx, shortcut) in shortcuts.iter().enumerate() {
+        if idx > 0 {
             ui.label(
-                RichText::new(name)
-                    .size(typography::LG)
-                    .strong()
-                    .color(ui.style().visuals.text_color()),
+                RichText::new("or")
+                    .size(theme.text.small)
+                    .color(ui.visuals().weak_text_color()),
             );
-        });
-        ui.space_xs();
-
-        // Shortcut rows in a grid
-        egui::Grid::new(format!("shortcuts_{name}"))
-            .num_columns(2)
-            .spacing([DESIGN_TOKENS.spacing.xl, DESIGN_TOKENS.spacing.sm])
-            .min_col_width(DESIGN_TOKENS.sizing.settings_dialog.label_width)
-            .show(ui, |ui| {
-                for action in actions {
-                    // Action label
-                    ui.horizontal(|ui| {
-                        ui.space_xl();
-                        ui.label(
-                            RichText::new(action.label())
-                                .size(typography::MD)
-                                .color(ui.style().visuals.text_color()),
-                        );
-                    });
-
-                    // Shortcut key badge
-                    ui.horizontal(|ui| {
-                        self.render_key_badge(ui, action.shortcut_key());
-                    });
-
-                    ui.end_row();
-                }
-            });
-    }
-
-    fn render_key_badge(&self, ui: &mut egui::Ui, key_text: &str) {
-        // Split compound keys (e.g. "Ctrl+Shift+Z") and render each as
-        // a separate badge when separated by " / " (alternative keys).
-        let alternatives: Vec<&str> = key_text.split(" / ").collect();
-
-        for (alt_idx, alt) in alternatives.iter().enumerate() {
-            if alt_idx > 0 {
-                ui.label(
-                    RichText::new("/")
-                        .size(typography::SM)
-                        .color(ui.style().visuals.weak_text_color()),
-                );
-            }
-
-            let parts: Vec<&str> = alt.split('+').collect();
-            for (part_idx, part) in parts.iter().enumerate() {
-                if part_idx > 0 {
-                    ui.label(
-                        RichText::new("+")
-                            .size(typography::SM)
-                            .color(ui.style().visuals.weak_text_color()),
-                    );
-                }
-
-                let badge_text = RichText::new(*part)
-                    .size(typography::SM)
-                    .color(ui.style().visuals.text_color());
-
-                let badge = egui::Label::new(badge_text);
-                let response = ui.add(badge);
-
-                // Draw a rounded background behind the key label
-                let badge_rect = response.rect.expand(DESIGN_TOKENS.spacing.xs);
-                let badge_rounding = DESIGN_TOKENS.rounding.sm;
-                let badge_bg = ui.style().visuals.widgets.inactive.bg_fill;
-                let badge_stroke = ui.style().visuals.widgets.inactive.bg_stroke;
-
-                // Paint behind the text
-                ui.painter().rect(
-                    badge_rect,
-                    badge_rounding,
-                    badge_bg,
-                    badge_stroke,
-                    StrokeKind::Inside,
-                );
-            }
         }
+        // `format_shortcut` spells every key out ("Plus", "PageUp") with the bundled fonts, so
+        // the badge shows the key's symbol where a font has it, and screen readers get the name.
+        let modifiers = ui.ctx().format_modifiers(shortcut.modifiers);
+        let symbol = shortcut.logical_key.symbol_or_name();
+        let font = FontId::proportional(theme.text.small);
+        let key = if ui.fonts_mut(|f| f.has_glyphs(&font, symbol)) {
+            symbol
+        } else {
+            shortcut.logical_key.name()
+        };
+        let text = if modifiers.is_empty() {
+            key.to_owned()
+        } else {
+            format!("{modifiers}+{key}")
+        };
+        let name = ui.ctx().format_shortcut(shortcut);
+        Frame::new()
+            .fill(theme.ui.panel_bg_secondary)
+            .stroke(Stroke::new(1.0, theme.ui.border_control))
+            .corner_radius(theme.radius.sm)
+            .inner_margin(Margin::symmetric(
+                theme.spacing.sm as i8,
+                theme.spacing.xs as i8,
+            ))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(text)
+                        .size(theme.text.small)
+                        .color(theme.ui.text),
+                )
+                .widget_info(|| WidgetInfo::labeled(Role::Label, true, &name));
+            });
     }
 }
