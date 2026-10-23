@@ -512,7 +512,8 @@ impl TimeframeSelector {
                 }
             });
 
-        if matches!(action, TimeframeAction::Select(_)) {
+        if let TimeframeAction::Select(timeframe) = action {
+            self.current = timeframe;
             self.show_custom_input = false;
             ui.close();
         }
@@ -628,6 +629,59 @@ impl ListItemContent for TimeframeRow<'_> {
 mod tests {
     use super::*;
     use crate::model::Timeframe as Model;
+
+    #[test]
+    fn interval_pick_updates_the_trigger_and_selection() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for selected in [
+                Timeframe::new(5, TimeframeUnit::Minute),
+                Timeframe::new(1, TimeframeUnit::Hour),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut selector = TimeframeSelector::new(Timeframe::new(1, TimeframeUnit::Minute));
+                let mut frame = |events| {
+                    let mut action = TimeframeAction::None;
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            action = selector.menu_ui(ui, &theme, 800.0);
+                        },
+                    );
+                    let pos = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == selected.display() => {
+                                Some(text.pos + text.galley.size() / 2.0)
+                            }
+                            _ => None,
+                        })
+                        .expect("visible favourite interval");
+                    output.textures_delta.clear();
+                    output.drop_without_applying_deltas();
+                    (pos, action)
+                };
+                let (pos, _) = frame(vec![]);
+                frame(vec![egui::Event::PointerMoved(pos)]);
+                let click = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                frame(vec![click(true)]);
+                let (_, action) = frame(vec![click(false)]);
+                assert!(
+                    matches!(action, TimeframeAction::Select(timeframe) if timeframe == selected)
+                );
+                assert_eq!(selector.current, selected);
+            }
+        }
+    }
 
     #[test]
     fn every_preset_maps_to_a_model_timeframe() {
