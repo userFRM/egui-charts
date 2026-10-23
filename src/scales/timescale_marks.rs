@@ -392,24 +392,15 @@ impl TickMarkGenerator {
             let timestamp_millis = time.timestamp_millis();
             let rounded = (timestamp_millis / millis) * millis;
             DateTime::from_timestamp_millis(rounded).unwrap_or(time)
-        } else if seconds < 60 {
-            // Seconds: round down to second boundary
-            time.date_naive()
-                .and_hms_opt(time.hour(), time.minute(), time.second())
-                .unwrap()
-                .and_utc()
-        } else if seconds < 3600 {
-            // Minutes: round down to minute boundary
-            time.date_naive()
-                .and_hms_opt(time.hour(), time.minute(), 0)
-                .unwrap()
-                .and_utc()
         } else if seconds < 86400 {
-            // Hours: round down to hour boundary
-            time.date_naive()
-                .and_hms_opt(time.hour(), 0, 0)
-                .unwrap()
-                .and_utc()
+            // Multiples of the interval since midnight keep their clock times as the view pans.
+            // Start at or after the first bar: a mark before it would be drawn at that bar.
+            let midnight = time.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+            let since_midnight = (time - midnight).num_seconds();
+            let first = (since_midnight + seconds - 1) / seconds * seconds;
+            midnight
+                .checked_add_signed(Duration::seconds(first))
+                .unwrap_or(time)
         } else {
             // Days or more: round down to day boundary
             time.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc()
@@ -730,6 +721,49 @@ mod tests {
             formatting_counts.iter().all(|(calls, kept)| calls == kept),
             "format only surviving marks: {formatting_counts:?}"
         );
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 20, 15, 0, 0).unwrap();
+        let bars: Vec<_> = (0..121)
+            .map(|i| (start + Duration::hours(i), i as usize))
+            .collect();
+        // 119 hours at 1100 px choose 4-hour marks, from the first one at or after the first bar.
+        // Spacing keeps each midnight with its date and 08:00 and 16:00 between them, and a pan
+        // of one bar keeps every mark.
+        let expected = [
+            (1, Time, 50, "16:00", 1),
+            (9, DayOfMonth, 60, "Jan 21", 9),
+            (17, Time, 50, "08:00", 17),
+            (25, Time, 50, "16:00", 25),
+            (33, DayOfMonth, 70, "Jan 22", 33),
+            (41, Time, 50, "08:00", 41),
+            (49, Time, 50, "16:00", 49),
+            (57, DayOfMonth, 60, "Jan 23", 57),
+            (65, Time, 50, "08:00", 65),
+            (73, Time, 50, "16:00", 73),
+            (81, DayOfMonth, 60, "Jan 24", 81),
+            (89, Time, 50, "08:00", 89),
+            (97, Time, 50, "16:00", 97),
+            (105, DayOfMonth, 60, "Jan 25", 105),
+            (113, Time, 50, "08:00", 113),
+        ];
+        let generator = TickMarkGenerator::new();
+        for pan in [0, 1] {
+            let visible = &bars[pan..pan + 120];
+            let marks = generator.generate_marks(visible[0].0, visible[119].0, 1100.0, visible);
+            let actual: Vec<_> = marks
+                .iter()
+                .map(|mark| {
+                    (
+                        (mark.time - start).num_hours(),
+                        mark.mark_type,
+                        mark.weight.value(),
+                        mark.label.as_str(),
+                        mark.index,
+                    )
+                })
+                .collect();
+            assert_eq!(actual, expected, "pan {pan}");
+        }
     }
 
     #[test]
