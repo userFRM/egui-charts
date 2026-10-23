@@ -136,8 +136,8 @@ impl Drawing {
         );
     }
 
-    /// Renders time cycles with circular/arc projections.
-    /// Features: concentric arcs, time-based circles, harmonic relationships.
+    /// Renders time cycles: the anchors span one cycle, repeated as half circles
+    /// forward in time to the right edge of the chart.
     pub(crate) fn render_time_cycles(&self, painter: &egui::Painter, chart_rect: Rect) {
         if self.points.len() < 2 {
             return;
@@ -151,152 +151,24 @@ impl Drawing {
             self.color[3],
         );
 
-        let base_radius = ((edge.x - center.x).powi(2) + (edge.y - center.y).powi(2)).sqrt();
-        if base_radius < 5.0 {
+        let arcs = time_cycle_arcs(center, edge, chart_rect.x_range());
+        let Some(&(first_arc, base_radius)) = arcs.first() else {
             return;
-        }
-
-        // Draw multiple concentric circles (harmonic multiples)
-        let harmonics = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+        };
+        // The last arc may run past the right edge of the pane.
+        let painter = &painter.with_clip_rect(chart_rect);
         let font = egui::FontId::proportional(typography::XS);
-
-        for (i, &mult) in harmonics.iter().enumerate() {
-            let radius = base_radius * mult;
-            let alpha = if (mult - 1.0).abs() < 0.01 { 255 } else { 100 };
-            let circle_color =
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], alpha);
-
-            // Draw arc (semicircle facing right for time projection)
-            let segments = 32;
-            for j in 0..segments {
-                let angle1 = -std::f32::consts::FRAC_PI_2
-                    + std::f32::consts::PI * j as f32 / segments as f32;
-                let angle2 = -std::f32::consts::FRAC_PI_2
-                    + std::f32::consts::PI * (j + 1) as f32 / segments as f32;
-
-                let p1 = Pos2::new(
-                    center.x + radius * angle1.cos(),
-                    center.y + radius * angle1.sin(),
-                );
-                let p2 = Pos2::new(
-                    center.x + radius * angle2.cos(),
-                    center.y + radius * angle2.sin(),
-                );
-
-                // Only draw if within chart bounds
-                if p1.x >= chart_rect.min.x && p2.x >= chart_rect.min.x {
-                    let stroke_w = if (mult - 1.0).abs() < 0.01 {
-                        stroke::THICK
-                    } else {
-                        stroke::HAIRLINE
-                    };
-                    painter.line_segment([p1, p2], Stroke::new(stroke_w, circle_color));
-                }
-            }
-
-            // Label at right edge of arc
-            let label_x = center.x + radius;
-            if label_x
-                <= chart_rect.max.x
-                    + DESIGN_TOKENS.sizing.technical_labels.line_label_width
-                    + DESIGN_TOKENS.spacing.lg
-            {
-                let label = format!("{mult}x");
-                let label_bg = Rect::from_center_size(
-                    Pos2::new(
-                        label_x + DESIGN_TOKENS.spacing.xl + DESIGN_TOKENS.spacing.sm,
-                        center.y,
-                    ),
-                    egui::vec2(
-                        DESIGN_TOKENS.sizing.technical_labels.cycle_label_width
-                            - DESIGN_TOKENS.spacing.lg,
-                        DESIGN_TOKENS.sizing.technical_labels.pattern_label_height,
-                    ),
-                );
-                painter.rect_filled(
-                    label_bg,
-                    DESIGN_TOKENS.rounding.sm,
-                    DESIGN_TOKENS
-                        .semantic
-                        .extended
-                        .chart_axis_bg
-                        .gamma_multiply(0.78),
-                );
-                painter.text(
-                    label_bg.center(),
-                    egui::Align2::CENTER_CENTER,
-                    label,
-                    font.clone(),
-                    circle_color,
-                );
-            }
-
-            // Fill between 1x and 2x circles with subtle color
-            if i == 1 {
-                // This is the 1x circle
-                let fill_color = Color32::from_rgba_unmultiplied(
-                    self.color[0],
-                    self.color[1],
-                    self.color[2],
-                    15,
-                );
-                // Draw filled arc between 1x and 2x
-                let inner_r = radius;
-                let outer_r = base_radius * 2.0;
-                for j in 0..segments {
-                    let angle1 = -std::f32::consts::FRAC_PI_2
-                        + std::f32::consts::PI * j as f32 / segments as f32;
-                    let angle2 = -std::f32::consts::FRAC_PI_2
-                        + std::f32::consts::PI * (j + 1) as f32 / segments as f32;
-
-                    let inner1 = Pos2::new(
-                        center.x + inner_r * angle1.cos(),
-                        center.y + inner_r * angle1.sin(),
-                    );
-                    let inner2 = Pos2::new(
-                        center.x + inner_r * angle2.cos(),
-                        center.y + inner_r * angle2.sin(),
-                    );
-                    let outer1 = Pos2::new(
-                        center.x + outer_r * angle1.cos(),
-                        center.y + outer_r * angle1.sin(),
-                    );
-                    let outer2 = Pos2::new(
-                        center.x + outer_r * angle2.cos(),
-                        center.y + outer_r * angle2.sin(),
-                    );
-
-                    if inner1.x >= chart_rect.min.x {
-                        let mesh = egui::Mesh {
-                            indices: vec![0, 1, 2, 0, 2, 3],
-                            vertices: vec![
-                                egui::epaint::Vertex {
-                                    pos: inner1,
-                                    uv: egui::epaint::WHITE_UV,
-                                    color: fill_color,
-                                },
-                                egui::epaint::Vertex {
-                                    pos: inner2,
-                                    uv: egui::epaint::WHITE_UV,
-                                    color: fill_color,
-                                },
-                                egui::epaint::Vertex {
-                                    pos: outer2,
-                                    uv: egui::epaint::WHITE_UV,
-                                    color: fill_color,
-                                },
-                                egui::epaint::Vertex {
-                                    pos: outer1,
-                                    uv: egui::epaint::WHITE_UV,
-                                    color: fill_color,
-                                },
-                            ],
-                            texture_id: egui::TextureId::default(),
-                        };
-                        painter.add(egui::Shape::mesh(mesh));
-                    }
-                }
-            }
+        let arc_stroke = Stroke::new(self.stroke_width, color);
+        let segments = 32;
+        for (arc_center, radius) in arcs {
+            // Upper half circle, from the cycle's start to its end.
+            let points = (0..=segments)
+                .map(|j| {
+                    let angle = std::f32::consts::PI * (1.0 + j as f32 / segments as f32);
+                    arc_center + radius * egui::vec2(angle.cos(), angle.sin())
+                })
+                .collect();
+            painter.add(egui::Shape::line(points, arc_stroke));
         }
 
         // Draw center anchor point
@@ -324,8 +196,8 @@ impl Drawing {
         let info_label = format!("Cycle: {bars} bars");
         let info_bg = Rect::from_center_size(
             Pos2::new(
-                center.x,
-                center.y - base_radius - DESIGN_TOKENS.spacing.xxl - DESIGN_TOKENS.spacing.sm,
+                first_arc.x,
+                first_arc.y - base_radius - DESIGN_TOKENS.spacing.xxl - DESIGN_TOKENS.spacing.sm,
             ),
             egui::vec2(
                 DESIGN_TOKENS.sizing.technical_labels.channel_label_width
@@ -522,9 +394,67 @@ fn sine_line_y(p1: Pos2, p2: Pos2, x: f32) -> Option<f32> {
     Some(center + (p1.y - center) * (std::f32::consts::PI * (x - p1.x) / half_period).cos())
 }
 
+/// Centre and radius of each time cycle arc that reaches into `x_range`: the
+/// anchors span the first cycle, and arcs as wide follow it forward in time,
+/// standing on the first anchor's price. Empty when the anchors are less than
+/// 5 px apart horizontally.
+fn time_cycle_arcs(p1: Pos2, p2: Pos2, x_range: egui::Rangef) -> Vec<(Pos2, f32)> {
+    let period = (p2.x - p1.x).abs();
+    if period < 5.0 {
+        return Vec::new();
+    }
+    let start = p1.x.min(p2.x);
+    // Skip the cycles that end left of the view without walking through them.
+    let first = ((x_range.min - start) / period).floor().max(0.0) as u32;
+    (first..)
+        .map(|k| start + period * k as f32)
+        .take_while(|&left| left < x_range.max)
+        .map(|left| (Pos2::new(left + period / 2.0, p1.y), period / 2.0))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The anchors span one cycle; arcs of that width follow each other from
+    /// the earlier anchor to the right edge, on the first anchor's price.
+    #[test]
+    fn time_cycles_repeat_the_anchor_interval_forward() {
+        let cases = [
+            // Cycle 100..140: arcs centred at 120, 160, 200 and 240, the last cut by the edge.
+            (
+                (100.0, 200.0),
+                (140.0, 180.0),
+                (0.0, 250.0),
+                vec![120.0, 160.0, 200.0, 240.0],
+            ),
+            // Second anchor first in time; the arc ending at 140 is left of the view.
+            (
+                (140.0, 200.0),
+                (100.0, 180.0),
+                (170.0, 250.0),
+                vec![160.0, 200.0, 240.0],
+            ),
+            ((100.0, 200.0), (104.0, 150.0), (0.0, 250.0), vec![]),
+        ];
+        for ((x1, y1), (x2, y2), (min, max), centres) in cases {
+            let got = time_cycle_arcs(
+                Pos2::new(x1, y1),
+                Pos2::new(x2, y2),
+                egui::Rangef::new(min, max),
+            );
+            let want: Vec<_> = centres.iter().map(|&x| (Pos2::new(x, y1), 20.0)).collect();
+            assert!(
+                got.len() == want.len()
+                    && got
+                        .iter()
+                        .zip(&want)
+                        .all(|(g, w)| g.0.distance(w.0) < 1e-3 && (g.1 - w.1).abs() < 1e-3),
+                "anchors x {x1} and {x2}: got {got:?}, want {want:?}"
+            );
+        }
+    }
 
     #[test]
     fn sine_line_passes_through_both_anchors_half_a_period_apart() {
