@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `chart::render_event_band` draws host-supplied `Marker`s as 22 px badges above a supplied time-axis baseline, aligned to the first bar at or after each event time. It uses the event's text, colour, tooltip and ID, and returns the clicked ID to the host. Events outside the supplied data or plot are left out; existing bar annotations keep their appearance.
+
 - `chart::render_quote_tags` paints independent current close, host-supplied `model::quote::SessionQuote` and abbreviated volume readouts, separating colliding tags and returning each rectangle for input and tick occlusion. `chart::price_axis_width` measures the formatted labels. Hosts composing their own axes can route `chart::crosshair_price_action` to an add-at-price menu and `chart::axis_settings_button` to scale settings; the two controls require `icons` and return clicks to the host.
 
 - `Chart::set_price_lines(series, lines)` draws horizontal lines at prices on a series, such as an entry, a stop or a target. A `model::PriceLine` has a price, a colour, a width, a line style, an optional title and a price axis label that can be turned off. The lines follow the series' price scale in every mode, are hidden while their price is off the scale or not finite, and label the axis in the scale's units. Only `SeriesId::MAIN` has price lines; another id is ignored with a warning. `model::LineStyle` is the line style of drawings and price lines; `drawings::LineStyle` remains a re-export of the same type.

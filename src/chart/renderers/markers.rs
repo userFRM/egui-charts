@@ -71,6 +71,65 @@ pub fn render_markers(
     }
 }
 
+/// Draws host-supplied event badges just above `baseline`, using the chart's time mapping.
+/// An event between bars uses the first bar at or after its time. Returns the clicked event ID;
+/// callers handle that action before starting a chart drag. The badges use the event's colour,
+/// text and tooltip, without assigning any market meaning to them.
+pub fn render_event_band(
+    ui: &mut egui::Ui,
+    events: &[Marker],
+    visible_data: &[Bar],
+    coords: &ChartMapping,
+    baseline: f32,
+) -> Option<String> {
+    use crate::theme::ThemeExt;
+    let mut clicked = None;
+    let first = visible_data.first()?;
+    let last = visible_data.last().unwrap();
+    for (index, event) in events.iter().enumerate() {
+        if event.time < first.time || event.time > last.time {
+            continue;
+        }
+        let at = visible_data.partition_point(|bar| bar.time < event.time);
+        let x = coords.idx_to_x(coords.start_idx + at);
+        let rect = Rect::from_center_size(Pos2::new(x, baseline - 11.0), Vec2::splat(22.0));
+        if rect.left() < coords.rect.left() || rect.right() > coords.rect.right() {
+            continue;
+        }
+        let response = ui.interact(
+            rect,
+            ui.scope_id().with(("event", &event.id, index)),
+            egui::Sense::click(),
+        );
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.circle(
+            rect.center(),
+            10.0,
+            ui.ctx().active_theme().chart.bg,
+            Stroke::new(1.2, event.color),
+        );
+        if let Some(text) = &event.text {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                FontId::proportional(11.0),
+                event.color,
+            );
+        }
+        let label = event
+            .tooltip
+            .as_deref()
+            .or(event.text.as_deref())
+            .unwrap_or("Event");
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+        if response.on_hover_text(label).clicked() {
+            clicked.clone_from(&event.id);
+        }
+    }
+    clicked
+}
+
 /// Render a single marker shape
 fn render_marker_shape(
     painter: &Painter,
@@ -298,6 +357,64 @@ mod tests {
                     "{position:?}, inverted {inverted}: y {y}, want {want}"
                 );
             }
+        }
+    }
+    /// Event targets follow the same bar centre after a pan and zoom and return the host ID.
+    #[test]
+    fn event_band_follows_time_mapping_and_returns_the_clicked_id() {
+        use egui::{Context, Event, Modifiers, PointerButton, RawInput};
+        let ctx = Context::default();
+        let time = Utc.with_ymd_and_hms(2024, 10, 1, 14, 30, 0).unwrap();
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                Bar::new(
+                    time + chrono::Duration::hours(i),
+                    100.0,
+                    101.0,
+                    99.0,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let event =
+            Marker::event(bars[10].time + chrono::Duration::minutes(15), "E").with_id("event-42");
+        for (spacing, offset) in [(10.0, 0.0), (15.0, 2.0)] {
+            let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 300.0));
+            let map = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(90.0, 110.0),
+                0.0,
+                200.0,
+                false,
+            );
+            let coords = ChartMapping::new(rect, spacing, 0, 29, offset, map);
+            let centre = Pos2::new(coords.idx_to_x(11), 289.0);
+            let mut clicked = None;
+            for pressed in [None, Some(true), Some(false)] {
+                let mut input = RawInput::default();
+                input.events.push(Event::PointerMoved(centre));
+                if let Some(pressed) = pressed {
+                    input.events.push(Event::PointerButton {
+                        pos: centre,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    });
+                }
+                let output = ctx.run_ui(input, |ui| {
+                    clicked =
+                        render_event_band(ui, std::slice::from_ref(&event), &bars, &coords, 300.0)
+                            .or(clicked.take());
+                });
+                let circle = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    Shape::Circle(circle) => Some(circle.center),
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                assert_eq!(circle, Some(centre));
+            }
+            assert_eq!(clicked.as_deref(), Some("event-42"));
         }
     }
 }
