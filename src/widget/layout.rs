@@ -292,10 +292,7 @@ impl ChartLayout {
         let wheel = super::pan_zoom::raw_wheel_delta(ui) != Vec2::ZERO;
         if self.mode != ChartLayoutMode::Tabs
             && let Some(index) = rects.iter().position(|r| {
-                ui.input(|i| {
-                    i.pointer.hover_pos().is_some_and(|p| r.contains(p))
-                        && (i.pointer.any_pressed() || wheel)
-                })
+                ui.rect_contains_pointer(*r) && ui.input(|i| i.pointer.any_pressed() || wheel)
             })
         {
             self.active = index;
@@ -572,7 +569,7 @@ mod tests {
         };
         layout.set_active(1);
         let frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
-            ctx.run_ui(
+            let output = ctx.run_ui(
                 RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 900.0))),
                     events,
@@ -585,8 +582,15 @@ mod tests {
                         "long chart tabs must scroll inside the container"
                     );
                 },
-            )
-            .drop_without_applying_deltas();
+            );
+            let group = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Sync group" => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            group
         };
         frame(&mut layout, &mut charts, vec![]);
         let point = charts[1].get_rendered_price_rect().center();
@@ -645,6 +649,39 @@ mod tests {
                 modifiers: Default::default(),
             }],
         );
+        // A group editor can overlap the next panel without activating that panel.
+        let click = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let corner = pos2(230.0, 12.0);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
+        frame(&mut layout, &mut charts, vec![click(corner, true)]);
+        frame(&mut layout, &mut charts, vec![click(corner, false)]);
+        frame(&mut layout, &mut charts, vec![]);
+        let input =
+            frame(&mut layout, &mut charts, vec![]).expect("group editor") + vec2(100.0, 18.0);
+        assert!(input.x > 320.0);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(input)]);
+        frame(&mut layout, &mut charts, vec![click(input, true)]);
+        frame(&mut layout, &mut charts, vec![click(input, false)]);
+        frame(&mut layout, &mut charts, vec![Event::Text("Desk".into())]);
+        assert_eq!(layout.sync_group(0), Some("Desk"));
+        assert_eq!(layout.active(), 0);
+        let escape = Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        frame(&mut layout, &mut charts, vec![escape]);
+        layout.set_sync_group(0, None);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(point)]);
+        frame(&mut layout, &mut charts, vec![click(point, true)]);
+        frame(&mut layout, &mut charts, vec![click(point, false)]);
         layout.sync.sync_time_axis = false;
         for chart in &mut charts {
             chart.apply_synced_time_scale(3.0, 0.0);
