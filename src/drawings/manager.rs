@@ -307,6 +307,10 @@ impl DrawingManager {
         let Some(id) = step(&mut self.history, &mut self.drawings) else {
             return false;
         };
+        self.painted
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| p.id != id);
         let was = before.into_iter().find(|&(i, _)| i == id);
         match (was, self.drawings.iter().any(|d| d.id == id)) {
             (Some(_), true) => self.queue(DrawingSyncAction::UpdateDrawing(id)),
@@ -391,17 +395,18 @@ impl DrawingManager {
     ///
     /// Returns the [`HandlePos`] if a handle was hit, `None` otherwise.
     pub fn hit_test_handle(&self, drawing: &Drawing, point: Pos2) -> Option<HandlePos> {
+        if !drawing.is_visible_on_timeframe(&self.curr_timeframe) {
+            return None;
+        }
         HandleService::hit_test_handle(drawing, point, self.options.handle_config.size)
     }
 
     /// Begins a handle drag operation, saving the drawing's current state for undo. A locked
     /// drawing is not dragged.
     pub fn start_drag_handle(&mut self, drawing_id: usize, handle: HandlePos) {
-        if let Some(drawing) = self
-            .drawings
-            .iter()
-            .find(|d| d.id == drawing_id && !d.locked)
-        {
+        if let Some(drawing) = self.drawings.iter().find(|d| {
+            d.id == drawing_id && !d.locked && d.is_visible_on_timeframe(&self.curr_timeframe)
+        }) {
             self.dragging_handle = Some((drawing_id, handle));
             self.drag_old_state = Some(drawing.clone());
             self.drag_origin = (handle == HandlePos::Middle)
@@ -734,11 +739,21 @@ impl DrawingManager {
 
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
     /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
-    /// saved. Does nothing if there is no such drawing.
+    /// saved. A locked drawing accepts only an edit that unlocks it.
+    /// Does nothing if there is no such drawing.
     pub fn edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
-            self.history.push_modify(id, drawing.clone());
+            let old = drawing.clone();
             edit(drawing);
+            if old.locked && drawing.locked {
+                *drawing = old;
+                return;
+            }
+            self.history.push_modify(id, old);
+            self.painted
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|p| p.id != id);
             self.queue(DrawingSyncAction::UpdateDrawing(id));
         }
     }
@@ -746,14 +761,18 @@ impl DrawingManager {
     /// Applies `edit` as one frame of a continuous edit, such as dragging a colour picker: the
     /// first frame records the drawing's state and nothing is queued until
     /// [`Self::end_drag_handle`], which makes the whole gesture one undo step and queues one
-    /// update. Does nothing if there is no such drawing.
+    /// update. Does nothing if there is no such drawing or it is locked.
     pub fn drag_edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
         if self.drag_old_state.as_ref().is_some_and(|d| d.id != id) {
             self.end_drag_handle();
         }
-        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
+        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
             self.drag_old_state.get_or_insert_with(|| drawing.clone());
             edit(drawing);
+            self.painted
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|p| p.id != id);
         }
     }
 
@@ -854,10 +873,13 @@ impl DrawingManager {
             .rev()
             .filter(|d| d.is_visible_on_timeframe(&self.curr_timeframe))
             .find(|drawing| {
-                painted
+                let paint = painted
                     .iter()
-                    .find(|p| p.id == drawing.id && p.points == drawing.points)
-                    .is_some_and(|p| DrawingInteraction::hit_test_painted(point, &p.shapes))
+                    .find(|p| p.id == drawing.id && p.points == drawing.points);
+                if paint.is_some_and(|p| !p.shapes.iter().any(|s| s.clip_rect.contains(point))) {
+                    return false;
+                }
+                paint.is_some_and(|p| DrawingInteraction::hit_test_painted(point, &p.shapes))
                     || DrawingInteraction::new()
                         .hit_test(point, std::slice::from_ref(*drawing), &self.curr_timeframe)
                         .is_some()
@@ -1034,6 +1056,12 @@ mod tests {
         let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
         for (tool, anchors, hit, miss) in [
             (
+                DrawingToolType::TrendLine,
+                vec![(50., 100.), (550., 100.)],
+                (200., 100.),
+                (510., 100.),
+            ),
+            (
                 DrawingToolType::TextLabel,
                 vec![(50., 100.)],
                 (180., 105.),
@@ -1090,6 +1118,10 @@ mod tests {
                 None,
                 "{tool:?}"
             );
+            if tool == DrawingToolType::TextLabel {
+                manager.edit_drawing(7, |d| d.text = Some("x".into()));
+                assert_eq!(manager.hit_test(Pos2::new(hit.0, hit.1)), None);
+            }
             manager.drawings[0].visible = false;
             assert_eq!(manager.hit_test(Pos2::new(hit.0, hit.1)), None);
         }
@@ -1166,7 +1198,7 @@ mod tests {
     }
 
     /// A locked drawing keeps its place when one of its handles is dragged and survives a
-    /// delete, which is how the eraser, the Delete key and the menus remove a drawing.
+    /// delete or style edit, until it is explicitly unlocked.
     #[test]
     fn a_locked_drawing_is_neither_moved_nor_deleted() {
         let mut manager = DrawingManager::new();
@@ -1180,6 +1212,15 @@ mod tests {
         manager.update_drag_handle(Pos2::new(50.0, 50.0), |x| x, f64::from);
         manager.end_drag_handle();
         manager.delete_drawing(3);
+        manager.edit_drawing(3, |d| d.font_size = 30.0);
+        manager.drag_edit_drawing(3, |d| d.font_size = 40.0);
+        manager.end_drag_handle();
+        assert_eq!(manager.drawings[0].font_size, 12.0);
+        assert!(!manager.can_undo());
+        assert!(manager.pending_sync.lock().unwrap().is_empty());
+        manager.edit_drawing(3, |d| d.locked = false);
+        manager.edit_drawing(3, |d| d.font_size = 30.0);
+        assert_eq!(manager.drawings[0].font_size, 30.0);
 
         assert_eq!(manager.drawings.len(), 1);
         assert_eq!(

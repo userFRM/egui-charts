@@ -1391,7 +1391,7 @@ impl DemoApp {
                 } else {
                     chart
                         .drawings_mut()
-                        .drag_edit_drawing(id, |d| d.color = color.to_array());
+                        .drag_edit_drawing(id, |d| d.color = color.to_srgba_unmultiplied());
                     self.colour_drag = true;
                 }
             }
@@ -2009,6 +2009,17 @@ mod tests {
         assert_eq!(props.font_size, 24.0);
         assert!(matches!(props.line_style, DrawingLineStyle::Dotted));
         assert!(props.extend_left);
+        app.apply_drawing_props(
+            DrawingId(7),
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            },
+        );
+        assert_eq!(app.chart.drawings().drawings[0].font_size, 24.0);
+        app.chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.locked = false);
         app.apply_drawing_props(DrawingId(7), props);
         let changed = DrawingProps {
             visible_all_timeframes: false,
@@ -2023,6 +2034,18 @@ mod tests {
         assert!(!saved.timeframe_visibility.is_visible_on("1h"));
         assert_eq!(saved.fill_color, None);
         assert_eq!(saved.font_size, 28.0);
+        app.handle_object_tree(
+            ObjectTreeAction::ChangeColor(
+                7,
+                egui::Color32::from_rgba_unmultiplied(51, 102, 153, 85),
+            ),
+            &[],
+        );
+        assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
+        app.chart.drawings_mut().end_drag_handle();
+        app.chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.locked = true);
         ctx.run_ui(egui::RawInput::default(), |ui| {
             app.show_drawing_toolbar(ui, egui::Color32::BLACK)
         })

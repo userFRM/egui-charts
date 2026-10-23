@@ -423,6 +423,11 @@ mod tests {
 
             frame(&ctx, &mut chart, 0.0, vec![]);
             let on_line = chart.drawings().drawings[0].points[0];
+            assert_eq!(
+                chart.drawings().hit_test_handle_by_id(on_line, 1).is_some(),
+                interval == Timeframe::Day1,
+                "handle hit on {interval:?}"
+            );
             chart.set_chart_type(kind);
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]).iter().any(|s| {
                 matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color)

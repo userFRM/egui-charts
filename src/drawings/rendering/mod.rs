@@ -636,11 +636,13 @@ mod tests {
             DrawingToolType::PriceNote,
             DrawingToolType::Comment,
             DrawingToolType::Signpost,
+            DrawingToolType::Table,
+            DrawingToolType::FontIcon,
         ] {
             let mut drawing = Drawing::new(7, tool);
             drawing.points = vec![Pos2::new(50.0, 100.0), Pos2::new(150.0, 150.0)];
             drawing.text = Some("Sample".into());
-            drawing.font_size = 22.0;
+            drawing.font_size = 48.0;
             drawing.font_weight = FontWeight::Bold;
             let shapes = paint(&drawing);
             let mut texts = Vec::new();
@@ -654,13 +656,28 @@ mod tests {
                 }
             }
             collect(&shapes, &mut texts);
+            if matches!(tool, DrawingToolType::Table | DrawingToolType::Note) {
+                let table = shapes
+                    .iter()
+                    .find_map(|s| match s {
+                        Shape::Rect(r) => Some(r.rect),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(
+                    texts
+                        .iter()
+                        .filter(|t| tool == DrawingToolType::Table || t.galley.job.text == "N")
+                        .all(|t| table.contains_rect(t.visual_bounding_rect()))
+                );
+            }
             assert!(
                 texts.iter().any(|t| t
                     .galley
                     .job
                     .sections
                     .iter()
-                    .any(|s| s.format.font_id.size == 22.0)),
+                    .any(|s| s.format.font_id.size == 48.0)),
                 "{tool:?} ignored font size"
             );
             let bold_text: Vec<_> = texts.iter().map(|t| (*t).clone()).collect();

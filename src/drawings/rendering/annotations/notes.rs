@@ -1,7 +1,7 @@
 //! Note, anchored note, and flag note rendering
 
 use crate::drawings::domain::Drawing;
-use crate::styles::stroke;
+use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -72,7 +72,7 @@ impl Drawing {
             note_rect.center(),
             egui::Align2::CENTER_CENTER,
             "N",
-            self.annotation_font(),
+            egui::FontId::proportional(typography::MD),
             DESIGN_TOKENS
                 .semantic
                 .extended

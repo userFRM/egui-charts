@@ -192,6 +192,9 @@ mod tests {
                 let mut cursors = CursorModeState::default();
                 let mut drawing = Drawing::new(7, tool);
                 drawing.points = vec![Pos2::new(50.0, 100.0), Pos2::new(250.0, 100.0)];
+                if tool == DrawingToolType::Rect {
+                    drawing.points = vec![Pos2::new(50.0, 50.0), Pos2::new(250.0, 150.0)];
+                }
                 if tool == DrawingToolType::FibonacciChannel {
                     drawing.points.push(Pos2::new(150.0, 200.0));
                 }
