@@ -36,10 +36,10 @@ pub enum CrosshairStyle {
 pub enum CrosshairLineStyle {
     /// Solid line
     Solid,
-    /// Dashed line (default)
-    #[default]
+    /// Dashed line
     Dashed,
-    /// Dotted line
+    /// Dotted line (default)
+    #[default]
     Dotted,
 }
 
@@ -88,7 +88,7 @@ impl Default for CrosshairOptions {
         Self {
             mode: CrosshairMode::Normal,
             style: CrosshairStyle::Full,
-            line_style: CrosshairLineStyle::Dashed,
+            line_style: CrosshairLineStyle::Dotted,
             vert_line_visible: true,
             horz_line_visible: true,
             vert_line_color: Color32::PLACEHOLDER,
@@ -96,8 +96,8 @@ impl Default for CrosshairOptions {
             vert_line_width: 1.0,
             horz_line_width: 1.0,
             label_visible: true,
-            label_background_color: Color32::PLACEHOLDER,
-            label_text_color: Color32::PLACEHOLDER,
+            label_background_color: Color32::BLACK,
+            label_text_color: Color32::WHITE,
         }
     }
 }

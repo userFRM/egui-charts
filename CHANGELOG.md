@@ -72,6 +72,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Crosshair price and time tags default to black with white text, use 21 px and 25 px rows, and clamp at both horizontal edges. The price row reserves a 21 px add-action cell for the host to route with `chart::crosshair_price_action`. The default crosshair stroke is dotted; explicit colours and line styles remain supported. `chart::render_crosshair_full` and `RenderContext` let hosts draw the same readout over a combined price and volume viewport.
+
 - Price lines use 4 px dashes with 4 px gaps, and dotted price lines use 1 px dots with 3 px gaps. Drawing line patterns keep their existing lengths. Price tags are about 17 px high at the default axis font size.
 
 - Intraday time marks use actual session bars and the formatter's timezone for calendar boundaries, so closed hours and missing weekends take no slots and month labels name the new month. Day labels show the day number. `TimeFormatter::wall_time` supplies calendar fields and `format_crosshair` supplies a hover readout; both have defaults for existing custom formatters. Intraday hover dates include weekday, day, month, short year and time, with fractional seconds preserved through timezone conversion.

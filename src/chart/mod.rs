@@ -42,3 +42,4 @@ pub(crate) mod state;
 #[cfg(feature = "icons")]
 pub use rendering::axes::{axis_settings_button, crosshair_price_action};
 pub use rendering::axes::{price_axis_width, render_quote_tags};
+pub use renderers::{RenderContext, render_crosshair_full};

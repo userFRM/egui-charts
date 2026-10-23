@@ -1,10 +1,10 @@
 use super::context::{ChartMapping, RenderContext};
 use super::labels::tick_decimals;
-use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, paint_axis_tag};
+use crate::chart::rendering::axes::paint_crosshair_tag;
 use crate::chart::rendering::draw_dashed_line;
 use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairStyle};
 use crate::model::Bar;
-use crate::scales::{PriceMap, PriceScaleMode, TickMarkType, TimeFormatter};
+use crate::scales::{PriceMap, PriceScaleMode, TimeFormatter};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Align2, Color32, Pos2, Rect, Stroke};
@@ -95,7 +95,7 @@ pub fn render_crosshair_full(
                             DESIGN_TOKENS.spacing.xs + 1.0,
                         )
                     } else {
-                        (DESIGN_TOKENS.spacing.xs, DESIGN_TOKENS.spacing.xs)
+                        (1.0, 3.0)
                     };
                     let stroke = Stroke::new(line_width, crosshair_color);
                     let rect = context.rect;
@@ -143,57 +143,43 @@ pub fn render_crosshair_full(
     ) {
         transform.label(price_scale.y_to_scale(actual_pos.y), 2)
     } else {
-        let decimals = tick_decimals(price_scale, actual_pos.y);
+        let decimals = price_scale
+            .price_precision()
+            .unwrap_or_else(|| tick_decimals(price_scale, actual_pos.y));
         format!("{price:.decimals$}")
     };
-    let price_tag = paint_axis_tag(
+    let price_tag = paint_crosshair_tag(
         context.painter,
-        Pos2::new(context.rect.max.x + PRICE_LABEL_GAP, actual_pos.y),
+        Pos2::new(context.rect.max.x - 17.0, actual_pos.y),
         Align2::LEFT_CENTER,
-        axis_right,
-        last_price_tag,
+        context.rect.left()..=axis_right,
         price_label,
-        label_text,
-        label_bg,
+        (label_text, label_bg),
+        21.0,
+        21.0,
+        last_price_tag,
     );
 
     let time_tag = bar.map(|(_, candle)| {
-        paint_axis_tag(
+        paint_crosshair_tag(
             context.painter,
-            Pos2::new(actual_pos.x, chart_bottom + TIME_LABEL_GAP),
+            Pos2::new(actual_pos.x, chart_bottom + 1.5),
             Align2::CENTER_TOP,
-            axis_right,
-            None,
+            context.rect.left()..=axis_right,
             time_label(candle.time, bar_seconds, formatter),
-            label_text,
-            label_bg,
+            (label_text, label_bg),
+            25.0,
+            0.0,
+            None,
         )
     });
 
     [Some(price_tag), time_tag]
 }
 
-/// The crosshair's time label for a bar `bar_seconds` long: its date as the time axis writes
-/// it, with the year unless it is the current one, then the time of day for intraday bars.
+/// Formats the hovered bar with the same timezone as the time axis.
 fn time_label(time: DateTime<Utc>, bar_seconds: i64, formatter: &dyn TimeFormatter) -> String {
-    let mut label = formatter.format(time, TickMarkType::DayOfMonth);
-    let year = formatter.format(time, TickMarkType::Year);
-    if year != formatter.format(Utc::now(), TickMarkType::Year) {
-        label = format!("{label}, {year}");
-    }
-    match bar_seconds {
-        86_400.. => label,
-        60.. => format!("{label} {}", formatter.format(time, TickMarkType::Time)),
-        1.. => format!(
-            "{label} {}",
-            formatter.format(time, TickMarkType::TimeWithSeconds)
-        ),
-        _ => format!(
-            "{label} {}{}",
-            formatter.format(time, TickMarkType::TimeWithSeconds),
-            time.format("%.3f")
-        ),
-    }
+    formatter.format_crosshair(time, bar_seconds)
 }
 
 /// Snap to nearest OHLC price (for Magnet mode)
@@ -224,4 +210,86 @@ fn snap_to_nearest_ohlc(hover_y: f32, price_scale: &PriceMap, candle: &Bar) -> f
     }
 
     nearest_price
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scales::{PriceRange, PriceTransform, TimeFormatterBuilder, TimezoneMode};
+    use chrono::{Duration, TimeZone};
+    use egui::{Context, RawInput, Shape};
+
+    /// Edge tags remain inside the pane, use supplied precision, and name the nearest bar
+    /// in the selected timezone, including when the pointer is below the price area.
+    #[test]
+    fn hover_tags_keep_the_bar_time_and_fit_both_edges() {
+        let rect = Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(400.0, 200.0));
+        let time = Utc.with_ymd_and_hms(2024, 10, 1, 0, 30, 0).unwrap();
+        let bars: Vec<_> = (0..30)
+            .map(|i| Bar::new(time + Duration::hours(i), 704.0, 706.0, 703.0, 705.0, 10.0))
+            .collect();
+        for (zone, first_label) in [
+            (TimezoneMode::Utc, "Tue 01 Oct '24 00:30"),
+            (TimezoneMode::nyse(), "Mon 30 Sep '24 20:30"),
+        ] {
+            let formatter = TimeFormatterBuilder::new().with_timezone(zone).build();
+            for (index, hover_y) in [(0, 100.0), (29, 100.0), (0, 250.0)] {
+                let map = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(700.0, 710.0),
+                    0.0,
+                    200.0,
+                    false,
+                )
+                .with_price_precision(Some(3));
+                let coords = ChartMapping::new(rect, 10.0, 0, 29, 0.0, map);
+                let ctx = Context::default();
+                let mut tags = [None; 2];
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    tags = render_crosshair_full(
+                        &RenderContext::new(ui.painter(), rect),
+                        Pos2::new(coords.idx_to_x(index), hover_y),
+                        &bars,
+                        &map,
+                        &coords,
+                        CrosshairMode::Normal,
+                        CrosshairStyle::Full,
+                        Color32::GRAY,
+                        1.0,
+                        CrosshairLineStyle::Dotted,
+                        Color32::BLACK,
+                        Color32::WHITE,
+                        300.0,
+                        460.0,
+                        None,
+                        formatter.as_ref(),
+                        3600,
+                    );
+                });
+                let date = tags[1].unwrap();
+                assert!(
+                    date.left() >= rect.left() && date.right() <= 460.0,
+                    "{date:?}"
+                );
+                assert_eq!(date.height(), 25.0);
+                assert_eq!(tags[0].unwrap().height(), 21.0);
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                if index == 0 {
+                    assert!(labels.contains(&first_label), "{labels:?}");
+                }
+                assert!(
+                    labels.contains(&format!("{:.3}", map.y_to_price(hover_y)).as_str()),
+                    "{labels:?}"
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 }
