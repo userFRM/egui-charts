@@ -38,22 +38,14 @@ impl IndicatorRenderer {
 
                 let mut points = Vec::new();
 
-                // Calculate visible range for indicator values
-                // values[i] corresponds to bars[i] in the FULL bars array
-                // coords.start_idx is the index of the first visible bar
-                let visible_end = coords.start_idx + bars.len();
+                // values[i] belongs to bar i of the full series and `bars` are the
+                // visible ones from coords.start_idx, so only that slice is walked.
+                let visible_end = (coords.start_idx + bars.len()).min(values.len());
+                let visible = values
+                    .get(coords.start_idx..visible_end)
+                    .unwrap_or_default();
 
-                for (i, value) in values.iter().enumerate() {
-                    // Skip values before visible range
-                    if i < coords.start_idx {
-                        continue;
-                    }
-                    // Stop after visible range
-                    if i >= visible_end {
-                        break;
-                    }
-
-                    // i is the global bar index (values[i] corresponds to bar i)
+                for (i, value) in (coords.start_idx..).zip(visible) {
                     let x = coords.idx_to_x(i);
 
                     let price = match value {
