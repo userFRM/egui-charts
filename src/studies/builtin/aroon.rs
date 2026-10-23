@@ -22,6 +22,7 @@
 //! aroon.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -72,25 +73,17 @@ impl Default for Aroon {
     }
 }
 
-impl Indicator for Aroon {
-    fn name(&self) -> &str {
-        "Aroon"
-    }
-
-    fn desc(&self) -> &str {
-        "Aroon - Trend identification indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl Aroon {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -120,9 +113,28 @@ impl Indicator for Aroon {
             let aroon_up = ((self.period - days_since_high) as f64 / self.period as f64) * 100.0;
             let aroon_down = ((self.period - days_since_low) as f64 / self.period as f64) * 100.0;
 
-            self.values
-                .push(IndicatorValue::Multiple(vec![aroon_up, aroon_down]));
+            values.push(IndicatorValue::Multiple(vec![aroon_up, aroon_down]));
         }
+
+        values
+    }
+}
+
+impl Indicator for Aroon {
+    fn name(&self) -> &str {
+        "Aroon"
+    }
+
+    fn desc(&self) -> &str {
+        "Aroon - Trend identification indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Avg Price Indicators
 /// Simple price calculations useful for analysis
@@ -284,6 +285,30 @@ impl Default for TrueRange {
     }
 }
 
+impl TrueRange {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+        if data.is_empty() {
+            return values;
+        }
+
+        // First bar: just H-L
+        values.push(IndicatorValue::Single(data[0].high - data[0].low));
+
+        for i in 1..data.len() {
+            let prev_close = data[i - 1].close;
+            let hl = data[i].high - data[i].low;
+            let hc = (data[i].high - prev_close).abs();
+            let lc = (data[i].low - prev_close).abs();
+            let tr = hl.max(hc).max(lc);
+            values.push(IndicatorValue::Single(tr));
+        }
+
+        values
+    }
+}
+
 impl Indicator for TrueRange {
     fn name(&self) -> &str {
         "TR"
@@ -294,24 +319,11 @@ impl Indicator for TrueRange {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // First bar: just H-L
-        self.values
-            .push(IndicatorValue::Single(data[0].high - data[0].low));
-
-        for i in 1..data.len() {
-            let prev_close = data[i - 1].close;
-            let hl = data[i].high - data[i].low;
-            let hc = (data[i].high - prev_close).abs();
-            let lc = (data[i].low - prev_close).abs();
-            let tr = hl.max(hc).max(lc);
-            self.values.push(IndicatorValue::Single(tr));
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

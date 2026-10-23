@@ -23,6 +23,7 @@
 //! adx.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -86,23 +87,15 @@ impl Default for ADX {
     }
 }
 
-impl Indicator for ADX {
-    fn name(&self) -> &str {
-        "ADX"
-    }
-
-    fn desc(&self) -> &str {
-        "Avg Directional Index - Trend strength indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ADX {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.period.saturating_mul(2) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate +DM, -DM, and TR for each bar
@@ -194,15 +187,35 @@ impl Indicator for ADX {
         // Build output values
         for i in 0..data.len() {
             if i < self.period * 2 - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push(IndicatorValue::Multiple(vec![
+                values.push(IndicatorValue::Multiple(vec![
                     adx[i],
                     plus_di[i],
                     minus_di[i],
                 ]));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for ADX {
+    fn name(&self) -> &str {
+        "ADX"
+    }
+
+    fn desc(&self) -> &str {
+        "Avg Directional Index - Trend strength indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

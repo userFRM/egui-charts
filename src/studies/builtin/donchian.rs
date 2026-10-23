@@ -22,6 +22,7 @@
 //! donchian.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue};
@@ -71,6 +72,34 @@ impl Default for DonchianChannels {
     }
 }
 
+impl DonchianChannels {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
+        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let (upper, lower) = (highest[i], lowest[i]);
+                let middle = (upper + lower) / 2.0;
+
+                values.push(IndicatorValue::Multiple(vec![middle, upper, lower]));
+            }
+        }
+
+        values
+    }
+}
+
 impl Indicator for DonchianChannels {
     fn name(&self) -> &str {
         "Donchian"
@@ -81,28 +110,11 @@ impl Indicator for DonchianChannels {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
-        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let (upper, lower) = (highest[i], lowest[i]);
-                let middle = (upper + lower) / 2.0;
-
-                self.values
-                    .push(IndicatorValue::Multiple(vec![middle, upper, lower]));
-            }
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

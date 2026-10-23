@@ -22,7 +22,7 @@
 //! st.calculate(&bars);
 //! ```
 
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -85,23 +85,15 @@ impl Default for SuperTrend {
     }
 }
 
-impl Indicator for SuperTrend {
-    fn name(&self) -> &str {
-        "SuperTrend"
-    }
-
-    fn desc(&self) -> &str {
-        "SuperTrend - Trend following indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl SuperTrend {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.atr_period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate ATR
@@ -185,15 +177,35 @@ impl Indicator for SuperTrend {
         // Build output values: [supertrend, direction]
         for i in 0..data.len() {
             if i < self.atr_period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 // direction: 1.0 for bullish, -1.0 for bearish
-                self.values.push(IndicatorValue::Multiple(vec![
+                values.push(IndicatorValue::Multiple(vec![
                     supertrend[i],
                     direction[i] as f64,
                 ]));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for SuperTrend {
+    fn name(&self) -> &str {
+        "SuperTrend"
+    }
+
+    fn desc(&self) -> &str {
+        "SuperTrend - Trend following indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Price Channel
 /// Simple highest high and lowest low channel
@@ -42,6 +43,37 @@ impl Default for PriceChannel {
     }
 }
 
+impl PriceChannel {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let window = &data[i + 1 - self.period..=i];
+                let highest = window
+                    .iter()
+                    .map(|b| b.high)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
+                let middle = (highest + lowest) / 2.0;
+
+                values.push(IndicatorValue::Multiple(vec![highest, lowest, middle]));
+            }
+        }
+
+        values
+    }
+}
+
 impl Indicator for PriceChannel {
     fn name(&self) -> &str {
         "Price Channel"
@@ -52,31 +84,11 @@ impl Indicator for PriceChannel {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let window = &data[i + 1 - self.period..=i];
-                let highest = window
-                    .iter()
-                    .map(|b| b.high)
-                    .fold(f64::NEG_INFINITY, f64::max);
-                let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
-                let middle = (highest + lowest) / 2.0;
-
-                self.values
-                    .push(IndicatorValue::Multiple(vec![highest, lowest, middle]));
-            }
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -30,28 +31,20 @@ impl Default for MajorityRule {
     }
 }
 
-impl Indicator for MajorityRule {
-    fn name(&self) -> &str {
-        "MajRule"
-    }
-
-    fn desc(&self) -> &str {
-        "Majority Rule - +1 if majority up closes, -1 if majority down, 0 if tie"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl MajorityRule {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         // First bar has no previous close to compare
-        self.values.push(IndicatorValue::None);
+        values.push(IndicatorValue::None);
 
         for i in 1..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -78,8 +71,24 @@ impl Indicator for MajorityRule {
                 0.0
             };
 
-            self.values.push(IndicatorValue::Single(result));
+            values.push(IndicatorValue::Single(result));
         }
+
+        values
+    }
+}
+
+impl Indicator for MajorityRule {
+    fn name(&self) -> &str {
+        "MajRule"
+    }
+
+    fn desc(&self) -> &str {
+        "Majority Rule - +1 if majority up closes, -1 if majority down, 0 if tie"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -25,6 +25,7 @@
 //! ichimoku.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue};
@@ -105,18 +106,10 @@ impl Default for IchimokuCloud {
     }
 }
 
-impl Indicator for IchimokuCloud {
-    fn name(&self) -> &str {
-        "Ichimoku"
-    }
-
-    fn desc(&self) -> &str {
-        "Ichimoku Cloud - Comprehensive trend indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl IchimokuCloud {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         // Midpoint of the highest high and lowest low of each full window
         let mid = |period: usize| -> Vec<Option<f64>> {
             let highest = rolling_max(data.iter().map(|b| b.high), period);
@@ -143,12 +136,32 @@ impl Indicator for IchimokuCloud {
             let chikou = i.checked_add(d).and_then(|j| data.get(j)).map(|b| b.close);
 
             let row = [tenkan, kijun, span_a, span_b, chikou];
-            self.values.push(if row.iter().all(Option::is_none) {
+            values.push(if row.iter().all(Option::is_none) {
                 IndicatorValue::None
             } else {
                 IndicatorValue::Multiple(row.map(|v| v.unwrap_or(f64::NAN)).to_vec())
             });
         }
+
+        values
+    }
+}
+
+impl Indicator for IchimokuCloud {
+    fn name(&self) -> &str {
+        "Ichimoku"
+    }
+
+    fn desc(&self) -> &str {
+        "Ichimoku Cloud - Comprehensive trend indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Vortex Indicator (VI)
 /// Identifies trend direction and strength
@@ -42,23 +43,15 @@ impl Default for VortexIndicator {
     }
 }
 
-impl Indicator for VortexIndicator {
-    fn name(&self) -> &str {
-        "Vortex"
-    }
-
-    fn desc(&self) -> &str {
-        "Vortex Indicator - Identifies trend direction"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl VortexIndicator {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate True Range, +VM, -VM for each bar
@@ -93,7 +86,7 @@ impl Indicator for VortexIndicator {
         // Calculate VI+ and VI-
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 // Sum over period
                 let tr_sum: f64 = tr_values[i + 1 - self.period..=i].iter().sum();
@@ -101,15 +94,34 @@ impl Indicator for VortexIndicator {
                 let vm_minus_sum: f64 = vm_minus[i + 1 - self.period..=i].iter().sum();
 
                 if tr_sum == 0.0 {
-                    self.values.push(IndicatorValue::None);
+                    values.push(IndicatorValue::None);
                 } else {
                     let vi_plus = vm_plus_sum / tr_sum;
                     let vi_minus = vm_minus_sum / tr_sum;
-                    self.values
-                        .push(IndicatorValue::Multiple(vec![vi_plus, vi_minus]));
+                    values.push(IndicatorValue::Multiple(vec![vi_plus, vi_minus]));
                 }
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for VortexIndicator {
+    fn name(&self) -> &str {
+        "Vortex"
+    }
+
+    fn desc(&self) -> &str {
+        "Vortex Indicator - Identifies trend direction"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

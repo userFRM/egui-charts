@@ -19,6 +19,7 @@
 //! pp.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -197,30 +198,22 @@ impl Default for PivotPoints {
     }
 }
 
-impl Indicator for PivotPoints {
-    fn name(&self) -> &str {
-        "Pivot Points"
-    }
-
-    fn desc(&self) -> &str {
-        "Pivot Points - Support and resistance levels from previous period"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl PivotPoints {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Find period high, low, close
         let mut i = 0;
         while i < data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 i += 1;
                 continue;
             }
@@ -241,7 +234,7 @@ impl Indicator for PivotPoints {
             let levels = self.calculate_pivots(high, low, close, open);
 
             // Store all 7 levels as Multiple
-            self.values.push(IndicatorValue::Multiple(vec![
+            values.push(IndicatorValue::Multiple(vec![
                 levels.pivot,
                 levels.s1,
                 levels.s2,
@@ -253,6 +246,31 @@ impl Indicator for PivotPoints {
 
             i += 1;
         }
+
+        values
+    }
+}
+
+impl Indicator for PivotPoints {
+    fn name(&self) -> &str {
+        "Pivot Points"
+    }
+
+    fn desc(&self) -> &str {
+        "Pivot Points - Support and resistance levels from previous period"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.high.is_finite()
+                    && b.low.is_finite()
+                    && b.close.is_finite()
+                    && (self.method != PivotMethod::DeMark || b.open.is_finite())
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

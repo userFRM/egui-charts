@@ -23,7 +23,7 @@
 //! psar.calculate(&bars);
 //! ```
 
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -84,23 +84,15 @@ impl Default for ParabolicSAR {
     }
 }
 
-impl Indicator for ParabolicSAR {
-    fn name(&self) -> &str {
-        "PSAR"
-    }
-
-    fn desc(&self) -> &str {
-        "Parabolic SAR - Trend following stop-and-reverse"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ParabolicSAR {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < 2 {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         let mut sar = vec![0.0; data.len()];
@@ -186,12 +178,31 @@ impl Indicator for ParabolicSAR {
         // Build output: [sar, trend]
         for i in 0..data.len() {
             if i == 0 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![sar[i], trend[i] as f64]));
+                values.push(IndicatorValue::Multiple(vec![sar[i], trend[i] as f64]));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for ParabolicSAR {
+    fn name(&self) -> &str {
+        "PSAR"
+    }
+
+    fn desc(&self) -> &str {
+        "Parabolic SAR - Trend following stop-and-reverse"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

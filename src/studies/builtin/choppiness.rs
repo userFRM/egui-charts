@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Choppiness Index
 /// Measures market trendiness vs choppiness
@@ -38,23 +39,15 @@ impl Default for ChoppinessIndex {
     }
 }
 
-impl Indicator for ChoppinessIndex {
-    fn name(&self) -> &str {
-        "CHOP"
-    }
-
-    fn desc(&self) -> &str {
-        "Choppiness Index - Measures market trendiness"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ChoppinessIndex {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate True Range for each bar
@@ -75,7 +68,7 @@ impl Indicator for ChoppinessIndex {
         // Calculate Choppiness Index
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 // Sum of TR over period
                 let atr_sum: f64 = tr_values[i + 1 - self.period..=i].iter().sum();
@@ -91,14 +84,34 @@ impl Indicator for ChoppinessIndex {
                 let range = highest - lowest;
 
                 if range == 0.0 {
-                    self.values.push(IndicatorValue::None);
+                    values.push(IndicatorValue::None);
                 } else {
                     // CHOP = 100 * LOG10(SUM(TR, n) / (Highest High - Lowest Low)) / LOG10(n)
                     let chop = 100.0 * (atr_sum / range).log10() / (self.period as f64).log10();
-                    self.values.push(IndicatorValue::Single(chop));
+                    values.push(IndicatorValue::Single(chop));
                 }
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for ChoppinessIndex {
+    fn name(&self) -> &str {
+        "CHOP"
+    }
+
+    fn desc(&self) -> &str {
+        "Choppiness Index - Measures market trendiness"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

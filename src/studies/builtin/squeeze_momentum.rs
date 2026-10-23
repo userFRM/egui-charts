@@ -1,4 +1,4 @@
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 /// Squeeze Momentum Indicator
 /// Combines Bollinger Bands and Keltner Channels to identify periods of low volatility
@@ -148,24 +148,16 @@ impl Default for SqueezeMomentum {
     }
 }
 
-impl Indicator for SqueezeMomentum {
-    fn name(&self) -> &str {
-        "Squeeze"
-    }
-
-    fn desc(&self) -> &str {
-        "Squeeze Momentum - Identifies volatility breakouts"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl SqueezeMomentum {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         let required = self.bb_period.max(self.kc_period).max(self.momentum_period);
         if data.len() < required {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Get closes
@@ -202,7 +194,7 @@ impl Indicator for SqueezeMomentum {
                 || atr[i].is_nan()
                 || momentum[i].is_nan()
             {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let bb_upper = bb_sma[i] + self.bb_mult * bb_std[i];
                 let bb_lower = bb_sma[i] - self.bb_mult * bb_std[i];
@@ -212,12 +204,32 @@ impl Indicator for SqueezeMomentum {
                 // Squeeze is ON when BB is inside KC
                 let squeeze_on = bb_lower > kc_lower && bb_upper < kc_upper;
 
-                self.values.push(IndicatorValue::Multiple(vec![
+                values.push(IndicatorValue::Multiple(vec![
                     momentum[i],
                     if squeeze_on { 1.0 } else { 0.0 },
                 ]));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for SqueezeMomentum {
+    fn name(&self) -> &str {
+        "Squeeze"
+    }
+
+    fn desc(&self) -> &str {
+        "Squeeze Momentum - Identifies volatility breakouts"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

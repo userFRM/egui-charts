@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue};
@@ -31,6 +32,31 @@ impl Default for Week52HighLow {
     }
 }
 
+impl Week52HighLow {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
+        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
+        for i in 0..data.len() {
+            if i + 1 < self.period {
+                values.push(IndicatorValue::None);
+                continue;
+            }
+
+            let range = highest[i] - lowest[i];
+            if range.abs() < 1e-15 {
+                values.push(IndicatorValue::Single(50.0));
+            } else {
+                let pct = (data[i].close - lowest[i]) / range * 100.0;
+                values.push(IndicatorValue::Single(pct));
+            }
+        }
+
+        values
+    }
+}
+
 impl Indicator for Week52HighLow {
     fn name(&self) -> &str {
         "52W HL%"
@@ -41,24 +67,11 @@ impl Indicator for Week52HighLow {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
-        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
-                continue;
-            }
-
-            let range = highest[i] - lowest[i];
-            if range.abs() < 1e-15 {
-                self.values.push(IndicatorValue::Single(50.0));
-            } else {
-                let pct = (data[i].close - lowest[i]) / range * 100.0;
-                self.values.push(IndicatorValue::Single(pct));
-            }
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
