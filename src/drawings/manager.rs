@@ -144,6 +144,8 @@ pub struct DrawingManager {
     pub active_tool: Option<DrawingToolType>,
     /// The drawing currently being created (not yet completed).
     pub curr_drawing: Option<Drawing>,
+    /// Whether the last point of `curr_drawing` follows the pointer rather than a click.
+    preview_point: bool,
     /// Next available drawing ID (monotonically increasing).
     next_id: usize,
 
@@ -187,6 +189,7 @@ impl DrawingManager {
             drawings: Vec::new(),
             active_tool: None,
             curr_drawing: None,
+            preview_point: false,
             next_id: 0,
             selection: SelectionService::new(),
             history: HistoryService::new(),
@@ -378,7 +381,7 @@ impl DrawingManager {
     pub fn set_active_tool(&mut self, tool: Option<DrawingToolType>) {
         self.active_tool = tool;
         if tool.is_some() {
-            self.curr_drawing = None;
+            self.cancel_curr_drawing();
         }
     }
 
@@ -435,6 +438,7 @@ impl DrawingManager {
         let mut drawing = Drawing::with_color(self.next_id, tool_type, self.options.default_color);
         let drawing_id = self.next_id;
         self.next_id += 1;
+        self.preview_point = false;
         drawing.add_point_with_chart_coords(point, x_to_bar, y_to_price);
 
         if drawing.completed {
@@ -467,6 +471,11 @@ impl DrawingManager {
     {
         if let Some(ref mut drawing) = self.curr_drawing {
             let drawing_id = drawing.id;
+            // The click takes the place of the pointer preview.
+            if std::mem::take(&mut self.preview_point) {
+                drawing.points.pop();
+                drawing.chart_points.pop();
+            }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
 
             if drawing.completed {
@@ -486,8 +495,9 @@ impl DrawingManager {
         }
     }
 
-    /// Updates the last point of the in-progress drawing (used for live preview
-    /// as the cursor moves between the first click and the final placement).
+    /// Moves the pointer preview of the in-progress drawing to `point`, adding it after the
+    /// placed anchors if there is none yet. The next click or the end of a drag replaces it
+    /// with an anchor; finishing a multi-point drawing drops it.
     pub fn update_last_point_with_coords<F, G>(&mut self, point: Pos2, x_to_bar: F, y_to_price: G)
     where
         F: Fn(f32) -> f32,
@@ -497,19 +507,26 @@ impl DrawingManager {
             && !drawing.points.is_empty()
             && !drawing.completed
         {
-            if drawing.points.len() == 1 {
+            if self.preview_point {
+                drawing.update_last_point_with_chart_coords(point, x_to_bar, y_to_price);
+            } else {
                 drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
                 drawing.completed = false;
-            } else if drawing.points.len() >= 2 {
-                drawing.update_last_point_with_chart_coords(point, x_to_bar, y_to_price);
+                self.preview_point = true;
             }
         }
     }
 
     /// Manually completes the in-progress drawing (e.g., on double-click or Enter
-    /// for multi-point tools). Requires at least 2 points, and as many as the tool draws
-    /// with, so that what it adds can be saved.
+    /// for multi-point tools), without its pointer preview. Requires at least 2 points, and
+    /// as many as the tool draws with, so that what it adds can be saved.
     pub fn complete_curr_drawing(&mut self) {
+        if let Some(drawing) = &mut self.curr_drawing
+            && std::mem::take(&mut self.preview_point)
+        {
+            drawing.points.pop();
+            drawing.chart_points.pop();
+        }
         if let Some(ref mut drawing) = self.curr_drawing
             && drawing.points.len() >= drawing.tool_type.anchors_needed().max(2)
         {
@@ -526,6 +543,7 @@ impl DrawingManager {
     /// Cancels the in-progress drawing without adding it to the drawing list.
     pub fn cancel_curr_drawing(&mut self) {
         self.curr_drawing = None;
+        self.preview_point = false;
     }
 
     // === Drawing CRUD ===
@@ -560,7 +578,7 @@ impl DrawingManager {
     /// Note: This does not push to the undo history (it is a destructive reset).
     pub fn clear_all(&mut self) {
         self.drawings.clear();
-        self.curr_drawing = None;
+        self.cancel_curr_drawing();
         self.selection.deselect_all();
     }
 
@@ -662,6 +680,8 @@ impl DrawingManager {
 
     /// Complete a drag-to-draw drawing (see [`Self::complete_curr_drawing`])
     pub fn complete_drag_drawing(&mut self) {
+        // The pointer preview is where the drag ended: the drawing's last anchor.
+        self.preview_point = false;
         // A position's stop starts mirrored around the entry, as an anchor of
         // its own so it can be moved without moving the target.
         if let Some(drawing) = &mut self.curr_drawing
@@ -749,7 +769,7 @@ mod tests {
         assert!(manager.active_tool.is_none());
     }
 
-    /// One click, a hover and Enter finish a multi-point tool with two anchors. Whatever the
+    /// Two clicks and Enter finish a multi-point tool with two anchors. Whatever the
     /// manager finishes must save, and a tool that draws nothing with two anchors (the parallel
     /// channel) must stay in progress, or the whole storage would refuse to save.
     #[test]
@@ -764,7 +784,7 @@ mod tests {
             let mut manager = DrawingManager::new();
             let (x_to_bar, y_to_price) = (|x: f32| x, |y: f32| f64::from(y));
             manager.start_drawing_with_coords(tool, Pos2::new(10.0, 10.0), x_to_bar, y_to_price);
-            manager.update_last_point_with_coords(Pos2::new(50.0, 40.0), x_to_bar, y_to_price);
+            manager.add_point_with_coords(Pos2::new(50.0, 40.0), x_to_bar, y_to_price);
             manager.complete_curr_drawing();
             assert_eq!(manager.drawings.len(), usize::from(finishes), "{tool:?}");
             let mut storage = DrawingStorage::new("AAPL");
@@ -776,6 +796,39 @@ mod tests {
                 "{tool:?}: {:?}",
                 storage.to_json()
             );
+        }
+    }
+
+    /// The pointer moves between the clicks that place a drawing's anchors. The drawing must
+    /// finish on the click that places its last anchor and keep exactly the clicked positions,
+    /// with no anchor left at a hovered position.
+    #[test]
+    fn hovering_between_clicks_adds_no_anchor() {
+        for (tool, clicks) in [
+            (DrawingToolType::TrendLine, 2),
+            (DrawingToolType::ParallelChannel, 3),
+            (DrawingToolType::XABCDPattern, 5),
+            (DrawingToolType::Polyline, 3),
+        ] {
+            let mut manager = DrawingManager::new();
+            let (x_to_bar, y_to_price) = (|x: f32| x, |y: f32| f64::from(y));
+            let click = |i: usize| Pos2::new(10.0 * (i + 1) as f32, 5.0 * (i % 2) as f32);
+            manager.start_drawing_with_coords(tool, click(0), x_to_bar, y_to_price);
+            for i in 1..clicks {
+                manager.update_last_point_with_coords(Pos2::new(99.0, 99.0), x_to_bar, y_to_price);
+                assert!(
+                    manager.drawings.is_empty(),
+                    "{tool:?} finished after {i} clicks"
+                );
+                manager.add_point_with_coords(click(i), x_to_bar, y_to_price);
+            }
+            manager.update_last_point_with_coords(Pos2::new(99.0, 99.0), x_to_bar, y_to_price);
+            manager.complete_curr_drawing();
+            let want: Vec<_> = (0..clicks)
+                .map(|i| ChartPoint::new(click(i).x, f64::from(click(i).y)))
+                .collect();
+            assert_eq!(manager.drawings.len(), 1, "{tool:?}");
+            assert_eq!(manager.drawings[0].chart_points, want, "{tool:?}");
         }
     }
 
