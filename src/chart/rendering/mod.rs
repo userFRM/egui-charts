@@ -6,6 +6,7 @@
 
 pub mod axes;
 pub mod candles;
+mod dashed_line;
 pub mod grid;
 pub mod overlays;
 
@@ -16,6 +17,7 @@ pub use candles::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, JapaneseChartSettings,
     TradingColors, VolumeSettings, render_chart_type,
 };
+pub(crate) use dashed_line::draw_dashed_line;
 pub use grid::{render_grid, render_vertical_grid};
 pub use overlays::{
     render_box_zoom, render_crosshair_with_options, render_legend, render_ohlc_info,

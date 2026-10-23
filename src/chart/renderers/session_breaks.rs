@@ -14,8 +14,8 @@
 //! coordinate math used by the candles.
 
 use super::context::{ChartMapping, RenderContext};
+use crate::chart::rendering::draw_dashed_line;
 use crate::config::SessionBreakStyle;
-use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::model::{Bar, SessionBreakType, SessionProvider, Timeframe, find_session_breaks};
 use egui::{Color32, Pos2, Stroke};
 

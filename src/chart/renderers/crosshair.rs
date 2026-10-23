@@ -1,8 +1,8 @@
 use super::context::{ChartMapping, RenderContext};
 use super::labels::tick_decimals;
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, paint_axis_tag};
+use crate::chart::rendering::draw_dashed_line;
 use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairStyle};
-use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::model::Bar;
 use crate::scales::{PriceMap, PriceScaleMode, TickMarkType, TimeFormatter};
 use crate::tokens::DESIGN_TOKENS;

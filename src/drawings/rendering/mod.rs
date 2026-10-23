@@ -65,7 +65,10 @@ mod pitchfork;
 mod shapes;
 mod trading;
 pub mod traits;
-pub(crate) mod utils;
+// The painter the drawing renderers share with the chart.
+pub(crate) mod utils {
+    pub(crate) use crate::chart::rendering::draw_dashed_line;
+}
 
 pub use traits::DrawingRenderer;
 

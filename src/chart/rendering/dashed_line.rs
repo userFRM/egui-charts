@@ -1,4 +1,4 @@
-//! Shared rendering utilities.
+//! The dashed-line painter the chart's renderers and the drawing tools share.
 
 use egui::{Pos2, Stroke};
 

@@ -32,7 +32,7 @@
 //! right offset, and base index so that indicator panes draw their data points
 //! at exactly the same x-coordinates as the corresponding candlesticks above.
 
-use crate::drawings::rendering::utils::draw_dashed_line;
+use crate::chart::rendering::draw_dashed_line;
 use crate::model::Bar;
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::{Indicator, IndicatorValue};

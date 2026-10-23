@@ -8,7 +8,7 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
 };
 
-use crate::drawings::rendering::utils::draw_dashed_line;
+use crate::chart::rendering::draw_dashed_line;
 pub use crate::model::{OrderId, OrderSide};
 use crate::styles::typography;
 use crate::theme::ThemeExt;

@@ -1,6 +1,6 @@
 //! Price and time axis rendering
 
-use crate::drawings::rendering::utils::draw_dashed_line;
+use crate::chart::rendering::draw_dashed_line;
 use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
 use crate::tokens::DESIGN_TOKENS;
