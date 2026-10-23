@@ -7,10 +7,27 @@
 
 use super::Timeframe;
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// A year of 365.25 days, in milliseconds.
 const YEAR_MS: f64 = 31_557_600_000.0;
+
+/// Reads none as NaN: serde_json writes a non-finite number as `null`, which a plain `f64` refuses.
+/// [`StrategyReport::performance`] skips a NaN like any non-finite value.
+fn null_as_nan<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
+}
+
+/// [`null_as_nan`] for the values of an equity curve.
+fn curve_null_as_nan<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<(DateTime<Utc>, f64)>, D::Error> {
+    let curve = Vec::<(DateTime<Utc>, Option<f64>)>::deserialize(deserializer)?;
+    Ok(curve
+        .into_iter()
+        .map(|(t, v)| (t, v.unwrap_or(f64::NAN)))
+        .collect())
+}
 
 /// The result of one strategy run, from any source: a backtest the host runs against the headless
 /// engine, a forward test, or the host's own analytics. Build it with [`StrategyReport::new`] and set
@@ -53,13 +70,14 @@ pub struct StrategyReport {
     pub timeframe: Timeframe,
     /// Account value at the start, in `currency`. Positive and finite, or
     /// [`StrategyPerformance::net_profit_fraction`] is unavailable.
+    #[serde(deserialize_with = "null_as_nan")]
     pub initial_capital: f64,
     /// Currency of capital, profits, fees and equity, such as "USD". Display only.
     #[serde(default)]
     pub currency: Option<String>,
     /// Annual risk-free rate as a fraction (0.02 for 2%), used by the Sharpe and Sortino ratios.
     /// Finite and above -1, or the ratios are unavailable.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_nan")]
     pub risk_free_rate: f64,
     /// Settings of the run as the host wants them shown (parameters, commission, sizing), in order.
     /// Display only.
@@ -70,7 +88,7 @@ pub struct StrategyReport {
     pub trades: Vec<StrategyTrade>,
     /// Account value marked to market at each bar close, oldest first, one point per bar, in
     /// strictly increasing time order.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "curve_null_as_nan")]
     pub equity: Vec<(DateTime<Utc>, f64)>,
 }
 
@@ -87,17 +105,19 @@ pub struct StrategyTrade {
     /// Long or short.
     pub side: StrategySide,
     /// Size of the position: positive and finite.
+    #[serde(deserialize_with = "null_as_nan")]
     pub quantity: f64,
     /// When the position was opened.
     pub entry_time: DateTime<Utc>,
     /// Average fill price of the entry.
+    #[serde(deserialize_with = "null_as_nan")]
     pub entry_price: f64,
     /// `None` while the trade is open.
     #[serde(default)]
     pub exit: Option<StrategyExit>,
     /// Commission and other costs of entry and exit, in the report's currency. Already included in
     /// the exit's profit.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_nan")]
     pub fees: f64,
     /// The host's name for the entry, such as the rule that opened it. Display only.
     #[serde(default)]
@@ -111,9 +131,11 @@ pub struct StrategyExit {
     /// When the position was closed.
     pub time: DateTime<Utc>,
     /// Average fill price of the exit.
+    #[serde(deserialize_with = "null_as_nan")]
     pub price: f64,
     /// Net profit of the trade after fees, in the report's currency, as the host computed it: the
     /// library does not model point values, inverse contracts or currency conversion.
+    #[serde(deserialize_with = "null_as_nan")]
     pub profit: f64,
 }
 
@@ -592,6 +614,16 @@ mod tests {
         let growth: Vec<f64> = (0..10).map(|i| 100.0 * 1.0001_f64.powf(i as f64)).collect();
         constant_growth.equity = curve(&growth, TimeDelta::days(41));
 
+        // A non-finite number in every kind of field: one invalid trade, one skipped equity point.
+        let mut non_finite = report(f64::NAN);
+        non_finite.risk_free_rate = f64::NAN;
+        non_finite.equity = vec![(t0(), f64::NAN)];
+        let mut trade = closed(5.0, f64::NEG_INFINITY);
+        trade.quantity = f64::INFINITY;
+        trade.entry_price = f64::NAN;
+        trade.exit.as_mut().unwrap().price = f64::NAN;
+        non_finite.trades.push(trade);
+
         let no_curve = StrategyPerformance {
             max_drawdown: None,
             max_drawdown_fraction: None,
@@ -708,6 +740,15 @@ mod tests {
                 },
             ),
             (
+                "non-finite capital, rate, trade fields and equity",
+                non_finite,
+                StrategyPerformance {
+                    skipped_trades: 1,
+                    skipped_equity_points: 1,
+                    ..Default::default()
+                },
+            ),
+            (
                 "empty",
                 report(10_000.0),
                 StrategyPerformance {
@@ -718,6 +759,14 @@ mod tests {
         ];
         for (case, report, expected) in rows {
             assert_matches(case, &report.performance(), &expected);
+            let loaded: StrategyReport =
+                serde_json::from_str(&serde_json::to_string(&report).unwrap())
+                    .unwrap_or_else(|e| panic!("{case}: {e}"));
+            assert_matches(
+                &format!("{case}, saved and loaded"),
+                &loaded.performance(),
+                &expected,
+            );
         }
     }
 
