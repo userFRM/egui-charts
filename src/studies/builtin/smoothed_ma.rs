@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Smoothed Moving Average (Wilder's Smoothing)
 use crate::studies::{Indicator, IndicatorValue};
@@ -26,6 +27,36 @@ impl SmoothedMA {
         self.color = color;
         self
     }
+
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        // First value is SMA
+        let first_sma: f64 =
+            data[..self.period].iter().map(|b| b.close).sum::<f64>() / self.period as f64;
+
+        for _i in 0..self.period - 1 {
+            values.push(IndicatorValue::None);
+        }
+        values.push(IndicatorValue::Single(first_sma));
+
+        let mut prev = first_sma;
+        for i in self.period..data.len() {
+            let smoothed = (prev * (self.period as f64 - 1.0) + data[i].close) / self.period as f64;
+            values.push(IndicatorValue::Single(smoothed));
+            prev = smoothed;
+        }
+
+        values
+    }
 }
 
 impl Default for SmoothedMA {
@@ -44,30 +75,7 @@ impl Indicator for SmoothedMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // First value is SMA
-        let first_sma: f64 =
-            data[..self.period].iter().map(|b| b.close).sum::<f64>() / self.period as f64;
-
-        for _i in 0..self.period - 1 {
-            self.values.push(IndicatorValue::None);
-        }
-        self.values.push(IndicatorValue::Single(first_sma));
-
-        let mut prev = first_sma;
-        for i in self.period..data.len() {
-            let smoothed = (prev * (self.period as f64 - 1.0) + data[i].close) / self.period as f64;
-            self.values.push(IndicatorValue::Single(smoothed));
-            prev = smoothed;
-        }
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

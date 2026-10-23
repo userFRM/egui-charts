@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// McGinley Dynamic
 /// Adaptive moving avg designed to track price better than traditional MAs
@@ -29,6 +30,40 @@ impl McGinleyDynamic {
         self.color = color;
         self
     }
+
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        // Start with first close
+        let mut md = data[0].close;
+        values.push(IndicatorValue::Single(md));
+
+        let k = 0.6; // Constant factor
+        let n = self.period as f64;
+
+        for i in 1..data.len() {
+            let close = data[i].close;
+
+            // McGinley Dynamic formula:
+            // MD = MD_prev + (Close - MD_prev) / (k * N * (Close / MD_prev)^4)
+            if md != 0.0 {
+                let ratio = close / md;
+                let divisor = k * n * ratio.powi(4);
+                if divisor != 0.0 {
+                    md = md + (close - md) / divisor;
+                }
+            }
+
+            values.push(IndicatorValue::Single(md));
+        }
+
+        values
+    }
 }
 
 impl Default for McGinleyDynamic {
@@ -47,34 +82,7 @@ impl Indicator for McGinleyDynamic {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // Start with first close
-        let mut md = data[0].close;
-        self.values.push(IndicatorValue::Single(md));
-
-        let k = 0.6; // Constant factor
-        let n = self.period as f64;
-
-        for i in 1..data.len() {
-            let close = data[i].close;
-
-            // McGinley Dynamic formula:
-            // MD = MD_prev + (Close - MD_prev) / (k * N * (Close / MD_prev)^4)
-            if md != 0.0 {
-                let ratio = close / md;
-                let divisor = k * n * ratio.powi(4);
-                if divisor != 0.0 {
-                    md = md + (close - md) / divisor;
-                }
-            }
-
-            self.values.push(IndicatorValue::Single(md));
-        }
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -23,6 +23,7 @@
 //! stoch_rsi.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -135,29 +136,13 @@ impl StochasticRSI {
             f64::NAN
         }
     }
-}
 
-/// Construct with the conventional default parameters.
-impl Default for StochasticRSI {
-    fn default() -> Self {
-        Self::new(14, 14, 3, 3)
-    }
-}
-
-impl Indicator for StochasticRSI {
-    fn name(&self) -> &str {
-        "StochRSI"
-    }
-
-    fn desc(&self) -> &str {
-        "Stochastic RSI - Stochastic oscillator of RSI"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
 
         let min_period = self
@@ -167,9 +152,9 @@ impl Indicator for StochasticRSI {
             .saturating_add(self.smooth_d);
         if data.len() < min_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Step 1: Calculate RSI
@@ -211,14 +196,37 @@ impl Indicator for StochasticRSI {
         // Build output
         for i in 0..data.len() {
             if k_line[i].is_nan() || d_line[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push(IndicatorValue::Multiple(vec![
+                values.push(IndicatorValue::Multiple(vec![
                     k_line[i] * 100.0, // Scale to 0-100
                     d_line[i] * 100.0,
                 ]));
             }
         }
+
+        values
+    }
+}
+
+/// Construct with the conventional default parameters.
+impl Default for StochasticRSI {
+    fn default() -> Self {
+        Self::new(14, 14, 3, 3)
+    }
+}
+
+impl Indicator for StochasticRSI {
+    fn name(&self) -> &str {
+        "StochRSI"
+    }
+
+    fn desc(&self) -> &str {
+        "Stochastic RSI - Stochastic oscillator of RSI"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

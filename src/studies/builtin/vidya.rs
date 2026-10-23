@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// VIDYA - Variable Index Dynamic Avg
 /// Adaptive moving avg that adjusts based on volatility
@@ -29,31 +30,16 @@ impl VIDYA {
         self.color = color;
         self
     }
-}
 
-impl Default for VIDYA {
-    fn default() -> Self {
-        Self::new(14)
-    }
-}
-
-impl Indicator for VIDYA {
-    fn name(&self) -> &str {
-        "VIDYA"
-    }
-
-    fn desc(&self) -> &str {
-        "Variable Index Dynamic Avg - Volatility-adjusted MA"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Standard smoothing constant
@@ -66,7 +52,7 @@ impl Indicator for VIDYA {
         for i in 0..data.len() {
             if i < self.period {
                 // Need enough data for CMO calculation
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 // Calculate CMO (Chande Momentum Oscillator) for volatility
                 let mut sum_up = 0.0;
@@ -92,9 +78,31 @@ impl Indicator for VIDYA {
                 // Calculate VIDYA
                 vidya = sc * vi * data[i].close + (1.0 - sc * vi) * vidya;
 
-                self.values.push(IndicatorValue::Single(vidya));
+                values.push(IndicatorValue::Single(vidya));
             }
         }
+
+        values
+    }
+}
+
+impl Default for VIDYA {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
+impl Indicator for VIDYA {
+    fn name(&self) -> &str {
+        "VIDYA"
+    }
+
+    fn desc(&self) -> &str {
+        "Variable Index Dynamic Avg - Volatility-adjusted MA"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -173,28 +181,13 @@ impl ZLEMA {
 
         result
     }
-}
 
-impl Default for ZLEMA {
-    fn default() -> Self {
-        Self::new(14)
-    }
-}
-
-impl Indicator for ZLEMA {
-    fn name(&self) -> &str {
-        "ZLEMA"
-    }
-
-    fn desc(&self) -> &str {
-        "Zero Lag EMA - Reduced lag moving avg"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
 
         let lag = (self.period - 1) / 2;
@@ -215,11 +208,33 @@ impl Indicator for ZLEMA {
 
         for i in 0..data.len() {
             if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push(IndicatorValue::Single(zlema[i]));
+                values.push(IndicatorValue::Single(zlema[i]));
             }
         }
+
+        values
+    }
+}
+
+impl Default for ZLEMA {
+    fn default() -> Self {
+        Self::new(14)
+    }
+}
+
+impl Indicator for ZLEMA {
+    fn name(&self) -> &str {
+        "ZLEMA"
+    }
+
+    fn desc(&self) -> &str {
+        "Zero Lag EMA - Reduced lag moving avg"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {
