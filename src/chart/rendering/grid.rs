@@ -12,7 +12,9 @@ pub fn render_grid(painter: &Painter, rect: Rect, price_map: &PriceMap, grid_col
     let marks = PriceMarkGenerator::new().generate_marks(price_map);
 
     for mark in marks {
-        let stroke_width = if mark.weight >= 80 {
+        let stroke_width = if grid_color.is_opaque() {
+            DESIGN_TOKENS.stroke.hairline
+        } else if mark.weight >= 80 {
             DESIGN_TOKENS.stroke.light
         } else {
             DESIGN_TOKENS.stroke.extra_thin
@@ -70,7 +72,14 @@ pub fn render_vertical_grid(
 
         painter.line_segment(
             [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)],
-            Stroke::new(DESIGN_TOKENS.stroke.extra_thin, grid_color),
+            Stroke::new(
+                if grid_color.is_opaque() {
+                    DESIGN_TOKENS.stroke.hairline
+                } else {
+                    DESIGN_TOKENS.stroke.extra_thin
+                },
+                grid_color,
+            ),
         );
     }
 }
