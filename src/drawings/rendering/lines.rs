@@ -9,15 +9,46 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
 impl Drawing {
-    /// Render trend line - simple line between two points
+    /// Draws the straight segment from `a` to `b` in the drawing's line style.
+    fn styled_segment(&self, painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke) {
+        match self.line_style.dash_pattern() {
+            None => {
+                painter.line_segment([a, b], stroke);
+            }
+            Some((dash, gap)) => super::utils::draw_dashed_line(painter, a, b, stroke, dash, gap),
+        }
+    }
+
+    /// Ends of a trend line from left to right, the left one extended to `min_x` and the right
+    /// one to `max_x` when the drawing extends that way; `None` below two anchors.
+    pub(crate) fn trend_line_ends(&self, min_x: f32, max_x: f32) -> Option<(Pos2, Pos2)> {
+        let &[a, b, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let (mut left, mut right) = if a.x <= b.x { (a, b) } else { (b, a) };
+        let slope = (right.y - left.y) / (right.x - left.x);
+        if slope.is_finite() {
+            if self.extend_left && min_x < left.x {
+                left = Pos2::new(min_x, left.y + (min_x - left.x) * slope);
+            }
+            if self.extend_right && max_x > right.x {
+                right = Pos2::new(max_x, right.y + (max_x - right.x) * slope);
+            }
+        }
+        Some((left, right))
+    }
+
+    /// Render trend line - a line between two points, extended to the left or right edge of
+    /// `rect` when the drawing asks for it
     pub(crate) fn render_trend_line(
         &self,
         painter: &egui::Painter,
+        rect: Rect,
         color: Color32,
         stroke: Stroke,
     ) {
-        if self.points.len() >= 2 {
-            painter.line_segment([self.points[0], self.points[1]], stroke);
+        if let Some((left, right)) = self.trend_line_ends(rect.min.x, rect.max.x) {
+            self.styled_segment(painter, left, right, stroke);
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
         }
@@ -46,7 +77,7 @@ impl Drawing {
                 Pos2::new(start.x, rect.min.y)
             };
 
-            painter.line_segment([start, extended_end], stroke);
+            self.styled_segment(painter, start, extended_end, stroke);
             painter.circle_filled(start, DESIGN_TOKENS.rounding.md, color);
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
@@ -74,9 +105,10 @@ impl Drawing {
                 let left_point = Pos2::new(rect.min.x, p1.y + t_left * dy);
                 let right_point = Pos2::new(rect.max.x, p1.y + t_right * dy);
 
-                painter.line_segment([left_point, right_point], stroke);
+                self.styled_segment(painter, left_point, right_point, stroke);
             } else {
-                painter.vline(p1.x, rect.y_range(), stroke);
+                let (top, bottom) = (Pos2::new(p1.x, rect.min.y), Pos2::new(p1.x, rect.max.y));
+                self.styled_segment(painter, top, bottom, stroke);
             }
 
             painter.circle_filled(p1, DESIGN_TOKENS.rounding.sm, color);
@@ -95,7 +127,8 @@ impl Drawing {
     ) {
         if !self.points.is_empty() {
             let y = self.points[0].y;
-            painter.hline(rect.x_range(), y, stroke);
+            let (left, right) = (Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y));
+            self.styled_segment(painter, left, right, stroke);
         }
     }
 
@@ -109,7 +142,7 @@ impl Drawing {
     ) {
         if !self.points.is_empty() {
             let start = self.points[0];
-            painter.line_segment([start, Pos2::new(rect.max.x, start.y)], stroke);
+            self.styled_segment(painter, start, Pos2::new(rect.max.x, start.y), stroke);
             painter.circle_filled(start, DESIGN_TOKENS.rounding.md, color);
         }
     }
@@ -118,7 +151,8 @@ impl Drawing {
     pub(crate) fn render_vertical_line(&self, painter: &egui::Painter, rect: Rect, stroke: Stroke) {
         if !self.points.is_empty() {
             let x = self.points[0].x;
-            painter.vline(x, rect.y_range(), stroke);
+            let (top, bottom) = (Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y));
+            self.styled_segment(painter, top, bottom, stroke);
         }
     }
 
@@ -132,8 +166,16 @@ impl Drawing {
     ) {
         if !self.points.is_empty() {
             let point = self.points[0];
-            painter.hline(rect.x_range(), point.y, stroke);
-            painter.vline(point.x, rect.y_range(), stroke);
+            let (left, right) = (
+                Pos2::new(rect.min.x, point.y),
+                Pos2::new(rect.max.x, point.y),
+            );
+            let (top, bottom) = (
+                Pos2::new(point.x, rect.min.y),
+                Pos2::new(point.x, rect.max.y),
+            );
+            self.styled_segment(painter, left, right, stroke);
+            self.styled_segment(painter, top, bottom, stroke);
             painter.circle_filled(point, DESIGN_TOKENS.rounding.md, color);
         }
     }
@@ -150,7 +192,7 @@ impl Drawing {
             let end = self.points[1];
 
             // Draw main trend line
-            painter.line_segment([start, end], stroke);
+            self.styled_segment(painter, start, end, stroke);
 
             // Draw horizontal reference line (dashed)
             let ref_end = Pos2::new(end.x, start.y);

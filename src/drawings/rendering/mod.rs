@@ -148,7 +148,7 @@ impl Drawing {
 
         match self.tool_type {
             // Simple Lines (9 tools)
-            DrawingToolType::TrendLine => self.render_trend_line(painter, color, stroke),
+            DrawingToolType::TrendLine => self.render_trend_line(painter, rect, color, stroke),
             DrawingToolType::Ray => self.render_ray(painter, rect, color, stroke),
             DrawingToolType::ExtendedLine => {
                 self.render_extended_line(painter, rect, color, stroke)

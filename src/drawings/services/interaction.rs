@@ -251,7 +251,16 @@ impl DrawingInteraction {
             }
 
             match drawing.tool_type {
-                DrawingToolType::TrendLine | DrawingToolType::Measure => {
+                // A trend line is hit along the extensions it is drawn with.
+                DrawingToolType::TrendLine => {
+                    let reach = (point.x - hit_distance, point.x + hit_distance);
+                    if let Some((left, right)) = drawing.trend_line_ends(reach.0, reach.1)
+                        && point_to_line_distance(point, left, right) <= hit_distance
+                    {
+                        return Some(drawing.id);
+                    }
+                }
+                DrawingToolType::Measure => {
                     if drawing.points.len() >= 2 {
                         let dist =
                             point_to_line_distance(point, drawing.points[0], drawing.points[1]);
