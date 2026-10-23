@@ -180,9 +180,6 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
             height: 28.0,
             quote_box_height: 18.0,
         },
-        timeframe_toolbar: TimeframeToolbarSizingTokens {
-            right_section_width: 220.0,
-        },
         candle: CandleSizingTokens {
             body_width_ratio: 0.6,
             wick_width: 1.0,

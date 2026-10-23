@@ -98,7 +98,7 @@ impl<'a> IconTextButton<'a> {
         let icon_size = self.config.small_icon_size;
         let padding = self.config.padding;
         // Measure actual text width instead of approximation
-        let font_id = egui::FontId::proportional(typography::MD);
+        let font_id = egui::FontId::proportional(typography::LG);
         let galley = ui.painter().layout_no_wrap(
             self.label.to_string(),
             font_id,
@@ -154,7 +154,7 @@ impl<'a> IconTextButton<'a> {
                 Pos2::new(rect.min.x + padding + icon_size + padding, rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 self.label,
-                egui::FontId::proportional(typography::MD),
+                egui::FontId::proportional(typography::LG),
                 color,
             );
         }
@@ -270,7 +270,7 @@ impl<'a> TextIconButton<'a> {
     }
 
     pub(crate) fn width(&self, ui: &Ui) -> f32 {
-        let font_id = egui::FontId::proportional(typography::SM);
+        let font_id = egui::FontId::proportional(typography::LG);
         let galley =
             ui.painter()
                 .layout_no_wrap(self.text.to_owned(), font_id, Color32::PLACEHOLDER);
@@ -280,7 +280,7 @@ impl<'a> TextIconButton<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let padding = self.config.padding;
         let icon_size = icon_sizes::XS;
-        let font_id = egui::FontId::proportional(typography::SM);
+        let font_id = egui::FontId::proportional(typography::LG);
         let size = Vec2::new(self.width(ui), self.config.btn_size);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response);
@@ -346,7 +346,7 @@ pub(crate) struct Trigger<'a> {
 
 impl Trigger<'_> {
     fn galley(&self, ui: &Ui, theme: &Theme) -> Arc<Galley> {
-        let font_id = egui::FontId::proportional(theme.text.body);
+        let font_id = egui::FontId::proportional(theme.text.title);
         ui.painter()
             .layout_no_wrap(self.label.clone(), font_id, Color32::PLACEHOLDER)
     }

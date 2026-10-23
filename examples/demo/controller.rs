@@ -68,16 +68,12 @@ enum SidePanel {
     Alerts,
 }
 
-/// Export formats the demo can perform. The browser build has no file system
-/// access, so it offers only the clipboard.
-#[cfg(not(target_arch = "wasm32"))]
+/// Export formats the demo can perform, with browser downloads on the web.
 const EXPORT_FORMATS: &[ExportFormat] = &[
     ExportFormat::Png,
     ExportFormat::Csv,
     ExportFormat::Clipboard,
 ];
-#[cfg(target_arch = "wasm32")]
-const EXPORT_FORMATS: &[ExportFormat] = &[ExportFormat::Clipboard];
 
 /// Where an export screenshot goes once egui delivers it.
 enum ScreenshotTarget {
@@ -157,7 +153,7 @@ pub struct DemoApp {
     replay_control: FloatingReplayControl,
 
     // A pending screenshot request the egui backend fulfils next frame.
-    screenshot_requested: bool,
+    screenshot_requested: Option<ScreenshotTarget>,
     // egui's capture callback sends each screenshot here; the next frame delivers it.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
@@ -244,7 +240,7 @@ impl DemoApp {
             next_alert_id: 1,
             replay: None,
             replay_control: FloatingReplayControl::new(),
-            screenshot_requested: false,
+            screenshot_requested: None,
             screenshots: mpsc::channel(),
             notice: None,
         }
@@ -548,10 +544,15 @@ impl DemoApp {
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
         };
-        self.request_screenshot(ctx, target);
+        // Capture the next frame after the dialog and any previous notice are gone.
+        self.export_dialog.close();
+        self.notice = None;
+        self.screenshot_requested = Some(target);
+        ctx.request_repaint();
     }
 
-    fn export_csv(&self, save_path: Option<std::path::PathBuf>) {
+    fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
+        let from_dialog = save_path.is_some();
         let mut out = String::from("time,open,high,low,close,volume\n");
         for b in &self.bars {
             out.push_str(&format!(
@@ -564,24 +565,30 @@ impl DemoApp {
                 b.volume
             ));
         }
+        let path = save_path.unwrap_or_else(|| {
+            let filename = format!("{}_export.csv", self.state.symbol);
+            #[cfg(not(target_arch = "wasm32"))]
+            return std::env::temp_dir().join(filename);
+            #[cfg(target_arch = "wasm32")]
+            std::path::PathBuf::from(filename)
+        });
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let path = save_path.unwrap_or_else(|| {
-                std::env::temp_dir().join(format!("{}_export.csv", self.state.symbol))
-            });
-            if let Err(e) = std::fs::write(&path, out) {
-                log::warn!("[demo] CSV export failed: {e}");
-            } else {
-                log::info!("[demo] Wrote CSV to {}", path.display());
-            }
-        }
+        let result = std::fs::write(&path, out).map_err(|e| e.to_string());
         #[cfg(target_arch = "wasm32")]
-        {
-            let _ = save_path;
-            log::info!(
-                "[demo] CSV export ({} bytes): browser download not wired",
-                out.len()
-            );
+        let result = browser_download(out.as_bytes(), &path);
+        match result {
+            Ok(()) => {
+                if from_dialog {
+                    self.export_dialog.mark_success();
+                }
+                self.notice = Some((format!("Export successful: {}", path.display()), 0.0));
+            }
+            Err(error) => {
+                if from_dialog {
+                    self.export_dialog.mark_error(error.clone());
+                }
+                self.notice = Some((format!("Export failed: {error}"), 0.0));
+            }
         }
     }
 }
@@ -596,6 +603,9 @@ impl eframe::App for DemoApp {
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ctx.global_style());
+
+        // Fulfil requests from the previous frame, before a dialog can submit another.
+        self.handle_screenshot(&ctx);
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
@@ -624,9 +634,6 @@ impl eframe::App for DemoApp {
 
         // Global keyboard shortcuts (e.g. the shortcuts help itself).
         self.handle_keyboard(&ctx);
-
-        // Fulfil a pending screenshot request.
-        self.handle_screenshot(&ctx);
 
         // Transient status notice.
         self.show_notice(&ctx);
@@ -687,7 +694,12 @@ impl DemoApp {
             TopToolbarAction::OpenSettings => {
                 self.settings_dialog.open(self.settings_state.clone());
             }
-            TopToolbarAction::TakeScreenshot => self.screenshot_requested = true,
+            TopToolbarAction::TakeScreenshot => {
+                self.export_dialog.close();
+                self.notice = None;
+                self.screenshot_requested = Some(ScreenshotTarget::File(None));
+                ctx.request_repaint();
+            }
             TopToolbarAction::ToggleFullscreen => {
                 let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
@@ -1213,15 +1225,17 @@ impl DemoApp {
     }
 
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
-        if self.screenshot_requested {
-            self.screenshot_requested = false;
-            self.request_screenshot(ctx, ScreenshotTarget::File(None));
+        if let Some(target) = self.screenshot_requested.take() {
+            self.request_screenshot(ctx, target);
         }
 
         // Deliver the screenshots captured since the last frame.
         while let Ok((image, target)) = self.screenshots.1.try_recv() {
             match target {
-                ScreenshotTarget::Clipboard => ctx.copy_image((*image).clone()),
+                ScreenshotTarget::Clipboard => {
+                    ctx.copy_image((*image).clone());
+                    self.notice = Some(("Image sent to clipboard".into(), 0.0));
+                }
                 ScreenshotTarget::File(path) => self.save_screenshot(&image, path),
             }
         }
@@ -1258,43 +1272,69 @@ impl DemoApp {
         ctx.request_repaint();
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn save_screenshot(&self, image: &egui::ColorImage, path: Option<std::path::PathBuf>) {
+    fn save_screenshot(&mut self, image: &egui::ColorImage, path: Option<std::path::PathBuf>) {
         let path = path.unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("{}_chart.png", self.state.symbol))
+            let filename = format!("{}_chart.png", self.state.symbol);
+            #[cfg(not(target_arch = "wasm32"))]
+            return std::env::temp_dir().join(filename);
+            #[cfg(target_arch = "wasm32")]
+            std::path::PathBuf::from(filename)
         });
         let (w, h) = (image.size[0] as u32, image.size[1] as u32);
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for px in &image.pixels {
             rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
         }
-        match image::RgbaImage::from_raw(w, h, rgba) {
-            Some(buf) => {
-                if let Err(e) = buf.save_with_format(&path, image::ImageFormat::Png) {
-                    log::warn!("[demo] screenshot save failed: {e}");
-                } else {
-                    log::info!("[demo] screenshot saved to {}", path.display());
+        let result = image::RgbaImage::from_raw(w, h, rgba)
+            .ok_or_else(|| "Screenshot buffer size mismatch".to_string())
+            .and_then(|buf| {
+                #[cfg(not(target_arch = "wasm32"))]
+                return buf
+                    .save_with_format(&path, image::ImageFormat::Png)
+                    .map_err(|e| e.to_string());
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let mut png = std::io::Cursor::new(Vec::new());
+                    buf.write_to(&mut png, image::ImageFormat::Png)
+                        .map_err(|e| e.to_string())?;
+                    browser_download(png.get_ref(), &path)
                 }
+            });
+        match result {
+            Ok(()) => {
+                self.notice = Some((format!("Export successful: {}", path.display()), 0.0));
             }
-            None => log::warn!("[demo] screenshot buffer size mismatch"),
+            Err(error) => {
+                self.notice = Some((format!("Export failed: {error}"), 0.0));
+            }
         }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn save_screenshot(&self, image: &egui::ColorImage, _path: Option<std::path::PathBuf>) {
-        // A browser download requires Blob/anchor plumbing beyond this demo's
-        // scope; log the capture so the control still does observable work.
-        log::info!(
-            "[demo] screenshot captured ({}x{}): browser download not wired",
-            image.size[0],
-            image.size[1]
-        );
     }
 }
 
 // ---------------------------------------------------------------------------
 // Free helpers.
 // ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+fn browser_download(bytes: &[u8], path: &std::path::Path) -> Result<(), String> {
+    use wasm_bindgen::JsCast;
+    use web_sys::{Blob, HtmlAnchorElement, Url, js_sys};
+
+    let download = || -> Result<(), wasm_bindgen::JsValue> {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let anchor = document
+            .create_element("a")?
+            .dyn_into::<HtmlAnchorElement>()?;
+        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+        let blob = Blob::new_with_u8_array_sequence(&parts)?;
+        let url = Url::create_object_url_with_blob(&blob)?;
+        anchor.set_href(&url);
+        anchor.set_download(&path.file_name().unwrap_or_default().to_string_lossy());
+        anchor.click();
+        Url::revoke_object_url(&url)
+    };
+    download().map_err(|e| format!("Browser download failed: {e:?}"))
+}
 
 fn panel_frame(bg: egui::Color32) -> egui::Frame {
     egui::Frame::new()

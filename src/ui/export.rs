@@ -20,7 +20,7 @@
 //!         println!("Exporting to: {:?}", save_path);
 //!     }
 //!     ExportResponse::Closed => {
-//!         // Dialog was closed without exporting
+//!         // User closed the dialog
 //!     }
 //!     ExportResponse::None => {
 //!         // Dialog is not open or no action taken
@@ -90,7 +90,7 @@ pub enum ExportResponse {
         /// Optional save path (None for clipboard exports)
         save_path: Option<PathBuf>,
     },
-    /// Dialog was closed without exporting
+    /// User closed the dialog
     Closed,
     /// No action taken (dialog not open or still being configured)
     None,
@@ -129,7 +129,8 @@ impl Default for ExportConfig {
 ///
 /// The dialog only collects the request; the host performs the export. Use
 /// [`with_formats`](Self::with_formats) to offer only the formats the host
-/// can produce.
+/// can produce. The dialog stays open after a request; report its result with
+/// [`mark_success`](Self::mark_success) or [`mark_error`](Self::mark_error).
 ///
 /// # Example
 ///
@@ -298,9 +299,8 @@ impl ExportDialog {
         let busy = ctx.memory(|m| m.focused().is_some()) || egui::Popup::is_any_open(ctx);
         ctx.data_mut(|d| d.insert_temp(busy_id, busy));
 
-        match response {
-            ExportResponse::Closed | ExportResponse::Export { .. } => self.close(),
-            ExportResponse::None => {}
+        if matches!(response, ExportResponse::Closed) {
+            self.close();
         }
         response
     }
@@ -312,36 +312,46 @@ impl ExportDialog {
         }
 
         let mut response = ExportResponse::None;
-        FormGrid::new("export_form").show(ui, |ui| {
-            let label = ui.label("Format");
-            ui.horizontal(|ui| {
-                for &format in &self.formats {
-                    ui.radio_value(&mut self.config.format, format, format.as_str());
-                }
-            })
-            .response
-            .labelled_by(label.id);
-            ui.end_row();
-
-            if self.config.format != ExportFormat::Clipboard {
-                let hint = format!(
-                    "File path, such as chart_export.{}",
-                    self.config.format.file_extension().unwrap_or("png")
-                );
-                let label = ui.label("File");
-                let field = ui
-                    .add(
-                        egui::TextEdit::singleline(&mut self.save_path)
-                            .id(path_field())
-                            .hint_text(hint)
-                            .desired_width(f32::INFINITY),
-                    )
-                    .labelled_by(label.id);
-                if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                    response = self.request_export(ui.ctx());
-                }
+        ui.add_enabled_ui(self.export_status != ExportStatus::Exporting, |ui| {
+            FormGrid::new("export_form").show(ui, |ui| {
+                let label = ui.label("Format");
+                ui.horizontal(|ui| {
+                    for &format in &self.formats {
+                        if ui
+                            .radio_value(&mut self.config.format, format, format.as_str())
+                            .changed()
+                        {
+                            self.export_status = ExportStatus::Idle;
+                        }
+                    }
+                })
+                .response
+                .labelled_by(label.id);
                 ui.end_row();
-            }
+
+                if self.config.format != ExportFormat::Clipboard {
+                    let hint = format!(
+                        "File path, such as chart_export.{}",
+                        self.config.format.file_extension().unwrap_or("png")
+                    );
+                    let label = ui.label("File");
+                    let field = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.save_path)
+                                .id(path_field())
+                                .hint_text(hint)
+                                .desired_width(f32::INFINITY),
+                        )
+                        .labelled_by(label.id);
+                    if field.changed() {
+                        self.reset_status();
+                    }
+                    if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        response = self.request_export(ui.ctx());
+                    }
+                    ui.end_row();
+                }
+            });
         });
 
         if self.config.format.is_data_format() {
@@ -354,7 +364,10 @@ impl ExportDialog {
         }
         self.draw_status(ui);
 
-        let (export, cancel) = DialogFooter::new("Export").secondary("Cancel").show(ui);
+        let (export, cancel) = DialogFooter::new("Export")
+            .primary_enabled(self.export_status != ExportStatus::Exporting)
+            .secondary("Cancel")
+            .show(ui);
         if export {
             response = self.request_export(ui.ctx());
         } else if cancel {
@@ -371,7 +384,11 @@ impl ExportDialog {
                 ui.label("Exporting...");
             }
             ExportStatus::Success => {
-                ui.success_label("Export successful!");
+                if self.config.format == ExportFormat::Clipboard {
+                    ui.success_label("Export successful!");
+                } else {
+                    ui.success_label(format!("Export successful: {}", self.save_path.trim()));
+                }
             }
             ExportStatus::Error(msg) => {
                 ui.add_space(ui.active_theme().spacing.md);
@@ -383,6 +400,9 @@ impl ExportDialog {
     /// The export response for the current choices, or `None` with an error status and the path
     /// field focused when a file format has no path.
     fn request_export(&mut self, ctx: &Context) -> ExportResponse {
+        if self.export_status == ExportStatus::Exporting {
+            return ExportResponse::None;
+        }
         let to_clipboard = self.config.format == ExportFormat::Clipboard;
         let path = self.save_path.trim();
         if to_clipboard || !path.is_empty() {
@@ -526,5 +546,103 @@ mod tests {
     fn restricting_formats_selects_an_offered_format() {
         let dialog = ExportDialog::new().with_formats(&[ExportFormat::Clipboard]);
         assert_eq!(dialog.config.format, ExportFormat::Clipboard);
+    }
+
+    #[test]
+    fn export_results_stay_visible_until_closed() {
+        for (format, path, success) in [
+            (
+                ExportFormat::Png,
+                "chart.png",
+                "Export successful: chart.png",
+            ),
+            (ExportFormat::Csv, "bars.csv", "Export successful: bars.csv"),
+            (ExportFormat::Clipboard, "", "Export successful!"),
+        ] {
+            for (theme, width, error) in [
+                (crate::theme::Theme::light(), 800.0, false),
+                (crate::theme::Theme::dark(), 800.0, true),
+                (crate::theme::Theme::light(), 320.0, true),
+                (crate::theme::Theme::dark(), 320.0, false),
+            ] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut dialog = ExportDialog::new();
+                dialog.config.format = format;
+                dialog.save_path = format!("  {path}  ");
+                dialog.open();
+                let frame = |dialog: &mut ExportDialog, key: Option<Key>| {
+                    let input = egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        events: key
+                            .map(|key| egui::Event::Key {
+                                key,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: Modifiers::NONE,
+                            })
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    };
+                    let mut response = ExportResponse::None;
+                    let output = ctx.run_ui(input, |ui| response = dialog.show(ui.ctx()));
+                    (response, output)
+                };
+                frame(&mut dialog, None).1.drop_without_applying_deltas();
+                let (response, output) = frame(&mut dialog, Some(Key::Enter));
+                output.drop_without_applying_deltas();
+                let ExportResponse::Export { save_path, .. } = response else {
+                    panic!("expected an export request for {format:?}");
+                };
+                assert_eq!(
+                    save_path,
+                    (format != ExportFormat::Clipboard).then(|| PathBuf::from(path))
+                );
+                assert!(
+                    dialog.is_open(),
+                    "submission must keep the result dialog open"
+                );
+                assert!(
+                    matches!(dialog.request_export(&ctx), ExportResponse::None),
+                    "a pending export must not be submitted again"
+                );
+                if error {
+                    dialog.mark_error("Permission denied".into());
+                } else {
+                    dialog.mark_success();
+                }
+                frame(&mut dialog, None).1.drop_without_applying_deltas();
+                let (response, output) = frame(&mut dialog, None);
+                assert!(matches!(response, ExportResponse::None));
+                let expected = if error {
+                    "Error: Permission denied"
+                } else {
+                    success
+                };
+                assert!(output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == expected)
+                }), "missing result: {expected}");
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        let rect = text.galley.rect.translate(text.pos.to_vec2());
+                        assert!(
+                            rect.left() >= 0.0 && rect.right() <= width,
+                            "text outside {width}px window: {} at {rect:?}",
+                            text.galley.text()
+                        );
+                    }
+                }
+                output.drop_without_applying_deltas();
+                let (response, output) = frame(&mut dialog, Some(Key::Escape));
+                output.drop_without_applying_deltas();
+                assert!(matches!(response, ExportResponse::Closed));
+                assert!(!dialog.is_open());
+            }
+        }
     }
 }

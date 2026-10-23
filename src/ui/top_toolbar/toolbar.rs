@@ -259,11 +259,11 @@ impl TopToolbar {
         let mut action = TopToolbarAction::None;
         // Controls carry their own token gaps (`gap`, separators).
         ui.spacing_mut().item_spacing.x = 0.0;
-        // Kit buttons label in egui's button style; every label of the strip has the body size.
-        let body = egui::FontId::proportional(ui.active_theme().text.body);
+        // Kit buttons label in egui's button style; every label of the strip has the title size.
+        let font = egui::FontId::proportional(ui.active_theme().text.title);
         ui.style_mut()
             .text_styles
-            .insert(egui::TextStyle::Button, body);
+            .insert(egui::TextStyle::Button, font);
 
         // The widest arrangement that fits: full, then icon-only labels, then overflow.
         let available = ui.available_width();

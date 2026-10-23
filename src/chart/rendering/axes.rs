@@ -15,9 +15,9 @@ pub(crate) const TIME_LABEL_GAP: f32 = 5.0;
 /// Padding between an axis tag's text and its edge.
 const TAG_PADDING: Vec2 = Vec2::new(4.0, 2.0);
 
-/// The font of every axis label and tag: the theme's small text.
+/// The font of every axis label and tag: the theme's label text.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
-    FontId::proportional(ctx.active_theme().text.small)
+    FontId::proportional(ctx.active_theme().text.label)
 }
 
 /// Paints `text` on a `fill` tag in the axis font and returns the tag's rect.
@@ -36,7 +36,7 @@ pub(crate) fn paint_axis_tag(
     fill: Color32,
 ) -> Rect {
     let theme = painter.ctx().active_theme();
-    let font = FontId::proportional(theme.text.small);
+    let font = axis_font(painter.ctx());
     let galley = painter.layout_no_wrap(text, font, text_color);
     let mut tag = align
         .anchor_size(anchor, galley.size())

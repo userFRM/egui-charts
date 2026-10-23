@@ -885,7 +885,7 @@ impl IndicatorPane {
                     Pos2::new(label_x, y),
                     egui::Align2::LEFT_CENTER,
                     label,
-                    egui::FontId::proportional(typography::XS),
+                    crate::chart::rendering::axes::axis_font(painter.ctx()),
                     text_color,
                 );
             }
@@ -932,12 +932,12 @@ impl IndicatorPane {
 
         let galley = painter.layout_no_wrap(
             self.legend_text(indicator),
-            egui::FontId::proportional(typography::SM),
+            egui::FontId::proportional(typography::MD),
             Color32::WHITE,
         );
         let text_left = rect.min.x + DESIGN_TOKENS.spacing.sm;
         let center_y = rect.min.y + DESIGN_TOKENS.spacing.xl;
-        let glyph_size = typography::SM;
+        let glyph_size = typography::MD;
         let center = Pos2::new(
             text_left + galley.size().x + DESIGN_TOKENS.spacing.md,
             center_y,
@@ -974,7 +974,7 @@ impl IndicatorPane {
             ),
             egui::Align2::LEFT_CENTER,
             self.legend_text(indicator),
-            egui::FontId::proportional(typography::SM),
+            egui::FontId::proportional(typography::MD),
             text_color,
         );
 
@@ -988,7 +988,7 @@ impl IndicatorPane {
                 close_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "\u{00d7}",
-                egui::FontId::proportional(typography::SM),
+                egui::FontId::proportional(typography::MD),
                 glyph_color,
             );
         }

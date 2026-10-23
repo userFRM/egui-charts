@@ -1,9 +1,10 @@
 Fonts embedded in the egui-charts web demo
 
-The demo draws its text with the default fonts of egui (the epaint_default_fonts
-crate) and, through egui's monochrome_emoji_fonts feature, with its emoji fonts,
-which are all compiled into its WebAssembly module:
+The demo draws its text in Roboto, embedded by egui-charts, with egui's default
+and emoji fonts as fallbacks. These fonts are all compiled into its WebAssembly
+module:
 
+- Roboto (weights 400 to 600, Latin subset), licensed under the SIL Open Font License 1.1.
 - Hack Regular, licensed under the MIT License and the Bitstream Vera License.
 - Ubuntu Light, licensed under the Ubuntu Font Licence 1.0.
 - egui-icons, a five-glyph subset of emoji-icon-font, licensed under the MIT License.
@@ -155,9 +156,10 @@ DEALINGS IN THE FONT SOFTWARE.
 
 
 ================================================================================
-Noto Emoji Regular
+Roboto and Noto Emoji Regular
 ================================================================================
 
+Copyright 2011 The Roboto Project Authors (https://github.com/googlefonts/roboto-classic)
 Copyright 2013 Google Inc. All Rights Reserved.
 
 This Font Software is licensed under the SIL Open Font License,
