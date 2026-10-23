@@ -22,30 +22,25 @@ pub fn render_markers(
             // Calculate marker position using ChartCoords helper
             let x = coords.idx_to_x(global_idx);
 
+            // The bar's ends on screen; the high is the lower end on an inverted scale.
+            let (high_y, low_y) = (
+                price_scale.price_to_y(bar.high),
+                price_scale.price_to_y(bar.low),
+            );
+            let (top, bottom) = (high_y.min(low_y), high_y.max(low_y));
+
             // Calculate Y position based on marker position setting
             let y = match marker.position {
-                MarkerPos::AboveBar => {
-                    let high_y = price_scale.price_to_y(bar.high);
-                    high_y - 20.0 * marker.size // 20 pixels above high
-                }
-                MarkerPos::BelowBar => {
-                    let low_y = price_scale.price_to_y(bar.low);
-                    low_y + 20.0 * marker.size // 20 pixels below low
-                }
+                MarkerPos::AboveBar => top - 20.0 * marker.size,
+                MarkerPos::BelowBar => bottom + 20.0 * marker.size,
                 MarkerPos::InBar => price_scale.price_to_y(bar.close),
                 MarkerPos::Top => context.rect.top() + 20.0 * marker.size,
                 MarkerPos::Bottom => context.rect.bottom() - 20.0 * marker.size,
                 MarkerPos::Left | MarkerPos::Right | MarkerPos::Absolute => {
                     price_scale.price_to_y(bar.close)
                 }
-                MarkerPos::AbsoluteUp => {
-                    let high_y = price_scale.price_to_y(bar.high);
-                    high_y - 10.0 * marker.size
-                }
-                MarkerPos::AbsoluteDown => {
-                    let low_y = price_scale.price_to_y(bar.low);
-                    low_y + 10.0 * marker.size
-                }
+                MarkerPos::AbsoluteUp => top - 10.0 * marker.size,
+                MarkerPos::AbsoluteDown => bottom + 10.0 * marker.size,
             };
 
             let pos = Pos2::new(x, y);
@@ -243,6 +238,66 @@ fn render_marker_shape(
                     DESIGN_TOKENS.semantic.chart.crosshair_label_text,
                 ),
             ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scales::{PriceRange, PriceTransform};
+    use chrono::{TimeZone, Utc};
+
+    /// A bar from 95 to 105 on a 90..110 scale over 500 px spans y 125..375 in
+    /// either orientation, so each marker lands at the same y: above positions
+    /// offset up from 125, below positions down from 375.
+    #[test]
+    fn markers_sit_outside_the_bar_on_either_scale_orientation() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
+        let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let bars = [Bar::new(t, 100.0, 105.0, 95.0, 100.0, 1.0)];
+        for inverted in [false, true] {
+            let map = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(90.0, 110.0),
+                0.0,
+                500.0,
+                inverted,
+            );
+            let coords = ChartMapping::new(rect, 10.0, 0, 0, 0.0, map);
+            for (position, want) in [
+                (MarkerPos::AboveBar, 105.0),
+                (MarkerPos::BelowBar, 395.0),
+                (MarkerPos::AbsoluteUp, 115.0),
+                (MarkerPos::AbsoluteDown, 385.0),
+            ] {
+                let marker = Marker::new(t)
+                    .with_pos(position)
+                    .with_shape(MarkerShape::Circle);
+                let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                    let painter = Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
+                    render_markers(
+                        &RenderContext::new(&painter, rect),
+                        std::slice::from_ref(&marker),
+                        &bars,
+                        &map,
+                        &coords,
+                    );
+                });
+                let y = output
+                    .shapes
+                    .iter()
+                    .find_map(|c| match &c.shape {
+                        Shape::Circle(circle) => Some(circle.center.y),
+                        _ => None,
+                    })
+                    .expect("a marker circle");
+                output.drop_without_applying_deltas();
+                assert!(
+                    (y - want).abs() < 1e-3,
+                    "{position:?}, inverted {inverted}: y {y}, want {want}"
+                );
+            }
         }
     }
 }

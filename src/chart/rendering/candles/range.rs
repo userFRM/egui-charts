@@ -38,7 +38,7 @@ pub(super) fn render_high_low(
         };
 
         // Draw high-low bar
-        let hl_rect = Rect::from_min_max(
+        let hl_rect = Rect::from_two_pos(
             Pos2::new(x - bar_width / 4.0, y_high),
             Pos2::new(x + bar_width / 4.0, y_low),
         );

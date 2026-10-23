@@ -9,10 +9,11 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 /// Pre-computed pixel Y coordinates for a single OHLC bar.
 ///
 /// Converts a bar's open/high/low/close prices into screen-space Y values
-/// and derives the body top/bottom (min/max of open and close Y).
+/// and orders the wick and body ends on screen (the high is the lower end on
+/// an inverted scale).
 pub struct OhlcYCoords {
-    pub y_high: f32,
-    pub y_low: f32,
+    pub wick_top: f32,
+    pub wick_bottom: f32,
     pub body_top: f32,
     pub body_bottom: f32,
 }
@@ -24,8 +25,8 @@ impl OhlcYCoords {
         let y_low = coords.price_to_y(bar.low);
         let y_close = coords.price_to_y(bar.close);
         Self {
-            y_high,
-            y_low,
+            wick_top: y_high.min(y_low),
+            wick_bottom: y_high.max(y_low),
             body_top: y_open.min(y_close),
             body_bottom: y_open.max(y_close),
         }
@@ -36,12 +37,12 @@ impl OhlcYCoords {
 pub fn draw_wicks(painter: &Painter, x: f32, y: &OhlcYCoords, wick_width: f32, color: Color32) {
     // Upper wick
     painter.add(Shape::line_segment(
-        [Pos2::new(x, y.y_high), Pos2::new(x, y.body_top)],
+        [Pos2::new(x, y.wick_top), Pos2::new(x, y.body_top)],
         Stroke::new(wick_width, color),
     ));
     // Lower wick
     painter.add(Shape::line_segment(
-        [Pos2::new(x, y.body_bottom), Pos2::new(x, y.y_low)],
+        [Pos2::new(x, y.body_bottom), Pos2::new(x, y.wick_bottom)],
         Stroke::new(wick_width, color),
     ));
 }
