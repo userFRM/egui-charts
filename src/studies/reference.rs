@@ -31,6 +31,7 @@
 //! second bar, the first with a previous close.
 
 use crate::model::Bar;
+use crate::studies::StochasticRSI;
 use crate::studies::{
     ADX, ATR, AccumulationDistribution, Aroon, AwesomeOscillator, BalanceOfPower, BollingerBands,
     BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility, ChandeMomentumOscillator,
@@ -247,7 +248,33 @@ fn staple_studies_match_published_definitions() {
         .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
         .collect();
     let constant = vec![Bar::new(bars[0].time, 100.0, 100.0, 100.0, 100.0, 1.0); 60];
+    // RSI(2) starts at bar 2; stochastic(2) at 3, K(2) at 4, D(2) at 5.
+    let rsi_short: Vec<_> = [1.0, 2.0, 1.0, 2.0, 1.0, 3.0, 2.0, 4.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
+        .collect();
     studies.extend([
+        (
+            "StochRSI-hand",
+            Box::new(StochasticRSI::new(2, 2, 2, 2)) as Box<dyn Indicator>,
+            rsi_short[..6].to_vec(),
+        ),
+        (
+            "StochRSI@31",
+            Box::new(StochasticRSI::default()),
+            bars[..31].to_vec(),
+        ),
+        (
+            "StochRSI@32",
+            Box::new(StochasticRSI::default()),
+            bars[..32].to_vec(),
+        ),
+        (
+            "StochRSI@33",
+            Box::new(StochasticRSI::default()),
+            bars[..33].to_vec(),
+        ),
         (
             "DEMA(2)-hand",
             Box::new(DEMA::new(2)) as Box<dyn Indicator>,
