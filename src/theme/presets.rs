@@ -29,7 +29,7 @@ impl Theme {
                 panel_bg_floating: rgb(42, 46, 57),
                 text: rgb(219, 219, 219),
                 text_secondary: rgb(184, 184, 184),
-                text_muted: rgb(112, 112, 112),
+                text_muted: rgb(150, 150, 150),
                 text_disabled: rgb(87, 87, 87),
                 border: rgb(42, 42, 42),
                 border_control: rgb(120, 125, 138),

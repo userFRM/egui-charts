@@ -56,7 +56,7 @@ impl ListItemContent for PropertyContent {
 
         // Use ListVisuals for color computation (rerun-inspired)
         // Label is always subdued (noninteractive)
-        let label_color = egui_visuals.widgets.noninteractive.fg_stroke.color;
+        let label_color = egui_visuals.weak_text_color();
 
         // Value color (use ListVisuals text_color or custom)
         let value_color = self

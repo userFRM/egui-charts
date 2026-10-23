@@ -598,7 +598,7 @@ mod tests {
             ("separator", dark.ui.border, [42, 42, 42]),
             ("text", dark.ui.text, [219, 219, 219]),
             ("secondary text", dark.ui.text_secondary, [184, 184, 184]),
-            ("muted text", dark.ui.text_muted, [112, 112, 112]),
+            ("muted text", dark.ui.text_muted, [150, 150, 150]),
             ("disabled text", dark.ui.text_disabled, [87, 87, 87]),
             ("price text", dark.chart.axis_text, [255, 255, 255]),
             (
@@ -728,8 +728,7 @@ mod tests {
             ] {
                 check("text", ui.text, surface, bg, text_min);
                 check("label text", visuals.text_color(), surface, bg, text_min);
-                // The dark preset reserves its specified #707070 for supplemental text.
-                if !name.starts_with("dark") {
+                {
                     check("muted text", ui.text_muted, surface, bg, text_min);
                     check(
                         "weak text",
