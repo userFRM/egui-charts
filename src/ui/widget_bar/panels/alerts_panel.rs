@@ -8,7 +8,7 @@ use egui::{Color32, RichText, Ui};
 
 use crate::data::{FeedError, inbox::Inbox};
 use crate::icons::icons;
-use crate::model::{Alert, AlertCondition, AlertId, AlertStatus};
+use crate::model::{Alert, AlertId, AlertStatus};
 use crate::services::{AlertEvent, Alerts, Listener};
 use crate::theme::ThemeExt;
 use crate::ui_kit::notifications::Toasts;
@@ -35,6 +35,8 @@ pub enum AlertPanelAction {
     None,
     /// Open the shared alert creation dialog; submit its result with [`AlertsPanel::save`].
     CreateAlert,
+    /// Edit this host-owned alert in the shared dialog.
+    EditAlert(Box<Alert>),
     /// Save this CSV text to a file chosen by the host.
     ExportLog(String),
 }
@@ -124,16 +126,9 @@ impl AlertsPanel {
 
     /// Save a price alert from the shared dialog. The list changes only after a host push.
     pub fn save(&mut self, alert: Alert) {
-        let level = match alert.condition {
-            AlertCondition::Crossing(v)
-            | AlertCondition::CrossingUp(v)
-            | AlertCondition::CrossingDown(v)
-            | AlertCondition::Above(v)
-            | AlertCondition::Below(v) => v,
-        };
-        if alert.symbol.trim().is_empty() || !level.is_finite() {
+        if !alert.is_valid() {
             self.error = Some(FeedError::InvalidData(
-                "Alert needs a symbol and a finite price".into(),
+                "Alert contains invalid conditions".into(),
             ));
             return;
         }
@@ -303,13 +298,10 @@ impl AlertsPanel {
                         let Some(id) = &alert.id else { continue };
                         ui.push_id(&id.0, |ui| {
                             ui.label(RichText::new(&alert.symbol).strong());
-                            ui.label(match alert.condition {
-                                AlertCondition::Crossing(v) => format!("Crossing {v}"),
-                                AlertCondition::CrossingUp(v) => format!("Crossing up {v}"),
-                                AlertCondition::CrossingDown(v) => format!("Crossing down {v}"),
-                                AlertCondition::Above(v) => format!("Above {v}"),
-                                AlertCondition::Below(v) => format!("Below {v}"),
-                            });
+                            ui.label(alert.condition.to_string());
+                            if !alert.name.is_empty() {
+                                ui.label(&alert.name);
+                            }
                             let color = self.status_color(ui, alert.status);
                             ui.colored_label(
                                 color,
@@ -324,6 +316,9 @@ impl AlertsPanel {
                                 ui.label(&alert.message);
                             }
                             ui.horizontal(|ui| {
+                                if ui.button("Edit").clicked() {
+                                    action = AlertPanelAction::EditAlert(Box::new(alert.clone()));
+                                }
                                 let active = alert.status == AlertStatus::Active;
                                 if ui.button(if active { "Pause" } else { "Enable" }).clicked() {
                                     let mut changed = alert.clone();
@@ -363,6 +358,7 @@ impl AlertsPanel {
 mod tests {
     use super::*;
     use crate::data::Reply;
+    use crate::model::AlertCondition;
     use crate::services::Events;
     use std::sync::Mutex;
 

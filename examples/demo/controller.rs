@@ -17,15 +17,15 @@ mod live;
 use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
-use egui_charts::model::{Alert, AlertCondition, AlertFrequency};
+use egui_charts::model::{Alert, AlertCondition};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
 use egui_charts::ui::dialogs::{
-    AlertData, AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction,
-    DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog, SeriesContextMenuAction,
-    SeriesSettingsAction, SeriesSettingsDialog,
+    AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
+    DrawingProps, KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction,
+    SeriesSettingsDialog,
 };
 use egui_charts::ui::dialogs::{DrawingContextMenuAction, DrawingLineStyle};
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
@@ -174,6 +174,7 @@ pub struct DemoApp {
 
     // Host-owned session-only alerts, shown through the library service connection.
     alerts: AlertsPanel,
+    alert_host: Arc<crate::panel_alerts::DemoAlerts>,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -300,6 +301,7 @@ impl DemoApp {
             open_panel: None,
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
+            alert_host: Arc::default(),
             replay: None,
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -307,8 +309,8 @@ impl DemoApp {
             screenshots: mpsc::channel(),
             toasts: Toasts::new(),
         };
-        app.alerts
-            .set_service(Arc::new(crate::panel_alerts::DemoAlerts::default()));
+        app.alerts.set_service(app.alert_host.clone());
+        app.alert_dialog.set_storage(app.alert_host.clone());
         app.apply_session();
         app
     }
@@ -463,33 +465,56 @@ impl DemoApp {
 
     // --- alerts ------------------------------------------------------------
 
-    fn add_price_alert(&mut self, data: AlertData) {
-        if let AlertData::Price {
-            symbol,
-            price,
-            condition,
-            message,
-            repeating,
-        } = data
-        {
-            let mut alert = Alert::new(symbol, condition_from_label(&condition, price));
-            alert.message = message;
-            alert.frequency = if repeating {
-                AlertFrequency::EveryTime
-            } else {
-                AlertFrequency::Once
-            };
-            self.alerts.save(alert);
-        } else {
-            self.notify(
-                "This session store accepts price alerts; other conditions need a host evaluator",
-            );
-        }
+    fn open_alert(&mut self, price: Option<f64>) {
+        use egui_charts::model::AlertSource;
+        self.alert_dialog.sources = self
+            .chart
+            .indicators()
+            .flat_map(|(id, study)| {
+                study
+                    .line_names()
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(output, name)| {
+                        (
+                            AlertSource::Study {
+                                id: id.0.to_string(),
+                                output,
+                            },
+                            format!("{}: {name}", study.name()),
+                        )
+                    })
+            })
+            .chain(
+                self.chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .filter(|d| {
+                        use egui_charts::drawings::DrawingToolType::*;
+                        d.completed
+                            && matches!(
+                                d.tool_type,
+                                HorizontalLine | HorizontalRay | TrendLine | Ray | ExtendedLine
+                            )
+                    })
+                    .map(|d| {
+                        (
+                            AlertSource::Drawing(d.id.to_string()),
+                            format!("Drawing {}", d.id),
+                        )
+                    }),
+            )
+            .collect();
+        let price = price
+            .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
+            .unwrap_or(0.0);
+        self.alert_dialog.open_at(self.state.symbol.clone(), price);
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
         self.alerts
-            .save(Alert::new(symbol, AlertCondition::CrossingUp(price)));
+            .save(Alert::new(symbol, AlertCondition::Crossing(price)));
     }
 
     // --- selection / context helpers --------------------------------------
@@ -700,7 +725,7 @@ impl DemoApp {
 
         // Alert creation.
         match self.alert_dialog.show(ctx) {
-            AlertDialogAction::Create(data) => self.add_price_alert(data),
+            AlertDialogAction::Create(alert) => self.alerts.save(*alert),
             AlertDialogAction::Cancel | AlertDialogAction::None => {}
         }
 
@@ -1080,7 +1105,7 @@ impl DemoApp {
                 self.symbol_search.open();
             }
             TopToolbarAction::OpenIndicators => self.indicator_dialog.open(),
-            TopToolbarAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            TopToolbarAction::CreateAlert => self.open_alert(None),
             TopToolbarAction::ToggleReplay => self.toggle_replay(),
             TopToolbarAction::OpenSettings => {
                 self.open_chart_settings_dialog();
@@ -1475,7 +1500,11 @@ impl DemoApp {
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
         match self.alerts.show(ui) {
-            AlertPanelAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            AlertPanelAction::CreateAlert => self.open_alert(None),
+            AlertPanelAction::EditAlert(alert) => {
+                self.open_alert(None);
+                self.alert_dialog.edit(*alert);
+            }
             AlertPanelAction::ExportLog(csv) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 let path = std::env::temp_dir().join("alerts.csv");
@@ -1706,7 +1735,7 @@ impl DemoApp {
         match action {
             SeriesContextMenuAction::OpenSettings => self.open_series_settings_dialog(),
             SeriesContextMenuAction::AddIndicator => self.indicator_dialog.open(),
-            SeriesContextMenuAction::AddAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            SeriesContextMenuAction::AddAlert => self.open_alert(None),
             _ => {}
         }
     }
@@ -1905,16 +1934,6 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .fill(bg)
         .stroke(egui::Stroke::NONE)
         .inner_margin(egui::Margin::ZERO)
-}
-
-fn condition_from_label(label: &str, price: f64) -> AlertCondition {
-    match label {
-        "Crossing" => AlertCondition::Crossing(price),
-        "Crossing Up" => AlertCondition::CrossingUp(price),
-        "Crossing Down" => AlertCondition::CrossingDown(price),
-        "Less Than" => AlertCondition::Below(price),
-        _ => AlertCondition::Above(price),
-    }
 }
 
 fn line_style_from_dialog(style: DrawingLineStyle) -> egui_charts::drawings::LineStyle {

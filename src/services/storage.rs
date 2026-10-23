@@ -11,6 +11,8 @@ pub enum StoreKind {
     Settings,
     /// The drawings of one symbol, one document per symbol, named by the symbol.
     Drawings,
+    /// Named alert presets in a versioned JSON document.
+    AlertPresets,
 }
 
 /// Where the library keeps settings and drawings between sessions: files, browser storage or a

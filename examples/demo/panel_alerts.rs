@@ -1,4 +1,4 @@
-//! Session-only alert storage for the demo panel. No prices are evaluated here.
+//! Session-only alert and preset storage for the demo host.
 
 use std::sync::Mutex;
 
@@ -15,6 +15,7 @@ struct State {
     alerts: Vec<Alert>,
     events: Option<Events<AlertEvent>>,
     next_id: u64,
+    documents: std::collections::HashMap<(egui_charts::services::StoreKind, String), String>,
 }
 
 impl Alerts for DemoAlerts {
@@ -46,6 +47,54 @@ impl Alerts for DemoAlerts {
         if let Some(events) = &state.events {
             events.push(AlertEvent::Remove(id));
         }
+        reply.send(Ok(()));
+    }
+}
+
+impl egui_charts::services::Storage for DemoAlerts {
+    fn list(&self, kind: egui_charts::services::StoreKind, reply: Reply<Vec<String>>) {
+        let state = self.0.lock().unwrap();
+        reply.send(Ok(state
+            .documents
+            .keys()
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, name)| name.clone())
+            .collect()));
+    }
+    fn load(
+        &self,
+        kind: egui_charts::services::StoreKind,
+        name: &str,
+        reply: Reply<Option<String>>,
+    ) {
+        reply.send(Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .documents
+            .get(&(kind, name.into()))
+            .cloned()));
+    }
+    fn save(
+        &self,
+        kind: egui_charts::services::StoreKind,
+        name: &str,
+        document: String,
+        reply: Reply<()>,
+    ) {
+        self.0
+            .lock()
+            .unwrap()
+            .documents
+            .insert((kind, name.into()), document);
+        reply.send(Ok(()));
+    }
+    fn delete(&self, kind: egui_charts::services::StoreKind, name: &str, reply: Reply<()>) {
+        self.0
+            .lock()
+            .unwrap()
+            .documents
+            .remove(&(kind, name.into()));
         reply.send(Ok(()));
     }
 }
