@@ -173,7 +173,10 @@ impl DemoApp {
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
         options.time_scale.bar_spacing = 6.1;
-        options.tooltip.enabled = false;
+        options.crosshair.style = egui_charts::config::CrosshairStyle::Arrow;
+        options.tooltip.on_long_press = true;
+        options.tooltip.show_time = false;
+        options.tooltip.font_size = 14.0;
         // A full-history range must also fit in a narrow window.
         options.time_scale.min_bar_spacing = 0.01;
         // The scale reserves half a slot and one pixel after the last centre.
@@ -836,13 +839,30 @@ impl DemoApp {
             _ => {}
         }
 
+        match action {
+            DrawingToolbarAction::SetCursorType(cursor) => {
+                use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+                use egui_charts::config::CrosshairStyle;
+                self.chart.set_crosshair_style(match cursor {
+                    CursorType::Cross => CrosshairStyle::Full,
+                    CursorType::Dot => CrosshairStyle::Dot,
+                    CursorType::Arrow | CursorType::Eraser => CrosshairStyle::Arrow,
+                    CursorType::Demonstration => CrosshairStyle::Demonstration,
+                });
+                self.chart.drawings_mut().set_active_tool(None);
+                self.chart.drawings_mut().set_eraser_mode(cursor == CursorType::Eraser);
+                return;
+            }
+            DrawingToolbarAction::ToggleValuesTooltip => {
+                self.chart.set_tooltip_enabled(self.drawing_toolbar.state.values_tooltip_on_long_press);
+                return;
+            }
+            _ => {}
+        }
+
         let dm = self.chart.drawings_mut();
         match action {
             DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
-            DrawingToolbarAction::SetCursorType(cursor) => {
-                use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
-                dm.set_eraser_mode(matches!(cursor, CursorType::Eraser));
-            }
             DrawingToolbarAction::ToggleMagnet => {
                 dm.options.magnet_mode = !dm.options.magnet_mode;
                 dm.update_snap_options();

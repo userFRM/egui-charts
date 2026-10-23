@@ -21,6 +21,7 @@ pub enum CursorType {
     Cross,
     Dot,
     Arrow,
+    Demonstration,
     Eraser,
 }
 
@@ -30,6 +31,7 @@ impl CursorType {
             CursorType::Cross,
             CursorType::Dot,
             CursorType::Arrow,
+            CursorType::Demonstration,
             CursorType::Eraser,
         ]
     }
@@ -39,6 +41,7 @@ impl CursorType {
             CursorType::Cross => "Cross",
             CursorType::Dot => "Dot",
             CursorType::Arrow => "Arrow",
+            CursorType::Demonstration => "Demonstration",
             CursorType::Eraser => "Eraser",
         }
     }
@@ -48,6 +51,7 @@ impl CursorType {
             CursorType::Cross => &icons::CROSSHAIR,
             CursorType::Dot => &icons::DOT,
             CursorType::Arrow => &icons::ARROW,
+            CursorType::Demonstration => &icons::DEMONSTRATION,
             CursorType::Eraser => &icons::ERASER,
         }
     }
@@ -57,6 +61,7 @@ impl CursorType {
             CursorType::Cross => None,
             CursorType::Dot => None,
             CursorType::Arrow => None,
+            CursorType::Demonstration => None,
             CursorType::Eraser => None,
         }
     }

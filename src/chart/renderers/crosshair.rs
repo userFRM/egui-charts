@@ -33,11 +33,6 @@ pub fn render_crosshair_full(
     formatter: &dyn TimeFormatter,
     bar_seconds: i64,
 ) -> [Option<Rect>; 2] {
-    // Arrow style = no crosshair at all (just standard mouse cursor)
-    if style == CrosshairStyle::Arrow {
-        return [None; 2];
-    }
-
     // The bar nearest the pointer, the one the OHLC readout shows, and its global index
     let bar = coords
         .local_idx_at_x(hover_pos.x, visible_data.len())
@@ -125,10 +120,7 @@ pub fn render_crosshair_full(
                 crosshair_color,
             );
         }
-        CrosshairStyle::Arrow => {
-            // Already handled by early return above
-            unreachable!()
-        }
+        CrosshairStyle::Arrow | CrosshairStyle::Demonstration => {}
     }
 
     // Calculate price at cursor
@@ -226,11 +218,13 @@ mod tests {
             (TimezoneMode::nyse(), "Mon 30 Sep '24 20:30"),
         ] {
             let formatter = TimeFormatterBuilder::new().with_timezone(zone).build();
-            for (index, hover_y, width) in [
-                (0, 100.0, 300.0),
-                (29, 100.0, 300.0),
-                (0, 250.0, 300.0),
-                (0, 100.0, 60.0),
+            for (index, hover_y, width, style) in [
+                (0, 100.0, 300.0, CrosshairStyle::Full),
+                (0, 100.0, 300.0, CrosshairStyle::Arrow),
+                (0, 100.0, 300.0, CrosshairStyle::Dot),
+                (29, 100.0, 300.0, CrosshairStyle::Full),
+                (0, 250.0, 300.0, CrosshairStyle::Full),
+                (0, 100.0, 60.0, CrosshairStyle::Full),
             ] {
                 let rect =
                     Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(100.0 + width, 200.0));
@@ -254,7 +248,7 @@ mod tests {
                         &map,
                         &coords,
                         CrosshairMode::Normal,
-                        CrosshairStyle::Full,
+                        style,
                         Color32::GRAY,
                         1.0,
                         CrosshairLineStyle::Dotted,

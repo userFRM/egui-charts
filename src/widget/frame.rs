@@ -8,6 +8,7 @@ use crate::config::{BackgroundStyle, WatermarkPos};
 use crate::model::PriceLine;
 use crate::scales::TimeFormatterBuilder;
 use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
@@ -392,7 +393,7 @@ impl Chart {
                     // Dot mode - default pointer (dot is rendered on chart)
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
-                CrosshairStyle::Arrow => {
+                CrosshairStyle::Arrow | CrosshairStyle::Demonstration => {
                     // Arrow mode - default pointer
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
@@ -877,6 +878,14 @@ impl Chart {
         // the menu closes.
         let menu_open = std::mem::take(&mut self.menu_open);
         let mut crosshair_tags = [None; 2];
+        self.cursor_modes.update(ui.input(|input| input.stable_dt));
+        if self.chart_options.crosshair.style == crate::config::CrosshairStyle::Demonstration {
+            self.cursor_modes
+                .move_pointer(response.hover_pos().filter(|pos| price_rect.contains(*pos)));
+            self.cursor_modes.render(ui, price_rect);
+        } else {
+            self.cursor_modes.move_pointer(None);
+        }
         if let Some(hover_pos) = response.hover_pos()
             && price_rect.contains(hover_pos)
         {
@@ -904,14 +913,65 @@ impl Chart {
                 // it when the cursor is in the empty scroll margin past the data.
                 let mut tooltip_options = self.chart_options.tooltip.clone();
                 tooltip_options.show_volume &= self.chart_type.supports_volume();
+                let held = ui.input(|input| {
+                    input.pointer.primary_down()
+                        && (!input.any_touches()
+                            || input
+                                .pointer
+                                .press_start_time()
+                                .is_some_and(|start| input.time - start >= 0.5))
+                });
+                if tooltip_options.on_long_press
+                    && ui.input(|input| input.any_touches() && input.pointer.primary_down())
+                {
+                    ui.ctx().request_repaint();
+                }
                 if tooltip_options.enabled
+                    && (!tooltip_options.on_long_press || held)
+                    && !self.drawings.eraser_mode
+                    && self.drawings.active_tool.is_none()
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
                 {
                     let candle = &visible_data[local_idx];
+                    if tooltip_options.on_long_press {
+                        let x = coords.idx_to_x(start_idx + local_idx);
+                        rendering::draw_dashed_line(
+                            &clipped_painter,
+                            Pos2::new(x, price_rect.top()),
+                            Pos2::new(x, price_rect.bottom()),
+                            egui::Stroke::new(
+                                1.0,
+                                self.chart_options
+                                    .crosshair
+                                    .resolved(ui.ctx())
+                                    .vert_line_color,
+                            ),
+                            5.0,
+                            5.0,
+                        );
+                        for (index, bar) in visible_data.iter().enumerate().step_by(25) {
+                            let pos = Pos2::new(
+                                coords.idx_to_x(start_idx + index),
+                                price_map.price_to_y(bar.close),
+                            );
+                            clipped_painter.circle(
+                                pos,
+                                3.5,
+                                ui.active_theme().chart.bg,
+                                egui::Stroke::new(1.5, ui.active_theme().ui.accent),
+                            );
+                        }
+                    }
                     rendering::render_tooltip_with_options(
                         &price_ctx,
                         hover_pos,
                         candle,
+                        self.state
+                            .shown()
+                            .get(start_idx + local_idx)
+                            .and_then(|_| (start_idx + local_idx).checked_sub(1))
+                            .and_then(|index| self.state.shown().get(index))
+                            .map(|bar| bar.close),
                         &tooltip_options,
                         &price_map,
                         &coords,
@@ -958,15 +1018,15 @@ impl Chart {
                 .filter(|pos| price_rect.contains(*pos))
                 .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
                 .map(|index| start_idx + index)
-                .unwrap_or_else(|| self.state.data().bars.len().saturating_sub(1));
-            if let Some(bar) = self.state.data().bars.get(selected) {
+                .unwrap_or_else(|| self.state.shown().len().saturating_sub(1));
+            if let Some(bar) = self.state.shown().get(selected) {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
                 legend.instrument = self.instrument();
                 legend.quote = self.quote.as_ref();
                 legend.previous_close = selected
                     .checked_sub(1)
-                    .and_then(|index| self.state.data().bars.get(index))
+                    .and_then(|index| self.state.shown().get(index))
                     .map(|bar| bar.close);
                 legend.bar_index = selected;
                 legend.studies = if time_based {
@@ -1051,6 +1111,60 @@ mod tests {
             top < y1000 && y10 < bottom,
             "{y10}..{y1000} outside {top}..{bottom}"
         );
+    }
+
+    /// Held values appear only for a pressed pointer and disappear on release or disable.
+    #[test]
+    fn held_values_follow_press_release_and_switch() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            chart.chart_options.tooltip.on_long_press = true;
+            chart.chart_options.tooltip.show_time = false;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            for (step, enabled, pressed, expected) in [
+                (1, true, false, false),
+                (2, true, true, true),
+                (3, true, false, false),
+                (4, false, true, false),
+                (5, false, false, false),
+            ] {
+                chart.set_tooltip_enabled(enabled);
+                let painted = shapes(
+                    &ctx,
+                    &mut chart,
+                    step as f64 * 0.1,
+                    vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+                let labels: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    labels.contains(&"Open"),
+                    expected,
+                    "step {step}: {labels:?}"
+                );
+                if expected {
+                    assert!(labels.contains(&"-10.00 (-8.33%)"));
+                    assert!(labels.contains(&"Vol"));
+                }
+            }
+        }
     }
 
     /// The crosshair's time label names the bar nearest the pointer, and a chart that follows

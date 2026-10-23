@@ -27,8 +27,10 @@ pub enum CrosshairStyle {
     Full,
     /// Only a dot at the intersection point
     Dot,
-    /// No crosshair, just standard arrow cursor
+    /// Standard arrow cursor and axis readouts, without crosshair lines
     Arrow,
+    /// A fading pointer trail for presentations, with axis readouts.
+    Demonstration,
 }
 
 /// Line style for crosshair rendering (Solid, Dashed, Dotted)

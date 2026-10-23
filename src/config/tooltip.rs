@@ -53,6 +53,9 @@ pub struct TooltipOptions {
     /// data tooltip independently of the crosshair.
     pub enabled: bool,
 
+    /// Show values only while the primary pointer is held. Touch waits for a long press.
+    pub on_long_press: bool,
+
     /// Tooltip display mode
     pub mode: TooltipMode,
 
@@ -109,6 +112,7 @@ impl Default for TooltipOptions {
     fn default() -> Self {
         Self {
             enabled: true,
+            on_long_press: false,
             mode: TooltipMode::Floating,
             show_ohlc: true,
             show_volume: true,

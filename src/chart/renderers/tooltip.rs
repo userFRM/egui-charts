@@ -19,6 +19,7 @@ pub fn render_tooltip_with_options(
     context: &RenderContext,
     hover_pos: Pos2,
     candle: &Bar,
+    previous_close: Option<f64>,
     options: &TooltipOptions,
     price_scale: &PriceMap,
     coords: &ChartMapping,
@@ -26,7 +27,14 @@ pub fn render_tooltip_with_options(
 ) {
     match options.mode {
         TooltipMode::Floating => {
-            render_floating_tooltip(context.painter, hover_pos, context.rect, candle, options);
+            render_floating_tooltip(
+                context.painter,
+                hover_pos,
+                context.rect,
+                candle,
+                previous_close,
+                options,
+            );
         }
         TooltipMode::Tracking => {
             render_tracking_tooltip(context.painter, context.rect, candle, options);
@@ -52,6 +60,7 @@ pub fn render_floating_tooltip(
     hover_pos: Pos2,
     price_rect: Rect,
     candle: &Bar,
+    previous_close: Option<f64>,
     options: &TooltipOptions,
 ) {
     let options = &options.resolved(painter.ctx());
@@ -72,14 +81,21 @@ pub fn render_floating_tooltip(
         rows.push(("Close", price(candle.close)));
     }
 
-    if options.show_volume {
-        rows.push(("Volume", format!("{:.2}", candle.volume)));
-    }
-
     if options.show_change {
-        let change_pct = percent_change(candle.open, candle.close);
-        let sign = if change_pct >= 0.0 { "+" } else { "" };
-        rows.push(("Change", format!("{sign}{change_pct:.2}%")));
+        let reference = previous_close.unwrap_or(candle.open);
+        let change = candle.close - reference;
+        let change_pct = percent_change(reference, candle.close);
+        rows.push(("Change", format!("{change:+.2} ({change_pct:+.2}%)")));
+    }
+    if options.show_volume {
+        let volume = if candle.volume.abs() >= 1_000_000.0 {
+            format!("{:.2}M", candle.volume / 1_000_000.0)
+        } else if candle.volume.abs() >= 1_000.0 {
+            format!("{:.2}K", candle.volume / 1_000.0)
+        } else {
+            format!("{:.0}", candle.volume)
+        };
+        rows.push(("Vol", volume));
     }
 
     if rows.is_empty() {
@@ -91,8 +107,15 @@ pub fn render_floating_tooltip(
     let rows: Vec<_> = rows
         .into_iter()
         .map(|(label, value)| {
-            let layout = |text| painter.layout_no_wrap(text, font_id.clone(), options.text_color);
-            (layout(label.to_owned()), layout(value))
+            let value_color = if candle.is_bullish() {
+                theme.chart.candle_up
+            } else {
+                theme.chart.candle_down
+            };
+            (
+                painter.layout_no_wrap(label.to_owned(), font_id.clone(), options.text_color),
+                painter.layout_no_wrap(value, font_id.clone(), value_color),
+            )
         })
         .collect();
     let label_width = rows
@@ -116,7 +139,34 @@ pub fn render_floating_tooltip(
     } else {
         price_rect.max.x - inset - size.x
     };
-    let tooltip_rect = Rect::from_min_size(Pos2::new(x, price_rect.min.y + inset), size);
+    let pos = if options.on_long_press {
+        let x = if hover_pos.x + 16.0 + size.x <= price_rect.right() {
+            hover_pos.x + 16.0
+        } else {
+            hover_pos.x - 16.0 - size.x
+        };
+        Pos2::new(
+            x.max(price_rect.left()),
+            (hover_pos.y - size.y / 2.0).clamp(
+                price_rect.top(),
+                (price_rect.bottom() - size.y).max(price_rect.top()),
+            ),
+        )
+    } else {
+        Pos2::new(x, price_rect.min.y + inset)
+    };
+    let tooltip_rect = Rect::from_min_size(pos, size);
+    if options.on_long_press {
+        painter.add(
+            egui::Shadow {
+                offset: [0, 2],
+                blur: 8,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(40),
+            }
+            .as_shape(tooltip_rect, theme.radius.sm),
+        );
+    }
 
     let border_color = if candle.is_bullish() {
         options.border_color_bullish

@@ -524,13 +524,18 @@ impl Chart {
         self.zoom_just_applied
     }
 
-    /// Sets the crosshair rendering style (Full, Dot, or Arrow).
+    /// Sets the crosshair rendering style (Full, Dot, Arrow or Demonstration).
     ///
     /// Use this to connect a toolbar cursor-type selector to the chart.
     /// The style controls how the crosshair lines and labels are drawn
     /// when the user hovers over the chart area.
     pub fn set_crosshair_style(&mut self, style: crate::config::CrosshairStyle) {
         self.chart_options.crosshair.style = style;
+    }
+
+    /// Enables the configured values readout without changing pan or zoom.
+    pub fn set_tooltip_enabled(&mut self, enabled: bool) {
+        self.chart_options.tooltip.enabled = enabled;
     }
 
     /// Apply series settings to chart colors, price source and price scale.

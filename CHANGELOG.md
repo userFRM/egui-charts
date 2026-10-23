@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `CrosshairStyle::Demonstration` and `CursorType::Demonstration` draw a fading pointer trail. The demo starts in Arrow mode, with following axis tags, and dispatches cursor picks to the chart. `TooltipOptions::on_long_press` restricts values to a held pointer, waiting half a second for touch; the floating panel includes absolute and percentage change from the previous close and marks series points while held. `Chart::set_tooltip_enabled` connects the values switch without resetting the viewport. Migration: exhaustive cursor matches need a Demonstration arm; tooltip struct literals need `on_long_press` or the default.
+
 - `Chart::set_instrument` and `Chart::set_quote` supply metadata and current bid/ask for charts without a feed. The chart uses the responsive legend, selects historical OHLC and study values under the pointer, and keeps current quotes independent. `take_quote_action` returns buy/sell clicks; changing the symbol clears supplied metadata and quotes. The demo records quote intents without submitting orders.
 
 - `chart::render_event_band` draws host-supplied `Marker`s as 22 px badges above a supplied time-axis baseline, aligned to the first bar at or after each event time. It uses the event's text, colour, tooltip and ID, and returns the clicked ID to the host. Events outside the supplied data or plot are left out; existing bar annotations keep their appearance.
