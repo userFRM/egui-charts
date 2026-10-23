@@ -2,7 +2,7 @@
 //!
 //! Renders individual items (drawings, indicators) in the tree.
 
-use egui::{Color32, Rect, Sense, Stroke, Ui, vec2};
+use egui::{Rect, Sense, Stroke, Ui, vec2};
 
 use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons as embedded_icons};
@@ -403,6 +403,7 @@ fn get_tool_abbreviation(tool_type: DrawingToolType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::Color32;
 
     #[test]
     fn selected_names_use_selection_colours_and_end_before_the_buttons() {
