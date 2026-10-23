@@ -4,7 +4,7 @@ use crate::chart::renderers::{self, BarRenderParams, RenderContext, StyleColors}
 use crate::model::Bar;
 
 /// Render volume bars for chart types that show volume
-pub(super) fn render_volume_bars(
+pub(crate) fn render_volume_bars(
     volume_ctx: &RenderContext,
     visible_data: &[Bar],
     start_idx: usize,

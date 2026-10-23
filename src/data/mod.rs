@@ -5,7 +5,8 @@
 //! with `ChartBuilder::with_feed`. Only [`Datafeed::history`] is required. The chart calls the
 //! feed on the UI thread and never waits for it: the feed answers each request once through a
 //! [`Reply`] and pushes live bars, trades, depth and status into the [`Sink`] of each
-//! [`Subscription`], from any thread, runtime or browser task.
+//! [`Subscription`], from any thread, runtime or browser task. Best bid/ask quotes use
+//! [`Sink::push_quote`]; executions read through `Chart::trades` can feed [`Footprint`].
 //!
 //! Symbol search is not part of the feed: it is the separate
 //! [`SymbolSearch`](crate::services::SymbolSearch) service. Until an application wires it into
@@ -22,6 +23,7 @@ use std::fmt;
 use std::time::Duration;
 
 pub(crate) mod depth;
+mod footprint;
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -33,6 +35,7 @@ pub(crate) mod inbox;
 )]
 pub(crate) mod merge;
 mod resample;
+pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")

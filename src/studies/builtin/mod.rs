@@ -1,8 +1,9 @@
 //! Built-in technical indicators.
 //!
 //! This module contains the built-in technical indicators, grouped by
-//! category below. All indicators implement the
-//! [`Indicator`](super::Indicator) trait for a uniform API.
+//! category below. Bar-based indicators implement the
+//! [`Indicator`](super::Indicator) trait for a uniform API. Execution-based studies
+//! [`trade_delta`] and [`footprint_studies`] consume [`crate::data::Footprint`] explicitly.
 //!
 //! # Indicator categories
 //!
@@ -46,6 +47,11 @@
 
 use crate::model::Bar;
 use crate::studies::IndicatorValue;
+
+mod footprint_studies;
+pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studies};
+mod trade_delta;
+pub use trade_delta::{TradeDeltaValue, trade_delta};
 
 mod bollinger_bands;
 mod ema;

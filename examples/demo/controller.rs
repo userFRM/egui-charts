@@ -115,6 +115,8 @@ pub struct DemoApp {
     pub chart: Chart,
     /// Whether an object tree colour picker is editing a drawing, as one undo step.
     colour_drag: bool,
+    footprint: Option<egui_charts::data::Footprint>,
+    footprint_scale: Option<(f32, f32)>,
     menus: ChartMenus,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
@@ -225,6 +227,8 @@ impl DemoApp {
         let mut app = Self {
             chart,
             colour_drag: false,
+            footprint: None,
+            footprint_scale: None,
             menus: ChartMenus::default(),
             state: DemoAppState {
                 symbol: symbol.into(),
@@ -348,6 +352,9 @@ impl DemoApp {
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
+        if self.footprint.is_some() {
+            self.rebuild_footprint();
+        }
         let spec = DemoSymbol::find(&self.state.symbol);
         self.chart.set_instrument(Some(
             egui_charts::model::Instrument::new(spec.symbol)
@@ -779,12 +786,14 @@ impl DemoApp {
                 let mut search = false;
                 let mut trade = false;
                 let mut publish = false;
+                let mut footprint_enabled = self.footprint.is_some();
                 let action = self.top_toolbar.show_with_slots(
                     ui,
                     &self.state,
                     |ui| {
                         let response = IconButton::new(&icons::MENU).tooltip("Menu").show(ui);
                         egui::Popup::menu(&response).show(|ui| {
+                            ui.checkbox(&mut footprint_enabled, "Footprint (synthetic)");
                             for (label, action) in [
                                 ("Quick search", TopToolbarAction::OpenSymbolSearch),
                                 ("Switch theme", TopToolbarAction::ThemeToggle),
@@ -827,6 +836,20 @@ impl DemoApp {
                             .clicked();
                     },
                 );
+                if footprint_enabled != self.footprint.is_some() {
+                    if footprint_enabled {
+                        self.footprint_scale = Some(self.chart.get_time_scale_state());
+                        self.rebuild_footprint();
+                        if self.footprint.is_some() {
+                            self.chart.apply_synced_time_scale(100.0, 0.0);
+                        }
+                    } else {
+                        self.footprint = None;
+                        if let Some((spacing, offset)) = self.footprint_scale.take() {
+                            self.chart.apply_synced_time_scale(spacing, offset);
+                        }
+                    }
+                }
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
                 if search {
@@ -1374,11 +1397,54 @@ impl DemoApp {
         }
     }
 
+    fn rebuild_footprint(&mut self) {
+        let bars = self.chart.bars(SeriesId::MAIN);
+        let step = if bars.last().is_some_and(|bar| bar.close.abs() >= 100.0) {
+            0.05
+        } else {
+            0.0001
+        };
+        let mut flow = egui_charts::data::Footprint::new(
+            egui_charts::model::BarClock::new(self.state.timeframe),
+            step,
+            1,
+        )
+        .expect("fixture has a positive price step");
+        for trade in crate::sampledata::synthetic_trades(bars) {
+            flow.push(&trade)
+                .expect("fixture executions are finite and chronological");
+        }
+        if flow.bars().len() == bars.len() {
+            self.footprint = Some(flow);
+        } else {
+            self.footprint = None;
+            if let Some((spacing, offset)) = self.footprint_scale.take() {
+                self.chart.apply_synced_time_scale(spacing, offset);
+            }
+            self.notify("Footprint example needs one source bar per UTC interval");
+        }
+    }
+
     fn show_chart(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         let chart = egui::CentralPanel::default()
             .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
-                self.chart.show(ui);
+                if let Some(flow) = &self.footprint {
+                    let config = egui_charts::chart::overlays::FootprintConfig {
+                        text_color: self.theme.ui.text,
+                        neutral_color: self.theme.ui.text,
+                        ask_color: self.chart.config().bullish_color,
+                        bid_color: self.chart.config().bearish_color,
+                        ..Default::default()
+                    };
+                    self.chart.show_footprint(ui, flow, &config);
+                    if self.chart.chart_type().is_time_independent() {
+                        ui.painter().text(self.chart.get_rendered_price_rect().center(), egui::Align2::CENTER_CENTER,
+                            "Footprint requires a time-based chart", egui::FontId::proportional(14.0), self.theme.ui.text);
+                    }
+                } else {
+                    self.chart.show(ui);
+                }
                 if self.chart.take_scale_settings_request() {
                     self.open_series_settings_dialog();
                     self.series_settings.active_tab = egui_charts::ui::dialogs::series_settings::SeriesSettingsTab::ScalesAndLines;
