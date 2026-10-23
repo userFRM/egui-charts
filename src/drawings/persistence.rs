@@ -251,11 +251,17 @@ impl DrawingStorage {
 
     /// Serialize to JSON, refusing what would lose a drawing on the next load:
     /// a non-finite number, which JSON cannot store and which would otherwise be
-    /// written as `null`, an id an earlier drawing already has and fewer anchors
-    /// than the tool draws with, which [`Self::from_json`] skips.
+    /// written as `null`, an id an earlier drawing already has, a cursor tool
+    /// such as the eraser and fewer anchors than the tool draws with, which
+    /// [`Self::from_json`] skips.
     pub fn to_json(&self) -> Result<String, SaveError> {
         let mut ids = HashSet::new();
         for stored in &self.drawings {
+            if stored.drawing.tool_type.is_cursor() {
+                return Err(SaveError::Cursor {
+                    id: stored.id.clone(),
+                });
+            }
             if !ids.insert(stored.id.as_str()) {
                 return Err(SaveError::DuplicateId {
                     id: stored.id.clone(),
@@ -403,6 +409,11 @@ pub enum SaveError {
         /// The id of the drawing.
         id: String,
     },
+    /// A drawing's tool is a cursor, such as the eraser, and loading skips it.
+    Cursor {
+        /// The id of the drawing.
+        id: String,
+    },
     /// A drawing has fewer anchors than its tool draws with, and loading skips it.
     MissingAnchors {
         /// The id of the drawing.
@@ -425,6 +436,7 @@ impl fmt::Display for SaveError {
                 write!(f, "drawing {id:?} has a non-finite {field}")
             }
             Self::DuplicateId { id } => write!(f, "duplicate drawing id {id:?}"),
+            Self::Cursor { id } => write!(f, "drawing {id:?} is a cursor, not a drawing"),
             Self::MissingAnchors {
                 id,
                 tool,
@@ -442,7 +454,10 @@ impl fmt::Display for SaveError {
 impl std::error::Error for SaveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::NonFinite { .. } | Self::DuplicateId { .. } | Self::MissingAnchors { .. } => None,
+            Self::NonFinite { .. }
+            | Self::DuplicateId { .. }
+            | Self::Cursor { .. }
+            | Self::MissingAnchors { .. } => None,
             Self::Json(error) => Some(error),
         }
     }
@@ -897,7 +912,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 7] = [
+        let cases: [(Spoil, &str); 8] = [
             (
                 |s| first(s).drawing.stroke_width = f32::NAN,
                 "non-finite stroke_width",
@@ -925,6 +940,10 @@ mod tests {
             ),
             (|s| s.drawings.push(s.drawings[0].clone()), "duplicate id"),
             (|s| first(s).points.truncate(1), "Trend Line needs 2"),
+            (
+                |s| first(s).drawing.tool_type = DrawingToolType::Eraser,
+                "a cursor",
+            ),
         ];
         for (spoil, expected) in cases {
             let mut storage = DrawingStorage::new("AAPL");
@@ -936,6 +955,7 @@ mod tests {
             let got = match storage.to_json() {
                 Err(SaveError::NonFinite { id, field }) => format!("{id}: non-finite {field}"),
                 Err(SaveError::DuplicateId { id }) => format!("{id}: duplicate id"),
+                Err(SaveError::Cursor { id }) => format!("{id}: a cursor"),
                 Err(SaveError::MissingAnchors {
                     id, tool, needed, ..
                 }) => {
