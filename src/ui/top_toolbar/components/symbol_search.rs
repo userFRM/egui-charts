@@ -302,9 +302,8 @@ impl SymbolSearchDialog {
         let mut open = true;
         Modal::new("symbol_search", "")
             .width(840.0)
-            .height(680.0)
-            .rounding(20.0)
-            .dim_background(false)
+            .height(480.0)
+            .top(ctx.content_rect().top() + ctx.content_rect().height() / 3.0 - 240.0)
             .show(ctx, &mut open, |ui| {
                 ui.horizontal(|ui| {
                     let theme = ui.active_theme();
@@ -362,7 +361,8 @@ impl SymbolSearchDialog {
                 // Results list
                 egui::ScrollArea::vertical()
                     .id_salt("symbol_results")
-                    .max_height(ui.available_height())
+                    .auto_shrink([false, false])
+                    .max_height((ui.available_height() - 36.0).max(0.0))
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         if self.filtered_symbols.is_empty() {
@@ -403,6 +403,18 @@ impl SymbolSearchDialog {
                             }
                         }
                     });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    for (key, action) in
+                        [("↑ ↓", "Navigate"), ("Enter", "Select"), ("Esc", "Close")]
+                    {
+                        ui.label(RichText::new(key).monospace().size(11.0));
+                        ui.label(RichText::new(action).size(11.0).weak());
+                        ui.add_space(12.0);
+                    }
+                });
 
                 // Keyboard navigation
                 ui.input(|i| {
@@ -461,7 +473,7 @@ impl SymbolSearchDialog {
     fn render_symbol_item(&self, ui: &mut Ui, symbol: &Symbol, is_sel: bool) -> Response {
         let theme = ui.active_theme();
         let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 56.0), Sense::click());
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 32.0), Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response, 4.0);
         response.widget_info(|| {
             egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_sel, &symbol.name)
@@ -469,76 +481,107 @@ impl SymbolSearchDialog {
         if is_sel || response.hovered() {
             ui.painter().rect_filled(rect, 4.0, theme.ui.btn_bg_hover);
         }
-        let center = Pos2::new(rect.left() + 22.0, rect.center().y);
-        ui.painter()
-            .circle_filled(center, 18.0, theme.ui.btn_bg_hover);
-        ui.painter().text(
-            center,
-            egui::Align2::CENTER_CENTER,
-            symbol.name.chars().next().unwrap_or('?'),
-            egui::FontId::proportional(16.0),
-            theme.ui.text,
-        );
-        ui.painter().text(
-            Pos2::new(rect.left() + 48.0, rect.center().y - 10.0),
-            egui::Align2::LEFT_CENTER,
-            &symbol.name,
-            egui::FontId::proportional(16.0),
-            theme.ui.text,
-        );
-        let exchange = if self.config.show_exchange {
-            &symbol.exchange
-        } else {
-            ""
-        };
-        let exchange_galley = ui.painter().layout_no_wrap(
-            exchange.to_owned(),
-            egui::FontId::proportional(12.0),
-            theme.ui.text_secondary,
-        );
-        let right = rect.right() - exchange_galley.size().x - 12.0;
-        ui.painter().galley(
-            Pos2::new(right, rect.center().y - exchange_galley.size().y / 2.0),
-            exchange_galley,
-            theme.ui.text_secondary,
-        );
+        let right = rect.right() - 8.0;
         let kind = symbol
             .symbol_type
-            .map(|kind| kind.to_string().to_uppercase())
+            .map(|kind| kind.to_string())
             .unwrap_or_default();
-        let badge =
-            ui.painter()
-                .layout_no_wrap(kind, egui::FontId::proportional(9.0), theme.ui.text);
-        let x = rect.left() + 48.0;
-        let desc = if self.config.show_description {
-            &symbol.display_name
+        let exchange = if self.config.show_exchange {
+            symbol.exchange.as_str()
         } else {
             ""
         };
-        let mut job = egui::text::LayoutJob::simple_singleline(
-            desc.to_owned(),
-            egui::FontId::proportional(12.0),
-            theme.ui.text_secondary,
-        );
-        job.wrap = egui::text::TextWrapping::truncate_at_width(
-            (right - x - badge.size().x - 24.0).max(0.0),
-        );
-        let desc = ui.painter().layout_job(job);
-        let badge_x = x + desc.size().x + 8.0;
-        ui.painter().galley(
-            Pos2::new(x, rect.center().y + 4.0),
-            desc,
-            theme.ui.text_secondary,
-        );
-        if symbol.symbol_type.is_some() {
-            let badge_rect = egui::Rect::from_min_size(
-                Pos2::new(badge_x, rect.center().y + 5.0),
-                badge.size() + Vec2::new(8.0, 2.0),
+        let column_width = |kind_column: bool| {
+            self.filtered_symbols
+                .iter()
+                .map(|symbol| {
+                    let text = if kind_column {
+                        symbol
+                            .symbol_type
+                            .map(|kind| kind.to_string())
+                            .unwrap_or_default()
+                    } else if self.config.show_exchange {
+                        symbol.exchange.clone()
+                    } else {
+                        String::new()
+                    };
+                    ui.painter()
+                        .layout_no_wrap(
+                            text,
+                            egui::FontId::proportional(11.0),
+                            theme.ui.text_secondary,
+                        )
+                        .size()
+                        .x
+                })
+                .fold(0.0_f32, f32::max)
+                .min(rect.width() * 0.2)
+        };
+        let kind_width = column_width(true);
+        let exchange_width = column_width(false);
+        let exchange_right = right - kind_width - 16.0;
+        for (text, edge, width) in [
+            (kind.as_str(), right, kind_width),
+            (exchange, exchange_right, exchange_width),
+        ] {
+            let galley = egui::WidgetText::from(
+                RichText::new(text)
+                    .size(11.0)
+                    .color(theme.ui.text_secondary),
+            )
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                width,
+                egui::TextStyle::Body,
             );
-            ui.painter()
-                .rect_filled(badge_rect, 2.0, theme.ui.btn_bg_hover);
-            ui.painter()
-                .galley(badge_rect.min + Vec2::new(4.0, 1.0), badge, theme.ui.text);
+            ui.painter().galley(
+                Pos2::new(
+                    edge - galley.size().x,
+                    rect.center().y - galley.size().y / 2.0,
+                ),
+                galley,
+                theme.ui.text_secondary,
+            );
+        }
+        let left = rect.left() + 8.0;
+        let width = (exchange_right - exchange_width - 16.0 - left).max(0.0);
+        let name = egui::WidgetText::from(
+            RichText::new(&symbol.name)
+                .size(13.0)
+                .strong()
+                .color(theme.ui.text),
+        )
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            width,
+            egui::TextStyle::Body,
+        );
+        let top = if self.config.show_description {
+            rect.top() + 1.0
+        } else {
+            rect.center().y - name.size().y / 2.0
+        };
+        ui.painter()
+            .galley(Pos2::new(left, top), name, theme.ui.text);
+        if self.config.show_description {
+            let description = egui::WidgetText::from(
+                RichText::new(&symbol.display_name)
+                    .size(11.0)
+                    .color(theme.ui.text_secondary),
+            )
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                width,
+                egui::TextStyle::Body,
+            );
+            ui.painter().galley(
+                Pos2::new(left, rect.bottom() - description.size().y - 1.0),
+                description,
+                theme.ui.text_secondary,
+            );
         }
 
         response
@@ -589,6 +632,8 @@ pub struct CompareSymbolsConfig {
     pub width: f32,
     /// Dialog height
     pub height: f32,
+    /// Maximum number of matching suggestions to render.
+    pub max_results: usize,
     /// Background color
     pub bg_color: Color32,
     /// Text color
@@ -606,6 +651,7 @@ impl Default for CompareSymbolsConfig {
         Self {
             width: 840.0,
             height: 560.0,
+            max_results: 20,
             bg_color: Color32::TRANSPARENT,
             text_color: Color32::TRANSPARENT,
             muted_color: Color32::TRANSPARENT,
@@ -739,6 +785,12 @@ impl CompareSymbolsDialog {
         self.is_open = false;
     }
 
+    /// Replace the displayed comparison list with the host's current chart series.
+    /// Call before showing the dialog so rejected or externally changed series stay in sync.
+    pub fn set_compared_symbols(&mut self, symbols: Vec<CompareSymbol>) {
+        self.compared_symbols = symbols;
+    }
+
     /// Get next color from palette
     fn next_color(&mut self) -> Color32 {
         let color = self.color_palette[self.next_color_idx % self.color_palette.len()];
@@ -759,9 +811,7 @@ impl CompareSymbolsDialog {
         Modal::new("compare_symbols", "")
             .width(config.width)
             .height(config.height)
-            .rounding(20.0)
             .fill(config.bg_color)
-            .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
                 action = self.draw_content(ui, symbols, &config);
             });
@@ -806,35 +856,39 @@ impl CompareSymbolsDialog {
             ui.label(RichText::new("Currently comparing:").color(config.muted_color));
             ui.space_sm();
 
-            for symbol in &self.compared_symbols {
-                ui.horizontal(|ui| {
-                    // Color indicator
-                    let (rect, _) = ui.allocate_exact_size(
-                        Vec2::splat(DESIGN_TOKENS.sizing.icon_xs),
-                        Sense::hover(),
-                    );
-                    ui.painter().circle_filled(rect.center(), 5.0, symbol.color);
+            egui::ScrollArea::vertical()
+                .id_salt("current_comparisons")
+                .max_height(ui.available_height() * 0.4)
+                .show(ui, |ui| {
+                    for symbol in &self.compared_symbols {
+                        ui.horizontal(|ui| {
+                            // Color indicator
+                            let (rect, _) = ui.allocate_exact_size(
+                                Vec2::splat(DESIGN_TOKENS.sizing.icon_xs),
+                                Sense::hover(),
+                            );
+                            ui.painter().circle_filled(rect.center(), 5.0, symbol.color);
 
-                    ui.label(&symbol.symbol);
-                    ui.label(
-                        RichText::new(&symbol.name)
-                            .color(config.muted_color)
-                            .size(typography::SM),
-                    );
+                            ui.label(&symbol.symbol);
+                            ui.label(
+                                RichText::new(&symbol.name)
+                                    .color(config.muted_color)
+                                    .size(typography::SM),
+                            );
 
-                    ui.right_aligned(|ui| {
-                        if ui.small_button("X").clicked() {
-                            action = CompareAction::RemoveSymbol(symbol.symbol.clone());
-                        }
+                            ui.right_aligned(|ui| {
+                                if ui.small_button("X").clicked() {
+                                    action = CompareAction::RemoveSymbol(symbol.symbol.clone());
+                                }
 
-                        let eye_label = if symbol.visible { "Hide" } else { "Show" };
-                        if ui.small_button(eye_label).clicked() {
-                            action = CompareAction::ToggleVisibility(symbol.symbol.clone());
-                        }
-                    });
+                                let eye_label = if symbol.visible { "Hide" } else { "Show" };
+                                if ui.small_button(eye_label).clicked() {
+                                    action = CompareAction::ToggleVisibility(symbol.symbol.clone());
+                                }
+                            });
+                        });
+                    }
                 });
-            }
-
             ui.separator_with_margin(DESIGN_TOKENS.spacing.lg);
         }
 
@@ -847,13 +901,18 @@ impl CompareSymbolsDialog {
         }
 
         egui::ScrollArea::vertical()
+            .id_salt("comparison_suggestions")
             .max_height(ui.available_height())
             .show(ui, |ui| {
                 let query = self.search_query.to_lowercase();
-                for symbol in symbols.iter().filter(|symbol| {
-                    symbol.name.to_lowercase().contains(&query)
-                        || symbol.display_name.to_lowercase().contains(&query)
-                }) {
+                for symbol in symbols
+                    .iter()
+                    .filter(|symbol| {
+                        symbol.name.to_lowercase().contains(&query)
+                            || symbol.display_name.to_lowercase().contains(&query)
+                    })
+                    .take(config.max_results)
+                {
                     if let Some(a) = self.draw_symbol_item(ui, symbol, config) {
                         action = a;
                     }
@@ -1049,6 +1108,11 @@ mod tests {
                 .map(|i| Symbol::new(format!("S{i}"), "Sample"))
                 .collect();
             let mut dialog = SymbolSearchDialog::new();
+            ctx.run_ui(Default::default(), |ui| {
+                let response = dialog.render_symbol_item(ui, &symbols[0], false);
+                assert_eq!(response.rect.height(), 32.0);
+            })
+            .drop_without_applying_deltas();
             dialog.open();
             let mut frame = |events| {
                 let mut picked = None;
@@ -1226,14 +1290,26 @@ mod tests {
 
     #[test]
     fn test_max_results_limit() {
-        let mut dialog = SymbolSearchDialog::new();
-        dialog.config.max_results = 2;
-
-        let symbols = create_test_symbols();
-        dialog.search_query = "USD".to_string();
-        dialog.update_filtered_symbols(&symbols);
-
-        assert!(dialog.filtered_symbols.len() <= 2);
+        let symbols: Vec<_> = (0..40)
+            .map(|index| Symbol::new(format!("S{index}"), "Sample"))
+            .collect();
+        for limit in [0, 1, 2] {
+            let mut dialog = SymbolSearchDialog::new();
+            dialog.config.max_results = limit;
+            dialog.update_filtered_symbols(&symbols);
+            assert_eq!(dialog.filtered_symbols.len(), limit);
+        }
+        let ctx = Context::default();
+        let mut compare = CompareSymbolsDialog::new();
+        let config = compare.config.resolved(&ctx.global_style().visuals);
+        let output = ctx.run_ui(Default::default(), |ui| {
+            compare.draw_content(ui, &symbols, &config);
+        });
+        let rows = output.shapes.iter().filter(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if symbols.iter().any(|symbol| symbol.name == text.galley.text())
+        )).count();
+        output.drop_without_applying_deltas();
+        assert_eq!(rows, 20, "compare suggestions use the default result cap");
     }
 
     #[test]

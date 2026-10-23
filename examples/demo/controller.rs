@@ -47,7 +47,7 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
 };
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
-use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
+use egui_charts::ui_kit::notifications::{NotificationPanel, Toast, Toasts};
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
 
@@ -158,6 +158,7 @@ pub struct DemoApp {
     settings_dialog: SettingsDialog,
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
+    compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
     indicator_templates: Vec<SavedIndicators>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
@@ -278,6 +279,7 @@ impl DemoApp {
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
+            compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
             indicator_templates: Vec::new(),
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
                 [
@@ -692,6 +694,15 @@ impl DemoApp {
 
         // Symbol search (used by the pill, quick search, and compare entry).
         let symbols = DemoSymbol::symbols();
+        // No comparison renderer is attached in this demo; retain the chart's empty list.
+        self.compare_dialog.set_compared_symbols(Vec::new());
+        if let egui_charts::ui::top_toolbar::CompareAction::AddSymbol(symbol) =
+            self.compare_dialog.show(ctx, &symbols)
+        {
+            self.toasts.add(Toast::info(format!(
+                "Comparison requested: {symbol}. The host must attach a comparison series."
+            )));
+        }
         self.symbol_search
             .set_recent_symbols(vec![self.state.symbol.clone()]);
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
@@ -1076,9 +1087,8 @@ impl DemoApp {
                 }
             }
             TopToolbarAction::IntervalSelected(tf) => self.switch_timeframe(tf),
-            TopToolbarAction::OpenSymbolSearch | TopToolbarAction::OpenCompare => {
-                self.symbol_search.open();
-            }
+            TopToolbarAction::OpenSymbolSearch => self.symbol_search.open(),
+            TopToolbarAction::OpenCompare => self.compare_dialog.open(),
             TopToolbarAction::OpenIndicators => self.indicator_dialog.open(),
             TopToolbarAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
             TopToolbarAction::ToggleReplay => self.toggle_replay(),
