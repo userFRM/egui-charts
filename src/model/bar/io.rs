@@ -10,11 +10,15 @@ use chrono::{DateTime, Utc};
 /// time has one and reads a time with or without it.
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
 
+/// The header row of a bar CSV file, written by every writer and required by `from_csv`.
+const HEADER: [&str; 6] = ["ts", "open", "high", "low", "close", "volume"];
+
 impl BarData {
     /// Loads bars from a CSV file
     ///
     /// # Format
-    /// CSV format: ts,open,high,low,close,volume
+    /// CSV format: ts,open,high,low,close,volume. The header row is required (any case, spaces
+    /// around names ignored) and the columns must be in this order.
     /// Timestamps are in "YYYY-MM-DD HH:MM:SS" format (UTC), optionally with a fraction of a
     /// second, such as "2024-03-15 10:00:00.250"
     ///
@@ -26,6 +30,14 @@ impl BarData {
     /// ```
     pub fn from_csv(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let mut rdr = csv::Reader::from_path(path)?;
+        let header = rdr.headers()?;
+        if !header
+            .iter()
+            .map(|name| name.trim().to_ascii_lowercase())
+            .eq(HEADER)
+        {
+            return Err(format!("Invalid CSV header: expected {}", HEADER.join(",")).into());
+        }
         let mut bars = Vec::new();
 
         for (line_num, result) in rdr.records().enumerate() {
@@ -91,7 +103,7 @@ impl BarData {
         let mut wtr = csv::Writer::from_writer(file);
 
         // Write header
-        wtr.write_record(["ts", "open", "high", "low", "close", "volume"])?;
+        wtr.write_record(HEADER)?;
 
         // Write data
         for bar in &self.bars {
@@ -128,7 +140,7 @@ impl BarData {
         let mut wtr = csv::Writer::from_writer(Vec::new());
 
         // Write header
-        wtr.write_record(["ts", "open", "high", "low", "close", "volume"])?;
+        wtr.write_record(HEADER)?;
 
         // Write data
         for bar in &self.bars {
@@ -175,14 +187,7 @@ impl BarData {
         let mut wtr = csv::Writer::from_writer(Vec::new());
 
         // Build header: ts,open,high,low,close,volume,indicator_1,...
-        let mut header: Vec<String> = vec![
-            "ts".to_string(),
-            "open".to_string(),
-            "high".to_string(),
-            "low".to_string(),
-            "close".to_string(),
-            "volume".to_string(),
-        ];
+        let mut header: Vec<String> = HEADER.map(String::from).to_vec();
         for (name, _) in indicators {
             header.push(name.clone());
         }
@@ -412,5 +417,38 @@ mod tests {
         let loaded_times: Vec<DateTime<Utc>> =
             loaded.unwrap().bars.iter().map(|b| b.time).collect();
         assert_eq!(loaded_times, times);
+    }
+
+    #[test]
+    fn from_csv_refuses_a_missing_or_reordered_header() {
+        let refused = Err("Invalid CSV header: expected ts,open,high,low,close,volume".to_string());
+        let cases = [
+            (
+                "2024-03-15 10:00:00,1,2,0.5,1.5,10\n2024-03-15 10:01:00,1,2,0.5,1.5,10\n",
+                refused.clone(),
+            ),
+            (
+                "ts,close,high,low,open,volume\n2024-03-15 10:00:00,1.5,2,0.5,1,10\n",
+                refused,
+            ),
+            (
+                " TS , Open,HIGH,low,close,Volume\n2024-03-15 10:00:00,1,2,0.5,1.5,10\n",
+                Ok(vec![(1.0, 1.5)]),
+            ),
+        ];
+        let path = temp_csv("header");
+        for (contents, expected) in cases {
+            std::fs::write(&path, contents).unwrap();
+            let got = BarData::from_csv(&path)
+                .map(|data| {
+                    data.bars
+                        .iter()
+                        .map(|b| (b.open, b.close))
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|e| e.to_string());
+            assert_eq!(got, expected, "{contents:?}");
+        }
+        std::fs::remove_file(&path).unwrap();
     }
 }
