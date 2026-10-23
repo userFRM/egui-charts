@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Horizontal arrow keys keep keyboard focus on the chart and pan on every press. Tab still moves to the next control.
+
 - `Chart::visible_bars` now applies the requested initial bar spacing on the first frame, matching `set_visible_bars`.
 
 ### Added

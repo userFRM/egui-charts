@@ -88,6 +88,16 @@ impl Chart {
             return;
         }
 
+        ui.memory_mut(|memory| {
+            memory.set_focus_lock_filter(
+                response.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    ..Default::default()
+                },
+            );
+        });
+
         ui.input(|i| {
             use egui::Key;
 
@@ -198,5 +208,88 @@ impl Chart {
         if response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::widget::test_frames::chart;
+    use egui::{Context, Event, Key, Modifiers, RawInput, Rect, Vec2};
+
+    #[test]
+    fn horizontal_arrows_pan_repeatedly_and_tab_leaves_the_chart() {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[101.0]);
+        let mut chart_id = egui::Id::NULL;
+        chart.config.show_right_axis = false;
+        chart.config.show_ohlc_info = false;
+        let mut next_id = egui::Id::NULL;
+        for (pass, key) in [
+            None,
+            None,
+            Some(Key::ArrowLeft),
+            Some(Key::ArrowLeft),
+            Some(Key::ArrowRight),
+            Some(Key::Tab),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let before = chart.state.time_scale().right_offset();
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1000.0, 500.0),
+                    )),
+                    events: key
+                        .map(|key| Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        })
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        let _ = ui.button("Before");
+                        ui.allocate_ui(Vec2::new(700.0, 400.0), |ui| {
+                            let response = chart.show(ui);
+                            chart_id = response.id;
+                            if pass == 0 {
+                                response.request_focus();
+                            }
+                        });
+                        next_id = ui.button("After").id;
+                    });
+                },
+            );
+            output.drop_without_applying_deltas();
+            if pass >= 2 && key != Some(Key::Tab) {
+                let expected = if key == Some(Key::ArrowLeft) {
+                    -chart.chart_options.keyboard.pan_amount
+                } else {
+                    chart.chart_options.keyboard.pan_amount
+                };
+                assert_eq!(
+                    chart.state.time_scale().right_offset(),
+                    before - expected,
+                    "pass {pass}"
+                );
+                assert!(
+                    ctx.memory(|memory| memory.has_focus(chart_id)),
+                    "pass {pass}"
+                );
+            }
+        }
+        assert!(!ctx.memory(|memory| memory.has_focus(chart_id)));
+        assert!(
+            ctx.memory(|memory| memory.focused().is_some()),
+            "expected keyboard focus after Tab, next {next_id:?}"
+        );
     }
 }
