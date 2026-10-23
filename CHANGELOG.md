@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- List action buttons and `UiExt` primary, secondary and danger helpers share the kit variants, including opaque themed state shades and their matching text. The dark primary blue now meets 4.5:1 with white. Ghost and Outlined controls use egui's hover and pressed fills, and neutral button glyphs use the same foreground states across button types. ([#435](https://github.com/userFRM/egui-charts/issues/435), [#582](https://github.com/userFRM/egui-charts/issues/582))
+
 - Deserialising incomplete theme colour palettes reports a missing-field error instead of silently filling a light theme with dark colours. Text, spacing and radius scales still default independently. Migration: save the complete `Theme` value; hand-written theme files must include `dark`, `ui` and `chart` with all colour fields. ([#434](https://github.com/userFRM/egui-charts/issues/434))
 
 - Links and clickable labels derive a readable colour from the accent on panels and windows. `Theme::with_accent` gives black, white and near-endpoint accents distinct opaque hover and pressed shades, a visible selection and a matching light focus ring while retaining text contrast. ([#432](https://github.com/userFRM/egui-charts/issues/432), [#433](https://github.com/userFRM/egui-charts/issues/433))

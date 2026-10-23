@@ -234,7 +234,11 @@ impl<'a> Widget for Button<'a> {
             } else {
                 self.variant
             };
-            let fg = variant.fg_color(ui);
+            let fg = if variant.is_inverse() {
+                variant.fg_color(ui)
+            } else {
+                ui.style().interact(&response).fg_stroke.color
+            };
             let rounding = tokens.rounding.button;
 
             ui.painter()

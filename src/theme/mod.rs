@@ -684,7 +684,7 @@ mod tests {
             ("grid", dark.chart.grid_line, [34, 34, 34]),
             ("up candle", dark.chart.candle_up, [8, 153, 129]),
             ("down candle", dark.chart.candle_down, [242, 54, 69]),
-            ("active toggle", dark.ui.accent, [49, 121, 245]),
+            ("active toggle", dark.ui.accent, [41, 98, 255]),
         ] {
             assert_eq!(
                 actual,
@@ -794,13 +794,7 @@ mod tests {
                 ("hovered accent", ui.accent_hover),
                 ("pressed accent", ui.accent_active),
             ] {
-                // The dark preset's specified active blue reads at 4.05:1 with white.
-                let min = if name == "dark" && fill == "accent" {
-                    4.0
-                } else {
-                    text_min
-                };
-                check("on-accent text", ui.accent_text, fill, bg, min);
+                check("on-accent text", ui.accent_text, fill, bg, text_min);
             }
             for (fill, bg) in [
                 ("danger", ui.danger_bg),
