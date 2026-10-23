@@ -148,7 +148,6 @@ impl CommandPalette {
             .width(480.0)
             .height(680.0)
             .rounding(8.0)
-            .dim_background(false)
             .show(ctx, open, |ui| {
                 ui.add_space(12.0);
                 ui.separator();

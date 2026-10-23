@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use egui::{RichText, Ui};
+use egui::{Color32, RichText, Ui};
 
 use crate::data::{FeedError, inbox::Inbox};
 use crate::icons::icons;
@@ -226,6 +226,16 @@ impl AlertsPanel {
         csv
     }
 
+    fn status_color(&self, ui: &Ui, status: AlertStatus) -> Color32 {
+        let theme = ui.active_theme();
+        match status {
+            AlertStatus::Active => theme.ui.success,
+            AlertStatus::Triggered => theme.ui.warning,
+            AlertStatus::Disabled => theme.ui.text_disabled,
+            AlertStatus::Expired => theme.ui.error,
+        }
+    }
+
     /// Render the host's alerts or trigger log after `poll`, returning creation or export intents.
     pub fn show(&mut self, ui: &mut Ui) -> AlertPanelAction {
         let mut action = AlertPanelAction::None;
@@ -300,11 +310,7 @@ impl AlertsPanel {
                                 AlertCondition::Above(v) => format!("Above {v}"),
                                 AlertCondition::Below(v) => format!("Below {v}"),
                             });
-                            let color = match alert.status {
-                                AlertStatus::Active => ui.active_theme().ui.success,
-                                AlertStatus::Triggered => ui.active_theme().ui.warning,
-                                _ => ui.visuals().weak_text_color(),
-                            };
+                            let color = self.status_color(ui, alert.status);
                             ui.colored_label(
                                 color,
                                 match alert.status {
@@ -448,5 +454,25 @@ mod tests {
         assert_eq!(panel.log().len(), 1);
         drop(panel);
         assert!(!renewed.is_active());
+    }
+
+    #[test]
+    fn default_alert_status_colours_follow_theme_changes() {
+        let panel = AlertsPanel::default();
+        let ctx = egui::Context::default();
+        for (_, theme) in crate::theme::presets() {
+            crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.run_ui(Default::default(), |ui| {
+                for (status, expected) in [
+                    (AlertStatus::Active, theme.ui.success),
+                    (AlertStatus::Triggered, theme.ui.warning),
+                    (AlertStatus::Disabled, theme.ui.text_disabled),
+                    (AlertStatus::Expired, theme.ui.error),
+                ] {
+                    assert_eq!(panel.status_color(ui, status), expected);
+                }
+            })
+            .drop_without_applying_deltas();
+        }
     }
 }

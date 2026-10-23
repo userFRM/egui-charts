@@ -1344,7 +1344,14 @@ impl Chart {
                 } else {
                     price_map.y_to_price(pos.y)
                 };
-                if let Some(price) = rendering::axes::crosshair_price_action(ui, tag, price) {
+                let foreground = self
+                    .chart_options
+                    .crosshair
+                    .resolved(ui.ctx())
+                    .label_text_color;
+                if let Some(price) =
+                    rendering::axes::crosshair_price_action(ui, tag, price, foreground)
+                {
                     self.right_click = Some(RightClickTarget::Background {
                         pos: tag.left_bottom(),
                         price,

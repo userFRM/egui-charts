@@ -21,6 +21,8 @@ pub struct IndicatorDialogConfig {
     pub hover_color: Color32,
     /// Fill of the selected row
     pub sel_color: Color32,
+    /// Text on the selected row, paired with `sel_color`
+    pub sel_text_color: Color32,
     /// Star of a favourite indicator
     pub favorite_color: Color32,
 }
@@ -37,6 +39,7 @@ impl IndicatorDialogConfig {
             muted_color: ui.text_secondary,
             hover_color: ui.btn_bg_hover,
             sel_color: ui.selection_bg,
+            sel_text_color: ui.selection_text,
             favorite_color: ui.warning,
             ..Self::default()
         }
@@ -57,6 +60,7 @@ impl IndicatorDialogConfig {
             muted_color: or(self.muted_color, themed.muted_color),
             hover_color: or(self.hover_color, themed.hover_color),
             sel_color: or(self.sel_color, themed.sel_color),
+            sel_text_color: or(self.sel_text_color, themed.sel_text_color),
             favorite_color: or(self.favorite_color, themed.favorite_color),
             ..self.clone()
         }
@@ -72,6 +76,7 @@ impl Default for IndicatorDialogConfig {
             muted_color: Color32::TRANSPARENT,
             hover_color: Color32::TRANSPARENT,
             sel_color: Color32::TRANSPARENT,
+            sel_text_color: Color32::TRANSPARENT,
             favorite_color: Color32::TRANSPARENT,
         }
     }

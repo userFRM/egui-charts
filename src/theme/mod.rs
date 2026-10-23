@@ -31,15 +31,12 @@ use egui::Color32;
 
 /// The colours and scales of the UI and the chart.
 ///
-/// With the `serde` feature, a theme serialises with any serde format, and fields
-/// missing from the input take their value from [`Theme::dark`]. Colours are egui's
-/// premultiplied `[r, g, b, a]` arrays.
+/// With the `serde` feature, a theme serialises with any serde format. The `dark`
+/// flag and both complete colour palettes are required; omitted text, spacing and
+/// radius scales use their defaults. Colours are egui's premultiplied `[r, g, b, a]`
+/// arrays.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Theme {
     /// Whether the UI is dark: selects egui's base visuals and the shadow strength.
     pub dark: bool,
@@ -48,10 +45,13 @@ pub struct Theme {
     /// Colours of the chart surface.
     pub chart: ChartColors,
     /// Type scale and chart text roles. Not applied to egui's text styles.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub text: TextSizes,
     /// Spacing scale.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub spacing: Spacing,
     /// Corner radius scale.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub radius: Radii,
 }
 
@@ -63,11 +63,7 @@ impl Default for Theme {
 
 /// Colours of the UI chrome.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UiColors {
     /// Panels, toolbars and inputs.
     pub panel_bg: Color32,
@@ -75,6 +71,8 @@ pub struct UiColors {
     pub panel_bg_secondary: Color32,
     /// Windows, menus, popups and tooltips.
     pub panel_bg_floating: Color32,
+    /// Scrim behind modal dialogs; transparent when the border alone separates them.
+    pub modal_overlay: Color32,
     /// Primary text.
     pub text: Color32,
     /// Secondary labels.
@@ -97,7 +95,7 @@ pub struct UiColors {
     pub selection_text: Color32,
     /// Keyboard focus ring.
     pub focus: Color32,
-    /// Fill of primary actions, and the colour of links and active icons.
+    /// Primary action fill and active icon colour; links derive a readable shade.
     pub accent: Color32,
     /// `accent` when hovered.
     pub accent_hover: Color32,
@@ -131,11 +129,7 @@ impl Default for UiColors {
 
 /// Colours of the chart surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChartColors {
     /// Plot background.
     pub bg: Color32,
@@ -322,34 +316,62 @@ impl Default for Radii {
 impl Theme {
     /// This theme with `accent` as its accent colour.
     ///
-    /// Also sets the colours derived from it: black or white `accent_text`, whichever
-    /// reads better on `accent`; hover and pressed shades 10% and 20% further from that
-    /// text colour; and the selection. Dark themes select with `accent` and white text
-    /// when white reads on it, else with `accent` darkened; light themes with a pale
-    /// `accent` over `panel_bg`. Text on the accent and the selection reads at 4.5:1 or
-    /// better, not the 7:1 of [`Theme::high_contrast`].
+    /// Also derives opaque hover and pressed shades at least 1.2:1 apart, black or
+    /// white text reading at 4.5:1 on every shade, a selection at least 1.3:1 from
+    /// the panel, and a light theme's focus ring. These overrides promise 4.5:1
+    /// text contrast rather than the high-contrast preset's 7:1.
     pub fn with_accent(mut self, accent: Color32) -> Self {
-        let white_text = contrast(Color32::WHITE, accent) >= contrast(Color32::BLACK, accent);
-        let (on_accent, away) = if white_text {
-            (Color32::WHITE, Color32::BLACK)
-        } else {
-            (Color32::BLACK, Color32::WHITE)
-        };
         let ui = &mut self.ui;
-        ui.accent = accent;
-        ui.accent_hover = accent.lerp_to_gamma(away, 0.1);
-        ui.accent_active = accent.lerp_to_gamma(away, 0.2);
-        ui.accent_text = on_accent;
-        (ui.selection_bg, ui.selection_text) = match (self.dark, white_text) {
-            (true, true) => (accent, Color32::WHITE),
-            // egui outlines a focused text input with the selection text, so it stays light.
-            (true, false) => (accent.lerp_to_gamma(Color32::BLACK, 0.6), Color32::WHITE),
-            (false, true) => (
-                ui.panel_bg.lerp_to_gamma(accent, 1.0 / 6.0),
-                ui.accent_active,
-            ),
-            (false, false) => (ui.panel_bg.lerp_to_gamma(accent, 1.0 / 6.0), ui.text),
+        let accent = ui.panel_bg.blend(accent);
+        let (on_accent, away) =
+            if contrast(Color32::WHITE, accent) >= contrast(Color32::BLACK, accent) {
+                (Color32::WHITE, Color32::BLACK)
+            } else {
+                (Color32::BLACK, Color32::WHITE)
+            };
+        // Near black or white, move towards the text instead so both steps have room.
+        let towards = if contrast(accent, away) >= 1.5 {
+            away
+        } else {
+            on_accent
         };
+        let shade = |fill: Color32| {
+            (1..=255)
+                .map(|step| fill.lerp_to_gamma(towards, step as f32 / 255.0))
+                .find(|&next| contrast(next, fill) >= 1.2 && contrast(on_accent, next) >= 4.5)
+                .unwrap_or(fill)
+        };
+        ui.accent = accent;
+        ui.accent_hover = shade(accent);
+        ui.accent_active = shade(ui.accent_hover);
+        ui.accent_text = on_accent;
+        ui.selection_text = if self.dark && ui.text == Color32::WHITE {
+            ui.text_secondary
+        } else if self.dark {
+            Color32::WHITE
+        } else {
+            Color32::BLACK
+        };
+        let selection = if self.dark {
+            accent
+        } else {
+            ui.panel_bg.lerp_to_gamma(accent, 1.0 / 6.0)
+        };
+        let selection = readable_color(selection, ui.text, &[ui.panel_bg], 1.3);
+        ui.selection_bg = readable_color(selection, ui.panel_bg, &[ui.selection_text], 4.5);
+        if !self.dark {
+            ui.focus = readable_color(
+                accent,
+                ui.text,
+                &[
+                    ui.panel_bg,
+                    ui.panel_bg_secondary,
+                    ui.panel_bg_floating,
+                    ui.btn_bg_hover,
+                ],
+                3.0,
+            );
+        }
         self
     }
 
@@ -379,6 +401,19 @@ pub(crate) fn contrast(fg: Color32, bg: Color32) -> f32 {
     };
     let (a, b) = (luminance(bg.blend(fg)), luminance(bg));
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Move `color` towards `text` only as far as needed to read on every background.
+pub(crate) fn readable_color(
+    color: Color32,
+    text: Color32,
+    backgrounds: &[Color32],
+    min: f32,
+) -> Color32 {
+    (0..=255)
+        .map(|step| color.lerp_to_gamma(text, step as f32 / 255.0))
+        .find(|&candidate| backgrounds.iter().all(|&bg| contrast(candidate, bg) >= min))
+        .unwrap_or(text)
 }
 
 /// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
@@ -411,8 +446,17 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     visuals.widgets.hovered.bg_fill = ui.btn_bg_hover;
     visuals.widgets.active.bg_fill = ui.btn_bg_active;
     visuals.widgets.open.bg_fill = ui.btn_bg_active;
-    // egui fills the top window's title bar, an open combo box and an open submenu button with it.
-    visuals.widgets.open.weak_bg_fill = ui.btn_bg_hover;
+    // Buttons, combo boxes and headers paint weak fills rather than bg_fill.
+    let widgets = &mut visuals.widgets;
+    for state in [
+        &mut widgets.noninteractive,
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        state.weak_bg_fill = state.bg_fill;
+    }
 
     // Widget borders
     visuals.widgets.noninteractive.bg_stroke =
@@ -424,12 +468,17 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
         egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control);
     visuals.widgets.active.bg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.accent);
 
+    visuals.widgets.open.bg_stroke =
+        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control);
+
     // Text/foreground colors
     visuals.widgets.noninteractive.fg_stroke =
         egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
+
+    visuals.widgets.open.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
 
     // Selection: egui paints selected labels in `selection.stroke`, on top of `bg_fill`, and
     // outlines a focused text input with `selection.stroke`. Dark themes use white on the accent,
@@ -443,7 +492,17 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     visuals.warn_fg_color = ui.warning;
 
     // Hyperlinks
-    visuals.hyperlink_color = ui.accent;
+    visuals.hyperlink_color = readable_color(
+        ui.accent,
+        ui.text,
+        &[
+            ui.panel_bg,
+            ui.panel_bg_floating,
+            ui.panel_bg_secondary,
+            ui.btn_bg_hover,
+        ],
+        7.0,
+    );
 
     // Floating chrome: hairline border, small radius and a tight shadow that stays close to
     // the surface instead of smearing over neighbouring toolbars.
@@ -516,6 +575,58 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn chart_theme_changes_keep_data_and_viewport_and_refresh_overlays() {
+        use crate::{
+            chart::selection::SeriesId,
+            model::{Bar, BarData},
+            widget::Chart,
+        };
+        let bars = vec![Bar::new(
+            chrono::DateTime::UNIX_EPOCH,
+            1.0,
+            2.0,
+            1.0,
+            2.0,
+            10.0,
+        )];
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let ctx = egui::Context::default();
+        let offset = chart.state().time_scale().right_offset();
+        for (_, theme) in presets() {
+            chart.set_theme(&ctx, &theme);
+            assert_eq!(chart.bars(SeriesId::MAIN), bars);
+            assert_eq!(chart.state().time_scale().right_offset(), offset);
+            assert_eq!(chart.config().background_color, theme.chart.bg);
+            let crosshair = chart.chart_options().crosshair.resolved(&ctx);
+            assert_eq!(
+                crosshair.label_background_color,
+                theme.chart.crosshair_label_bg
+            );
+            assert_eq!(crosshair.label_text_color, theme.chart.crosshair_label_text);
+            let tooltip = chart.chart_options().tooltip.resolved(&ctx);
+            assert_eq!(tooltip.background_color, theme.chart.bg_tooltip);
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn partial_light_palettes_are_rejected_instead_of_mixing_presets() {
+        let partial = serde_json::json!({"dark": false, "ui": {
+            "panel_bg": [255, 255, 255, 255],
+            "panel_bg_floating": [255, 255, 255, 255],
+            "text": [19, 23, 34, 255]
+        }});
+        assert!(serde_json::from_value::<Theme>(partial).is_err());
+        for (_, theme) in presets() {
+            let mut saved = serde_json::to_value(&theme).unwrap();
+            for scale in ["text", "spacing", "radius"] {
+                saved.as_object_mut().unwrap().remove(scale);
+            }
+            assert_eq!(serde_json::from_value::<Theme>(saved).unwrap(), theme);
+        }
+    }
+
     #[cfg(feature = "serde")]
     #[test]
     fn saved_text_roles_default_when_missing_and_keep_overrides_when_scaled() {
@@ -528,7 +639,8 @@ mod tests {
             ("bottom_bar", 14.0),
         ] {
             for override_size in [None, Some(19.0)] {
-                let mut saved = serde_json::json!({"text": {"body": 17.0}});
+                let mut saved = serde_json::to_value(Theme::dark()).unwrap();
+                saved["text"] = serde_json::json!({"body": 17.0});
                 if let Some(size) = override_size {
                     saved["text"][role] = serde_json::json!(size);
                 }
@@ -598,7 +710,6 @@ mod tests {
             ("separator", dark.ui.border, [42, 42, 42]),
             ("text", dark.ui.text, [219, 219, 219]),
             ("secondary text", dark.ui.text_secondary, [184, 184, 184]),
-            ("muted text", dark.ui.text_muted, [112, 112, 112]),
             ("disabled text", dark.ui.text_disabled, [87, 87, 87]),
             ("price text", dark.chart.axis_text, [255, 255, 255]),
             (
@@ -609,7 +720,7 @@ mod tests {
             ("grid", dark.chart.grid_line, [34, 34, 34]),
             ("up candle", dark.chart.candle_up, [8, 153, 129]),
             ("down candle", dark.chart.candle_down, [242, 54, 69]),
-            ("active toggle", dark.ui.accent, [49, 121, 245]),
+            ("active toggle", dark.ui.accent, [41, 98, 255]),
         ] {
             assert_eq!(
                 actual,
@@ -636,6 +747,20 @@ mod tests {
                 Theme::light().with_accent(purple),
             ),
         ]);
+        for (name, base) in presets() {
+            for (accent_name, accent) in [
+                ("white", Color32::WHITE),
+                ("black", Color32::BLACK),
+                ("yellow", Color32::YELLOW),
+                ("blue", Color32::BLUE),
+                ("navy", Color32::from_rgb(10, 10, 30)),
+            ] {
+                themes.push((
+                    format!("{name}, {accent_name} accent"),
+                    base.clone().with_accent(accent),
+                ));
+            }
+        }
         let focus_ring_of = |ctx: &egui::Context| {
             let mut focus_ring = Color32::TRANSPARENT;
             ctx.run_ui(Default::default(), |ui| {
@@ -661,6 +786,23 @@ mod tests {
                 assert!(contrast(fg, theme.chart.bg) >= 4.5, "{name}: {role}");
             }
             assert_eq!(visuals.widgets.noninteractive.fg_stroke.color, ui.text);
+            for (state, fill) in [
+                (&visuals.widgets.noninteractive, ui.panel_bg),
+                (&visuals.widgets.inactive, ui.panel_bg),
+                (&visuals.widgets.hovered, ui.btn_bg_hover),
+                (&visuals.widgets.active, ui.btn_bg_active),
+                (&visuals.widgets.open, ui.btn_bg_active),
+            ] {
+                assert_eq!(state.weak_bg_fill, fill, "{name}: widget fill");
+            }
+            assert_eq!(visuals.widgets.open.fg_stroke.color, ui.text);
+            let settings = SettingsDialogStyle::from_theme(&theme);
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                crate::ui::timeframe_toolbar::TimeframeBarConfig::from_theme(&theme)
+                    .active_text_color,
+                ui.text
+            );
             let focus_ring = focus_ring_of(&ctx);
             // High contrast holds every text level to 7:1 and outlines to 4.5:1 (WCAG AAA).
             let (text_min, outline_min) = if name == "high-contrast" {
@@ -688,13 +830,7 @@ mod tests {
                 ("hovered accent", ui.accent_hover),
                 ("pressed accent", ui.accent_active),
             ] {
-                // The dark preset's specified active blue reads at 4.05:1 with white.
-                let min = if name == "dark" && fill == "accent" {
-                    4.0
-                } else {
-                    text_min
-                };
-                check("on-accent text", ui.accent_text, fill, bg, min);
+                check("on-accent text", ui.accent_text, fill, bg, text_min);
             }
             for (fill, bg) in [
                 ("danger", ui.danger_bg),
@@ -704,16 +840,66 @@ mod tests {
                 check("on-danger text", ui.danger_text, fill, bg, text_min);
             }
             // Hover must read on a panel, and pressed must sit further from it than hover.
-            let (panel, hovered) = (visuals.panel_fill, visuals.widgets.hovered.bg_fill);
+            let (panel, hovered) = (visuals.panel_fill, visuals.widgets.hovered.weak_bg_fill);
             check("hover fill", hovered, "panels", panel, 1.2);
             let pressed_min = contrast(hovered, panel) + 0.05;
             check(
                 "pressed fill",
-                visuals.widgets.active.bg_fill,
+                visuals.widgets.active.weak_bg_fill,
                 "panels",
                 panel,
                 pressed_min,
             );
+            check(
+                "pressed fill",
+                visuals.widgets.active.weak_bg_fill,
+                "hover fill",
+                hovered,
+                1.2,
+            );
+            check(
+                "pressed text",
+                ui.text,
+                "pressed fill",
+                ui.btn_bg_active,
+                text_min,
+            );
+            check(
+                "active settings text",
+                settings.tab_text_active,
+                "pressed fill",
+                settings.tab_bg_active,
+                text_min,
+            );
+            check(
+                "active settings icon",
+                settings.tab_icon_active,
+                "pressed fill",
+                settings.tab_bg_active,
+                outline_min,
+            );
+            for (role, stroke) in [
+                ("open outline", visuals.widgets.open.bg_stroke),
+                ("settings input", settings.input_border),
+                ("settings hovered input", settings.input_border_hover),
+                ("settings dropdown", settings.dropdown_border),
+                ("settings checkbox", settings.checkbox_border),
+                ("settings secondary button", settings.btn_secondary_border),
+            ] {
+                check(role, stroke.color, "panels", panel, outline_min);
+            }
+            if name.contains("accent") {
+                check("selection fill", ui.selection_bg, "panels", panel, 1.3);
+                check("accent hover", ui.accent_hover, "accent", ui.accent, 1.2);
+                check(
+                    "accent pressed",
+                    ui.accent_active,
+                    "accent hover",
+                    ui.accent_hover,
+                    1.2,
+                );
+                assert_ne!(ui.selection_text, ui.text, "{name}: selected glyphs");
+            }
             // egui outlines a focused text input with the selection stroke.
             check(
                 "focused input outline",
@@ -725,11 +911,13 @@ mod tests {
             for (surface, bg) in [
                 ("panels", visuals.panel_fill),
                 ("windows", visuals.window_fill),
+                ("secondary panels", ui.panel_bg_secondary),
+                ("hover fill", ui.btn_bg_hover),
             ] {
+                check("links", visuals.hyperlink_color, surface, bg, 7.0);
                 check("text", ui.text, surface, bg, text_min);
                 check("label text", visuals.text_color(), surface, bg, text_min);
-                // The dark preset reserves its specified #707070 for supplemental text.
-                if !name.starts_with("dark") {
+                {
                     check("muted text", ui.text_muted, surface, bg, text_min);
                     check(
                         "weak text",
@@ -739,6 +927,7 @@ mod tests {
                         text_min,
                     );
                 }
+                check("success text", ui.success, surface, bg, text_min);
                 check("error text", visuals.error_fg_color, surface, bg, text_min);
                 check("warning text", visuals.warn_fg_color, surface, bg, text_min);
                 check(

@@ -6,6 +6,7 @@
 use super::ChartView;
 use crate::drawings::domain::Drawing;
 use crate::styles::{stroke, typography};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -359,11 +360,8 @@ impl Drawing {
             let width = rect.width();
             let [width_label, height_label] =
                 <[String; 2]>::try_from(self.size_labels(&|_| 0.0)).unwrap_or_default();
-            let label_bg = DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.8);
+            let chart = painter.ctx().active_theme().chart;
+            let label_bg = chart.bg_axis;
 
             // Width label (bottom center)
             if width > 50.0 {
@@ -373,7 +371,7 @@ impl Drawing {
                     egui::Align2::CENTER_CENTER,
                     width_label_pos,
                     width_label,
-                    middle_color,
+                    chart.axis_text,
                     label_bg,
                 );
             }
@@ -385,7 +383,7 @@ impl Drawing {
                     egui::Align2::LEFT_CENTER,
                     Pos2::new(rect.max.x + typography::XS, rect.center().y),
                     height_label,
-                    middle_color,
+                    chart.axis_text,
                     label_bg,
                 );
             }
@@ -664,6 +662,36 @@ pub(super) fn arc_points(center: Pos2, edge: Pos2) -> Vec<Pos2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rectangle_size_labels_use_the_active_theme_pair() {
+        use crate::{
+            drawings::DrawingToolType,
+            theme::{apply_to_egui, presets},
+        };
+        let ctx = egui::Context::default();
+        let mut drawing = Drawing::new(1, DrawingToolType::Rect);
+        drawing.add_point(Pos2::new(100.0, 100.0));
+        drawing.add_point(Pos2::new(300.0, 300.0));
+        for (_, theme) in presets() {
+            apply_to_egui(&ctx, &theme);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                drawing.render_rect(ui.painter(), drawing.color32(), drawing.stroke());
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.sections[0].format.color),
+                    _ => None,
+                })
+                .collect();
+            let fills = output.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == theme.chart.bg_axis)).count();
+            output.drop_without_applying_deltas();
+            assert_eq!(labels, vec![theme.chart.axis_text; 2]);
+            assert_eq!(fills, 2);
+        }
+    }
 
     /// In a pane from (0, 0) to (1000, 600), a ray from (500, 100) moving 100 px across and
     /// 50 px down per step reaches the right edge after 5 steps at y = 350, and moving 100 px
