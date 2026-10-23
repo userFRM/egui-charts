@@ -47,7 +47,7 @@ pub struct Theme {
     pub ui: UiColors,
     /// Colours of the chart surface.
     pub chart: ChartColors,
-    /// Type scale. Not yet applied to egui's text styles.
+    /// Type scale and chart text roles. Not applied to egui's text styles.
     pub text: TextSizes,
     /// Spacing scale.
     pub spacing: Spacing,
@@ -184,6 +184,9 @@ impl ChartColors {
 }
 
 /// Font sizes, in points.
+///
+/// Components choose which role to use; setting a role does not change egui's text styles.
+/// Use `..Default::default()` in struct literals to keep defaults for the other roles.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(
     feature = "serde",
@@ -203,10 +206,24 @@ pub struct TextSizes {
     pub title: f32,
     /// Section headings.
     pub heading: f32,
+    /// In-pane chart title, independently of its OHLC values.
+    pub chart_title: f32,
+    /// Toolbar labels, including Save.
+    pub toolbar: f32,
+    /// OHLC values and supplementary legend rows.
+    pub ohlc: f32,
+    /// Price and time axis labels.
+    pub axis: f32,
+    /// Price tags on the axis.
+    pub price_tag: f32,
+    /// Bottom range and status bar labels.
+    pub bottom_bar: f32,
 }
 
 impl Default for TextSizes {
     fn default() -> Self {
+        use crate::styles::typography;
+
         Self {
             tiny: 10.0,
             small: 11.0,
@@ -214,6 +231,12 @@ impl Default for TextSizes {
             body: 13.0,
             title: 14.0,
             heading: 16.0,
+            chart_title: typography::CHART_TITLE,
+            toolbar: typography::TOOLBAR,
+            ohlc: typography::OHLC,
+            axis: typography::AXIS,
+            price_tag: typography::PRICE_TAG,
+            bottom_bar: typography::BOTTOM_BAR,
         }
     }
 }
@@ -228,6 +251,12 @@ impl TextSizes {
             body: self.body * factor,
             title: self.title * factor,
             heading: self.heading * factor,
+            chart_title: self.chart_title * factor,
+            toolbar: self.toolbar * factor,
+            ohlc: self.ohlc * factor,
+            axis: self.axis * factor,
+            price_tag: self.price_tag * factor,
+            bottom_bar: self.bottom_bar * factor,
         }
     }
 }
@@ -486,6 +515,36 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn saved_text_roles_default_when_missing_and_keep_overrides_when_scaled() {
+        for (role, default) in [
+            ("chart_title", 16.0),
+            ("toolbar", 14.0),
+            ("ohlc", 13.0),
+            ("axis", 12.0),
+            ("price_tag", 12.0),
+            ("bottom_bar", 14.0),
+        ] {
+            for override_size in [None, Some(19.0)] {
+                let mut saved = serde_json::json!({"text": {"body": 17.0}});
+                if let Some(size) = override_size {
+                    saved["text"][role] = serde_json::json!(size);
+                }
+                let mut theme: Theme = serde_json::from_value(saved).unwrap();
+                theme.text = theme.text.scaled(1.5);
+                let saved = serde_json::to_value(&theme).unwrap();
+                assert_eq!(
+                    saved["text"][role],
+                    serde_json::json!(override_size.unwrap_or(default) * 1.5),
+                    "{role}: {override_size:?}"
+                );
+                assert_eq!(saved["text"]["body"], serde_json::json!(25.5));
+                assert_eq!(serde_json::from_value::<Theme>(saved).unwrap(), theme);
+            }
+        }
+    }
 
     #[test]
     fn bundled_font_keeps_prices_tabular() {

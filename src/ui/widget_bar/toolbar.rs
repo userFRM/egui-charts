@@ -31,7 +31,7 @@ impl RightBarIcon {
     pub fn icon(&self) -> &'static Icon {
         match self {
             RightBarIcon::Alerts => &embedded_icons::WIDGET_BAR_ALERTS,
-            RightBarIcon::ObjectTree => &embedded_icons::OBJECT_TREE,
+            RightBarIcon::ObjectTree => &embedded_icons::WIDGET_BAR_LAYERS,
             RightBarIcon::Help => &embedded_icons::WIDGET_BAR_HELP,
         }
     }
@@ -56,9 +56,9 @@ impl RightBarIcon {
 /// Configuration for the right icon bar (exact dimensions)
 #[derive(Clone, Debug)]
 pub struct WidgetBarConfig {
-    /// Bar width - 52px
+    /// Bar width, 45px by default.
     pub width: f32,
-    /// Button size - 44x44 buttons
+    /// Square button size, 44px by default.
     pub btn_size: f32,
     /// Icon size inside the button
     pub icon_size: f32,
@@ -75,16 +75,28 @@ pub struct WidgetBarConfig {
 impl Default for WidgetBarConfig {
     fn default() -> Self {
         Self {
-            // Exact dimensions
-            width: DESIGN_TOKENS.sizing.toolbar.right_sidebar_width, // 52px
-            btn_size: DESIGN_TOKENS.sizing.toolbar.right_btn_size,   // 44px
-            icon_size: icon_sizes::MD,                               // 20px, as in the top toolbar
-            btn_spacing: DESIGN_TOKENS.sizing.toolbar.right_btn_spacing, // 2px
+            width: 45.0,
+            btn_size: DESIGN_TOKENS.sizing.toolbar.right_btn_size,
+            icon_size: icon_sizes::TOOLBAR,
+            btn_spacing: DESIGN_TOKENS.sizing.toolbar.right_btn_spacing,
             hover_margin: DESIGN_TOKENS.sizing.toolbar.right_hover_margin, // 3px
             hover_rounding: DESIGN_TOKENS.sizing.toolbar.right_hover_rounding, // 8px
-            top_padding: DESIGN_TOKENS.spacing.md,
+            top_padding: 4.0,
         }
     }
+}
+
+/// A host-supplied widget entry. The host renders its panel after receiving its id.
+#[derive(Clone)]
+pub struct WidgetBarWidget {
+    /// Stable host id, unique within the bar.
+    pub id: u64,
+    /// Icon drawn using the same size and tint as the built-in entries.
+    pub icon: Icon,
+    /// Tooltip and accessible name.
+    pub tooltip: String,
+    /// Host entries precede the built-in entries in their section.
+    pub section: WidgetBarSection,
 }
 
 /// Action returned by the right icon bar
@@ -92,6 +104,8 @@ impl Default for WidgetBarConfig {
 pub enum WidgetBarAction {
     None,
     Clicked(RightBarIcon),
+    /// A host widget was clicked, including when it was toggled closed.
+    WidgetClicked(u64),
 }
 
 /// Right Edge Icon Bar
@@ -99,6 +113,10 @@ pub struct WidgetBar {
     pub config: WidgetBarConfig,
     pub icons: Vec<RightBarIcon>,
     pub active_icon: Option<RightBarIcon>,
+    /// Host widget entries, empty until the host supplies them.
+    pub widgets: Vec<WidgetBarWidget>,
+    /// Active host widget. Selecting a built-in entry clears it, and vice versa.
+    pub active_widget: Option<u64>,
     pub notification_counts: std::collections::HashMap<RightBarIcon, u32>,
     /// Controls the host hid.
     hidden: HashSet<Control>,
@@ -124,6 +142,8 @@ impl Default for WidgetBar {
                 RightBarIcon::Help,
             ],
             active_icon: None,
+            widgets: Vec::new(),
+            active_widget: None,
             notification_counts: std::collections::HashMap::new(),
             hidden: HashSet::new(),
         }
@@ -152,130 +172,134 @@ impl WidgetBar {
         self.notification_counts.insert(icon, count);
     }
 
-    /// Show the icon bar - colors fetched from ui context at render time
-    /// Uses section grouping and flexible spacer
+    /// Show the bar, keeping the bottom section at the foot and scrolling if it cannot fit.
+    /// Host widget clicks return their id; the host owns the corresponding panel contents.
     pub fn show(&mut self, ui: &mut Ui) -> WidgetBarAction {
         let mut action = WidgetBarAction::None;
-
-        // Get colors from theme at render time (not cached)
-        let bg_color = ui.style().visuals.panel_fill;
-        let icon_color = ui.visuals().widgets.noninteractive.fg_stroke.color;
-        let icon_hover_color = ui.visuals().widgets.hovered.fg_stroke.color;
-        let active_color = ui.active_theme().ui.accent;
-        let hover_bg = ui.visuals().widgets.hovered.bg_fill;
-        let pressed_bg = ui.visuals().widgets.active.bg_fill;
-        let error_color = ui.style().visuals.error_fg_color;
-        let separator_color = ui.style().visuals.widgets.noninteractive.bg_fill;
-
-        let available_height = ui.available_height();
-        let (response, painter) = ui.allocate_painter(
-            Vec2::new(self.config.width, available_height),
-            Sense::hover(),
-        );
-        let rect = response.rect;
-
-        // Background with panel rounding to match outer frame (with visibility check)
-        if ui.is_rect_visible(rect) {
-            painter.rect_filled(rect, DESIGN_TOKENS.rounding.panel, bg_color);
+        ui.scope(|ui| {
+            ui.spacing_mut().scroll.floating = true;
+            egui::ScrollArea::vertical()
+                .id_salt("widget_bar")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let count = self
+                        .icons
+                        .iter()
+                        .filter(|&&i| control(i).is_none_or(|c| !self.hidden.contains(&c)))
+                        .count()
+                        + self.widgets.len();
+                    let pitch = self.config.btn_size + self.config.btn_spacing;
+                    let height = ui.available_height().max(
+                        self.config.top_padding + count as f32 * pitch + DESIGN_TOKENS.spacing.lg,
+                    );
+                    let (rect, _) = ui
+                        .allocate_exact_size(Vec2::new(self.config.width, height), Sense::hover());
+                    let painter = ui.painter().clone();
+                    painter.rect_filled(
+                        rect,
+                        DESIGN_TOKENS.rounding.panel,
+                        ui.visuals().panel_fill,
+                    );
+                    let mut y = rect.top() + self.config.top_padding;
+                    for section in [WidgetBarSection::Top, WidgetBarSection::Bottom] {
+                        if section == WidgetBarSection::Bottom {
+                            let count =
+                                self.icons.iter().filter(|i| i.section() == section).count()
+                                    + self.widgets.iter().filter(|w| w.section == section).count();
+                            y = y.max(
+                                rect.bottom() - count as f32 * pitch - DESIGN_TOKENS.spacing.md,
+                            );
+                            let sep = Rect::from_min_size(
+                                Pos2::new(rect.left() + 8.0, y),
+                                Vec2::new(self.config.width - 16.0, 1.0),
+                            );
+                            painter.rect_filled(sep, 0.0, ui.active_theme().ui.border);
+                            y += 1.0 + DESIGN_TOKENS.spacing.md;
+                        }
+                        for widget in self.widgets.iter().filter(|w| w.section == section) {
+                            let id = ui.scope_id().with(("host_widget", widget.id));
+                            let response = self.render_icon_button(
+                                ui,
+                                id,
+                                &widget.icon,
+                                &widget.tooltip,
+                                self.active_widget == Some(widget.id),
+                                0,
+                                rect.center().x,
+                                y,
+                            );
+                            if response.clicked() {
+                                action = WidgetBarAction::WidgetClicked(widget.id);
+                            }
+                            y += pitch;
+                        }
+                        for icon in self
+                            .icons
+                            .iter()
+                            .filter(|i| i.section() == section)
+                            .filter(|&&i| control(i).is_none_or(|c| !self.hidden.contains(&c)))
+                        {
+                            let id = ui.scope_id().with(("built_in", icon));
+                            let response = self.render_icon_button(
+                                ui,
+                                id,
+                                icon.icon(),
+                                icon.tooltip(),
+                                self.active_icon == Some(*icon),
+                                self.notification_counts.get(icon).copied().unwrap_or(0),
+                                rect.center().x,
+                                y,
+                            );
+                            if response.clicked() {
+                                action = WidgetBarAction::Clicked(*icon);
+                            }
+                            y += pitch;
+                        }
+                    }
+                });
+        });
+        match action {
+            WidgetBarAction::Clicked(icon) => {
+                self.active_icon = if self.active_icon == Some(icon) {
+                    None
+                } else {
+                    Some(icon)
+                };
+                self.active_widget = None;
+            }
+            WidgetBarAction::WidgetClicked(id) => {
+                self.active_widget = if self.active_widget == Some(id) {
+                    None
+                } else {
+                    Some(id)
+                };
+                self.active_icon = None;
+            }
+            WidgetBarAction::None => {}
         }
-
-        let mut y = rect.min.y + self.config.top_padding;
-        let center_x = rect.center().x;
-
-        // Separate icons into sections
-        let top_icons: Vec<_> = self
-            .icons
-            .iter()
-            .filter(|i| i.section() == WidgetBarSection::Top)
-            .filter(|&&i| control(i).is_none_or(|c| !self.hidden.contains(&c)))
-            .copied()
-            .collect();
-        let bottom_icons: Vec<_> = self
-            .icons
-            .iter()
-            .filter(|i| i.section() == WidgetBarSection::Bottom)
-            .copied()
-            .collect();
-
-        // Calculate space needed for bottom section
-        let bottom_section_height = (bottom_icons.len() as f32)
-            * (self.config.btn_size + self.config.btn_spacing)
-            + DESIGN_TOKENS.spacing.lg; // separator + padding
-
-        // Render top section icons (Alerts, ObjectTree)
-        for icon in &top_icons {
-            y = self.render_icon_button(
-                ui,
-                &painter,
-                icon,
-                center_x,
-                y,
-                &mut action,
-                icon_color,
-                icon_hover_color,
-                active_color,
-                hover_bg,
-                pressed_bg,
-                error_color,
-            );
-        }
-
-        // Flexible spacer BETWEEN top and bottom sections
-        let remaining_space = rect.max.y - y - bottom_section_height;
-        if remaining_space > 0.0 {
-            y += remaining_space;
-        }
-
-        // Draw separator before bottom section (with visibility check)
-        let sep_margin = DESIGN_TOKENS.sizing.toolbar.separator_margin;
-        let sep_width = self.config.width - sep_margin * 2.0;
-        let sep_height = DESIGN_TOKENS.sizing.toolbar.separator_width;
-        let sep_rect = Rect::from_min_size(
-            Pos2::new(rect.min.x + sep_margin, y),
-            Vec2::new(sep_width, sep_height),
-        );
-        if ui.is_rect_visible(sep_rect) {
-            painter.rect_filled(sep_rect, DESIGN_TOKENS.rounding.none, separator_color);
-        }
-        y += sep_height + DESIGN_TOKENS.spacing.md;
-
-        // Render bottom section icons (Help)
-        for icon in &bottom_icons {
-            y = self.render_icon_button(
-                ui,
-                &painter,
-                icon,
-                center_x,
-                y,
-                &mut action,
-                icon_color,
-                icon_hover_color,
-                active_color,
-                hover_bg,
-                pressed_bg,
-                error_color,
-            );
-        }
-
         action
     }
 
     /// Render a single icon button with hover rect
     fn render_icon_button(
-        &mut self,
+        &self,
         ui: &mut Ui,
-        painter: &egui::Painter,
-        icon: &RightBarIcon,
+        id: egui::Id,
+        icon: &Icon,
+        tooltip: &str,
+        is_active: bool,
+        count: u32,
         center_x: f32,
         y: f32,
-        action: &mut WidgetBarAction,
-        icon_color: egui::Color32,
-        icon_hover_color: egui::Color32,
-        active_color: egui::Color32,
-        hover_bg: egui::Color32,
-        pressed_bg: egui::Color32,
-        error_color: egui::Color32,
-    ) -> f32 {
+    ) -> egui::Response {
+        let painter = ui.painter().clone();
+        let theme = ui.active_theme();
+        let icon_color = theme.ui.text;
+        let icon_hover_color = theme.ui.text;
+        let active_color = theme.ui.accent;
+        let hover_bg = theme.ui.btn_bg_hover;
+        let pressed_bg = theme.ui.btn_bg_active;
+        let error_color = theme.ui.error;
         let btn_rect = Rect::from_center_size(
             Pos2::new(center_x, y + self.config.btn_size / 2.0),
             Vec2::splat(self.config.btn_size),
@@ -294,11 +318,10 @@ impl WidgetBar {
         );
 
         // Check for clicks
-        let btn_res = ui.allocate_rect(btn_rect, Sense::click());
+        let btn_res = ui.interact(btn_rect, id, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &btn_res);
         let is_hovered = btn_res.hovered();
         let is_pressed = btn_res.is_pointer_button_down_on();
-        let is_active = self.active_icon == Some(*icon);
 
         // Button background on inner rect only - with visibility check
         if ui.is_rect_visible(hover_rect) {
@@ -324,15 +347,12 @@ impl WidgetBar {
         let icon_rect =
             Rect::from_center_size(btn_rect.center(), Vec2::splat(self.config.icon_size));
         if ui.is_rect_visible(icon_rect) {
-            icon.icon()
-                .as_image_tinted(Vec2::splat(self.config.icon_size), curr_icon_color)
+            icon.as_image_tinted(Vec2::splat(self.config.icon_size), curr_icon_color)
                 .paint_at(ui, icon_rect);
         }
 
         // Notification badge (with visibility check)
-        if let Some(&count) = self.notification_counts.get(icon)
-            && count > 0
-        {
+        if count > 0 {
             let badge_radius = DESIGN_TOKENS.spacing.md;
             let badge_pos = Pos2::new(btn_rect.max.x - badge_radius, btn_rect.min.y + badge_radius);
             let badge_rect = Rect::from_center_size(badge_pos, Vec2::splat(badge_radius * 2.0));
@@ -361,19 +381,173 @@ impl WidgetBar {
             }
         }
 
-        // Handle click
-        if btn_res.clicked() {
-            self.active_icon = if is_active { None } else { Some(*icon) };
-            *action = WidgetBarAction::Clicked(*icon);
-        }
-
         // The bar is at the window's right edge, so the tooltip opens to the left, clear of the
         // next button. Unlike `on_hover_text`, `Tooltip` does not name the button.
-        btn_res.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, icon.tooltip()));
-        let mut tooltip = egui::Tooltip::for_enabled(&btn_res);
-        tooltip.popup = tooltip.popup.align(egui::RectAlign::LEFT);
-        tooltip.show(|ui| ui.label(icon.tooltip()));
+        btn_res.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
+        let mut tip = egui::Tooltip::for_enabled(&btn_res);
+        tip.popup = tip.popup.align(egui::RectAlign::LEFT);
+        tip.show(|ui| ui.label(tooltip));
 
-        y + self.config.btn_size + self.config.btn_spacing
+        btn_res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{Theme, apply_to_egui};
+    use egui::{Context, Event, PointerButton, RawInput, Shape};
+
+    /// Host entries share the rail's grid and report their ids, without leaving a built-in
+    /// entry selected. Clicks stay with the pressed id, and an active entry toggles closed.
+    #[test]
+    fn host_widgets_share_the_grid_and_report_their_own_clicks() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for height in [900.0, 450.0] {
+                let ctx = Context::default();
+                egui_extras::install_image_loaders(&ctx);
+                apply_to_egui(&ctx, &theme);
+                let mut bar = WidgetBar::new();
+                assert_eq!(bar.config.width, 45.0);
+                bar.widgets = vec![
+                    WidgetBarWidget {
+                        id: 42,
+                        icon: embedded_icons::WATCHLIST,
+                        tooltip: "Watchlist".into(),
+                        section: WidgetBarSection::Top,
+                    },
+                    WidgetBarWidget {
+                        id: 7,
+                        icon: embedded_icons::WIDGET_BAR_CALENDAR,
+                        tooltip: "Calendar".into(),
+                        section: WidgetBarSection::Bottom,
+                    },
+                ];
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                let frame = |bar: &mut WidgetBar, events| {
+                    let mut origin = Pos2::ZERO;
+                    let mut action = WidgetBarAction::None;
+                    let mut output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(45.0, height),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            origin = ui.cursor().min;
+                            action = bar.show(ui);
+                        },
+                    );
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    (action, shapes, origin)
+                };
+                frame(&mut bar, vec![]);
+                let (_, shapes, origin) = frame(&mut bar, vec![]);
+                let icons: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Rect(r) if r.brush.is_some() => Some(r.rect),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(icons.len(), 5);
+                for icon in &icons {
+                    assert_eq!(icon.size(), Vec2::splat(28.0));
+                    assert!(
+                        (icon.center().x - origin.x - 22.5).abs() <= 0.5,
+                        "icon {icon:?}, origin {origin:?}"
+                    );
+                    assert!(icon.top() >= 0.0 && icon.bottom() <= height);
+                }
+                assert_eq!(icons[0].center().y, origin.y + 26.0);
+                assert_eq!(icons[1].center().y - icons[0].center().y, 46.0);
+                for (index, action, active_icon, active_widget) in [
+                    (0, WidgetBarAction::WidgetClicked(42), None, Some(42)),
+                    (
+                        1,
+                        WidgetBarAction::Clicked(RightBarIcon::Alerts),
+                        Some(RightBarIcon::Alerts),
+                        None,
+                    ),
+                    (3, WidgetBarAction::WidgetClicked(7), None, Some(7)),
+                    (3, WidgetBarAction::WidgetClicked(7), None, None),
+                ] {
+                    let pos = icons[index].center();
+                    frame(&mut bar, vec![Event::PointerMoved(pos)]);
+                    frame(&mut bar, vec![button(pos, true)]);
+                    let (got, ..) = frame(&mut bar, vec![button(pos, false)]);
+                    assert_eq!(got, action);
+                    assert_eq!(
+                        (bar.active_icon, bar.active_widget),
+                        (active_icon, active_widget)
+                    );
+                }
+                let pos = icons[0].center();
+                frame(&mut bar, vec![Event::PointerMoved(pos)]);
+                frame(&mut bar, vec![button(pos, true)]);
+                bar.widgets[0].id = 99;
+                let (action, ..) = frame(&mut bar, vec![button(pos, false)]);
+                assert_eq!(
+                    action,
+                    WidgetBarAction::None,
+                    "a replacement is not the pressed entry"
+                );
+
+                bar.widgets.extend((100..120).map(|id| WidgetBarWidget {
+                    id,
+                    icon: embedded_icons::WATCHLIST,
+                    tooltip: format!("Panel {id}"),
+                    section: WidgetBarSection::Top,
+                }));
+                frame(&mut bar, vec![]);
+                frame(
+                    &mut bar,
+                    vec![Event::PointerMoved(Pos2::new(22.0, height / 2.0))],
+                );
+                frame(
+                    &mut bar,
+                    vec![Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: Vec2::new(0.0, -2000.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Wheel,
+                        modifiers: Default::default(),
+                    }],
+                );
+                for _ in 0..30 {
+                    frame(&mut bar, vec![]);
+                }
+                let (_, shapes, _) = frame(&mut bar, vec![]);
+                let help = shapes
+                    .iter()
+                    .rev()
+                    .find_map(|s| match &s.shape {
+                        Shape::Rect(r) if r.brush.is_some() => Some(r.rect),
+                        _ => None,
+                    })
+                    .expect("help remains reachable by scrolling");
+                assert!(
+                    help.top() >= 0.0 && help.bottom() <= height,
+                    "help: {help:?}"
+                );
+                let pos = help.center();
+                frame(&mut bar, vec![Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    let (action, ..) = frame(&mut bar, vec![button(pos, pressed)]);
+                    if !pressed {
+                        assert_eq!(action, WidgetBarAction::Clicked(RightBarIcon::Help));
+                    }
+                }
+            }
+        }
     }
 }

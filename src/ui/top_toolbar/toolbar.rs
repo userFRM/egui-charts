@@ -1,21 +1,19 @@
 //! Top Toolbar Widget
 //!
 //! The symbol search pill, interval and chart type dropdowns, indicators, alert, replay,
-//! undo and redo on the left; theme, layouts, save, search, settings, fullscreen and screenshot
+//! undo and redo on the left; layouts, save, settings, fullscreen and screenshot
 //! on the right. When the strip is too narrow, Indicators, Alert and Replay
 //! lose their labels, then the least important controls move into an overflow menu at the right.
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::ThemeExt;
-use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
+use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::list_item::ListItem;
 use egui::Ui;
 
-use crate::ext::UiExt;
-
 use super::{
     actions::TopToolbarAction,
-    buttons::{TextIconButton, ToolbarIconButton, Trigger},
+    buttons::{IconTextButton, TextIconButton, ToolbarIconButton, Trigger},
     components::{
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
         layout_menu::{LayoutAction, LayoutMenu},
@@ -65,21 +63,22 @@ const LEFT: &[&[Slot]] = &[
 
 /// Right-aligned part of the strip, in groups divided by separators.
 const RIGHT: &[&[Slot]] = &[
-    &[S::Theme, S::Layouts, S::Save],
-    &[S::QuickSearch, S::Settings, S::Fullscreen, S::Screenshot],
+    &[S::Layouts, S::Save],
+    &[S::Settings, S::Fullscreen, S::Screenshot],
 ];
 
 /// Controls that move into the overflow menu when the strip is too narrow, the first to go
-/// first. Quick search opens the same dialog as the symbol pill.
-const OVERFLOW_ORDER: [Slot; 8] = [
+/// first.
+const OVERFLOW_ORDER: [Slot; 9] = [
     S::Compare,
     S::Templates,
     S::Save,
     S::Layouts,
     S::Screenshot,
     S::Fullscreen,
-    S::QuickSearch,
-    S::Theme,
+    S::Alert,
+    S::Indicators,
+    S::Settings,
 ];
 
 /// Space between the controls of a group.
@@ -87,20 +86,23 @@ fn gap() -> f32 {
     DESIGN_TOKENS.spacing.sm
 }
 
-/// Width of `UiExt::toolbar_separator` with its padding.
+/// Width of the group rule with its padding.
 fn separator() -> f32 {
-    2.0 * DESIGN_TOKENS.spacing.xl + DESIGN_TOKENS.sizing.toolbar.separator_width
+    2.0 * gap() + DESIGN_TOKENS.sizing.toolbar.separator_width
 }
 
-/// Width of a kit icon-and-text button: 12 px padding on each side of a 20 px icon, a 4 px
-/// gap and the laid-out label.
-fn labelled_button_width(ui: &Ui, label: &str) -> f32 {
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER);
-    let spacing = &DESIGN_TOKENS.spacing;
-    2.0 * spacing.xl + DESIGN_TOKENS.sizing.icon_md + spacing.sm + galley.size().x
+/// Neutral group rule, centred in the strip.
+fn show_separator(ui: &mut Ui) {
+    ui.add_space(gap());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 22.0), egui::Sense::hover());
+    let theme = ui.active_theme();
+    let color = if theme.dark {
+        theme.ui.border
+    } else {
+        theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.085)
+    };
+    ui.painter().rect_filled(rect, 0.0, color);
+    ui.add_space(gap());
 }
 
 impl Slot {
@@ -234,11 +236,18 @@ impl TopToolbar {
         ui: &mut Ui,
         app_state: &dyn crate::ui::app_state::ChartAppState,
     ) -> TopToolbarAction {
-        ui.horizontal(|ui| {
-            ui.set_height(self.config.height);
-            self.show_contents_desktop(ui, app_state.active_symbol())
-        })
-        .inner
+        let mut menu_action = TopToolbarAction::None;
+        let action = self.show_with_slots(
+            ui,
+            app_state,
+            |ui| Self::show_menu(ui, &mut menu_action),
+            |_| {},
+        );
+        if menu_action != TopToolbarAction::None {
+            menu_action
+        } else {
+            action
+        }
     }
 
     /// Show the toolbar inline (same layout, no outer frame).
@@ -247,11 +256,59 @@ impl TopToolbar {
         ui: &mut Ui,
         app_state: &dyn crate::ui::app_state::ChartAppState,
     ) -> TopToolbarAction {
+        self.show_with_state(ui, app_state)
+    }
+
+    /// Show host menu content before the symbol and host actions at the far right.
+    ///
+    /// The menu slot is 48 px wide. Keep host actions compact; their measured width is
+    /// reserved before built-in controls compact or move into overflow. The closures
+    /// handle their own responses and may open menus or return actions to the host.
+    pub fn show_with_slots(
+        &mut self,
+        ui: &mut Ui,
+        app_state: &dyn crate::ui::app_state::ChartAppState,
+        menu: impl FnOnce(&mut Ui),
+        actions: impl FnOnce(&mut Ui),
+    ) -> TopToolbarAction {
         ui.horizontal(|ui| {
             ui.set_height(self.config.height);
-            self.show_contents_desktop(ui, app_state.active_symbol())
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(48.0, self.config.height),
+                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                menu,
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.horizontal(actions);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), self.config.height),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| self.show_contents_desktop(ui, app_state.active_symbol()),
+                )
+                .inner
+            })
+            .inner
         })
         .inner
+    }
+
+    fn show_menu(ui: &mut Ui, action: &mut TopToolbarAction) {
+        let response = IconButton::new(&embedded_icons::MENU)
+            .icon_scale(24.0 / 28.0)
+            .tooltip("Menu")
+            .show(ui);
+        egui::Popup::menu(&response).show(|ui| {
+            ui.set_width(DESIGN_TOKENS.sizing.dialog.submenu_width);
+            for control in [S::QuickSearch, S::Theme] {
+                if let Some((icon, label, clicked_action)) = control.entry()
+                    && ListItem::new().show_with_icon(ui, label, icon).clicked()
+                {
+                    *action = clicked_action;
+                    ui.close();
+                }
+            }
+        });
     }
 
     /// Desktop layout: horizontal toolbar contents.
@@ -300,7 +357,7 @@ impl TopToolbar {
 
     /// Width of `control` in the strip.
     fn control_width(&self, ui: &Ui, control: Slot, compact: bool, symbol: &str) -> f32 {
-        let icon_button = ButtonSize::MD.pixels();
+        let icon_button = self.config.btn_size;
         match control {
             S::Symbol => Self::symbol_trigger(symbol).width(ui),
             S::Interval => self.timeframe_selector.trigger().width(ui),
@@ -308,7 +365,7 @@ impl TopToolbar {
             S::Compare | S::Templates | S::Layouts => self.config.btn_size,
             S::Save => Self::save_button(&self.config).width(ui),
             c if c.compacts() && !compact => c.entry().map_or(icon_button, |(_, label, _)| {
-                labelled_button_width(ui, label)
+                IconTextButton::new(&embedded_icons::INDICATORS, label, &self.config).width(ui)
             }),
             _ => icon_button,
         }
@@ -354,7 +411,7 @@ impl TopToolbar {
         if hidden.is_empty() {
             0.0
         } else {
-            gap() + ButtonSize::MD.pixels()
+            gap() + super::config::BUTTON_SIZE
         }
     }
 
@@ -379,7 +436,7 @@ impl TopToolbar {
                 continue;
             }
             if !first_group {
-                ui.toolbar_separator();
+                show_separator(ui);
             }
             first_group = false;
             for (i, control) in visible.into_iter().enumerate() {
@@ -425,24 +482,25 @@ impl TopToolbar {
                 ToolbarIconButton::new(icon, label, &self.config).show(ui)
             }
             S::Save => Self::save_button(&self.config).show(ui),
-            S::Undo => IconButton::new(icon)
-                .enabled(self.state.can_undo)
-                .tooltip(if self.state.can_undo {
-                    label
+            S::Undo | S::Redo => {
+                let enabled = if control == S::Undo {
+                    self.state.can_undo
                 } else {
-                    "Nothing to undo"
+                    self.state.can_redo
+                };
+                ui.add_enabled(enabled, |ui: &mut Ui| {
+                    ToolbarIconButton::new(icon, label, &self.config).show(ui)
                 })
-                .show(ui),
-            S::Redo => IconButton::new(icon)
-                .enabled(self.state.can_redo)
-                .tooltip(if self.state.can_redo {
-                    label
+                .on_disabled_hover_text(if control == S::Undo {
+                    "Nothing to undo"
                 } else {
                     "Nothing to redo"
                 })
-                .show(ui),
-            c if c.compacts() && !compact => Button::icon_and_text(icon, label).ghost().show(ui),
-            _ => IconButton::new(icon).tooltip(label).show(ui),
+            }
+            c if c.compacts() && !compact => {
+                IconTextButton::new(icon, label, &self.config).show(ui)
+            }
+            _ => ToolbarIconButton::new(icon, label, &self.config).show(ui),
         };
         if response.clicked() {
             if control == S::Replay {
@@ -472,10 +530,11 @@ impl TopToolbar {
 
     fn symbol_trigger(symbol: &str) -> Trigger<'static> {
         Trigger {
-            icon: Some(&embedded_icons::QUICK_SEARCH),
+            icon: Some(&embedded_icons::CHART_CANDLES),
             label: symbol.to_owned(),
             name: format!("Symbol search: {symbol}"),
-            min_width: 0.0,
+            min_width: 128.0,
+            filled: true,
         }
     }
 
@@ -529,6 +588,91 @@ mod tests {
             }
         }
         actions
+    }
+
+    #[test]
+    fn menu_triggers_fit_without_input_outlines_or_chart_type_text() {
+        struct State;
+        impl crate::ui::app_state::ChartAppState for State {
+            fn active_symbol(&self) -> &str {
+                "SYNTH:LONG_SYMBOL"
+            }
+            fn active_timeframe(&self) -> &crate::model::Timeframe {
+                &crate::model::Timeframe::Hour1
+            }
+            fn chart_type(&self) -> ChartType {
+                ChartType::Candles
+            }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            fn is_replay_active(&self) -> bool {
+                false
+            }
+        }
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [640.0, 1440.0] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut toolbar = TopToolbar::new();
+                toolbar.timeframe_selector.current = Timeframe::new(1, TimeframeUnit::Hour);
+                let mut host_rect = Rect::NOTHING;
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 50.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        toolbar.show_with_slots(
+                            ui,
+                            &State,
+                            |ui| {
+                                IconButton::new(&embedded_icons::MENU).show(ui);
+                            },
+                            |ui| {
+                                host_rect = crate::ui_kit::buttons::Button::new("Host action")
+                                    .ghost()
+                                    .show(ui)
+                                    .rect;
+                            },
+                        );
+                        assert!(ui.min_rect().right() <= width, "controls exceed the strip");
+                    },
+                );
+                output.textures_delta.clear();
+                let mut interval = false;
+                for shape in &output.shapes {
+                    match &shape.shape {
+                        egui::Shape::Text(text) => {
+                            assert_ne!(text.galley.text(), "Candles");
+                            interval |= text.galley.text() == "1h";
+                            assert!(
+                                text.galley.rect.translate(text.pos.to_vec2()).right() <= width,
+                                "{} outside toolbar at {} with width {}",
+                                text.galley.text(),
+                                text.pos.x,
+                                text.galley.size().x
+                            );
+                        }
+                        egui::Shape::Rect(rect) if rect.rect.height() >= 28.0 => {
+                            assert!(
+                                rect.rect.right() <= host_rect.left() || rect.rect == host_rect,
+                                "control {:?} overlaps host {:?}",
+                                rect.rect,
+                                host_rect
+                            );
+                            assert_eq!(
+                                rect.stroke.width, 0.0,
+                                "triggers must have no input outline"
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                output.drop_without_applying_deltas();
+                assert!(interval);
+            }
+        }
     }
 
     #[test]
