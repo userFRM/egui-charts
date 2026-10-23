@@ -579,6 +579,23 @@ impl DemoApp {
         let props = DrawingProps {
             color: drawing.color32(),
             line_width: drawing.stroke_width,
+            line_style: match drawing.line_style {
+                egui_charts::drawings::LineStyle::Solid => DrawingLineStyle::Solid,
+                egui_charts::drawings::LineStyle::Dashed => DrawingLineStyle::Dashed,
+                egui_charts::drawings::LineStyle::Dotted => DrawingLineStyle::Dotted,
+            },
+            fill_color: drawing.fill_color32(),
+            fill_enabled: drawing.fill_color.is_some(),
+            extend_left: drawing.extend_left,
+            extend_right: drawing.extend_right,
+            font_size: drawing.font_size,
+            visible_all_timeframes: drawing.timeframe_visibility.show_on_all,
+            visible_timeframes: drawing
+                .timeframe_visibility
+                .visible_timeframes
+                .iter()
+                .cloned()
+                .collect(),
             label: drawing.text.clone().unwrap_or_default(),
             ..DrawingProps::default()
         };
@@ -693,14 +710,21 @@ impl DemoApp {
 
     fn apply_drawing_props(&mut self, id: DrawingId, props: DrawingProps) {
         self.chart.drawings_mut().edit_drawing(id.0, |drawing| {
-            drawing.color = props.color.to_array();
+            drawing.color = props.color.to_srgba_unmultiplied();
             drawing.stroke_width = props.line_width;
             drawing.line_style = line_style_from_dialog(props.line_style);
             drawing.extend_left = props.extend_left;
             drawing.extend_right = props.extend_right;
-            if !props.label.is_empty() {
-                drawing.text = Some(props.label);
-            }
+            drawing.text = (!props.label.is_empty()).then_some(props.label);
+            drawing.fill_color = props
+                .fill_color
+                .filter(|_| props.fill_enabled)
+                .map(|c| c.to_srgba_unmultiplied());
+            drawing.font_size = props.font_size;
+            drawing.timeframe_visibility = egui_charts::drawings::TimeframeVisibility {
+                show_on_all: props.visible_all_timeframes,
+                visible_timeframes: props.visible_timeframes.into_iter().collect(),
+            };
         });
     }
 
@@ -1079,6 +1103,9 @@ impl DemoApp {
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        let drawings = &self.chart.drawings().drawings;
+        self.drawing_toolbar.state.lock_all =
+            !drawings.is_empty() && drawings.iter().all(|d| d.locked);
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
             .exact_size(56.0)
@@ -1953,6 +1980,61 @@ fn apply_settings_state(
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// Existing drawing settings survive opening and applying the dialog, and the toolbar
+    /// reflects locks changed through other drawing controls rather than an optimistic toggle.
+    #[test]
+    fn drawing_controls_round_trip_visibility_fill_fonts_and_locks() {
+        use egui_charts::drawings::{Drawing, DrawingToolType, LineStyle, TimeframeVisibility};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut drawing = Drawing::new(7, DrawingToolType::TextLabel);
+        drawing.line_style = LineStyle::Dotted;
+        drawing.fill_color = Some([51, 102, 153, 85]);
+        drawing.font_size = 24.0;
+        drawing.extend_left = true;
+        drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+        drawing.text = Some("Annotation".into());
+        drawing.locked = true;
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.open_drawing_props_for(7);
+        let props = app.drawing_props.props.clone();
+        assert!(!props.visible_all_timeframes);
+        assert_eq!(props.visible_timeframes, ["1h"]);
+        assert!(props.fill_enabled);
+        assert_eq!(
+            props.fill_color.unwrap().to_srgba_unmultiplied(),
+            [51, 102, 153, 85]
+        );
+        assert_eq!(props.font_size, 24.0);
+        assert!(matches!(props.line_style, DrawingLineStyle::Dotted));
+        assert!(props.extend_left);
+        app.apply_drawing_props(DrawingId(7), props);
+        let changed = DrawingProps {
+            visible_all_timeframes: false,
+            visible_timeframes: vec!["4h".into()],
+            font_size: 28.0,
+            fill_enabled: false,
+            ..app.drawing_props.props.clone()
+        };
+        app.apply_drawing_props(DrawingId(7), changed);
+        let saved = &app.chart.drawings().drawings[0];
+        assert!(saved.timeframe_visibility.is_visible_on("4h"));
+        assert!(!saved.timeframe_visibility.is_visible_on("1h"));
+        assert_eq!(saved.fill_color, None);
+        assert_eq!(saved.font_size, 28.0);
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+        })
+        .drop_without_applying_deltas();
+        assert!(app.drawing_toolbar.state.lock_all);
+        app.chart.drawings_mut().drawings[0].locked = false;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+        })
+        .drop_without_applying_deltas();
+        assert!(!app.drawing_toolbar.state.lock_all);
+    }
 
     #[test]
     fn opening_settings_keeps_the_charts_current_display() {
