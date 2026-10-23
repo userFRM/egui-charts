@@ -79,6 +79,28 @@ cd examples/demo && trunk build --release
 
 The bundled library examples can be run with the usual cargo invocation, for example `cargo run --example basic_chart`.
 
+### Measuring frame time
+
+`benches/frame_time.rs` renders the chart headlessly (layout, painting and tessellation through egui, with no window or GPU) on generated sample data, and prints the median frame time and the median tessellation time of each scenario as a Markdown table to paste into a pull request:
+
+```sh
+cargo bench --bench frame_time
+```
+
+The scenarios are one chart of 5,000,000 bars zoomed out and zoomed in, four charts of 100,000 bars, and eight charts of 100,000 bars with ten studies each, in a 1920 by 1080 window with the pointer over the charts. `FRAME_TIME_FRAMES` sets the number of measured frames (default 300, after 60 warm-up frames), and arguments run only the scenarios whose name contains one of them, for example `cargo bench --bench frame_time -- "zoomed out"`. `benches/bare_chart.rs` times the frame of the `bare_chart` example in the same way.
+
+To compare two commits, build the bench on each and run the two binaries in turn, so that changes in machine load and clock speed affect both alike. `cargo bench --no-run` prints the path of the binary it builds:
+
+```sh
+git switch --detach <base> && cargo bench --bench frame_time --no-run
+cp target/release/deps/frame_time-<hash> /tmp/frame_time-base
+git switch <branch> && cargo bench --bench frame_time --no-run
+cp target/release/deps/frame_time-<hash> /tmp/frame_time-head
+for round in 1 2 3 4 5; do /tmp/frame_time-base; /tmp/frame_time-head; done
+```
+
+Compare the medians round by round, and quote the machine and the number of rounds with the figures.
+
 ## Project layout
 
 A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/lib.rs) for the full table):

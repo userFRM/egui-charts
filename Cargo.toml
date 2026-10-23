@@ -61,6 +61,12 @@ path = "benches/bare_chart.rs"
 harness = false
 required-features = ["widget"]
 
+[[bench]]
+name = "frame_time"
+path = "benches/frame_time.rs"
+harness = false
+required-features = ["widget", "studies"]
+
 [features]
 default = ["ui"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,

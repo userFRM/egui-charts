@@ -5,7 +5,7 @@
 //! ```
 //!
 //! The prices are generated sample data. `benches/bare_chart.rs` runs this example's
-//! frame headlessly to measure its cost.
+//! frame headlessly to measure its cost, and `benches/frame_time.rs` draws its sample bars.
 
 use chrono::{TimeZone, Utc};
 use egui_charts::model::{Bar, BarData};
@@ -54,7 +54,7 @@ impl BareChart {
 }
 
 /// Sample bar `i`: a deterministic wave, not market data. `tick` moves its close while it forms.
-fn sample_bar(i: usize, tick: u64) -> Bar {
+pub(crate) fn sample_bar(i: usize, tick: u64) -> Bar {
     let t = i as f64;
     let open = 100.0 + 10.0 * (t / 40.0).sin() + 3.0 * (t / 7.0).sin();
     let close = open + 1.5 * (t * 1.7 + tick as f64 * 0.3).sin();
