@@ -369,13 +369,16 @@ mod tests {
             line.chart_points = vec![ChartPoint::new(50.0, 15.0)];
             line.timeframe_visibility = TimeframeVisibility::specific(&["1D"]);
             chart.drawings_mut().drawings.push(line);
+            chart.drawings_mut().select(1);
+            chart.drawings_mut().options.handle_config.color = color.to_array();
 
             frame(&ctx, &mut chart, 0.0, vec![]);
             let on_line = chart.drawings().drawings[0].points[0];
             chart.set_chart_type(kind);
-            let painted = shapes(&ctx, &mut chart, 0.1, vec![])
-                .iter()
-                .any(|s| matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color));
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]).iter().any(|s| {
+                matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color)
+                    || matches!(s, Shape::Circle(c) if c.fill == color)
+            });
             frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(on_line)]);
             for (time, pressed) in [(0.3, true), (0.4, false)] {
                 frame(

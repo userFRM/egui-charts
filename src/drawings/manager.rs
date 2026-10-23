@@ -947,7 +947,10 @@ impl DrawingManager {
 
         // Render handles for selected drawing
         if let Some(sel_id) = self.selection.primary()
-            && let Some(drawing) = self.drawings.iter().find(|d| d.id == sel_id)
+            && let Some(drawing) = self
+                .drawings
+                .iter()
+                .find(|d| d.id == sel_id && d.is_visible_on_timeframe(&self.curr_timeframe))
         {
             self.render_handles(painter, drawing);
         }
