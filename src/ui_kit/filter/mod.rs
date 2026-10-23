@@ -201,7 +201,7 @@ fn search_field(
         }
     }
 
-    if (response.has_focus() || response.lost_focus())
+    if (response.has_focus() || ui.memory(|m| m.had_focus_last_frame(response.id)))
         && !query.is_empty()
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn escape_clears_only_the_focused_filter() {
-        for focused in [false, true] {
+        for (focused, moved) in [(false, false), (true, false), (false, true)] {
             let ctx = Context::default();
             let mut query = "RSI".to_owned();
             let mut id = egui::Id::NULL;
@@ -226,8 +226,15 @@ mod tests {
                 id = filter_input(ui, &mut query).response.id;
             })
             .drop_without_applying_deltas();
-            if focused {
+            if focused || moved {
                 ctx.memory_mut(|m| m.request_focus(id));
+                ctx.run_ui(RawInput::default(), |ui| {
+                    filter_input(ui, &mut query);
+                })
+                .drop_without_applying_deltas();
+            }
+            if moved {
+                ctx.memory_mut(|m| m.request_focus(egui::Id::unique("another field")));
             }
             let input = RawInput {
                 events: vec![Event::Key {
@@ -246,7 +253,7 @@ mod tests {
             assert_eq!(
                 query,
                 if focused { "" } else { "RSI" },
-                "focused: {focused}"
+                "focused: {focused}, moved: {moved}"
             );
         }
     }

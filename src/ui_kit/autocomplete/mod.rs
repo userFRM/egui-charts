@@ -141,16 +141,18 @@ impl<'a> AutocompleteEdit<'a> {
             text_edit = text_edit.hint_text(placeholder);
         }
 
-        let response = ui.add(text_edit);
+        let mut response = ui.add(text_edit);
+        let owns_keyboard =
+            response.has_focus() || ui.memory(|m| m.had_focus_last_frame(response.id));
         let text_changed = response.changed();
 
         // Handle keyboard navigation
         let (move_up, move_down, confirm, escape) = ui.input(|i| {
             (
-                i.key_pressed(Key::ArrowUp),
-                i.key_pressed(Key::ArrowDown),
-                i.key_pressed(Key::Enter) || i.key_pressed(Key::Tab),
-                i.key_pressed(Key::Escape),
+                owns_keyboard && i.key_pressed(Key::ArrowUp),
+                owns_keyboard && i.key_pressed(Key::ArrowDown),
+                owns_keyboard && (i.key_pressed(Key::Enter) || i.key_pressed(Key::Tab)),
+                owns_keyboard && i.key_pressed(Key::Escape),
             )
         });
 
@@ -171,7 +173,10 @@ impl<'a> AutocompleteEdit<'a> {
             popup_open = true;
         }
 
-        if escape || (!response.has_focus() && !popup_open) {
+        let pointer_in_popup = ui
+            .memory(|m| m.area_rect(popup_id.with("area")))
+            .is_some_and(|rect| ui.rect_contains_pointer(rect));
+        if escape || !has_suggestions || (!owns_keyboard && !pointer_in_popup) {
             Popup::close_id(ui.ctx(), popup_id);
             popup_open = false;
         }
@@ -240,6 +245,11 @@ impl<'a> AutocompleteEdit<'a> {
                                         suggestion,
                                     )
                                 });
+                                crate::styles::focus::draw_focus_ring(
+                                    ui,
+                                    &item_response,
+                                    DESIGN_TOKENS.rounding.sm,
+                                );
 
                                 if ui.is_rect_visible(rect) {
                                     let painter = ui.painter();
@@ -291,6 +301,7 @@ impl<'a> AutocompleteEdit<'a> {
         // If a suggestion was selected, update the text
         if let Some(ref sel) = selected {
             *self.text = sel.clone();
+            response.mark_changed();
             Popup::close_id(ui.ctx(), popup_id);
             ui.ctx()
                 .memory_mut(|m| m.data.insert_temp(selected_idx_id, 0usize));
@@ -299,7 +310,7 @@ impl<'a> AutocompleteEdit<'a> {
         AutocompleteResponse {
             response,
             selected,
-            is_open: popup_open,
+            is_open: Popup::is_id_open(ui.ctx(), popup_id),
         }
     }
 }
@@ -437,5 +448,42 @@ mod tests {
         let (output, picked, _, _) = frame(vec![key(Key::Enter)]);
         output.drop_without_applying_deltas();
         assert_eq!(picked.as_deref(), Some("Apple"));
+    }
+
+    #[test]
+    fn a_popup_does_not_handle_keys_after_focus_moves_to_another_field() {
+        let ctx = Context::default();
+        let mut text = "a".to_owned();
+        let mut other = String::new();
+        let mut frame = |events| {
+            let mut shown = None;
+            let mut other_id = Id::NULL;
+            ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    shown = Some(AutocompleteEdit::new(&mut text, ["Apple", "Avocado"]).show(ui));
+                    other_id = ui.text_edit_singleline(&mut other).id;
+                },
+            )
+            .drop_without_applying_deltas();
+            (shown.unwrap(), other_id, text.clone())
+        };
+        let (shown, other_id, _) = frame(vec![]);
+        ctx.memory_mut(|m| m.request_focus(shown.response.id));
+        assert!(frame(vec![]).0.is_open);
+        ctx.memory_mut(|m| m.request_focus(other_id));
+        let (shown, _, text) = frame(vec![Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        assert!(shown.selected.is_none());
+        assert!(!shown.is_open);
+        assert_eq!(text, "a");
     }
 }
