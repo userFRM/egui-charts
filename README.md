@@ -216,7 +216,7 @@ Drawings are anchored in chart coordinates (bar index and price), so they stay i
 
 ## Technical Indicators
 
-`IndicatorFactory` registers 123 indicator names, each creating a distinct study that implements the `Indicator` trait, under a category such as Momentum or Volume. Six types are not registered and are built directly: five compute the same study as a registered one under their defaults, `CVD` (A/D), `CloseToCloseVol` (HV), `HL2` (Median Price), `HLC3` (Typical Price) and `PriceChannel` (Donchian), and `EhlersFisher` is a variant of the Fisher Transform recursion with length 10 and a clamp on the normalised price. The indicator dialog in the `ui` feature offers a fixed subset.
+`IndicatorFactory` registers 123 indicator names, each creating a distinct study that implements the `Indicator` trait, under a category such as Momentum or Volume. Six types are not registered and are built directly: five compute the same study as a registered one under their defaults, `CVD` (A/D), `CloseToCloseVol` (HV), `HL2` (Median Price), `HLC3` (Typical Price) and `PriceChannel` (Donchian), and `EhlersFisher` is a variant of the Fisher Transform recursion with length 10 and a clamp on the normalised price. The indicator dialog in the `ui` feature lists every study its factory registers, the host's own included, and creates them through it.
 
 | Category | Indicators |
 |---|---|

@@ -418,12 +418,11 @@ impl DemoApp {
     // --- dialog wiring -----------------------------------------------------
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
-        // Indicators: build the configured indicator and add it live.
-        if let IndicatorDialogAction::AddConfiguredIndicator(cfg) =
+        // Indicators: add the study the dialog created.
+        if let IndicatorDialogAction::AddIndicator(study) =
             self.indicator_dialog.show(ctx, &self.theme)
         {
-            let indicator = self.indicator_dialog.create_indicator(cfg.indicator_type);
-            self.chart.add_indicator(indicator);
+            self.chart.add_indicator(study);
         }
 
         // Chart settings.

@@ -21,8 +21,8 @@ pub use chart_type_selector::{
 
 // From indicator_dialog
 pub use indicator_dialog::{
-    ConfiguredIndicator, IndicatorCategory, IndicatorDialog, IndicatorDialogAction,
-    IndicatorDialogConfig, IndicatorInfo, IndicatorParams, IndicatorTab, IndicatorType,
+    IndicatorCategory, IndicatorDialog, IndicatorDialogAction, IndicatorDialogConfig,
+    IndicatorInfo, IndicatorParams, IndicatorTab,
 };
 
 // From chart_grid_selector

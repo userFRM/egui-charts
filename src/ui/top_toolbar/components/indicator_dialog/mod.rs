@@ -4,8 +4,8 @@
 //! Features categories, favorites, search, tabs, and param configuration.
 //!
 //! ## Module Organization
-//! - `types`: Enum definitions (IndicatorTab, IndicatorCategory, IndicatorType)
-//! - `data`: Data structures (IndicatorInfo, ConfiguredIndicator, IndicatorParams)
+//! - `types`: Enum definitions (IndicatorTab, IndicatorCategory)
+//! - `data`: Data structures (IndicatorInfo, IndicatorParams)
 //! - `config`: Configuration struct
 //! - `actions`: Action enum
 //! - `dialog`: Main IndicatorDialog implementation
@@ -21,7 +21,7 @@ pub mod types;
 // Public re-exports
 pub use actions::IndicatorDialogAction;
 pub use config::IndicatorDialogConfig;
-pub use data::{ConfiguredIndicator, IndicatorInfo, IndicatorParams};
+pub use data::{IndicatorInfo, IndicatorParams};
 pub use dialog::IndicatorDialog;
 pub use templates::{IndicatorTemplateAction, IndicatorTemplatePanel, IndicatorTemplateState};
-pub use types::{IndicatorCategory, IndicatorTab, IndicatorType};
+pub use types::{IndicatorCategory, IndicatorTab};

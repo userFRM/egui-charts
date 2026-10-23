@@ -3,8 +3,8 @@
 use super::{
     actions::IndicatorDialogAction,
     config::IndicatorDialogConfig,
-    data::{ConfiguredIndicator, IndicatorInfo, IndicatorParams},
-    types::{IndicatorCategory, IndicatorTab, IndicatorType},
+    data::{IndicatorInfo, IndicatorParams},
+    types::{IndicatorCategory, IndicatorTab},
 };
 use crate::icons::icons;
 use crate::studies::*;
@@ -30,7 +30,8 @@ const SIDEBAR_WIDTH: f32 = 140.0;
 
 /// Indicator Dialog
 ///
-/// Modal dialog for searching, selecting, and configuring indicators.
+/// Modal dialog for searching, selecting, and configuring indicators. It lists every study
+/// its [`IndicatorFactory`] registers and creates the one the user adds through it.
 pub struct IndicatorDialog {
     /// Is dialog open
     pub is_open: bool,
@@ -48,7 +49,9 @@ pub struct IndicatorDialog {
     sel_indicator: Option<IndicatorInfo>,
     /// Favorite indicator IDs
     pub favorites: HashSet<String>,
-    /// Available indicators
+    /// Creates the studies the dialog lists
+    factory: IndicatorFactory,
+    /// Available indicators, one per factory name
     indicators: Vec<IndicatorInfo>,
     /// Configuration
     config: IndicatorDialogConfig,
@@ -65,8 +68,9 @@ impl Default for IndicatorDialog {
 }
 
 impl IndicatorDialog {
-    /// Create a new indicator dialog with built-in indicators
+    /// Create a new indicator dialog with the built-in studies
     pub fn new() -> Self {
+        let factory = IndicatorFactory::new();
         Self {
             is_open: false,
             search: FilterWidget::new().placeholder("Search indicators"),
@@ -76,16 +80,19 @@ impl IndicatorDialog {
             sel_category: IndicatorCategory::BuiltIns,
             sel_indicator: None,
             favorites: HashSet::new(),
-            indicators: IndicatorInfo::builtin_indicators(),
+            indicators: IndicatorInfo::from_factory(&factory),
+            factory,
             config: IndicatorDialogConfig::default(),
             params: IndicatorParams::default(),
             show_config: false,
         }
     }
 
-    /// Set the available indicator list
-    pub fn with_indicators(mut self, indicators: Vec<IndicatorInfo>) -> Self {
-        self.indicators = indicators;
+    /// List and create the studies of `factory`, such as the built-ins and the host's own
+    /// added with [`IndicatorFactory::register`]
+    pub fn with_factory(mut self, factory: IndicatorFactory) -> Self {
+        self.indicators = IndicatorInfo::from_factory(&factory);
+        self.factory = factory;
         self
     }
 
@@ -238,7 +245,7 @@ impl IndicatorDialog {
 
     /// Whether `ind` belongs to the active tab and category and matches the search.
     fn matches(&self, ind: &IndicatorInfo) -> bool {
-        let searched = [&ind.name, &ind.desc, &ind.id]
+        let searched = [&ind.name, &ind.desc, &ind.id, &ind.category]
             .iter()
             .any(|text| self.search.matches(text));
         if !searched {
@@ -497,25 +504,24 @@ impl IndicatorDialog {
                 return self.add_selected();
             }
             if !is_sel {
-                self.sel_indicator = Some(indicator.clone());
-                self.show_config = true;
-                self.params = IndicatorParams::default();
+                self.select(indicator);
             }
         }
         None
     }
 
+    /// Select `indicator` and open its configuration panel with fresh parameters.
+    fn select(&mut self, indicator: &IndicatorInfo) {
+        self.sel_indicator = Some(indicator.clone());
+        self.show_config = true;
+        self.params = IndicatorParams::default();
+    }
+
     /// Add the selected indicator with its parameters and close the dialog.
     fn add_selected(&mut self) -> Option<IndicatorDialogAction> {
-        let indicator_type = self.sel_indicator.as_ref()?.indicator_type?;
-        let params = self.params.clone();
+        let study = self.create(&self.sel_indicator.as_ref()?.id)?;
         self.close();
-        Some(IndicatorDialogAction::AddConfiguredIndicator(
-            ConfiguredIndicator {
-                indicator_type,
-                params,
-            },
-        ))
+        Some(IndicatorDialogAction::AddIndicator(study))
     }
 
     fn draw_config_panel(
@@ -530,17 +536,14 @@ impl IndicatorDialog {
                 .size(theme.text.title)
                 .strong(),
         );
-        let indicator_type = indicator.indicator_type;
+        let name = indicator.id.clone();
         ui.add_space(theme.spacing.lg);
 
         FormGrid::new("indicator_params").show(ui, |ui| {
-            self.draw_indicator_params(ui, config, theme, indicator_type);
+            self.draw_indicator_params(ui, config, theme, &name);
         });
 
-        let (add, back) = DialogFooter::new("Add")
-            .secondary("Back")
-            .primary_enabled(indicator_type.is_some())
-            .show(ui);
+        let (add, back) = DialogFooter::new("Add").secondary("Back").show(ui);
         if back {
             self.sel_indicator = None;
             self.show_config = false;
@@ -551,53 +554,37 @@ impl IndicatorDialog {
         None
     }
 
+    /// The parameters the dialog edits for the study registered as `name`.
     fn draw_indicator_params(
         &mut self,
         ui: &mut Ui,
         config: &IndicatorDialogConfig,
         theme: &Theme,
-        indicator_type: Option<IndicatorType>,
+        name: &str,
     ) {
+        let edited = self.edited(name);
         let p = &mut self.params;
-        match indicator_type {
-            Some(
-                IndicatorType::SMA
-                | IndicatorType::EMA
-                | IndicatorType::WMA
-                | IndicatorType::VWMA
-                | IndicatorType::KeltnerChannels
-                | IndicatorType::DonchianChannels
-                | IndicatorType::Aroon,
-            ) => {
+        match edited {
+            "SMA" | "EMA" | "WMA" | "VWMA" | "Keltner" | "Donchian" | "Aroon" => {
                 Self::draw_int_param(ui, "Period", &mut p.period, 1..=500);
             }
-            Some(IndicatorType::BollingerBands) => {
+            "BB" => {
                 Self::draw_int_param(ui, "Period", &mut p.period, 1..=500);
                 Self::draw_float_param(ui, "Std Dev", &mut p.bb_std_dev, 0.1..=5.0, 0.1);
             }
-            Some(
-                IndicatorType::RSI
-                | IndicatorType::CCI
-                | IndicatorType::ATR
-                | IndicatorType::ADX
-                | IndicatorType::MFI
-                | IndicatorType::WilliamsR
-                | IndicatorType::ROC
-                | IndicatorType::Momentum
-                | IndicatorType::ChaikinMoneyFlow,
-            ) => {
+            "RSI" | "CCI" | "ATR" | "ADX" | "MFI" | "Williams %R" | "ROC" | "Momentum" | "CMF" => {
                 Self::draw_int_param(ui, "Period", &mut p.period, 2..=500);
             }
-            Some(IndicatorType::MACD) => {
+            "MACD" => {
                 Self::draw_int_param(ui, "Fast", &mut p.macd_fast, 1..=500);
                 Self::draw_int_param(ui, "Slow", &mut p.macd_slow, 1..=500);
                 Self::draw_int_param(ui, "Signal", &mut p.macd_signal, 1..=500);
             }
-            Some(IndicatorType::Stochastic) => {
+            "Stochastic" => {
                 Self::draw_int_param(ui, "%K Period", &mut p.stoch_k, 1..=500);
                 Self::draw_int_param(ui, "%D Period", &mut p.stoch_d, 1..=500);
             }
-            Some(IndicatorType::SuperTrend) => {
+            "SuperTrend" => {
                 Self::draw_int_param(ui, "Period", &mut p.period, 1..=500);
                 Self::draw_float_param(
                     ui,
@@ -607,14 +594,14 @@ impl IndicatorDialog {
                     0.1,
                 );
             }
-            Some(IndicatorType::IchimokuCloud) => {
+            "Ichimoku" => {
                 Self::draw_int_param(ui, "Tenkan", &mut p.ichimoku_tenkan, 1..=500);
                 Self::draw_int_param(ui, "Kijun", &mut p.ichimoku_kijun, 1..=500);
                 Self::draw_int_param(ui, "Senkou", &mut p.ichimoku_senkou, 1..=500);
             }
-            None | Some(IndicatorType::OBV | IndicatorType::VWAP | IndicatorType::ParabolicSAR) => {
+            _ => {
                 ui.label(
-                    RichText::new("This indicator has no settings.")
+                    RichText::new("Added with its default settings.")
                         .size(theme.text.small)
                         .color(config.muted_color),
                 );
@@ -645,52 +632,48 @@ impl IndicatorDialog {
         ui.end_row();
     }
 
-    /// Create an indicator instance from current params
-    pub fn create_indicator(&self, indicator_type: IndicatorType) -> Box<dyn Indicator> {
-        match indicator_type {
-            IndicatorType::SMA => Box::new(SMA::new(self.params.period)),
-            IndicatorType::EMA => Box::new(EMA::new(self.params.period)),
-            IndicatorType::WMA => Box::new(WMA::new(self.params.period)),
-            IndicatorType::BollingerBands => Box::new(BollingerBands::new(
-                self.params.period,
-                self.params.bb_std_dev,
-            )),
-            IndicatorType::RSI => Box::new(RSI::new(self.params.period)),
-            IndicatorType::MACD => Box::new(MACD::new(
-                self.params.macd_fast,
-                self.params.macd_slow,
-                self.params.macd_signal,
-            )),
-            IndicatorType::Stochastic => {
-                Box::new(Stochastic::new(self.params.stoch_k, 3, self.params.stoch_d))
-            }
-            IndicatorType::CCI => Box::new(CCI::new(self.params.period)),
-            IndicatorType::ATR => Box::new(ATR::new(self.params.period)),
-            IndicatorType::ADX => Box::new(ADX::new(self.params.period)),
-            IndicatorType::OBV => Box::new(OnBalanceVolume::new()),
-            IndicatorType::MFI => Box::new(MoneyFlowIndex::new(self.params.period)),
-            IndicatorType::VWAP => Box::new(VolumeWeightedAvgPrice::new()),
-            IndicatorType::IchimokuCloud => Box::new(IchimokuCloud::new(
-                self.params.ichimoku_tenkan,
-                self.params.ichimoku_kijun,
-                self.params.ichimoku_senkou,
-            )),
-            IndicatorType::SuperTrend => Box::new(SuperTrend::new(
-                self.params.period,
-                self.params.supertrend_multiplier,
-            )),
-            IndicatorType::ParabolicSAR => Box::new(ParabolicSAR::default_params()),
-            IndicatorType::KeltnerChannels => {
-                Box::new(KeltnerChannels::new(self.params.period, 10, 2.0))
-            }
-            IndicatorType::DonchianChannels => Box::new(DonchianChannels::new(self.params.period)),
-            IndicatorType::WilliamsR => Box::new(WilliamsR::new(self.params.period)),
-            IndicatorType::ROC => Box::new(RateOfChange::new(self.params.period)),
-            IndicatorType::Momentum => Box::new(Momentum::new(self.params.period)),
-            IndicatorType::Aroon => Box::new(Aroon::new(self.params.period)),
-            IndicatorType::ChaikinMoneyFlow => Box::new(ChaikinMoneyFlow::new(self.params.period)),
-            IndicatorType::VWMA => Box::new(VWMA::new(self.params.period)),
+    /// `name` if the dialog edits the parameters of the study registered under it, which is
+    /// a built-in, else `""`: a host's study, even under a built-in's name, is created as
+    /// the host registered it.
+    fn edited<'a>(&self, name: &'a str) -> &'a str {
+        if self.factory.category(name) == Some(IndicatorFactory::CUSTOM) {
+            ""
+        } else {
+            name
         }
+    }
+
+    /// The study registered as `name`, with the parameters the dialog edits for it.
+    fn create(&self, name: &str) -> Option<Box<dyn Indicator>> {
+        let p = &self.params;
+        Some(match self.edited(name) {
+            "SMA" => Box::new(SMA::new(p.period)),
+            "EMA" => Box::new(EMA::new(p.period)),
+            "WMA" => Box::new(WMA::new(p.period)),
+            "VWMA" => Box::new(VWMA::new(p.period)),
+            "BB" => Box::new(BollingerBands::new(p.period, p.bb_std_dev)),
+            "RSI" => Box::new(RSI::new(p.period)),
+            "MACD" => Box::new(MACD::new(p.macd_fast, p.macd_slow, p.macd_signal)),
+            "Stochastic" => Box::new(Stochastic::new(p.stoch_k, 3, p.stoch_d)),
+            "CCI" => Box::new(CCI::new(p.period)),
+            "ATR" => Box::new(ATR::new(p.period)),
+            "ADX" => Box::new(ADX::new(p.period)),
+            "MFI" => Box::new(MoneyFlowIndex::new(p.period)),
+            "Ichimoku" => Box::new(IchimokuCloud::new(
+                p.ichimoku_tenkan,
+                p.ichimoku_kijun,
+                p.ichimoku_senkou,
+            )),
+            "SuperTrend" => Box::new(SuperTrend::new(p.period, p.supertrend_multiplier)),
+            "Keltner" => Box::new(KeltnerChannels::new(p.period, 10, 2.0)),
+            "Donchian" => Box::new(DonchianChannels::new(p.period)),
+            "Williams %R" => Box::new(WilliamsR::new(p.period)),
+            "ROC" => Box::new(RateOfChange::new(p.period)),
+            "Momentum" => Box::new(Momentum::new(p.period)),
+            "Aroon" => Box::new(Aroon::new(p.period)),
+            "CMF" => Box::new(ChaikinMoneyFlow::new(p.period)),
+            _ => return self.factory.create(name),
+        })
     }
 
     /// Get selected indicator if any
@@ -717,24 +700,46 @@ mod tests {
     fn each_tab_and_category_lists_only_its_own_indicators() {
         use IndicatorCategory::*;
         use IndicatorTab::*;
-        // (tab, category, whether every built-in is listed); the other rows list none.
+        // (tab, category, whether every study of the factory is listed); the other rows list none.
         let cases = [
             (Indicators, BuiltIns, true),
             (Indicators, Community, false),
             (Profiles, BuiltIns, false),
             (Patterns, BuiltIns, false),
         ];
+        let factory = || {
+            let mut factory = IndicatorFactory::new();
+            factory.register("Host SMA", || Box::new(SMA::new(42)));
+            factory
+        };
         for (tab, category, all) in cases {
-            let mut dialog = IndicatorDialog::new();
+            let mut dialog = IndicatorDialog::new().with_factory(factory());
             dialog.active_tab = tab;
             dialog.sel_category = category;
-            let listed = dialog
+            let mut listed: Vec<String> = dialog
                 .indicators
                 .iter()
                 .filter(|i| dialog.matches(i))
-                .count();
-            let expected = if all { dialog.indicators.len() } else { 0 };
+                .map(|i| i.id.clone())
+                .collect();
+            listed.sort();
+            let mut expected = if all { factory().list() } else { Vec::new() };
+            expected.sort();
             assert_eq!(listed, expected, "{tab:?} / {category:?}");
+        }
+
+        // A study the host registers, under a new name or a built-in's, is added through the
+        // factory.
+        for name in ["Host SMA", "RSI"] {
+            let mut factory = factory();
+            factory.register(name, || Box::new(SMA::new(42)));
+            let mut dialog = IndicatorDialog::new().with_factory(factory);
+            let host = dialog.indicators.iter().find(|i| i.id == name).cloned();
+            dialog.select(&host.expect("the host's study is listed"));
+            let Some(IndicatorDialogAction::AddIndicator(study)) = dialog.add_selected() else {
+                panic!("the host's {name} is added");
+            };
+            assert_eq!(study.name(), "SMA", "{name}");
         }
     }
 
@@ -787,11 +792,5 @@ mod tests {
         assert_eq!(dialog.config.width, 900.0);
         assert_eq!(dialog.config.text_color, Color32::RED);
         assert_eq!(dialog.config.hover_color, hover);
-    }
-
-    #[test]
-    fn momentum_entry_creates_the_momentum_study() {
-        let indicator = IndicatorDialog::new().create_indicator(IndicatorType::Momentum);
-        assert_eq!(indicator.name(), "Momentum");
     }
 }

@@ -338,7 +338,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 
 ### Factory Coverage
 - [x] `IndicatorFactory` registers all 123 built-in indicators by name and category, each a distinct study; `CVD`, `CloseToCloseVol`, `HL2`, `HLC3` and `PriceChannel` repeat a registered study and `EhlersFisher` is a variant of Fisher Transform; these six types are built directly
-- [ ] The indicator dialog offers a fixed subset (`IndicatorType::all()`); the other indicators are reachable only from code
+- [x] The indicator dialog lists every study its `IndicatorFactory` registers, including a host's own, and creates them through it
 
 ---
 
