@@ -23,6 +23,7 @@ exclude = [
     "tests/",
     "benches/",
     "docs/",
+    "fuzz/",
     "*.png",
     "*.gif",
     "*.mp4",
