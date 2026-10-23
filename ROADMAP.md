@@ -238,9 +238,9 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 
 ---
 
-## Technical Indicators (117 registered)
+## Technical Indicators (118 registered)
 
-All 117 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
+All 118 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
 Some indicators appear in more than one category below (for example Standard Error in Volatility and Statistics).
 
 ### Rendering Limitation
@@ -321,7 +321,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] True Range
 
 ### Market Structure
-- [x] 52-Week High/Low %
+- [x] 52-Week High/Low % and 52W High/Low: a 364-day timestamp window on every interval, blank before 52 weeks of history; high and low draw as two overlay lines
 
 ### Support / Resistance
 - [x] Pivot Points: Standard, Fibonacci, Woodie, Camarilla, DeMark formulas over a rolling N-bar window, pivot and six support and resistance levels
@@ -331,7 +331,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] PPO and PVO (Percentage Volume Oscillator): oscillator, signal and histogram, drawn as three lines
 
 ### Factory Coverage
-- [x] `IndicatorFactory` registers all 117 built-in indicators by name and category, each a distinct study; `CVD`, `CloseToCloseVol`, `HL2`, `HLC3` and `PriceChannel` repeat a registered study and `EhlersFisher` is a variant of Fisher Transform; these six types are built directly
+- [x] `IndicatorFactory` registers all 118 built-in indicators by name and category, each a distinct study; `CVD`, `CloseToCloseVol`, `HL2`, `HLC3` and `PriceChannel` repeat a registered study and `EhlersFisher` is a variant of Fisher Transform; these six types are built directly
 - [x] The indicator dialog lists every study its `IndicatorFactory` registers, including a host's own, and creates them through it
 
 ---
@@ -533,7 +533,7 @@ The ui_kit components are generic building blocks:
 - 19 of 19 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
 - `DrawingToolType` defines 94 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
-- 117 registered indicators with calculation code
+- 118 registered indicators with calculation code
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - Reusable ui_kit building blocks
 - Theme system with design tokens and dark, light and high-contrast presets

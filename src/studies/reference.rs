@@ -27,7 +27,8 @@ use crate::studies::{
     CommoditySelectionIndex, DirectionalMovement, DonchianChannels, EMA, HMA, IchimokuCloud,
     Indicator, IndicatorValue, KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD,
     MoneyFlowIndex, ParabolicSAR, PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange,
-    SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, WilliamsR,
+    SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, Week52HighLow, Week52HighLowLevels,
+    WilliamsR,
 };
 use chrono::{TimeZone, Utc};
 
@@ -83,7 +84,7 @@ fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
 #[test]
 fn staple_studies_match_published_definitions() {
     let bars = fixture();
-    let mut studies: Vec<(&str, Box<dyn Indicator>)> = vec![
+    let studies: Vec<(&str, Box<dyn Indicator>)> = vec![
         ("SMA(20)", Box::new(SMA::default())),
         ("EMA(12)", Box::new(EMA::default())),
         ("WMA(20)", Box::new(WMA::default())),
@@ -140,8 +141,86 @@ fn staple_studies_match_published_definitions() {
             Box::new(IchimokuCloud::new(9, 26, 52).with_displacement(22)),
         ),
     ];
-    for (_, study) in &mut studies {
-        study.calculate(&bars);
+    let mut studies: Vec<_> = studies
+        .into_iter()
+        .map(|(name, study)| (name, study, bars.clone()))
+        .collect();
+    // The boundary is inclusive; extrema expire one second later, even across gaps.
+    let calendar: Vec<_> = [
+        (0, 100.0, 0.0, 50.0),
+        (86_400, 80.0, 10.0, 40.0),
+        (363 * 86_400, 60.0, 20.0, 40.0),
+        (364 * 86_400 - 1, 55.0, 25.0, 40.0),
+        (364 * 86_400, 50.0, 30.0, 40.0),
+        (364 * 86_400 + 1, 45.0, 35.0, 40.0),
+        (365 * 86_400 + 1, 40.0, 32.0, 36.0),
+        (800 * 86_400, 30.0, 26.0, 28.0),
+    ]
+    .into_iter()
+    .map(|(t, high, low, close)| {
+        Bar::new(
+            Utc.timestamp_opt(t, 0).unwrap(),
+            close,
+            high,
+            low,
+            close,
+            1.0,
+        )
+    })
+    .collect();
+    let minutes: Vec<_> = (0..300)
+        .map(|i| {
+            Bar::new(
+                Utc.timestamp_opt(i * 60, 0).unwrap(),
+                2.0,
+                10.0,
+                0.0,
+                2.0,
+                1.0,
+            )
+        })
+        .collect();
+    let weekly: Vec<_> = [0, 7, 357, 364, 371, 735]
+        .into_iter()
+        .enumerate()
+        .map(|(i, day)| {
+            let high = 100.0 - i as f64 * 10.0;
+            Bar::new(
+                Utc.timestamp_opt(day * 86_400, 0).unwrap(),
+                20.0,
+                high,
+                0.0,
+                20.0,
+                1.0,
+            )
+        })
+        .collect();
+    let flat: Vec<_> = calendar
+        .iter()
+        .map(|b| Bar::new(b.time, 10.0, 10.0, 10.0, 10.0, 1.0))
+        .collect();
+    studies.extend([
+        (
+            "52W-levels-calendar",
+            Box::new(Week52HighLowLevels::default()) as Box<dyn Indicator>,
+            calendar.clone(),
+        ),
+        (
+            "52W-levels-weekly",
+            Box::new(Week52HighLowLevels::default()),
+            weekly.clone(),
+        ),
+        ("52W%-flat", Box::new(Week52HighLow::default()), flat),
+        (
+            "52W%-calendar",
+            Box::new(Week52HighLow::default()),
+            calendar,
+        ),
+        ("52W%-minutes", Box::new(Week52HighLow::default()), minutes),
+        ("52W%-weekly", Box::new(Week52HighLow::default()), weekly),
+    ]);
+    for (_, study, data) in &mut studies {
+        study.calculate(data);
     }
 
     let mut failures = Vec::new();
@@ -150,15 +229,19 @@ fn staple_studies_match_published_definitions() {
         let mut tokens = row.split_whitespace();
         let name = tokens.next().unwrap();
         let line: usize = tokens.next().unwrap().parse().unwrap();
-        let idx = studies.iter().position(|(n, _)| *n == name);
+        let idx = studies.iter().position(|(n, _, _)| *n == name);
         let idx = idx.unwrap_or_else(|| panic!("{name} has expected values but is not built"));
         checked_lines[idx] += 1;
         let values = studies[idx].1.values();
-        assert_eq!(values.len(), bars.len(), "{name}: one value per bar");
+        assert_eq!(
+            values.len(),
+            studies[idx].2.len(),
+            "{name}: one value per bar"
+        );
         let expected: Vec<&str> = tokens.collect();
         assert_eq!(
             expected.len(),
-            bars.len(),
+            values.len(),
             "{name} line {line}: one token per bar"
         );
         let mismatches: Vec<String> = expected
@@ -183,7 +266,7 @@ fn staple_studies_match_published_definitions() {
             ));
         }
     }
-    for ((name, _), lines) in studies.iter().zip(&checked_lines) {
+    for ((name, _, _), lines) in studies.iter().zip(&checked_lines) {
         assert!(*lines > 0, "{name} is built but has no expected values");
     }
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));

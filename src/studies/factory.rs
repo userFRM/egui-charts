@@ -216,8 +216,9 @@ impl IndicatorFactory {
                 WeightedClose,
                 OHLC4,
             ],
-            "Breadth and spread" => [
+            "Market structure" => [
                 Week52HighLow,
+                Week52HighLowLevels,
             ],
         );
     }
@@ -341,13 +342,14 @@ mod tests {
         use crate::model::Bar;
         use chrono::{TimeZone, Utc};
 
+        // Two bars per session over more than 52 weeks distinguish session and calendar studies.
         let bars: Vec<Bar> = (0..400)
             .map(|i: i64| {
                 let x = i as f64;
                 let close = 100.0 + (x * 0.13).sin() * 8.0 + (x * 0.029).cos() * 5.0;
                 let open = close - (x * 0.7).sin() * 1.5;
                 Bar {
-                    time: Utc.timestamp_opt(i * 3_600, 0).unwrap(),
+                    time: Utc.timestamp_opt((i / 2 * 48 + i % 2) * 3_600, 0).unwrap(),
                     open,
                     high: close.max(open) + 0.5 + (x * 0.3).sin().abs(),
                     low: close.min(open) - 0.5 - (x * 0.5).cos().abs(),
@@ -526,7 +528,8 @@ mod tests {
             Box::new(HL2::new()),
             Box::new(HLC3::new()),
             Box::new(OHLC4::new()),
-            Box::new(Week52HighLow::new(l(0))),
+            Box::new(Week52HighLow::new()),
+            Box::new(Week52HighLowLevels::new()),
         ]
     }
 

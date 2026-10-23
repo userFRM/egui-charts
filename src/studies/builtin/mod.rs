@@ -195,7 +195,7 @@ mod rank_correlation;
 mod standard_error;
 mod standard_error_bands;
 
-// Tenth batch - Breadth & Price indicators
+// Tenth batch - Market structure indicators
 mod anchored_vwap_study;
 mod week52_highlow;
 
@@ -351,9 +351,9 @@ pub use rank_correlation::RankCorrelationIndex;
 pub use standard_error::StandardError;
 pub use standard_error_bands::StandardErrorBands;
 
-// Re-exports - Tenth batch (Breadth & Price)
+// Re-exports - Tenth batch (Market structure)
 pub use anchored_vwap_study::AnchoredVWAP;
-pub use week52_highlow::Week52HighLow;
+pub use week52_highlow::{Week52HighLow, Week52HighLowLevels};
 
 // Re-exports - Tenth batch (Other)
 pub use bbw::BollingerBandsWidth;
