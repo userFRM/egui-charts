@@ -105,7 +105,7 @@ impl<'a> IconButton<'a> {
 
         let button_size = Vec2::splat(self.size.pixels());
         let (rect, response) = ui.allocate_exact_size(button_size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
 
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();

@@ -658,6 +658,7 @@ impl UiExt for Ui {
         let selected_text = display(value);
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
+            .icon(crate::ui_kit::buttons::combo_chevron)
             .selected_text(selected_text)
             .show_ui(self, |ui| {
                 for option in options {
@@ -681,6 +682,7 @@ impl UiExt for Ui {
         let selected_text = display(value);
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
+            .icon(crate::ui_kit::buttons::combo_chevron)
             .selected_text(selected_text)
             .width(width)
             .show_ui(self, |ui| {
@@ -702,6 +704,7 @@ impl UiExt for Ui {
     ) -> bool {
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
+            .icon(crate::ui_kit::buttons::combo_chevron)
             .selected_text(value.as_str())
             .show_ui(self, |ui| {
                 for &option in options {
@@ -725,6 +728,7 @@ impl UiExt for Ui {
     ) -> bool {
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
+            .icon(crate::ui_kit::buttons::combo_chevron)
             .selected_text(value.as_str())
             .width(width)
             .show_ui(self, |ui| {

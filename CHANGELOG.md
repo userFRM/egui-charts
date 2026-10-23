@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Egui controls and kit buttons share the 4 px small radius. Focus rings follow each control's corners and end 2 px outside it; the text cursor uses the theme text colour. Split buttons, sections and `UiExt` combos use the small chevron icons. Migration: `styles::focus::draw_focus_ring` takes the control's radius as its third argument. ([#586](https://github.com/userFRM/egui-charts/issues/586), [#593](https://github.com/userFRM/egui-charts/issues/593), [#594](https://github.com/userFRM/egui-charts/issues/594), [#595](https://github.com/userFRM/egui-charts/issues/595))
+
 - Command palette highlights are inset from the row edges and use the kit small radius for selected and hovered rows. ([#591](https://github.com/userFRM/egui-charts/issues/591))
 
 - Subdued list text and property labels use the weak text colour while values retain the row text colour. Dark weak text reads at 4.5:1 or better on panels and floating windows. ([#589](https://github.com/userFRM/egui-charts/issues/589))
