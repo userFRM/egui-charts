@@ -213,7 +213,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
+                crate::tokens::DESIGN_TOKENS.semantic.brand.accent,
                 params.price_source(),
             );
         }

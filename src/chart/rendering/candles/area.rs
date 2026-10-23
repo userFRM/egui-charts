@@ -10,7 +10,7 @@ use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::model::{Bar, BaselineLevel, PriceSource};
 
-const AREA_ALPHA: u8 = 50;
+const AREA_ALPHA: u8 = 115;
 const HLC_AREA_ALPHA: u8 = 30;
 const BASELINE_FILL_ALPHA: u8 = 30;
 
@@ -227,19 +227,27 @@ fn collect_hlc_points(
 }
 
 fn draw_area_fill(painter: &Painter, points: &[Pos2], baseline_y: f32, color: Color32, alpha: u8) {
-    let area_color = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha);
-
-    for i in 0..points.len() - 1 {
-        let p1 = points[i];
-        let p2 = points[i + 1];
-        let quad = vec![
-            p1,
-            p2,
-            Pos2::new(p2.x, baseline_y),
-            Pos2::new(p1.x, baseline_y),
-        ];
-        painter.add(Shape::convex_polygon(quad, area_color, Stroke::NONE));
+    let top = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+    if !top.is_finite() || baseline_y <= top {
+        return;
     }
+    let mut mesh = egui::Mesh::default();
+    for (i, point) in points.iter().enumerate() {
+        let opacity = (f32::from(alpha) * (baseline_y - point.y) / (baseline_y - top))
+            .clamp(0.0, 255.0)
+            .round() as u8;
+        mesh.colored_vertex(
+            *point,
+            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), opacity),
+        );
+        mesh.colored_vertex(Pos2::new(point.x, baseline_y), Color32::TRANSPARENT);
+        if i > 0 {
+            let n = (2 * i) as u32;
+            mesh.add_triangle(n - 2, n, n - 1);
+            mesh.add_triangle(n - 1, n, n + 1);
+        }
+    }
+    painter.add(mesh);
 }
 
 fn draw_hlc_fill(painter: &Painter, points: &[HlcPoint], bullish: Color32, bearish: Color32) {
@@ -366,4 +374,58 @@ fn draw_baseline_part(
         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), BASELINE_FILL_ALPHA);
     let fill_points = vec![a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)];
     painter.add(Shape::convex_polygon(fill_points, fill_color, Stroke::NONE));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Context, LayerId, RawInput, pos2, vec2};
+
+    #[test]
+    fn area_gradient_uses_visible_high_and_reaches_the_plot_bottom() {
+        // 80 points from y=20 to y=100: y=60 is halfway, so 45% becomes 22.5%.
+        // Moving the visible high to y=40 keeps the same endpoint opacities.
+        for top in [20.0, 40.0] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(RawInput::default(), |_| {
+                let painter = Painter::new(
+                    ctx.clone(),
+                    LayerId::background(),
+                    Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)),
+                );
+                draw_area_fill(
+                    &painter,
+                    &[
+                        pos2(10.0, top),
+                        pos2(20.0, (top + 100.0) / 2.0),
+                        pos2(30.0, top),
+                    ],
+                    100.0,
+                    Color32::BLUE,
+                    115,
+                );
+            });
+            let vertices: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| {
+                    if let Shape::Mesh(mesh) = &s.shape {
+                        Some(mesh.vertices.clone())
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
+                .collect();
+            output.drop_without_applying_deltas();
+            assert!(
+                !vertices.is_empty(),
+                "area fill must carry per-vertex gradient colours"
+            );
+            for vertex in vertices {
+                let expected = (115.0 * (100.0 - vertex.pos.y) / (100.0 - top)).round() as u8;
+                assert_eq!(vertex.color.a(), expected);
+            }
+        }
+    }
 }
