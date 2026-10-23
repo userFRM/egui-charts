@@ -8,7 +8,7 @@
 //! Use [`TimeFormatterBuilder`] for a fluent construction API.
 
 use super::timescale_marks::TickMarkType;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use std::sync::Arc;
 
@@ -27,6 +27,34 @@ pub trait TimeFormatter: Send + Sync {
     /// # Returns
     /// Formatted string to display on the time axis
     fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String;
+
+    /// Clock-face time used to identify calendar boundaries. The returned UTC value
+    /// holds local fields, not another instant.
+    fn wall_time(&self, time: DateTime<Utc>) -> DateTime<Utc> {
+        time
+    }
+
+    /// Formats the hovered bar, retaining this formatter's date and clock conventions.
+    fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+        let mut label = self.format(time, TickMarkType::DayOfMonth);
+        let year = self.format(time, TickMarkType::Year);
+        if year != self.format(Utc::now(), TickMarkType::Year) {
+            label = format!("{label}, {year}");
+        }
+        match bar_seconds {
+            86_400.. => label,
+            60.. => format!("{label} {}", self.format(time, TickMarkType::Time)),
+            1.. => format!(
+                "{label} {}",
+                self.format(time, TickMarkType::TimeWithSeconds)
+            ),
+            _ => format!(
+                "{label} {}{}",
+                self.format(time, TickMarkType::TimeWithSeconds),
+                time.format("%.3f")
+            ),
+        }
+    }
 
     /// Clone this formatter into a Box
     fn clone_box(&self) -> Box<dyn TimeFormatter>;
@@ -56,8 +84,7 @@ impl TimeFormatter for DefaultTimeFormatter {
         match mark_type {
             TickMarkType::Year => time.format("%Y").to_string(),
             TickMarkType::Month => time.format("%b").to_string(),
-            // Show "Jan 15" for day boundaries
-            TickMarkType::DayOfMonth => time.format("%b %d").to_string(),
+            TickMarkType::DayOfMonth => time.format("%d").to_string(),
             TickMarkType::Time => {
                 // Show just time for intraday marks
                 if self.use_24_hour {
@@ -78,6 +105,29 @@ impl TimeFormatter for DefaultTimeFormatter {
                     time.format("%I:%M:%S %p").to_string()
                 }
             }
+        }
+    }
+
+    fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+        if bar_seconds >= 86_400 {
+            let date = time.format("%b %d");
+            return if time.format("%Y").to_string() == Utc::now().format("%Y").to_string() {
+                date.to_string()
+            } else {
+                format!("{date}, {}", time.format("%Y"))
+            };
+        }
+        let date = time.format("%a %d %b '%y");
+        let kind = if bar_seconds >= 60 {
+            TickMarkType::Time
+        } else {
+            TickMarkType::TimeWithSeconds
+        };
+        let clock = self.format(time, kind);
+        if bar_seconds <= 0 && self.show_seconds {
+            format!("{date} {clock}{}", time.format("%.3f"))
+        } else {
+            format!("{date} {clock}")
         }
     }
 
@@ -124,6 +174,14 @@ impl TimeFormatter for LocaleTimeFormatter {
             show_seconds: true,
         }
         .format(time, mark_type)
+    }
+
+    fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+        DefaultTimeFormatter {
+            use_24_hour: self.use_24_hour,
+            show_seconds: true,
+        }
+        .format_crosshair(time, bar_seconds)
     }
 
     fn clone_box(&self) -> Box<dyn TimeFormatter> {
@@ -278,38 +336,14 @@ impl TimezoneAwareFormatter {
 
     /// Convert UTC ts to target timezone
     fn convert_timezone(&self, utc_time: DateTime<Utc>) -> DateTime<Utc> {
-        use chrono::Datelike;
-        use chrono::Timelike;
-
         match &self.timezone {
             TimezoneMode::Utc => utc_time,
-            TimezoneMode::Local => {
-                // Convert to local, then back to UTC representation for formatting
-                let local = utc_time.with_timezone(&chrono::Local);
-                Utc.with_ymd_and_hms(
-                    local.year(),
-                    local.month(),
-                    local.day(),
-                    local.hour(),
-                    local.minute(),
-                    local.second(),
-                )
-                .single()
-                .unwrap_or(utc_time)
-            }
+            TimezoneMode::Local => utc_time
+                .with_timezone(&chrono::Local)
+                .naive_local()
+                .and_utc(),
             TimezoneMode::Timezone(tz) | TimezoneMode::Exchange(tz) => {
-                // Convert to target timezone
-                let converted = utc_time.with_timezone(tz);
-                Utc.with_ymd_and_hms(
-                    converted.year(),
-                    converted.month(),
-                    converted.day(),
-                    converted.hour(),
-                    converted.minute(),
-                    converted.second(),
-                )
-                .single()
-                .unwrap_or(utc_time)
+                utc_time.with_timezone(tz).naive_local().and_utc()
             }
         }
     }
@@ -319,6 +353,15 @@ impl TimeFormatter for TimezoneAwareFormatter {
     fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String {
         let converted = self.convert_timezone(time);
         self.inner.format(converted, mark_type)
+    }
+
+    fn wall_time(&self, time: DateTime<Utc>) -> DateTime<Utc> {
+        self.convert_timezone(time)
+    }
+
+    fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+        self.inner
+            .format_crosshair(self.convert_timezone(time), bar_seconds)
     }
 
     fn clone_box(&self) -> Box<dyn TimeFormatter> {
@@ -495,6 +538,18 @@ mod tests {
         let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
         let result = formatter.format(time, TickMarkType::Time);
         assert_eq!(result, "10:30");
+        assert_eq!(
+            formatter.format_crosshair(time, 3600),
+            "Sat 15 Jun '24 10:30"
+        );
+        let fractional = time + chrono::Duration::milliseconds(123);
+        assert_eq!(
+            TimeFormatterBuilder::new()
+                .with_timezone(TimezoneMode::nyse())
+                .build()
+                .format_crosshair(fractional, 0),
+            "Sat 15 Jun '24 10:30:00.123"
+        );
     }
 
     #[test]

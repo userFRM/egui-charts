@@ -70,6 +70,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Intraday time marks use actual session bars and the formatter's timezone for calendar boundaries, so closed hours and missing weekends take no slots and month labels name the new month. Day labels show the day number. `TimeFormatter::wall_time` supplies calendar fields and `format_crosshair` supplies a hover readout; both have defaults for existing custom formatters. Intraday hover dates include weekday, day, month, short year and time, with fractional seconds preserved through timezone conversion.
+
 - Price ticks, price lines and crosshair price labels use the feed instrument's `price_decimals`, which clears when the feed reloads. Hosts without a feed can set `PriceScale::set_price_precision`; an unspecified precision keeps at least two decimals on price ticks. Default price marks stay at least 40 px apart. Price tags have square left corners and white text on financial colours, while pale custom fills retain dark text.
 
 - The export dialog stays open to show success with the file path or an error, and prevents duplicate requests while an export is pending. The demo reports file write results and offers PNG and CSV downloads in the browser. Image exports capture a frame after closing the dialog and report the result in a notice.

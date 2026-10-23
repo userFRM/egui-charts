@@ -190,8 +190,16 @@ impl TickMarkGenerator {
         // Determine mark type and weight threshold
         let (mark_type, weight_threshold) = self.determine_mark_type_and_weight(interval);
 
-        // Generate candidate marks
-        let mut marks = self.generate_candidate_marks(start_time, end_time, interval, mark_type);
+        let intraday = bars.windows(2).any(|pair| {
+            let seconds = (pair[1].0 - pair[0].0).num_seconds();
+            (1..86_400).contains(&seconds)
+        });
+        // Session gaps take no horizontal space; use the supplied bar boundaries.
+        let mut marks = if intraday && interval < Duration::days(30) {
+            self.generate_bar_marks(bars, interval, mark_type)
+        } else {
+            self.generate_candidate_marks(start_time, end_time, interval, mark_type)
+        };
 
         // Filter by weight threshold
         marks.retain(|mark| mark.weight >= weight_threshold);
@@ -200,7 +208,24 @@ impl TickMarkGenerator {
         marks = self.map_marks_to_bars(marks, bars);
 
         // Apply spacing constraints
-        marks = self.apply_spacing_constraints(marks, width_pixels);
+        marks = if intraday {
+            let span = bars.last().unwrap().1.saturating_sub(bars[0].1).max(1) as f32;
+            let min_bars = self.config.min_spacing * span / width_pixels;
+            marks.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.index.cmp(&b.index)));
+            let mut kept: Vec<TickMark> = Vec::new();
+            for mark in marks {
+                if kept
+                    .iter()
+                    .all(|other| mark.index.abs_diff(other.index) as f32 >= min_bars)
+                {
+                    kept.push(mark);
+                }
+            }
+            kept.sort_by_key(|mark| mark.time);
+            kept
+        } else {
+            self.apply_spacing_constraints(marks, width_pixels)
+        };
 
         // Limit to max marks
         if marks.len() > self.config.max_marks {
@@ -209,6 +234,55 @@ impl TickMarkGenerator {
 
         for mark in &mut marks {
             mark.label = self.format_time_label(mark.time, mark.mark_type);
+        }
+        marks
+    }
+
+    /// Calendar and clock boundaries on actual bars, in the formatter's timezone.
+    fn generate_bar_marks(
+        &self,
+        bars: &[(DateTime<Utc>, usize)],
+        interval: Duration,
+        primary_type: TickMarkType,
+    ) -> Vec<TickMark> {
+        let mut marks = Vec::new();
+        let mut previous: Option<DateTime<Utc>> = None;
+        for &(time, index) in bars {
+            let local = self.formatter.wall_time(time);
+            let boundary = previous.filter(|previous| previous.date_naive() != local.date_naive());
+            let (kind, weight) = if boundary.is_some_and(|previous| previous.year() != local.year())
+            {
+                (TickMarkType::Year, TickMarkWeight::YEAR)
+            } else if boundary.is_some_and(|previous| previous.month() != local.month()) {
+                (TickMarkType::Month, TickMarkWeight::MONTH)
+            } else {
+                self.classify_time_boundary(local, primary_type)
+            };
+            let day = boundary.is_some() || local.time().num_seconds_from_midnight() == 0;
+            let clock_mark = interval < Duration::days(1)
+                && (i64::from(local.time().num_seconds_from_midnight()) * 1000
+                    + i64::from(local.timestamp_subsec_millis()))
+                .rem_euclid(interval.num_milliseconds().max(1))
+                    == 0;
+            let day_mark = day
+                && (interval < Duration::days(1)
+                    || i64::from(local.num_days_from_ce()).rem_euclid(interval.num_days().max(1))
+                        == 0);
+            if kind == TickMarkType::Year || kind == TickMarkType::Month || day_mark || clock_mark {
+                let (mark_type, weight) = if day && weight < TickMarkWeight::DAY {
+                    (TickMarkType::DayOfMonth, TickMarkWeight::DAY)
+                } else {
+                    (kind, weight)
+                };
+                marks.push(TickMark {
+                    time,
+                    mark_type,
+                    weight,
+                    label: String::new(),
+                    index,
+                });
+            }
+            previous = Some(local);
         }
         marks
     }
@@ -647,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_marks_are_unchanged_and_only_survivors_are_formatted() {
+    fn time_marks_keep_boundaries_and_only_survivors_are_formatted() {
         use super::super::time_formatter::CustomTimeFormatter;
         use std::sync::{
             Arc,
@@ -679,7 +753,7 @@ mod tests {
                 vec![
                     (0, Year, 100, "2024", 0),
                     (14400, Time, 50, "04:00", 480),
-                    (86400, DayOfMonth, 60, "Jan 02", 2880),
+                    (86400, DayOfMonth, 60, "02", 2880),
                 ],
             ),
         ] {
@@ -731,19 +805,19 @@ mod tests {
         // of one bar keeps every mark.
         let expected = [
             (1, Time, 50, "16:00", 1),
-            (9, DayOfMonth, 60, "Jan 21", 9),
+            (9, DayOfMonth, 60, "21", 9),
             (17, Time, 50, "08:00", 17),
             (25, Time, 50, "16:00", 25),
-            (33, DayOfMonth, 70, "Jan 22", 33),
+            (33, DayOfMonth, 70, "22", 33),
             (41, Time, 50, "08:00", 41),
             (49, Time, 50, "16:00", 49),
-            (57, DayOfMonth, 60, "Jan 23", 57),
+            (57, DayOfMonth, 60, "23", 57),
             (65, Time, 50, "08:00", 65),
             (73, Time, 50, "16:00", 73),
-            (81, DayOfMonth, 60, "Jan 24", 81),
+            (81, DayOfMonth, 60, "24", 81),
             (89, Time, 50, "08:00", 89),
             (97, Time, 50, "16:00", 97),
-            (105, DayOfMonth, 60, "Jan 25", 105),
+            (105, DayOfMonth, 60, "25", 105),
             (113, Time, 50, "08:00", 113),
         ];
         let generator = TickMarkGenerator::new();
@@ -764,6 +838,66 @@ mod tests {
                 .collect();
             assert_eq!(actual, expected, "pan {pan}");
         }
+        use crate::scales::{TimeFormatterBuilder, TimezoneMode};
+        // Local midnight, including a month change, is a date mark in either zone.
+        let start = Utc.with_ymd_and_hms(2024, 3, 30, 0, 0, 0).unwrap();
+        let bars: Vec<_> = (0..120)
+            .map(|i| (start + Duration::hours(i), i as usize))
+            .collect();
+        for zone in [TimezoneMode::Utc, TimezoneMode::nyse()] {
+            let formatter = TimeFormatterBuilder::new().with_timezone(zone).build();
+            let generator = TickMarkGenerator::with_formatter(
+                TickMarkGeneratorConfig::default(),
+                formatter.clone_box(),
+            );
+            let marks = generator.generate_marks(bars[0].0, bars[119].0, 1100.0, &bars);
+            assert!(
+                marks
+                    .iter()
+                    .any(|mark| mark.mark_type == TickMarkType::Month && mark.label == "Apr")
+            );
+            for mark in marks
+                .iter()
+                .filter(|mark| mark.weight >= TickMarkWeight::DAY)
+            {
+                assert_eq!(formatter.wall_time(mark.time).hour(), 0, "{mark:?}");
+            }
+        }
+        // Missing weekends and closed hours consume no slots; marks use actual session bars.
+        let start = Utc.with_ymd_and_hms(2024, 3, 20, 13, 30, 0).unwrap();
+        let bars: Vec<_> = (0..30)
+            .flat_map(|day| {
+                let time = start + Duration::days(day);
+                (0..7).filter_map(move |hour| {
+                    (time.weekday().number_from_monday() <= 5)
+                        .then_some(time + Duration::hours(hour))
+                })
+            })
+            .enumerate()
+            .map(|(index, time)| (time, index))
+            .collect();
+        let marks = TickMarkGenerator::new().generate_marks(
+            bars[0].0,
+            bars.last().unwrap().0,
+            1100.0,
+            &bars,
+        );
+        assert!(
+            marks
+                .iter()
+                .any(|mark| mark.mark_type == TickMarkType::Month && mark.label == "Apr")
+        );
+        assert!(
+            marks
+                .iter()
+                .all(|mark| bars[mark.index].0 == mark.time && mark.time.hour() == 13)
+        );
+        let min_bars = 50.0 * (bars.len() - 1) as f32 / 1100.0;
+        assert!(
+            marks
+                .windows(2)
+                .all(|pair| pair[0].index.abs_diff(pair[1].index) as f32 >= min_bars)
+        );
     }
 
     #[test]
@@ -815,7 +949,7 @@ mod tests {
         // Shows "Jun 15" for day boundaries
         assert_eq!(
             generator.format_time_label(time, TickMarkType::DayOfMonth),
-            "Jun 15"
+            "15"
         );
         assert_eq!(
             generator.format_time_label(time, TickMarkType::Time),
