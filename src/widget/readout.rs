@@ -28,7 +28,7 @@ impl Chart {
                     precision: study.precision().unwrap_or_else(|| {
                         if study.is_overlay() {
                             self.instrument()
-                                .and_then(|instrument| instrument.price_decimals)
+                                .and_then(crate::scales::instrument_price_precision)
                                 .map_or_else(
                                     || {
                                         crate::chart::renderers::price_decimals(
@@ -37,7 +37,6 @@ impl Chart {
                                     },
                                     usize::from,
                                 )
-                                .min(8)
                         } else {
                             2
                         }

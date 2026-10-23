@@ -334,6 +334,8 @@ pub struct DataWindowInfo {
     pub change: f64,
     /// Change from previous close (percentage)
     pub change_percent: f64,
+    /// Decimals of abbreviated volume fields.
+    pub volume_precision: Option<u8>,
     /// Previous close price
     pub prev_close: f64,
     /// Instrument price decimals; `None` keeps magnitude-based formatting.
@@ -349,6 +351,13 @@ impl DataWindowInfo {
             symbol: symbol.into(),
             ..Default::default()
         }
+    }
+
+    /// Applies the instrument's price and volume precision to this readout.
+    pub fn with_instrument(mut self, instrument: &crate::model::Instrument) -> Self {
+        self.price_decimals = crate::scales::instrument_price_precision(instrument);
+        self.volume_precision = instrument.volume_decimals;
+        self
     }
 
     /// Set OHLCV data

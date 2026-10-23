@@ -371,6 +371,409 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
     use egui::{Context, Event, Pos2, Rect, Shape};
 
+    #[cfg(feature = "studies")]
+    #[test]
+    fn pane_and_price_ticks_share_font_and_colour() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0], &[110.0]);
+            *chart.config_mut() = theme.apply_to_config(chart.config().clone());
+            chart.config_mut().show_symbol_last_val = false;
+            chart.config_mut().show_volume = false;
+            chart.config_mut().show_indicator_last_val = false;
+            chart.set_instrument(Some(
+                crate::model::Instrument::new("SAMPLE").with_price_decimals(5),
+            ));
+            chart.add_indicator(Box::new(crate::studies::RSI::default()));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let pane = &chart.get_rendered_indicator_panes()[0];
+            let ticks: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.x > pane.chart_rect.right()
+                            && text.galley.text().parse::<f64>().is_ok() =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(ticks.iter().any(|text| text.pos.y > pane.panel_rect.top()));
+            assert!(ticks.iter().any(|text| text.pos.y < pane.panel_rect.top()));
+            for tick in ticks {
+                let format = &tick.galley.job.sections[0].format;
+                assert_eq!(format.font_id, super::axis_font(&ctx));
+                if tick.pos.y > pane.panel_rect.top() {
+                    assert_eq!(
+                        tick.galley
+                            .text()
+                            .split_once('.')
+                            .map_or(0, |(_, decimals)| decimals.len()),
+                        2
+                    );
+                }
+                assert_eq!(
+                    format.color,
+                    theme.chart.axis_text,
+                    "{}",
+                    tick.galley.text()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn currency_button_reserves_ticks_and_opens_its_menu() {
+        use crate::model::Instrument;
+        for left in [false, true] {
+            for currency in [None, Some(""), Some("USD")] {
+                let ctx = Context::default();
+                let mut chart = chart(&[1.0], &[2.0]);
+                chart.config_mut().show_volume = false;
+                chart.config_mut().right_axis_width = 0.0;
+                chart.config_mut().left_axis_width = 0.0;
+                chart.config_mut().show_right_axis = !left;
+                chart.config_mut().show_left_axis = left;
+                chart.set_instrument(currency.map(|code| {
+                    Instrument::new("SAMPLE")
+                        .with_currency(code)
+                        .with_price_decimals(0)
+                }));
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let header = painted.iter().find_map(|shape| match shape {
+                    Shape::Text(text) if text.galley.text() == "USD" => Some(text),
+                    _ => None,
+                });
+                assert_eq!(
+                    header.is_some(),
+                    currency.is_some_and(|code| !code.is_empty())
+                );
+                if let Some(header) = header {
+                    assert_eq!(
+                        header.galley.job.sections[0].format.font_id,
+                        super::axis_font(&ctx)
+                    );
+                    let plot = chart.get_rendered_price_rect();
+                    assert!(
+                        (header.pos.y + header.galley.size().y / 2.0 - plot.top() - 12.0).abs()
+                            < 0.1
+                    );
+                    let box_rect = painted
+                        .iter()
+                        .find_map(|shape| match shape {
+                            Shape::Rect(rect)
+                                if rect.rect.height() == 24.0 && rect.rect.contains(header.pos) =>
+                            {
+                                Some(rect.rect)
+                            }
+                            _ => None,
+                        })
+                        .expect("currency backdrop");
+                    assert_eq!(
+                        box_rect.right(),
+                        if left {
+                            plot.left()
+                        } else {
+                            plot.right()
+                                + chart
+                                    .config()
+                                    .right_axis_width
+                                    .max(chart.measured_axis_width)
+                        }
+                    );
+                    for shape in &painted {
+                        if let Shape::Text(text) = shape
+                            && text.galley.text().parse::<f64>().is_ok()
+                            && text.pos.x >= box_rect.left()
+                        {
+                            assert!(
+                                !Rect::from_min_size(text.pos, text.galley.size())
+                                    .intersects(box_rect)
+                            );
+                        }
+                    }
+                    let pos = box_rect.center();
+                    let events = vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ];
+                    frame(&ctx, &mut chart, 0.2, events);
+                    let popup = shapes(&ctx, &mut chart, 0.3, vec![]);
+                    assert_eq!(popup.iter().filter(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "USD")).count(), 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tick_metadata_controls_axis_and_legend_decimals() {
+        use crate::model::Instrument;
+        for (tick, price, decimals, explicit) in [
+            (0.25, 125.25, 2, None),
+            (0.00001, 1.23456, 5, None),
+            (1e-18, 3e-18, 18, None),
+            (1.0, 100.0, 0, None),
+            (0.01, 0.0, 2, None),
+            (0.25, 125.25, 4, Some(4)),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[price], &[price]);
+            chart.config_mut().show_volume = false;
+            chart.config_mut().show_indicator_last_val = false;
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::new(crate::studies::MACD::default()));
+            let mut instrument = Instrument::new("SAMPLE").with_tick_size(tick);
+            instrument.price_decimals = explicit;
+            chart.set_instrument(Some(instrument));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let text: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            let expected = format!("{price:.decimals$}");
+            assert!(
+                text.contains(&expected.as_str()),
+                "last price {expected}: {text:?}"
+            );
+            assert!(
+                text.contains(&format!("C {expected}").as_str()),
+                "legend {expected}: {text:?}"
+            );
+            #[cfg(feature = "studies")]
+            if decimals == 0 {
+                for pane in chart.get_rendered_indicator_panes() {
+                    let labels: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Text(text)
+                                if text.pos.x > pane.chart_rect.right()
+                                    && text.pos.y > pane.panel_rect.top()
+                                    && text.galley.text().parse::<f64>().is_ok() =>
+                            {
+                                Some(text.galley.text())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let unique: std::collections::HashSet<_> = labels.iter().collect();
+                    assert_eq!(
+                        unique.len(),
+                        labels.len(),
+                        "pane ticks must not repeat rounded values: {labels:?}"
+                    );
+                }
+            }
+            let plot = chart.get_rendered_price_rect();
+            for shape in &painted {
+                if let Shape::Text(text) = shape
+                    && text.pos.x > plot.right()
+                    && text.galley.text().parse::<f64>().is_ok()
+                {
+                    assert_eq!(
+                        text.galley
+                            .text()
+                            .split_once('.')
+                            .map_or(0, |(_, fraction)| fraction.len()),
+                        decimals
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn study_axis_tags_follow_visible_last_values_and_separate_collisions() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use egui::Color32;
+        for (overlay, shown) in [(true, true), (false, true), (true, false), (false, false)] {
+            for side in [Some(false), Some(true), None] {
+                let ctx = Context::default();
+                let mut chart = chart(&[100.0], &[110.0]);
+                chart.config_mut().show_right_axis = side == Some(false);
+                chart.config_mut().show_left_axis = side == Some(true);
+                chart.config_mut().show_indicator_last_val = shown;
+                chart.config_mut().show_symbol_last_val = false;
+                chart.config_mut().show_volume = false;
+                let colors = [
+                    Color32::from_rgb(41, 98, 255),
+                    Color32::from_rgb(255, 167, 38),
+                ];
+                let id = chart.add_indicator(Box::new(
+                    CustomIndicator::new("Colliding", |bars| {
+                        vec![
+                            IndicatorValue::Multiple(vec![105.0, 105.0, 106.0, f64::NAN]);
+                            bars.len()
+                        ]
+                    })
+                    .with_overlay(overlay)
+                    .with_line_cnt(4)
+                    .with_colors(vec![
+                        colors[0],
+                        colors[1],
+                        Color32::RED,
+                        Color32::GREEN,
+                    ]),
+                ));
+                let study = chart.indicator_mut(id).unwrap();
+                let mut settings = study.settings();
+                settings.precision = Some(4);
+                settings.plots[2].visible = false;
+                study.apply_settings(&[], settings).unwrap();
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let plot = if overlay {
+                    chart.get_rendered_price_rect()
+                } else {
+                    chart.get_rendered_indicator_panes()[0].chart_rect
+                };
+                let tags: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Rect(rect) if colors.contains(&rect.fill) => Some(rect.rect),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!painted.iter().any(|shape| matches!(shape,
+                    Shape::Text(text) if text.galley.text() == "106.0000"
+                )));
+                assert_eq!(
+                    tags.len(),
+                    if shown && side.is_some() { 2 } else { 0 },
+                    "overlay={overlay}"
+                );
+                if shown && side.is_some() {
+                    for tag in &tags {
+                        assert_eq!(tag.height(), 15.0);
+                        if side == Some(true) {
+                            assert!((plot.left() - tag.right() - 5.0).abs() < 0.1);
+                        } else {
+                            assert!((tag.left() - plot.right() - 5.0).abs() < 0.1);
+                        }
+                        assert!(tag.top() >= plot.top() && tag.bottom() <= plot.bottom());
+                        let text = painted
+                            .iter()
+                            .find_map(|shape| match shape {
+                                Shape::Text(text)
+                                    if tag.contains_rect(Rect::from_min_size(
+                                        text.pos,
+                                        text.galley.size(),
+                                    )) =>
+                                {
+                                    Some(text)
+                                }
+                                _ => None,
+                            })
+                            .expect("value text inside its tag");
+                        assert_eq!(text.galley.text(), "105.0000");
+                        assert_eq!(text.galley.job.sections[0].format.color, Color32::WHITE);
+                    }
+                    let separation = (tags[0].center().y - tags[1].center().y).abs();
+                    assert!(
+                        (separation - (tags[0].height() + tags[1].height()) / 2.0).abs() < 0.01
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn measured_axis_keeps_wide_tags_inside_shared_plot_insets() {
+        use crate::model::{Instrument, PriceLine};
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [320.0, 800.0] {
+                for pane_widest in [false, true] {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut chart = chart(&[100.0], &[110.0]);
+                    chart.set_instrument(Some(Instrument::new("SAMPLE").with_price_decimals(8)));
+                    chart.config_mut().show_volume = false;
+                    chart.config_mut().show_symbol_last_val = false;
+                    chart.config_mut().show_indicator_last_val = false;
+                    if pane_widest {
+                        chart.add_indicator(Box::new(CustomIndicator::new("Wide pane", |bars| {
+                            vec![IndicatorValue::Single(12345678.0); bars.len()]
+                        })));
+                    } else {
+                        chart.set_price_lines(
+                            crate::widget::SeriesId::MAIN,
+                            vec![PriceLine::new(105.0, egui::Color32::BLUE)],
+                        );
+                        chart.add_indicator(Box::new(crate::studies::RSI::default()));
+                    }
+                    let mut widget = Rect::NOTHING;
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                widget = chart.show(ui).rect;
+                            });
+                        },
+                    );
+                    let painted = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let plot = chart.get_rendered_price_rect();
+                    assert!((plot.left() - widget.left()).abs() <= 8.0);
+                    assert!(plot.width() > 0.0);
+                    for pane in chart.get_rendered_indicator_panes() {
+                        assert_eq!(pane.chart_rect.x_range(), plot.x_range());
+                    }
+                    for shape in &painted {
+                        if let Shape::Text(text) = &shape.shape
+                            && text.pos.x > plot.right()
+                            && text.galley.text().parse::<f64>().is_ok()
+                        {
+                            assert!(
+                                text.pos.x + text.galley.size().x <= widget.right() - 8.0,
+                                "axis text must fit on its first frame"
+                            );
+                        }
+                    }
+                    if !pane_widest {
+                        let tag = painted
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                Shape::Rect(rect) if rect.fill == egui::Color32::BLUE => {
+                                    Some(rect.rect)
+                                }
+                                _ => None,
+                            })
+                            .expect("custom price tag");
+                        assert!((tag.left() - plot.right() - 5.0).abs() < 0.1);
+                        assert!((widget.right() - tag.right() - 8.0).abs() < 0.1);
+                    }
+                }
+            }
+        }
+    }
+
     /// A narrow legend wraps whole fields before the plot's axis inset.
     #[test]
     fn legend_fields_stay_inside_the_plot() {

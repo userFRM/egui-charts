@@ -219,9 +219,9 @@ pub struct ChartConfig {
     pub show_right_axis: bool,
     /// Whether to show left price axis
     pub show_left_axis: bool,
-    /// Width of right price axis in pixels
+    /// Minimum right price axis width in pixels; current labels can grow the column.
     pub right_axis_width: f32,
-    /// Width of left price axis in pixels
+    /// Minimum left price axis width in pixels; current labels can grow the column.
     pub left_axis_width: f32,
     /// Scale mode for right price axis (Normal, Logarithmic, Percentage, IndexedTo100)
     pub right_axis_scale_mode: PriceScaleMode,
@@ -241,6 +241,12 @@ pub struct ChartConfig {
     pub show_indicator_labels: bool,
     /// Whether to show indicator last values
     pub show_indicator_last_val: bool,
+    /// Preserve price units per bar when the time scale zooms or the pane resizes.
+    pub lock_price_to_bar_ratio: bool,
+    /// Draw the latest valid bid and ask lines and axis values supplied by the host.
+    pub show_bid_ask: bool,
+    /// Draw the highest high and lowest low of the visible bars on the price scale.
+    pub show_high_low: bool,
     /// Whether to show countdown to next candle
     pub show_countdown: bool,
     /// Whether to show "Go to Realtime" button when scrolled away from live edge
@@ -375,6 +381,9 @@ impl Default for ChartConfig {
             show_symbol_prev_close: false,
             show_indicator_labels: true,
             show_indicator_last_val: true,
+            lock_price_to_bar_ratio: false,
+            show_bid_ask: false,
+            show_high_low: false,
             show_countdown: true,
             show_realtime_btn: true,
             realtime_button_pos: RealtimeButtonPos::TopCenter,

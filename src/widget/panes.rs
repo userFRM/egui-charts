@@ -160,10 +160,18 @@ impl Chart {
                 indicator.as_ref(),
                 visible_range.clone(),
                 coords,
-                Some((plot.x_range(), self.config.show_right_axis)),
+                Some(plot.x_range()),
                 collapsed,
+                if self.config.show_right_axis {
+                    Some(crate::scales::PriceScaleId::Right)
+                } else if self.config.show_left_axis {
+                    Some(crate::scales::PriceScaleId::Left)
+                } else {
+                    None
+                },
                 hover.map(|pos| (pos, crosshair_options)),
             ) {
+                self.measured_axis_width = self.measured_axis_width.max(panel.measured_axis_width);
                 let PaneInteraction {
                     panel_rect,
                     chart_rect,

@@ -253,6 +253,7 @@ pub struct PaneInteraction {
 pub struct IndicatorPane {
     config: IndicatorPaneConfig,
     pub(super) bar_index: Option<usize>,
+    pub(super) measured_axis_width: f32,
 }
 
 impl IndicatorPane {
@@ -261,6 +262,7 @@ impl IndicatorPane {
         Self {
             config,
             bar_index: None,
+            measured_axis_width: 0.0,
         }
     }
 
@@ -335,12 +337,13 @@ impl IndicatorPane {
         // Draw y-axis labels
         self.draw_y_axis_labels(
             painter,
-            (rect, chart_rect),
-            (y_min, y_max),
-            text_color,
-            indicator.precision().unwrap_or(2),
+            rect,
+            chart_rect,
+            y_min,
+            y_max,
+            indicator,
+            Some(crate::scales::PriceScaleId::Right),
             None,
-            false,
         );
 
         // Draw indicator legend at top-left. The non-interactive path cannot
@@ -429,12 +432,13 @@ impl IndicatorPane {
         // Draw y-axis labels
         self.draw_y_axis_labels(
             painter,
-            (rect, chart_rect),
-            (y_min, y_max),
-            text_color,
-            indicator.precision().unwrap_or(2),
+            rect,
+            chart_rect,
+            y_min,
+            y_max,
+            indicator,
+            Some(crate::scales::PriceScaleId::Right),
             None,
-            false,
         );
 
         // Draw indicator legend at top-left. The non-interactive path cannot
@@ -462,7 +466,16 @@ impl IndicatorPane {
         visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) -> Option<PaneInteraction> {
-        self.show_aligned_interactive_in(ui, indicator, visible_range, coords, None, false, None)
+        self.show_aligned_interactive_in(
+            ui,
+            indicator,
+            visible_range,
+            coords,
+            None,
+            false,
+            Some(crate::scales::PriceScaleId::Right),
+            None,
+        )
     }
 
     pub(super) fn show_aligned_interactive_in(
@@ -471,8 +484,9 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
         visible_range: Range<usize>,
         coords: IndicatorCoordParams,
-        plot: Option<(egui::emath::Rangef, bool)>,
+        plot_x: Option<egui::emath::Rangef>,
         collapsed: bool,
+        axis: Option<crate::scales::PriceScaleId>,
         hover: Option<(Pos2, crate::config::CrosshairOptions)>,
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
@@ -506,8 +520,8 @@ impl IndicatorPane {
         // Calculate drawing area to match main chart layout
         let left_padding = layout::LEFT_PADDING;
         let right_padding = layout::RIGHT_PADDING;
-        let left_axis = plot.is_some_and(|(_, right)| !right);
-        let plot_x = plot.map(|(range, _)| range).unwrap_or_else(|| {
+        let left_axis = axis == Some(crate::scales::PriceScaleId::Left);
+        let plot_x = plot_x.unwrap_or_else(|| {
             egui::emath::Rangef::new(
                 rect.left() + left_padding,
                 (rect.right() - right_padding).max(rect.left() + left_padding),
@@ -582,12 +596,13 @@ impl IndicatorPane {
                     &options,
                     chart_rect.bottom(),
                 );
+                axis?;
                 crate::chart::renderers::render_crosshair_price_tag(
                     &context,
                     pos,
-                    &mapping
-                        .price
-                        .with_price_precision(indicator.precision().map(|p| p as u8)),
+                    &mapping.price.with_price_precision(Some(
+                        indicator.precision().unwrap_or(2).min(255) as u8,
+                    )),
                     &options,
                     if left_axis {
                         chart_rect.left()
@@ -598,14 +613,8 @@ impl IndicatorPane {
                 )
             });
             // Draw y-axis labels
-            self.draw_y_axis_labels(
-                painter,
-                (rect, chart_rect),
-                (y_min, y_max),
-                text_color,
-                indicator.precision().unwrap_or(2),
-                tag,
-                left_axis,
+            self.measured_axis_width = self.draw_y_axis_labels(
+                painter, rect, chart_rect, y_min, y_max, indicator, axis, tag,
             );
         }
 
@@ -1029,45 +1038,76 @@ impl IndicatorPane {
     fn draw_y_axis_labels(
         &self,
         painter: &egui::Painter,
-        rects: (Rect, Rect),
-        range: (f64, f64),
-        text_color: Color32,
-        precision: usize,
+        full_rect: Rect,
+        chart_rect: Rect,
+        y_min: f64,
+        y_max: f64,
+        indicator: &dyn Indicator,
+        axis: Option<crate::scales::PriceScaleId>,
         crosshair_tag: Option<Rect>,
-        left_axis: bool,
-    ) {
-        let (full_rect, chart_rect) = rects;
-        let (y_min, y_max) = range;
-        let range = y_max - y_min;
-        let step = self.calculate_nice_step(range, 5);
-        let label_x = if left_axis {
+    ) -> f32 {
+        let Some(axis) = axis else {
+            return 0.0;
+        };
+        let left = axis == crate::scales::PriceScaleId::Left;
+        let align = if left {
+            egui::Align2::RIGHT_CENTER
+        } else {
+            egui::Align2::LEFT_CENTER
+        };
+        let axis_edge = if left {
+            chart_rect.left()
+        } else {
+            full_rect.right()
+        };
+        let text_color = painter.ctx().active_theme().chart.axis_text;
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(y_min, y_max),
+            chart_rect.top(),
+            chart_rect.bottom(),
+            false,
+        )
+        .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
+        let mut tags = vec![crosshair_tag];
+        if self.config.show_values {
+            crate::chart::rendering::axes::render_study_tags(
+                painter, chart_rect, &map, indicator, axis_edge, &mut tags,
+            );
+        }
+        let mut width = crate::chart::rendering::axes::price_axis_width(painter, &map, &[]);
+        for tag in tags.iter().flatten() {
+            width = width.max(tag.width() + 5.0 + 8.0);
+        }
+        let label_x = if left {
             chart_rect.left() - DESIGN_TOKENS.spacing.sm
         } else {
             chart_rect.right() + DESIGN_TOKENS.spacing.sm
         };
 
-        let mut y_val = (y_min / step).ceil() * step;
-        while y_val <= y_max {
-            let y = self.value_to_y(y_val, chart_rect, y_min, y_max);
-            if y >= full_rect.min.y + 10.0
-                && y <= full_rect.max.y - 10.0
-                && !crosshair_tag.is_some_and(|tag| tag.expand(8.0).y_range().contains(y))
-            {
-                let label = format!("{y_val:.precision$}");
-                painter.text(
-                    Pos2::new(label_x, y),
-                    if left_axis {
-                        egui::Align2::RIGHT_CENTER
-                    } else {
-                        egui::Align2::LEFT_CENTER
-                    },
+        for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
+            let y = mark.y_coord;
+            if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
+                let label = mark.label;
+                let galley = painter.layout_no_wrap(
                     label,
                     crate::chart::rendering::axes::axis_font(painter.ctx()),
                     text_color,
                 );
+                let bounds = align.anchor_size(Pos2::new(label_x, y), galley.size());
+                if tags.iter().flatten().any(|tag| tag.intersects(bounds)) {
+                    continue;
+                }
+                painter.text(
+                    Pos2::new(label_x, y),
+                    align,
+                    galley.text(),
+                    crate::chart::rendering::axes::axis_font(painter.ctx()),
+                    text_color,
+                );
             }
-            y_val += step;
         }
+        width
     }
 
     /// Builds the legend text (indicator name plus its current value) shown at

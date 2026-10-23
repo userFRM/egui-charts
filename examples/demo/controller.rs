@@ -12,7 +12,6 @@ mod live;
 use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
-use egui_charts::chart::series::SeriesSettings;
 use egui_charts::model::{Alert, AlertCondition, AlertFrequency};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
@@ -205,7 +204,7 @@ impl DemoApp {
             .with_symbol(symbol)
             .with_timeframe(timeframe)
             .with_theme(theme.clone())
-            .with_visible_candles(210)
+            .with_visible_candles(0)
             .with_chart_options(options)
             .build();
         chart.config_mut().volume_height_fraction = 0.25;
@@ -516,6 +515,20 @@ impl DemoApp {
         settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
         settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
         settings.scales_and_lines.show_countdown = config.show_countdown;
+        settings.scales_and_lines.show_bid_ask = config.show_bid_ask;
+        settings.scales_and_lines.show_high_low = config.show_high_low;
+        settings.margins.top_percent =
+            (self.chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
+        settings.margins.bottom_percent = (self
+            .chart
+            .state()
+            .price_scale()
+            .options()
+            .scale_margins
+            .bottom
+            * 100.0) as f32;
+        settings.margins.right_bars =
+            self.chart.chart_options().time_scale.right_offset.max(0.0) as u32;
         let scale = self.chart.state().price_scale();
         settings.scales_and_lines.auto_scale = !scale.is_manual();
         settings.scales_and_lines.log_scale =
@@ -528,7 +541,7 @@ impl DemoApp {
 
     fn open_series_settings_dialog(&mut self) {
         self.series_settings
-            .open(SeriesId::MAIN, SeriesSettings::default());
+            .open(SeriesId::MAIN, self.chart.series_settings());
     }
 
     fn open_drawing_props_for(&mut self, drawing_id: usize) {
@@ -1920,12 +1933,59 @@ fn apply_settings_state(
     config.show_symbol_prev_close = state.scales_and_lines.show_prev_close_label;
     config.show_prev_close_line = state.scales_and_lines.show_prev_close;
     config.show_countdown = state.scales_and_lines.show_countdown;
+    config.show_bid_ask = state.scales_and_lines.show_bid_ask;
+    config.show_high_low = state.scales_and_lines.show_high_low;
+    chart.price_scale_mut().options_mut().scale_margins = egui_charts::scales::PriceScaleMargins {
+        top: f64::from(state.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
+        bottom: f64::from(state.margins.bottom_percent.clamp(0.0, 100.0)) / 100.0,
+    };
+    if state.margins.right_bars != chart.chart_options().time_scale.right_offset.max(0.0) as u32 {
+        chart.set_right_margin(state.margins.right_bars as f32);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// A narrow first layout and later resizes retain the configured zoom and live edge.
+    #[test]
+    fn opening_view_keeps_default_spacing_across_resizes() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for scale in [1.0, 2.0] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.live.set_paused(true);
+                *app.chart.config_mut() = theme.apply_to_config(app.chart.config().clone());
+                for width in [140.0, 0.0, 80.0, 320.0, 1440.0] {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            app.chart.show(ui);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                    let time_scale = app.chart.state().time_scale();
+                    assert_eq!(
+                        time_scale.bar_spacing(),
+                        6.1,
+                        "width {width}, scale {scale}"
+                    );
+                    assert!(
+                        (time_scale.right_offset() - (65.0 - 6.1 * 0.5 - 1.0) / 6.1).abs() < 1e-5
+                    );
+                }
+            }
+        }
+    }
 
     /// Existing drawing settings survive opening and applying the dialog, and the toolbar
     /// reflects locks changed through other drawing controls rather than an optimistic toggle.

@@ -7,6 +7,7 @@
 //! These functions are called directly by the chart widget and the modern
 //! rendering layer in [`rendering`](super::rendering).
 
+mod axis_currency;
 mod bar;
 mod candle;
 mod context;
@@ -18,6 +19,7 @@ mod session_breaks;
 mod tooltip;
 mod volume;
 
+pub use axis_currency::render_axis_currency;
 pub use bar::render_ohlc_bar;
 pub use candle::render_candle;
 pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};

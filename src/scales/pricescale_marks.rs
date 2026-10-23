@@ -117,8 +117,8 @@ impl PriceMarkGenerator {
 
         let price_range = max_price - min_price;
 
-        // Guard against zero or very small price range
-        if price_range <= f64::EPSILON * 1000.0 {
+        // An absolute epsilon would discard representable sub-unit ranges.
+        if price_range <= 0.0 {
             return Vec::new();
         }
 
@@ -489,6 +489,13 @@ mod tests {
         for (mode, min, max, precision, expected) in [
             (PriceScaleMode::Normal, 18_200.0, 22_800.0, None, "20000.00"),
             (PriceScaleMode::Normal, 700.0, 730.0, Some(3), "710.000"),
+            (
+                PriceScaleMode::Normal,
+                1e-18,
+                9e-18,
+                Some(18),
+                "0.000000000000000005",
+            ),
             (
                 PriceScaleMode::Logarithmic,
                 700f64.ln(),
