@@ -63,6 +63,7 @@ mod media;
 mod patterns;
 mod pitchfork;
 mod shapes;
+mod style;
 mod trading;
 pub mod traits;
 // The painter the drawing renderers share with the chart.
@@ -349,6 +350,10 @@ impl Drawing {
         }
 
         let painter = &painter.with_clip_rect(rect);
+        let start = painter.ctx().graphics(|g| {
+            g.get(painter.layer_id())
+                .map_or(0, |list| list.next_idx().0)
+        });
         let color = self.color32();
         let stroke = self.stroke();
 
@@ -491,6 +496,7 @@ impl Drawing {
             | DrawingToolType::ArrowCursor
             | DrawingToolType::Eraser => {}
         }
+        self.finish_style(painter, start, rect);
     }
 
     /// Render this drawing using the modular render system
@@ -526,6 +532,276 @@ mod tests {
     use super::*;
     use crate::drawings::DrawingManager;
     use egui::{Context, Pos2, RawInput, Shape};
+
+    /// A non-default style reaches geometry in every renderer family, while fills keep
+    /// their configured colour. Dashes in a 200 px horizontal edge cannot be one solid edge.
+    #[test]
+    fn common_stroke_and_fill_styles_reach_tool_families() {
+        use crate::drawings::LineStyle;
+        for tool in [
+            DrawingToolType::Rect,
+            DrawingToolType::Circle,
+            DrawingToolType::Triangle,
+            DrawingToolType::Curve,
+            DrawingToolType::GannFan,
+            DrawingToolType::CyclicLines,
+            DrawingToolType::XABCDPattern,
+        ] {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = [
+                (100., 100.),
+                (300., 100.),
+                (200., 250.),
+                (350., 150.),
+                (400., 200.),
+            ]
+            .map(|(x, y)| Pos2::new(x, y))
+            .to_vec();
+            drawing.chart_points = drawing
+                .points
+                .iter()
+                .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                .collect();
+            drawing.line_style = LineStyle::Dotted;
+            drawing.stroke_width = 5.0;
+            drawing.fill_color = Some([12, 34, 56, 80]);
+            let shapes = paint(&drawing);
+            let mut lines = Vec::new();
+            fn collect<'a>(
+                shapes: &'a [Shape],
+                lines: &mut Vec<(&'a [Pos2; 2], &'a egui::Stroke)>,
+            ) {
+                for s in shapes {
+                    match s {
+                        Shape::Vec(v) => collect(v, lines),
+                        Shape::LineSegment { points, stroke } => lines.push((points, stroke)),
+                        _ => {}
+                    }
+                }
+            }
+            collect(&shapes, &mut lines);
+            assert!(
+                lines
+                    .iter()
+                    .any(|(p, s)| p[0].distance(p[1]) <= 3.0 && s.width == 5.0),
+                "{tool:?} has no styled dash"
+            );
+            assert!(
+                !lines.iter().any(|(p, _)| p[0].distance(p[1]) > 10.0),
+                "{tool:?} retained a solid line"
+            );
+            if matches!(
+                tool,
+                DrawingToolType::Rect
+                    | DrawingToolType::Circle
+                    | DrawingToolType::Triangle
+                    | DrawingToolType::CyclicLines
+                    | DrawingToolType::XABCDPattern
+            ) {
+                fn has_fill(shapes: &[Shape], color: egui::Color32) -> bool {
+                    shapes.iter().any(|s| match s {
+                        Shape::Vec(v) => has_fill(v, color),
+                        Shape::Path(p) => p.fill == color,
+                        Shape::Rect(r) => r.fill == color,
+                        Shape::Circle(c) => c.fill == color,
+                        _ => false,
+                    })
+                }
+                assert!(
+                    has_fill(&shapes, drawing.fill_color32().unwrap()),
+                    "{tool:?} ignored fill"
+                );
+            }
+        }
+    }
+
+    /// Text size changes the laid-out box; bold adds weight without requiring host fonts.
+    #[test]
+    fn common_annotation_fonts_are_laid_out_at_the_configured_size() {
+        use crate::drawings::FontWeight;
+        for tool in [
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+            DrawingToolType::Note,
+            DrawingToolType::AnchoredNote,
+            DrawingToolType::Callout,
+            DrawingToolType::PriceLabel,
+            DrawingToolType::FlagNote,
+            DrawingToolType::PriceNote,
+            DrawingToolType::Comment,
+            DrawingToolType::Signpost,
+        ] {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = vec![Pos2::new(50.0, 100.0), Pos2::new(150.0, 150.0)];
+            drawing.text = Some("Sample".into());
+            drawing.font_size = 22.0;
+            drawing.font_weight = FontWeight::Bold;
+            let shapes = paint(&drawing);
+            let mut texts = Vec::new();
+            fn collect<'a>(shapes: &'a [Shape], texts: &mut Vec<&'a egui::epaint::TextShape>) {
+                for s in shapes {
+                    match s {
+                        Shape::Vec(v) => collect(v, texts),
+                        Shape::Text(t) => texts.push(t),
+                        _ => {}
+                    }
+                }
+            }
+            collect(&shapes, &mut texts);
+            assert!(
+                texts.iter().any(|t| t
+                    .galley
+                    .job
+                    .sections
+                    .iter()
+                    .any(|s| s.format.font_id.size == 22.0)),
+                "{tool:?} ignored font size"
+            );
+            let bold_text: Vec<_> = texts.iter().map(|t| (*t).clone()).collect();
+            drawing.font_weight = FontWeight::Normal;
+            let normal = paint(&drawing);
+            let mut normal_text = Vec::new();
+            collect(&normal, &mut normal_text);
+            assert_ne!(
+                bold_text,
+                normal_text.into_iter().cloned().collect::<Vec<_>>(),
+                "{tool:?} ignored font weight"
+            );
+        }
+    }
+
+    /// Endpoint symbols retain the clicked direction even when the anchors run right to left.
+    #[test]
+    fn common_endpoint_markers_follow_styles_and_anchor_direction() {
+        use crate::drawings::ArrowStyle;
+        for &style in ArrowStyle::all() {
+            let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+            drawing.points = vec![Pos2::new(300., 100.), Pos2::new(100., 100.)];
+            drawing.arrow_start_style = ArrowStyle::Circle;
+            drawing.arrow_end_style = style;
+            let shapes = paint(&drawing);
+            assert!(
+                shapes
+                    .iter()
+                    .any(|s| matches!(s,Shape::Circle(c) if c.center == drawing.points[0])),
+                "start circle missing"
+            );
+            let tip = drawing.points[1];
+            let present = match style {
+                ArrowStyle::None => !shapes.iter().any(|s| matches!(s,Shape::Path(_))),
+                ArrowStyle::Arrow => shapes.iter().any(|s| matches!(s,Shape::Path(p) if p.points == [tip, Pos2::new(108.,96.), Pos2::new(108.,104.)])),
+                ArrowStyle::OpenArrow => shapes.iter().any(|s| matches!(s,Shape::Path(p) if p.points.get(1) == Some(&tip) && p.fill == egui::Color32::TRANSPARENT)),
+                ArrowStyle::Circle => shapes.iter().any(|s| matches!(s,Shape::Circle(c) if c.center == tip)),
+                ArrowStyle::Square => shapes.iter().any(|s| matches!(s,Shape::Rect(r) if r.rect.center() == tip)),
+                ArrowStyle::Diamond => shapes.iter().any(|s| matches!(s,Shape::Path(p) if p.points.len() == 4 && p.points[0].x < tip.x && p.points[2].x > tip.x)),
+            };
+            assert!(present, "{style:?}");
+        }
+        for tool in [
+            DrawingToolType::InfoLine,
+            DrawingToolType::TrendAngle,
+            DrawingToolType::Arrow,
+            DrawingToolType::ArrowMarker,
+        ] {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = vec![Pos2::new(100., 100.), Pos2::new(300., 100.)];
+            drawing.line_style = crate::drawings::LineStyle::Dashed;
+            drawing.extend_left = true;
+            drawing.extend_right = true;
+            fn extent(shapes: &[Shape]) -> (f32, f32) {
+                shapes
+                    .iter()
+                    .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), s| {
+                        let (a, b) = match s {
+                            Shape::Vec(v) => extent(v),
+                            Shape::LineSegment { points, .. } => {
+                                (points[0].x.min(points[1].x), points[0].x.max(points[1].x))
+                            }
+                            _ => (min, max),
+                        };
+                        (min.min(a), max.max(b))
+                    })
+            }
+            let (min, max) = extent(&paint(&drawing));
+            assert!(
+                min <= 0.0 && max >= 499.0,
+                "{tool:?}: extended dashed line spans {min}..{max}"
+            );
+        }
+        for tool in [DrawingToolType::TrendLine, DrawingToolType::ExtendedLine] {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = vec![Pos2::new(100., 300.), Pos2::new(100., 100.)];
+            drawing.arrow_start_style = ArrowStyle::Circle;
+            drawing.arrow_end_style = ArrowStyle::Square;
+            let shapes = paint(&drawing);
+            let (start, end) = if tool == DrawingToolType::ExtendedLine {
+                (Pos2::new(100., 400.), Pos2::new(100., 0.))
+            } else {
+                (drawing.points[0], drawing.points[1])
+            };
+            assert!(
+                shapes
+                    .iter()
+                    .any(|s| matches!(s,Shape::Circle(c) if c.center == start)),
+                "{tool:?}: vertical start"
+            );
+            assert!(
+                shapes
+                    .iter()
+                    .any(|s| matches!(s,Shape::Rect(r) if r.rect.center() == end)),
+                "{tool:?}: vertical end"
+            );
+        }
+    }
+
+    /// These anchors form a semicircle of radius sqrt(5000), length 222.144 px.
+    /// An 8 px dash / 4 px gap paints about two thirds, plus at most one dash.
+    #[test]
+    fn dash_spacing_continues_across_segmented_curves() {
+        let mut drawing = Drawing::new(7, DrawingToolType::Arc);
+        drawing.points = vec![
+            Pos2::new(100., 100.),
+            Pos2::new(200., 200.),
+            Pos2::new(200., 100.),
+        ];
+        drawing.line_style = crate::drawings::LineStyle::Dashed;
+        fn length(shapes: &[Shape]) -> f32 {
+            shapes
+                .iter()
+                .map(|s| match s {
+                    Shape::Vec(v) => length(v),
+                    Shape::LineSegment { points, .. } => points[0].distance(points[1]),
+                    _ => 0.0,
+                })
+                .sum()
+        }
+        let painted = length(&paint(&drawing));
+        assert!(
+            painted > 140.0 && painted < 157.0,
+            "painted {painted} px of a 222.144 px arc"
+        );
+    }
+
+    fn paint(drawing: &Drawing) -> Vec<Shape> {
+        let ctx = Context::default();
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            let view = ChartView {
+                instrument: None,
+                bars: &[],
+                revision: 0,
+                bar_to_x: &|b| b * 10.0,
+                price_to_y: &|p| 500.0 - p as f32,
+            };
+            drawing.render(
+                ui.painter(),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.)),
+                &view,
+            );
+        });
+        let shapes = output.shapes.iter().map(|s| s.shape.clone()).collect();
+        output.drop_without_applying_deltas();
+        shapes
+    }
 
     /// A pattern's projected target and selection handles can cross the pane edge;
     /// their paint commands retain the pane's clip, intersected with the caller's clip.

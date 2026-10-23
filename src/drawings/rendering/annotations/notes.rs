@@ -1,7 +1,7 @@
 //! Note, anchored note, and flag note rendering
 
 use crate::drawings::domain::Drawing;
-use crate::styles::{stroke, typography};
+use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -72,7 +72,7 @@ impl Drawing {
             note_rect.center(),
             egui::Align2::CENTER_CENTER,
             "N",
-            egui::FontId::proportional(typography::MD),
+            self.annotation_font(),
             DESIGN_TOKENS
                 .semantic
                 .extended
@@ -84,7 +84,7 @@ impl Drawing {
         if let Some(text) = &self.text
             && !text.is_empty()
         {
-            let font = egui::FontId::proportional(typography::XS);
+            let font = self.annotation_font();
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), Color32::BLACK);
             let text_size = galley.size();
 
@@ -162,7 +162,7 @@ impl Drawing {
         if let Some(text) = &self.text
             && !text.is_empty()
         {
-            let font = egui::FontId::proportional(typography::SM);
+            let font = self.annotation_font();
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
             let text_size = galley.size();
 
@@ -273,7 +273,7 @@ impl Drawing {
         if let Some(text) = &self.text
             && !text.is_empty()
         {
-            let font = egui::FontId::proportional(typography::XS);
+            let font = self.annotation_font();
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
             let text_size = galley.size();
 
