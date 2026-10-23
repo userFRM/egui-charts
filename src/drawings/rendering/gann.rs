@@ -23,6 +23,22 @@ fn gann_fan_line_y(start: Pos2, end: Pos2, ratio: f32, x: f32) -> f32 {
     start.y + (x - start.x) * base_slope * ratio
 }
 
+/// The 2x1, 3x1 and 4x1 lines of a Gann box and their 1x2, 1x3 and 1x4
+/// mirrors, from the first anchor to the far edges, where the diagonal to the
+/// second anchor is the 1x1 line.
+fn gann_box_angle_lines(p1: Pos2, p2: Pos2) -> Vec<[Pos2; 2]> {
+    let d = p2 - p1;
+    [2.0, 3.0, 4.0]
+        .into_iter()
+        .flat_map(|ratio| {
+            [
+                [p1, Pos2::new(p2.x, p1.y + d.y / ratio)],
+                [p1, Pos2::new(p1.x + d.x / ratio, p2.y)],
+            ]
+        })
+        .collect()
+}
+
 impl Drawing {
     /// Render Gann Fan - Complete 9-angle Gann fan with bi-directional support
     pub(crate) fn render_gann_fan(&self, painter: &egui::Painter, chart_rect: Rect) {
@@ -388,28 +404,11 @@ impl Drawing {
         let angle_color =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 120);
 
-        let angle_ratios: [f32; 3] = [2.0, 3.0, 4.0]; // 2:1, 3:1, 4:1
-
-        for &ratio in &angle_ratios {
-            // From top-left going down-right (time dominant)
-            let end_x1 = rect.min.x + rect.width();
-            let end_y1 = rect.min.y + rect.width() / ratio;
-            if end_y1 <= rect.max.y {
-                painter.line_segment(
-                    [rect.left_top(), Pos2::new(end_x1, end_y1)],
-                    Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-                );
-            }
-
-            // From top-left going down-right (price dominant)
-            let end_x2 = rect.min.x + rect.height() / ratio;
-            let end_y2 = rect.min.y + rect.height();
-            if end_x2 <= rect.max.x {
-                painter.line_segment(
-                    [rect.left_top(), Pos2::new(end_x2, end_y2)],
-                    Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
-                );
-            }
+        for segment in gann_box_angle_lines(p1, p2) {
+            painter.line_segment(
+                segment,
+                Stroke::new(DESIGN_TOKENS.stroke.light, angle_color),
+            );
         }
 
         // Draw level labels on the left side (price levels)
@@ -421,9 +420,10 @@ impl Drawing {
             .chart_axis_bg
             .gamma_multiply(0.8);
 
+        // Levels count from the first anchor's price, whichever corner it is.
         for i in 0..=divisions {
             if i == 0 || i == divisions || i == divisions / 2 {
-                let y = rect.min.y + step_y * i as f32;
+                let y = p1.y + (p2.y - p1.y) * i as f32 / divisions as f32;
                 let pct = (100.0 * i as f32 / divisions as f32) as i32;
                 let label_text = format!("{pct}%");
                 let label_pos = Pos2::new(rect.min.x - 25.0, y);
@@ -631,6 +631,32 @@ impl Drawing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A box started at its top-right corner (100, 0) and dragged to (0, 80):
+    /// each line starts at the first anchor and ends 1/2, 1/3 and 1/4 of the
+    /// way along the far edges.
+    #[test]
+    fn gann_box_lines_start_at_the_first_anchor() {
+        let (p1, p2) = (Pos2::new(100.0, 0.0), Pos2::new(0.0, 80.0));
+        let want = [
+            (0.0, 40.0),
+            (50.0, 80.0),
+            (0.0, 26.6667),
+            (66.6667, 80.0),
+            (0.0, 20.0),
+            (75.0, 80.0),
+        ]
+        .map(|(x, y)| [p1, Pos2::new(x, y)]);
+        let got = gann_box_angle_lines(p1, p2);
+        assert!(
+            got.len() == want.len()
+                && got
+                    .iter()
+                    .zip(&want)
+                    .all(|(g, w)| g[0].distance(w[0]) < 1e-3 && g[1].distance(w[1]) < 1e-3),
+            "got {got:?}, want {want:?}"
+        );
+    }
 
     /// Anchors (0, 100) and (10, 90) put the 1x1 line through the second anchor.
     /// An NxM line moves N price units per M bars, so at x = 10 it sits at
