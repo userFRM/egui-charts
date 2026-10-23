@@ -88,6 +88,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The demo supplies an independent extended-session price from its fixture. Axis button regression coverage verifies click routing without price scaling or viewport movement.
+
 - The in-pane title shows an outline, an instrument flag and a series action menu on hover. The menu copies the symbol or current legend values.
 
 - The demo opens at one minute and concentrates synthetic volume in a low band with occasional peaks. Hourly session data remains available from the interval selector.

@@ -358,6 +358,28 @@ impl DemoApp {
                 color: egui::Color32::from_rgb(38, 166, 154),
                 background: egui::Color32::TRANSPARENT,
             }]);
+        // An extended-session quote comes from the fixture's latest session, never the hover bar.
+        let session = self
+            .source_bars
+            .last()
+            .filter(|bar| {
+                self.state.symbol == "SAMPLE"
+                    && self
+                        .bars
+                        .last()
+                        .is_some_and(|regular| bar.time > regular.time)
+            })
+            .and_then(|bar| {
+                session_bars(
+                    "SAMPLE",
+                    std::slice::from_ref(bar),
+                    SessionType::ETH,
+                    self.timeframe_toolbar.state.adjust_for_dividends,
+                )
+                .first()
+                .map(|bar| egui_charts::model::quote::SessionQuote::new(bar.close, "PRE"))
+            });
+        self.chart.set_session_quote(session);
         self.chart
             .set_quote(self.bars.last().map(|bar| egui_charts::model::Level1Quote {
                 // The frozen quote is fifteen seconds before this synthetic bar closes.

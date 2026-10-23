@@ -1084,30 +1084,29 @@ impl Chart {
         self.axis_hover = hover_pos.zip(crosshair_tags[0]);
         #[cfg(feature = "icons")]
         if self.config.show_right_axis {
-            if let Some((pos, tag)) = self.axis_hover {
-                if let Some(price) =
+            if let Some((pos, tag)) = self.axis_hover
+                && let Some(price) =
                     rendering::axes::crosshair_price_action(ui, tag, price_map.y_to_price(pos.y))
-                {
-                    self.right_click = Some(RightClickTarget::Background {
-                        pos: tag.left_bottom(),
-                        price,
-                    });
-                }
+            {
+                self.right_click = Some(RightClickTarget::Background {
+                    pos: tag.left_bottom(),
+                    price,
+                });
             }
             if rendering::axes::axis_settings_button(ui, axis_corner).clicked() {
                 self.scale_settings_requested = true;
             }
         }
-        if time_based {
-            if let Some(id) = renderers::render_event_band(
+        if time_based
+            && let Some(id) = renderers::render_event_band(
                 ui,
                 &self.events,
                 visible_data,
                 &coords,
                 price_rect.bottom(),
-            ) {
-                self.event_click = Some(id);
-            }
+            )
+        {
+            self.event_click = Some(id);
         }
 
         if self.config.show_ohlc_info {
@@ -1221,6 +1220,57 @@ mod tests {
             top < y1000 && y10 < bottom,
             "{y10}..{y1000} outside {top}..{bottom}"
         );
+    }
+
+    /// Axis buttons route their clicks without changing the price range or viewport.
+    #[cfg(feature = "icons")]
+    #[test]
+    fn axis_buttons_route_without_scaling() {
+        for settings in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let plot = chart.last_rendered_price_rect;
+            frame(
+                &ctx,
+                &mut chart,
+                0.1,
+                vec![Event::PointerMoved(plot.center())],
+            );
+            let map = chart.get_chart_mapping();
+            let range = map.price.range();
+            let viewport = chart.get_time_scale_state();
+            let pos = if settings {
+                Pos2::new(
+                    plot.right() + chart.config.right_axis_width / 2.0,
+                    plot.bottom() + 14.0,
+                )
+            } else {
+                let (_, tag) = chart.axis_hover.expect("hover tag");
+                tag.left_center() + egui::Vec2::new(10.0, 0.0)
+            };
+            for (step, events) in [
+                vec![Event::PointerMoved(pos)],
+                vec![navigation_press(pos, true)],
+                vec![navigation_press(pos, false)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                frame(&ctx, &mut chart, 0.2 + step as f64 * 0.1, events);
+            }
+            if settings {
+                assert!(chart.take_scale_settings_request());
+                assert!(!chart.take_scale_settings_request());
+            } else {
+                assert!(
+                    matches!(chart.take_right_click(), Some(super::RightClickTarget::Background { price, .. }) if (price - map.y_to_price(plot.center().y)).abs() < 0.001)
+                );
+            }
+            assert_eq!(chart.get_chart_mapping().price.range().min, range.min);
+            assert_eq!(chart.get_chart_mapping().price.range().max, range.max);
+            assert_eq!(chart.get_time_scale_state(), viewport);
+        }
     }
 
     /// Held values appear only for a pressed pointer and disappear on release or disable.

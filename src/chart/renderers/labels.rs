@@ -477,6 +477,7 @@ mod tests {
                 Shape::Rect(rect)
                     if rect.fill.a() > 0
                         && rect.rect.max.x > plot.max.x
+                        && rect.rect.center().y < plot.max.y
                         && rect.rect.height() < 40.0 =>
                 {
                     Some(rect.rect)
