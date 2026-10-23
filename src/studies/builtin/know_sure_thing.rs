@@ -149,8 +149,6 @@ impl KnowSureThing {
         for i in 0..data.len() {
             if kst[i].is_nan() {
                 values.push(IndicatorValue::None);
-            } else if signal[i].is_nan() {
-                values.push(IndicatorValue::Single(kst[i]));
             } else {
                 values.push(IndicatorValue::Multiple(vec![kst[i], signal[i]]));
             }

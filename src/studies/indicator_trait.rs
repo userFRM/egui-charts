@@ -13,19 +13,24 @@ use egui::Color32;
 /// depends on the indicator:
 ///
 /// - **`Single(f64)`** -- used by single-line indicators (SMA, EMA, RSI, ATR, ...).
-/// - **`Multiple(Vec<f64>)`** -- used by multi-line indicators. For example,
+/// - **`Multiple(Vec<f64>)`** -- used by multi-line indicators, one value per
+///   line in the order of [`line_names`](Indicator::line_names). For example,
 ///   MACD emits `[macd_line, signal_line, histogram]` and Bollinger Bands
-///   emits `[upper, middle, lower]`.
-/// - **`None`** -- emitted for bars that fall within the indicator's warmup
-///   period (i.e. not enough prior data to compute a value).
+///   emits `[upper, middle, lower]`. A line without a value on the bar, such
+///   as a signal line during its warmup, is NaN.
+/// - **`None`** -- emitted for bars where no line has a value: within the
+///   indicator's warmup period, or on a bar whose inputs are not finite.
+///
+/// An indicator with more than one line emits `Multiple` with
+/// [`line_cnt`](Indicator::line_cnt) values or `None`, never `Single`.
 #[derive(Debug, Clone)]
 pub enum IndicatorValue {
     /// A single computed value (e.g. SMA output at one bar).
     Single(f64),
-    /// Multiple computed values for multi-output indicators (e.g. MACD
-    /// producing MACD line, signal line, and histogram).
+    /// One value per line for multi-line indicators (e.g. MACD producing
+    /// MACD line, signal line, and histogram), NaN for a line without one.
     Multiple(Vec<f64>),
-    /// No value available, typically during the warmup period.
+    /// No value on this bar: warmup, or inputs that are not finite.
     None,
 }
 

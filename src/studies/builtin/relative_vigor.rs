@@ -124,8 +124,6 @@ impl RelativeVigorIndex {
         for i in 0..data.len() {
             if rvi[i].is_nan() {
                 values.push(IndicatorValue::None);
-            } else if signal[i].is_nan() {
-                values.push(IndicatorValue::Single(rvi[i]));
             } else {
                 values.push(IndicatorValue::Multiple(vec![rvi[i], signal[i]]));
             }

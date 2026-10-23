@@ -84,7 +84,12 @@ impl FisherTransform {
 
             // Apply Fisher Transform
             let fisher = 0.5 * ((1.0 + value) / (1.0 - value)).ln() + 0.5 * prev_fisher;
-            let signal = prev_fisher;
+            // The first value has no previous one to trigger on.
+            let signal = if i + 1 == self.period {
+                f64::NAN
+            } else {
+                prev_fisher
+            };
 
             prev_val = value;
             prev_fisher = fisher;
@@ -96,8 +101,6 @@ impl FisherTransform {
         for (fisher, signal) in fisher_values {
             if fisher.is_nan() {
                 values.push(IndicatorValue::None);
-            } else if signal.is_nan() || signal == 0.0 {
-                values.push(IndicatorValue::Single(fisher));
             } else {
                 values.push(IndicatorValue::Multiple(vec![fisher, signal]));
             }
@@ -184,14 +187,14 @@ mod tests {
     /// (high, low, expected (fisher, trigger)) for length 5, from Ehlers'
     /// published construction computed independently. The series rises long
     /// enough for the smoothed value to reach the clamp, stays flat until the
-    /// window has no range, then falls.
+    /// window has no range, then falls. The first value has no trigger.
     #[allow(clippy::type_complexity)]
     const REFERENCE: &[(f64, f64, Option<(f64, f64)>)] = &[
         (101.0, 99.0, None),
         (102.0, 100.0, None),
         (103.0, 101.0, None),
         (104.0, 102.0, None),
-        (105.0, 103.0, Some((0.342828254415394, 0.0))),
+        (105.0, 103.0, Some((0.342828254415394, f64::NAN))),
         (106.0, 104.0, Some((0.791373872129106, 0.342828254415394))),
         (107.0, 105.0, Some((1.26149294935091, 0.791373872129106))),
         (108.0, 106.0, Some((1.7251749834508, 1.26149294935091))),
@@ -225,16 +228,15 @@ mod tests {
 
         assert_eq!(ft.values.len(), REFERENCE.len());
         for (i, (value, &(_, _, expected))) in ft.values.iter().zip(REFERENCE).enumerate() {
-            // A zero trigger is reported as a single line.
             let actual = match value {
-                IndicatorValue::None => None,
-                IndicatorValue::Single(f) => Some((*f, 0.0)),
                 IndicatorValue::Multiple(v) => Some((v[0], v[1])),
+                _ => None,
             };
+            let near = |a: f64, b: f64| (a - b).abs() < 1e-9 || a.is_nan() && b.is_nan();
             match (actual, expected) {
                 (None, None) => {}
                 (Some((f, t)), Some((ef, et))) => assert!(
-                    (f - ef).abs() < 1e-9 && (t - et).abs() < 1e-9,
+                    near(f, ef) && near(t, et),
                     "bar {i}: got ({f}, {t}), expected ({ef}, {et})"
                 ),
                 _ => panic!("bar {i}: got {actual:?}, expected {expected:?}"),

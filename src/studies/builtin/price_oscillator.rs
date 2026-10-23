@@ -110,7 +110,7 @@ pub(super) fn percentage_oscillator(
         .zip(&signal)
         .map(|(line, signal)| match (line, signal) {
             (Some(l), Some(s)) => IndicatorValue::Multiple(vec![*l, *s, l - s]),
-            (Some(l), None) => IndicatorValue::Single(*l),
+            (Some(l), None) => IndicatorValue::Multiple(vec![*l, f64::NAN, f64::NAN]),
             _ => IndicatorValue::None,
         })
         .collect()

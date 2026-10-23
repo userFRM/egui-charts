@@ -564,11 +564,13 @@ mod tests {
             lengths.extend([huge, longer]);
         }
 
-        // Every value has one entry per declared line and every line a name. The volume
-        // profiles emit a histogram per bar instead of lines (#167).
+        // Every value has one entry per declared line and every line a name; a study of
+        // several lines never emits `Single`. The volume profiles emit a histogram per bar
+        // instead of lines (#167).
         let fits = |v: &IndicatorValue, lines: usize| match v {
+            IndicatorValue::Single(_) => lines == 1,
             IndicatorValue::Multiple(xs) => xs.len() == lines,
-            _ => true,
+            IndicatorValue::None => true,
         };
         let mut failures = Vec::new();
         for n in lengths {

@@ -131,8 +131,6 @@ impl TRIX {
         for i in 0..data.len() {
             if trix_values[i].is_nan() {
                 values.push(IndicatorValue::None);
-            } else if signal[i].is_nan() {
-                values.push(IndicatorValue::Single(trix_values[i]));
             } else {
                 values.push(IndicatorValue::Multiple(vec![trix_values[i], signal[i]]));
             }

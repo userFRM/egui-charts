@@ -156,8 +156,6 @@ impl StochasticMomentumIndex {
         for i in 0..data.len() {
             if smi[i].is_nan() {
                 values.push(IndicatorValue::None);
-            } else if signal[i].is_nan() {
-                values.push(IndicatorValue::Single(smi[i]));
             } else {
                 values.push(IndicatorValue::Multiple(vec![smi[i], signal[i]]));
             }

@@ -85,18 +85,21 @@ impl Indicator for CenterOfGravity {
             }
 
             let cog = if den != 0.0 { -num / den } else { 0.0 };
-            let signal = prev_cog;
+            // The first value has no previous one to signal on.
+            let signal = if i + 1 == self.period {
+                f64::NAN
+            } else {
+                prev_cog
+            };
 
             prev_cog = cog;
             cog_values.push((cog, signal));
         }
 
         // Store results
-        for (i, (cog, signal)) in cog_values.iter().enumerate() {
+        for (cog, signal) in &cog_values {
             if cog.is_nan() {
                 self.values.push(IndicatorValue::None);
-            } else if i < self.period || signal.is_nan() || *signal == 0.0 {
-                self.values.push(IndicatorValue::Single(*cog));
             } else {
                 self.values
                     .push(IndicatorValue::Multiple(vec![*cog, *signal]));

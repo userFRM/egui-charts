@@ -80,7 +80,12 @@ impl EhlersFisher {
             let new_value1 = 0.33 * normalized.clamp(-0.999, 0.999) + 0.67 * value1;
 
             // Fisher transform
-            let prev_fisher = fisher;
+            // The first value has no previous one to trigger on.
+            let prev_fisher = if i + 1 == self.period {
+                f64::NAN
+            } else {
+                fisher
+            };
             fisher = 0.5 * ((1.0 + new_value1) / (1.0 - new_value1)).ln() + 0.5 * fisher;
 
             value1 = new_value1;
@@ -91,8 +96,6 @@ impl EhlersFisher {
         for (fisher, trigger) in fisher_values {
             if fisher.is_nan() {
                 values.push(IndicatorValue::None);
-            } else if trigger.is_nan() || trigger == 0.0 {
-                values.push(IndicatorValue::Single(fisher));
             } else {
                 values.push(IndicatorValue::Multiple(vec![fisher, trigger]));
             }
