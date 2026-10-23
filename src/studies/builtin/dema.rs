@@ -15,6 +15,7 @@
 //! dema.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -71,6 +72,39 @@ impl DEMA {
 
         ema
     }
+
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        // Need 2 * period - 1 bars for valid DEMA
+        let min_period = self.period.saturating_mul(2) - 1;
+
+        // Extract close prices
+        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
+
+        // Calculate first EMA
+        let ema1 = Self::calculate_ema(&closes, self.period);
+
+        // Calculate EMA of EMA (starting from where first EMA is valid)
+        let ema2 = Self::calculate_ema(&ema1, self.period);
+
+        // Calculate DEMA = 2 * EMA1 - EMA2
+        for i in 0..data.len() {
+            if i < min_period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let dema = 2.0 * ema1[i] - ema2[i];
+                values.push(IndicatorValue::Single(dema));
+            }
+        }
+
+        values
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -90,33 +124,7 @@ impl Indicator for DEMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // Need 2 * period - 1 bars for valid DEMA
-        let min_period = self.period.saturating_mul(2) - 1;
-
-        // Extract close prices
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-
-        // Calculate first EMA
-        let ema1 = Self::calculate_ema(&closes, self.period);
-
-        // Calculate EMA of EMA (starting from where first EMA is valid)
-        let ema2 = Self::calculate_ema(&ema1, self.period);
-
-        // Calculate DEMA = 2 * EMA1 - EMA2
-        for i in 0..data.len() {
-            if i < min_period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let dema = 2.0 * ema1[i] - ema2[i];
-                self.values.push(IndicatorValue::Single(dema));
-            }
-        }
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

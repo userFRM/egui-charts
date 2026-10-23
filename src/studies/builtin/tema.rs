@@ -19,6 +19,7 @@
 //! tema.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -75,29 +76,13 @@ impl TEMA {
 
         ema
     }
-}
 
-/// Construct with the conventional default parameters.
-impl Default for TEMA {
-    fn default() -> Self {
-        Self::new(20)
-    }
-}
-
-impl Indicator for TEMA {
-    fn name(&self) -> &str {
-        "TEMA"
-    }
-
-    fn desc(&self) -> &str {
-        "Triple Exponential Moving Avg - Minimal lag moving avg"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
 
         // Need 3 * period - 2 bars for valid TEMA
@@ -118,12 +103,35 @@ impl Indicator for TEMA {
         // Calculate TEMA = 3 * EMA1 - 3 * EMA2 + EMA3
         for i in 0..data.len() {
             if i < min_period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let tema = 3.0 * ema1[i] - 3.0 * ema2[i] + ema3[i];
-                self.values.push(IndicatorValue::Single(tema));
+                values.push(IndicatorValue::Single(tema));
             }
         }
+
+        values
+    }
+}
+
+/// Construct with the conventional default parameters.
+impl Default for TEMA {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
+impl Indicator for TEMA {
+    fn name(&self) -> &str {
+        "TEMA"
+    }
+
+    fn desc(&self) -> &str {
+        "Triple Exponential Moving Avg - Minimal lag moving avg"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

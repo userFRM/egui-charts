@@ -42,6 +42,7 @@
 //! }
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -82,30 +83,14 @@ impl MACD {
             visible: true,
         }
     }
-}
 
-/// Construct with the conventional default parameters.
-impl Default for MACD {
-    fn default() -> Self {
-        Self::new(12, 26, 9)
-    }
-}
-
-impl Indicator for MACD {
-    fn name(&self) -> &str {
-        "MACD"
-    }
-
-    fn desc(&self) -> &str {
-        "MACD - Trend-following momentum indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.len() < self.slow_period {
-            self.values.resize(data.len(), IndicatorValue::None);
-            return;
+            values.resize(data.len(), IndicatorValue::None);
+            return values;
         }
 
         // Calculate fast EMA
@@ -137,8 +122,8 @@ impl Indicator for MACD {
 
         // Calculate signal line (EMA of MACD)
         if macd_line.len() < self.signal_period {
-            self.values.resize(data.len(), IndicatorValue::None);
-            return;
+            values.resize(data.len(), IndicatorValue::None);
+            return values;
         }
 
         let signal_mult = 2.0 / (self.signal_period as f64 + 1.0);
@@ -153,12 +138,35 @@ impl Indicator for MACD {
         // Calculate histogram
         for i in 0..macd_line.len() {
             let histogram = macd_line[i] - signal_line[i];
-            self.values.push(IndicatorValue::Multiple(vec![
+            values.push(IndicatorValue::Multiple(vec![
                 macd_line[i],
                 signal_line[i],
                 histogram,
             ]));
         }
+
+        values
+    }
+}
+
+/// Construct with the conventional default parameters.
+impl Default for MACD {
+    fn default() -> Self {
+        Self::new(12, 26, 9)
+    }
+}
+
+impl Indicator for MACD {
+    fn name(&self) -> &str {
+        "MACD"
+    }
+
+    fn desc(&self) -> &str {
+        "MACD - Trend-following momentum indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

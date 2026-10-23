@@ -29,7 +29,7 @@
 //! vw.calculate(&bars);
 //! ```
 
-use super::VWMA;
+use super::{VWMA, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -72,6 +72,30 @@ impl VolumeWeightedMACD {
             visible: true,
         }
     }
+
+    /// The values over `data`, every bar of which has a finite close and volume.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut fast = VWMA::new(self.fast_period);
+        let mut slow = VWMA::new(self.slow_period);
+        fast.calculate(data);
+        slow.calculate(data);
+
+        let signal_mult = 2.0 / (self.signal_period as f64 + 1.0);
+        let mut signal: Option<f64> = None;
+        fast.values()
+            .iter()
+            .zip(slow.values())
+            .map(|pair| match pair {
+                (IndicatorValue::Single(fast), IndicatorValue::Single(slow)) => {
+                    let line = fast - slow;
+                    let sig = signal.map_or(line, |prev| (line - prev) * signal_mult + prev);
+                    signal = Some(sig);
+                    IndicatorValue::Multiple(vec![line, sig, line - sig])
+                }
+                _ => IndicatorValue::None,
+            })
+            .collect()
+    }
 }
 
 impl Indicator for VolumeWeightedMACD {
@@ -84,27 +108,11 @@ impl Indicator for VolumeWeightedMACD {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        let mut fast = VWMA::new(self.fast_period);
-        let mut slow = VWMA::new(self.slow_period);
-        fast.calculate(data);
-        slow.calculate(data);
-
-        let signal_mult = 2.0 / (self.signal_period as f64 + 1.0);
-        let mut signal: Option<f64> = None;
-        self.values = fast
-            .values()
-            .iter()
-            .zip(slow.values())
-            .map(|pair| match pair {
-                (IndicatorValue::Single(fast), IndicatorValue::Single(slow)) => {
-                    let line = fast - slow;
-                    let sig = signal.map_or(line, |prev| (line - prev) * signal_mult + prev);
-                    signal = Some(sig);
-                    IndicatorValue::Multiple(vec![line, sig, line - sig])
-                }
-                _ => IndicatorValue::None,
-            })
-            .collect();
+        self.values = over_finite_bars(
+            data,
+            |b| b.close.is_finite() && b.volume.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

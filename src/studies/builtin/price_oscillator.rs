@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Price Oscillator (PPO - Percentage Price Oscillator)
 /// Measures the percentage difference between two EMAs
@@ -68,32 +69,16 @@ impl PriceOscillator {
 
         ema
     }
-}
 
-/// Construct with the conventional default parameters.
-impl Default for PriceOscillator {
-    fn default() -> Self {
-        Self::new(12, 26, 9)
-    }
-}
-
-impl Indicator for PriceOscillator {
-    fn name(&self) -> &str {
-        "PPO"
-    }
-
-    fn desc(&self) -> &str {
-        "Percentage Price Oscillator - Percentage difference between EMAs"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.len() < self.long_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Extract closes
@@ -124,14 +109,36 @@ impl Indicator for PriceOscillator {
         // Store results
         for i in 0..data.len() {
             if ppo_line[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else if signal_line[i].is_nan() || i < self.long_period + self.signal_period - 2 {
-                self.values.push(IndicatorValue::Single(ppo_line[i]));
+                values.push(IndicatorValue::Single(ppo_line[i]));
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![ppo_line[i], signal_line[i]]));
+                values.push(IndicatorValue::Multiple(vec![ppo_line[i], signal_line[i]]));
             }
         }
+
+        values
+    }
+}
+
+/// Construct with the conventional default parameters.
+impl Default for PriceOscillator {
+    fn default() -> Self {
+        Self::new(12, 26, 9)
+    }
+}
+
+impl Indicator for PriceOscillator {
+    fn name(&self) -> &str {
+        "PPO"
+    }
+
+    fn desc(&self) -> &str {
+        "Percentage Price Oscillator - Percentage difference between EMAs"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

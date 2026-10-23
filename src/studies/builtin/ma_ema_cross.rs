@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// EMA Cross
 use crate::studies::{Indicator, IndicatorValue};
@@ -26,6 +27,30 @@ impl EMACross {
             visible: true,
         }
     }
+
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        let fast_mult = 2.0 / (self.fast_period as f64 + 1.0);
+        let slow_mult = 2.0 / (self.slow_period as f64 + 1.0);
+
+        let mut fast_ema = data[0].close;
+        let mut slow_ema = data[0].close;
+
+        for bar in data {
+            fast_ema = (bar.close - fast_ema) * fast_mult + fast_ema;
+            slow_ema = (bar.close - slow_ema) * slow_mult + slow_ema;
+
+            values.push(IndicatorValue::Multiple(vec![fast_ema, slow_ema]));
+        }
+
+        values
+    }
 }
 
 impl Default for EMACross {
@@ -44,25 +69,7 @@ impl Indicator for EMACross {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        let fast_mult = 2.0 / (self.fast_period as f64 + 1.0);
-        let slow_mult = 2.0 / (self.slow_period as f64 + 1.0);
-
-        let mut fast_ema = data[0].close;
-        let mut slow_ema = data[0].close;
-
-        for bar in data {
-            fast_ema = (bar.close - fast_ema) * fast_mult + fast_ema;
-            slow_ema = (bar.close - slow_ema) * slow_mult + slow_ema;
-
-            self.values
-                .push(IndicatorValue::Multiple(vec![fast_ema, slow_ema]));
-        }
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

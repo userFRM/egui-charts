@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// TRIX - Triple Exponential Avg
 /// A momentum oscillator that shows the rate of change of a triple-smoothed EMA
@@ -91,33 +92,17 @@ impl TRIX {
 
         ema
     }
-}
 
-/// Construct with the conventional default parameters.
-impl Default for TRIX {
-    fn default() -> Self {
-        Self::new(15)
-    }
-}
-
-impl Indicator for TRIX {
-    fn name(&self) -> &str {
-        "TRIX"
-    }
-
-    fn desc(&self) -> &str {
-        "TRIX - Rate of change of triple-smoothed EMA"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         let required = self.period.saturating_mul(3).saturating_add(1);
         if data.len() < required {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Get close prices
@@ -145,14 +130,36 @@ impl Indicator for TRIX {
         // Store results
         for i in 0..data.len() {
             if trix_values[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else if signal[i].is_nan() {
-                self.values.push(IndicatorValue::Single(trix_values[i]));
+                values.push(IndicatorValue::Single(trix_values[i]));
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![trix_values[i], signal[i]]));
+                values.push(IndicatorValue::Multiple(vec![trix_values[i], signal[i]]));
             }
         }
+
+        values
+    }
+}
+
+/// Construct with the conventional default parameters.
+impl Default for TRIX {
+    fn default() -> Self {
+        Self::new(15)
+    }
+}
+
+impl Indicator for TRIX {
+    fn name(&self) -> &str {
+        "TRIX"
+    }
+
+    fn desc(&self) -> &str {
+        "TRIX - Rate of change of triple-smoothed EMA"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

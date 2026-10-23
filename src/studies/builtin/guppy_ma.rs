@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Guppy Multiple Moving Average (GMMA)
 use crate::studies::{Indicator, IndicatorValue};
@@ -38,6 +39,38 @@ impl GuppyMA {
             visible: true,
         }
     }
+
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        // Calculate all 12 EMA series
+        let short_emas: Vec<Vec<f64>> = SHORT_PERIODS
+            .iter()
+            .map(|&p| calc_ema_series(data, p))
+            .collect();
+        let long_emas: Vec<Vec<f64>> = LONG_PERIODS
+            .iter()
+            .map(|&p| calc_ema_series(data, p))
+            .collect();
+
+        for i in 0..data.len() {
+            let mut vals = Vec::with_capacity(12);
+            for series in &short_emas {
+                vals.push(series[i]);
+            }
+            for series in &long_emas {
+                vals.push(series[i]);
+            }
+            values.push(IndicatorValue::Multiple(vals));
+        }
+
+        values
+    }
 }
 
 impl Default for GuppyMA {
@@ -72,32 +105,7 @@ impl Indicator for GuppyMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // Calculate all 12 EMA series
-        let short_emas: Vec<Vec<f64>> = SHORT_PERIODS
-            .iter()
-            .map(|&p| calc_ema_series(data, p))
-            .collect();
-        let long_emas: Vec<Vec<f64>> = LONG_PERIODS
-            .iter()
-            .map(|&p| calc_ema_series(data, p))
-            .collect();
-
-        for i in 0..data.len() {
-            let mut vals = Vec::with_capacity(12);
-            for series in &short_emas {
-                vals.push(series[i]);
-            }
-            for series in &long_emas {
-                vals.push(series[i]);
-            }
-            self.values.push(IndicatorValue::Multiple(vals));
-        }
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {
