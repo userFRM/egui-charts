@@ -3,11 +3,70 @@ use crate::model::Bar;
 use crate::scales::PriceMap;
 /// Indicator Renderer
 /// Renders indicator lines overlay on the chart
-use crate::studies::{CrossDirection, Indicator, IndicatorLineStyle, IndicatorValue};
+use crate::studies::{
+    CrossDirection, Indicator, IndicatorLineStyle, PlotPattern, PlotStyle, PlotType,
+};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Stroke};
 
 pub struct IndicatorRenderer;
+
+/// Paint one uninterrupted study segment; callers split at missing values.
+pub(crate) fn paint_study_plot(
+    painter: &egui::Painter,
+    points: &[Pos2],
+    plot: PlotStyle,
+    baseline: f32,
+) {
+    let baseline = if baseline.is_finite() {
+        baseline.clamp(painter.clip_rect().top(), painter.clip_rect().bottom())
+    } else {
+        painter.clip_rect().bottom()
+    };
+    match plot.plot_type {
+        PlotType::Line => match plot.pattern {
+            PlotPattern::Solid => {
+                painter.add(egui::Shape::line(
+                    points.to_vec(),
+                    Stroke::new(plot.width, plot.color),
+                ));
+            }
+            PlotPattern::Dashed => {
+                painter.extend(egui::Shape::dashed_line(
+                    points,
+                    Stroke::new(plot.width, plot.color),
+                    6.0,
+                    4.0,
+                ));
+            }
+            PlotPattern::Dotted => {
+                painter.extend(egui::Shape::dotted_line(
+                    points,
+                    plot.color,
+                    4.0,
+                    plot.width * 0.5,
+                ));
+            }
+        },
+        PlotType::Histogram => {
+            for point in points {
+                painter.rect_filled(
+                    egui::Rect::from_two_pos(
+                        Pos2::new(point.x - plot.width * 0.5, baseline),
+                        Pos2::new(point.x + plot.width * 0.5, point.y),
+                    ),
+                    0.0,
+                    plot.color,
+                );
+            }
+        }
+        PlotType::Circles => {
+            for point in points {
+                painter.circle_filled(*point, plot.width, plot.color);
+            }
+        }
+    }
+}
 
 impl IndicatorRenderer {
     pub fn render(
@@ -34,6 +93,10 @@ impl IndicatorRenderer {
             let line_cnt = indicator.line_cnt();
 
             for line_idx in 0..line_cnt {
+                let plot = indicator.plot_style(line_idx);
+                if !plot.visible {
+                    continue;
+                }
                 let color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
 
                 let style = indicator.line_style(line_idx);
@@ -42,20 +105,9 @@ impl IndicatorRenderer {
                 // values[i] belongs to bar i of the full series and `bars` are the
                 // visible ones from coords.start_idx, so only that slice is walked.
                 let visible_end = (coords.start_idx + bars.len()).min(values.len());
-                let visible = values
-                    .get(coords.start_idx..visible_end)
-                    .unwrap_or_default();
-
-                for (i, value) in (coords.start_idx..).zip(visible) {
+                for i in coords.start_idx..visible_end {
                     let x = coords.idx_to_x(i);
-
-                    // A NaN line value has no point and breaks the line like `None`.
-                    let price = match value {
-                        IndicatorValue::Single(p) => Some(*p),
-                        IndicatorValue::Multiple(prices) => prices.get(line_idx).copied(),
-                        IndicatorValue::None => None,
-                    }
-                    .filter(|p| p.is_finite());
+                    let price = values.value(line_idx, i);
 
                     if let Some(price) = price {
                         // Convert price to screen Y coord
@@ -68,29 +120,53 @@ impl IndicatorRenderer {
                     } else {
                         // Break the line if we have a None value
                         if !points.is_empty() {
-                            Self::draw_line(context, &points, color, style);
+                            Self::draw_line(
+                                context,
+                                &points,
+                                color,
+                                style,
+                                plot,
+                                price_scale.price_to_y(0.0),
+                            );
                         }
                         points.clear();
                     }
                 }
 
-                if indicator.extend_right() && visible_end == values.len() && points.len() >= 2 {
+                if plot.plot_type == PlotType::Line
+                    && indicator.extend_right()
+                    && visible_end == values.len()
+                    && points.len() >= 2
+                {
                     let ((a, pa), (b, pb)) = (points[points.len() - 2], points[points.len() - 1]);
                     if b.x > a.x && b.x < context.rect.right() {
                         let painter = context.painter.with_clip_rect(context.rect);
                         let mut previous = b;
+                        let mut extension = vec![b];
                         // Project prices before mapping them, so a logarithmic axis preserves the fit.
                         for step in 1..=((context.rect.right() - b.x).ceil() as usize) {
                             let x = (b.x + step as f32).min(context.rect.right());
                             let price = pb + (pb - pa) * ((x - b.x) / (b.x - a.x)) as f64;
                             let point = Pos2::new(x, price_scale.price_to_y(price));
                             if point.y.is_finite() && previous.y.is_finite() {
-                                painter.line_segment(
-                                    [previous, point],
-                                    Stroke::new(style.width, color),
-                                );
+                                if plot.pattern == PlotPattern::Solid {
+                                    painter.line_segment(
+                                        [previous, point],
+                                        Stroke::new(style.width, color),
+                                    );
+                                } else {
+                                    extension.push(point);
+                                }
                             }
                             previous = point;
+                        }
+                        if plot.pattern != PlotPattern::Solid {
+                            paint_study_plot(
+                                &painter,
+                                &extension,
+                                plot,
+                                price_scale.price_to_y(0.0),
+                            );
                         }
                     }
                 }
@@ -116,11 +192,22 @@ impl IndicatorRenderer {
 
                 // Draw final segment
                 if !points.is_empty() {
-                    Self::draw_line(context, &points, color, style);
+                    Self::draw_line(
+                        context,
+                        &points,
+                        color,
+                        style,
+                        plot,
+                        price_scale.price_to_y(0.0),
+                    );
                 }
             }
             let painter = context.painter.with_clip_rect(context.rect);
-            for marker in indicator.markers() {
+            for marker in indicator
+                .markers()
+                .iter()
+                .filter(|_| (0..line_cnt).any(|line| indicator.plot_style(line).visible))
+            {
                 if marker.bar < coords.start_idx
                     || marker.bar >= coords.start_idx + bars.len()
                     || !marker.value.is_finite()
@@ -150,8 +237,15 @@ impl IndicatorRenderer {
         points: &[(Pos2, f64)],
         color: Color32,
         style: IndicatorLineStyle,
+        plot: PlotStyle,
+        baseline: f32,
     ) {
         let painter = context.painter.with_clip_rect(context.rect);
+        if plot.plot_type != PlotType::Line || plot.pattern != PlotPattern::Solid {
+            let positions: Vec<_> = points.iter().map(|(point, _)| *point).collect();
+            paint_study_plot(&painter, &positions, plot, baseline);
+            return;
+        }
         if let [(point, _)] = points {
             painter.circle_filled(*point, DESIGN_TOKENS.stroke.thick, color);
             return;
@@ -206,6 +300,73 @@ mod tests {
     use egui::{RawInput, Rect, Vec2};
 
     use crate::studies::{BollingerBands, SMA, StandardErrorBands};
+
+    #[test]
+    fn plot_geometry_uses_the_selected_stroke_and_zero_baseline() {
+        let color = Color32::from_rgb(17, 71, 191);
+        let points = [Pos2::new(10.0, 15.0), Pos2::new(20.0, 5.0)];
+        for (plot_type, pattern) in [
+            (PlotType::Histogram, PlotPattern::Solid),
+            (PlotType::Circles, PlotPattern::Solid),
+            (PlotType::Line, PlotPattern::Dashed),
+            (PlotType::Line, PlotPattern::Dotted),
+        ] {
+            let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+                paint_study_plot(
+                    &ui.painter()
+                        .with_clip_rect(Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0))),
+                    &points,
+                    PlotStyle {
+                        color,
+                        width: 4.0,
+                        pattern,
+                        plot_type,
+                        visible: true,
+                    },
+                    20.0,
+                );
+            });
+            let painted: Vec<_> = std::mem::take(&mut output.shapes)
+                .into_iter()
+                .map(|s| s.shape)
+                .collect();
+            output.drop_without_applying_deltas();
+            match plot_type {
+                PlotType::Histogram => {
+                    let rects: Vec<_> = painted
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::Rect(r) if r.fill == color => Some(r.rect),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        rects,
+                        [
+                            Rect::from_min_max(Pos2::new(8.0, 15.0), Pos2::new(12.0, 20.0)),
+                            Rect::from_min_max(Pos2::new(18.0, 5.0), Pos2::new(22.0, 20.0)),
+                        ]
+                    );
+                }
+                PlotType::Circles => {
+                    let circles = painted.iter().filter(
+                        |s| matches!(s, Shape::Circle(c) if c.fill == color && c.radius == 4.0),
+                    );
+                    assert_eq!(circles.count(), 2);
+                }
+                PlotType::Line if pattern == PlotPattern::Dashed => {
+                    assert!(painted.iter().any(|s| {
+                        matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color && stroke.width == 4.0)
+                    }));
+                }
+                PlotType::Line => {
+                    assert!(painted.iter().any(|s| {
+                        matches!(s, Shape::Circle(c) if c.fill == color && c.radius == 2.0)
+                    }));
+                }
+            }
+        }
+    }
 
     #[test]
     fn overlay_lines_use_one_point_strokes_and_study_colours() {

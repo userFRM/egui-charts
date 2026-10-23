@@ -13,11 +13,9 @@
 //!    (e.g. `SMA::new(20)`, `RSI::new(14)`, `MACD::new(12, 26, 9)`).
 //! 2. **Calculation** -- Call [`Indicator::calculate`] with a slice of [`Bar`]
 //!    data. The indicator computes its output values in one pass.
-//! 3. **Reading results** -- Call [`Indicator::values`] to retrieve computed
-//!    [`IndicatorValue`]s (one per input bar). Single-line indicators emit
-//!    `IndicatorValue::Single(f64)`, multi-line indicators emit
-//!    `IndicatorValue::Multiple(Vec<f64>)`, and bars before the warmup period
-//!    are `IndicatorValue::None`.
+//! 3. **Reading results** -- Call [`Indicator::values`] to retrieve [`IndicatorValues`],
+//!    one contiguous `Vec<f64>` per output line. NaN represents missing values, including
+//!    warm-up. [`IndicatorValues::value`] returns finite values as `Option<f64>`.
 //! 4. **Rendering** -- The chart engine reads [`Indicator::is_overlay`] to
 //!    decide whether the indicator is drawn on the main price pane or in a
 //!    separate sub-pane, and uses [`Indicator::colors`] /
@@ -61,6 +59,12 @@ mod custom;
 #[cfg(feature = "studies")]
 pub mod factory;
 mod indicator_trait;
+mod inputs;
+pub use inputs::{InputKind, InputValue, StudyInput};
+mod settings;
+pub use settings::{ConfiguredStudy, PlotPattern, PlotStyle, PlotType, StudySettings};
+mod values;
+pub use values::IndicatorValues;
 #[cfg(any(feature = "studies", feature = "widget"))]
 pub(crate) mod math;
 #[cfg(all(test, feature = "studies"))]

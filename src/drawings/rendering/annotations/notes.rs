@@ -84,7 +84,7 @@ impl Drawing {
         if let Some(text) = &self.text
             && !text.is_empty()
         {
-            let font = egui::FontId::proportional(typography::XS);
+            let font = self.annotation_font();
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), Color32::BLACK);
             let text_size = galley.size();
 
@@ -162,7 +162,7 @@ impl Drawing {
         if let Some(text) = &self.text
             && !text.is_empty()
         {
-            let font = egui::FontId::proportional(typography::SM);
+            let font = self.annotation_font();
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
             let text_size = galley.size();
 
@@ -273,7 +273,7 @@ impl Drawing {
         if let Some(text) = &self.text
             && !text.is_empty()
         {
-            let font = egui::FontId::proportional(typography::XS);
+            let font = self.annotation_font();
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
             let text_size = galley.size();
 

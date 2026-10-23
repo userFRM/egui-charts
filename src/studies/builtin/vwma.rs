@@ -2,14 +2,14 @@ use super::over_finite_bars;
 use crate::model::Bar;
 /// Volume Weighted Moving Avg (VWMA)
 /// Moving avg weighted by volume - gives more importance to high-volume periods
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 #[derive(Clone)]
 pub struct VWMA {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -18,7 +18,7 @@ impl VWMA {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.success, // Green
             visible: true,
         }
@@ -39,8 +39,8 @@ impl Default for VWMA {
 
 impl VWMA {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         for i in 0..data.len() {
             if i < self.period - 1 {
                 values.push(IndicatorValue::None);
@@ -68,6 +68,10 @@ impl VWMA {
 }
 
 impl Indicator for VWMA {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "VWMA"
     }
@@ -84,7 +88,7 @@ impl Indicator for VWMA {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

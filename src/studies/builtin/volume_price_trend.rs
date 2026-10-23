@@ -3,13 +3,13 @@ use crate::model::Bar;
 /// Volume Price Trend (VPT)
 /// Cumulative volume indicator that considers price changes
 /// Similar to OBV but uses percentage changes
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 #[derive(Clone)]
 pub struct VolumePriceTrend {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -17,7 +17,7 @@ pub struct VolumePriceTrend {
 impl VolumePriceTrend {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
             visible: true,
         }
@@ -29,8 +29,8 @@ impl VolumePriceTrend {
     }
 
     /// The values over `data`, every bar of which has a finite close and volume.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
             return values;
@@ -76,7 +76,7 @@ impl Indicator for VolumePriceTrend {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -116,7 +116,7 @@ const SIGNAL_LEN: f64 = 255.0;
 
 /// The index from 1000, moved by the close's percentage change on the bars where `counts(volume,
 /// previous volume)` holds, and its EMA signal line seeded with the first index value.
-fn volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> Vec<IndicatorValue> {
+fn volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> IndicatorValues {
     over_finite_bars(
         data,
         |b| b.close.is_finite() && b.volume.is_finite(),
@@ -124,21 +124,21 @@ fn volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> Vec<IndicatorValu
     )
 }
 
-fn compute_volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> Vec<IndicatorValue> {
+fn compute_volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> IndicatorValues {
     let Some(first) = data.first() else {
-        return Vec::new();
+        return IndicatorValues::new();
     };
     let alpha = 2.0 / (SIGNAL_LEN + 1.0);
     let (mut index, mut signal) = (1000.0, 1000.0);
-    let mut values = Vec::with_capacity(data.len());
-    values.push(IndicatorValue::Multiple(vec![index, signal]));
+    let mut values = IndicatorValues::new();
+    values.push_lines(&[index, signal]);
     let mut prev = first;
     for bar in &data[1..] {
         if counts(bar.volume, prev.volume) && prev.close != 0.0 {
             index += index * ((bar.close - prev.close) / prev.close);
         }
         signal += (index - signal) * alpha;
-        values.push(IndicatorValue::Multiple(vec![index, signal]));
+        values.push_lines(&[index, signal]);
         prev = bar;
     }
     values
@@ -151,7 +151,7 @@ fn compute_volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> Vec<Indic
 /// with the first index value so that it starts at bar 0 like the index.
 #[derive(Clone)]
 pub struct NegativeVolumeIndex {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     signal_color: Color32,
     visible: bool,
@@ -160,7 +160,7 @@ pub struct NegativeVolumeIndex {
 impl NegativeVolumeIndex {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.error, // Red
             signal_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
@@ -192,7 +192,7 @@ impl Indicator for NegativeVolumeIndex {
         self.values = volume_index(data, |volume, prev| volume < prev);
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -241,7 +241,7 @@ impl Indicator for NegativeVolumeIndex {
 /// with the first index value so that it starts at bar 0 like the index.
 #[derive(Clone)]
 pub struct PositiveVolumeIndex {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     signal_color: Color32,
     visible: bool,
@@ -250,7 +250,7 @@ pub struct PositiveVolumeIndex {
 impl PositiveVolumeIndex {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.success, // Green
             signal_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
@@ -282,7 +282,7 @@ impl Indicator for PositiveVolumeIndex {
         self.values = volume_index(data, |volume, prev| volume > prev);
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -355,8 +355,8 @@ mod tests {
         assert_eq!(vpt.values.len(), 3);
 
         // First VPT should be 0
-        let IndicatorValue::Single(v) = vpt.values[0] else {
-            panic!("no value: {:?}", vpt.values[0]);
+        let IndicatorValue::Single(v) = vpt.values.to_rows()[0] else {
+            panic!("no value: {:?}", vpt.values.to_rows()[0]);
         };
         assert_eq!(v, 0.0);
     }
@@ -418,7 +418,8 @@ mod tests {
             study.calculate(&data);
             assert_eq!(study.line_cnt(), 2, "{}", study.name());
             assert_eq!(study.values().len(), expected.len(), "{}", study.name());
-            for (bar, (value, &(index, signal))) in study.values().iter().zip(&expected).enumerate()
+            for (bar, (value, &(index, signal))) in
+                study.values().to_rows().iter().zip(&expected).enumerate()
             {
                 let IndicatorValue::Multiple(lines) = value else {
                     panic!(

@@ -169,7 +169,7 @@ impl Drawing {
             let end = self.points[1];
 
             // Draw main trend line
-            self.styled_segment(painter, start, end, stroke);
+            painter.line_segment([start, end], stroke);
 
             // Draw horizontal reference line (dashed)
             let ref_end = Pos2::new(end.x, start.y);
@@ -541,24 +541,6 @@ impl Drawing {
             let end = self.points[1];
 
             painter.line_segment([start, end], stroke);
-
-            let dx = end.x - start.x;
-            let dy = end.y - start.y;
-            let angle = dy.atan2(dx);
-            let arrow_size = DESIGN_TOKENS.spacing.xl;
-            let arrow_angle = 0.5;
-
-            let p1 = Pos2::new(
-                end.x - arrow_size * (angle - arrow_angle).cos(),
-                end.y - arrow_size * (angle - arrow_angle).sin(),
-            );
-            let p2 = Pos2::new(
-                end.x - arrow_size * (angle + arrow_angle).cos(),
-                end.y - arrow_size * (angle + arrow_angle).sin(),
-            );
-
-            painter.line_segment([end, p1], stroke);
-            painter.line_segment([end, p2], stroke);
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
         }

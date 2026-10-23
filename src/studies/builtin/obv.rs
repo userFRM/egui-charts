@@ -25,14 +25,14 @@
 
 use crate::model::Bar;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// On Balance Volume indicator
 #[derive(Clone)]
 pub struct OnBalanceVolume {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     stepper: Stepper<State>,
     color: Color32,
     visible: bool,
@@ -48,7 +48,7 @@ impl OnBalanceVolume {
     /// Create a new OBV indicator
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: DESIGN_TOKENS.semantic.extended.deep_purple, // Deep Purple
             visible: true,
@@ -103,7 +103,7 @@ impl Indicator for OnBalanceVolume {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -191,6 +191,7 @@ mod tests {
             obv.calculate(&bars(closes, volumes));
             let got: Vec<Option<f64>> = obv
                 .values()
+                .to_rows()
                 .iter()
                 .map(|v| match v {
                     IndicatorValue::Single(x) => Some(*x),

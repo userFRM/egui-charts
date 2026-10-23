@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Parkinson high-low range volatility.
@@ -10,7 +10,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct ParkinsonVol {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -20,7 +20,7 @@ impl ParkinsonVol {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![Color32::from_rgb(103, 58, 183)], // Deep purple
             visible: true,
         }
@@ -35,8 +35,8 @@ impl Default for ParkinsonVol {
 
 impl ParkinsonVol {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.is_empty() {
             return values;
         }
@@ -86,6 +86,10 @@ impl ParkinsonVol {
 }
 
 impl Indicator for ParkinsonVol {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Parkinson Vol"
     }
@@ -102,7 +106,7 @@ impl Indicator for ParkinsonVol {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
