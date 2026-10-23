@@ -507,31 +507,18 @@ impl Chart {
         // Save current zoom state to history before applying new zoom
         self.state.push_zoom_state();
 
-        let left_x_relative = min_x - chart_rect.min.x;
-        let right_x_relative = max_x - chart_rect.min.x;
-
-        let left_idx = self
-            .state
-            .time_scale()
-            .coord_to_idx(min_x, chart_rect.min.x, chart_width);
-        let right_idx = self
-            .state
-            .time_scale()
-            .coord_to_idx(max_x, chart_rect.min.x, chart_width);
-
-        let num_bars = right_idx.max(left_idx) - right_idx.min(left_idx) + 1.0;
-        if num_bars > 0.0 {
-            let new_spacing = (right_x_relative - left_x_relative) / num_bars;
-            self.state.time_scale_mut().set_bar_spacing(new_spacing);
-
-            let center_idx = (left_idx + right_idx) / 2.0;
-            let base_idx = self.state.time_scale().base_idx() as f32;
-            let visible_bars = chart_width / self.state.time_scale().bar_spacing();
-            let target_right_offset = center_idx + (visible_bars / 2.0) - base_idx;
-            self.state
-                .time_scale_mut()
-                .set_right_offset(target_right_offset);
-        }
+        // Horizontal zoom: the box's bars fill the width (up to the maximum spacing), centred.
+        // A box inside one bar shows that bar across the width, or keeps a wider spacing.
+        let time_scale = self.state.time_scale_mut();
+        let center_idx =
+            time_scale.coord_to_idx((min_x + max_x) / 2.0, chart_rect.min.x, chart_width);
+        let old = time_scale.bar_spacing();
+        time_scale.set_bar_spacing((old * chart_width / (max_x - min_x)).min(chart_width.max(old)));
+        // The inverse of `coord_to_idx` at the middle of the width.
+        let spacing = time_scale.bar_spacing();
+        let base_idx = time_scale.base_idx() as f32;
+        time_scale
+            .set_right_offset(center_idx - base_idx + (chart_width / 2.0 - 1.0) / spacing - 0.5);
 
         // Vertical zoom: the box's prices, in the units of the window it selects, whose first
         // visible close (the base of the relative modes) can differ from the one it was drawn on.
@@ -742,10 +729,11 @@ mod tests {
         );
     }
 
-    /// The prices inside a zoom box fill the pane on the next frame. The box re-centres the time
-    /// window, so the relative modes rebase on another first visible close than the box was drawn on.
+    /// The bars and prices inside a zoom box fill the pane on the next frame. The box re-centres
+    /// the time window, so the relative modes rebase on another first visible close than the box
+    /// was drawn on.
     #[test]
-    fn box_zoom_fills_the_pane_with_the_selected_prices() {
+    fn box_zoom_fills_the_pane_with_the_selected_bars_and_prices() {
         let lows: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
         let highs: Vec<f64> = lows.iter().map(|low| low + 1.0).collect();
         for mode in [PriceScaleMode::Normal, PriceScaleMode::Percentage] {
@@ -764,8 +752,20 @@ mod tests {
                 Pos2::new(rect.right() - 150.0, y_hi),
                 Pos2::new(rect.right() - 50.0, y_lo),
             );
+            let idx = |x| {
+                let ts = chart.state.time_scale();
+                ts.coord_to_idx(x, rect.left(), rect.width())
+            };
+            let (left, right) = (idx(start.x), idx(end.x));
             assert!(chart.execute_box_zoom(start, end, rect, rect.width()));
             frame(&ctx, &mut chart, 0.1, Vec::new());
+            let ts = chart.state.time_scale();
+            let x = |idx| ts.idx_to_coord_precise(idx, rect.left(), rect.width());
+            let (x_left, x_right) = (x(left), x(right));
+            assert!(
+                (x_left - rect.left()).abs() < 0.5 && (x_right - rect.right()).abs() < 0.5,
+                "{mode:?}: bars {left}..{right} at x {x_left}..{x_right}, pane {rect:?}"
+            );
             let after = chart.get_chart_mapping().price;
             let (top, bottom) = after.extent();
             let (y_hi, y_lo) = (after.price_to_y(hi), after.price_to_y(lo));
@@ -774,5 +774,16 @@ mod tests {
                 "{mode:?}: {lo}..{hi} at y {y_lo}..{y_hi}, pane {top}..{bottom}"
             );
         }
+
+        // A box inside one bar zooms to one bar across the pane, no further.
+        let ctx = egui::Context::default();
+        let mut one_bar = chart(&lows, &highs);
+        frame(&ctx, &mut one_bar, 0.0, Vec::new());
+        let rect = one_bar.last_rendered_price_rect;
+        one_bar.state.time_scale_mut().set_bar_spacing(40.0);
+        let (x, y) = (rect.center().x, rect.top() + 100.0);
+        let (start, end) = (Pos2::new(x, y), Pos2::new(x + 25.0, y + 100.0));
+        assert!(one_bar.execute_box_zoom(start, end, rect, rect.width()));
+        assert_eq!(one_bar.state.time_scale().bar_spacing(), rect.width());
     }
 }
