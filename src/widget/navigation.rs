@@ -19,22 +19,24 @@ const LABELS: [&str; 8] = [
 ];
 
 impl Chart {
-    /// The row's rect at the bottom of the main pane, or `None` when the pane is too narrow for it.
+    /// The row's rect at the bottom of the main pane, or `None` when it does not fit in the pane.
     pub(super) fn navigation_rect(&self, ui: &Ui, chart_rect: Rect) -> Option<Rect> {
         let theme = ui.active_theme();
         let size = Vec2::new(
             8.0 * DESIGN_TOKENS.sizing.button_md + 9.0 * theme.spacing.sm,
             DESIGN_TOKENS.sizing.button_md + 2.0 * theme.spacing.sm,
         );
-        (size.x <= chart_rect.width()).then(|| {
-            Rect::from_min_size(
-                Pos2::new(
-                    chart_rect.center().x - size.x / 2.0,
-                    chart_rect.bottom() - theme.spacing.lg - size.y,
-                ),
-                size,
-            )
-        })
+        (size.x <= chart_rect.width() && size.y + theme.spacing.lg <= chart_rect.height()).then(
+            || {
+                Rect::from_min_size(
+                    Pos2::new(
+                        chart_rect.center().x - size.x / 2.0,
+                        chart_rect.bottom() - theme.spacing.lg - size.y,
+                    ),
+                    size,
+                )
+            },
+        )
     }
 
     pub(super) fn navigation_visible(&self, ui: &Ui, chart_rect: Rect) -> bool {

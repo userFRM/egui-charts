@@ -181,7 +181,7 @@ pub struct ButtonsSettings {
 impl Default for ButtonsSettings {
     fn default() -> Self {
         Self {
-            navigation: ButtonVisibility::VisibleOnMouseOver,
+            navigation: ButtonVisibility::Hidden,
             pane: ButtonVisibility::VisibleOnMouseOver,
         }
     }

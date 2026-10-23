@@ -415,43 +415,56 @@ impl Chart {
     /// The layout respects current config flags like `show_ohlc_info`,
     /// `show_time_labels`, and `show_volume`.
     pub fn calculate_layout_rects(&self, widget_rect: Rect) -> ChartLayoutRects {
+        self.pane_layout_rects(widget_rect, self.config.show_time_labels)
+    }
+
+    fn pane_layout_rects(&self, widget_rect: Rect, show_time_labels: bool) -> ChartLayoutRects {
         use crate::styles::sizing::chart as sizing;
 
-        let bottom_padding = if self.config.show_time_labels {
+        let padding = self
+            .config
+            .padding
+            .max(0.0)
+            .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
+        let left_axis = if self.config.show_left_axis {
+            self.config.left_axis_width.max(0.0)
+        } else {
+            0.0
+        };
+        let right_axis = if self.config.show_right_axis {
+            self.config.right_axis_width.max(0.0)
+        } else {
+            0.0
+        };
+        let bottom_padding = if show_time_labels {
             sizing::BOTTOM_PADDING_WITH_TIME
         } else {
-            sizing::BOTTOM_PADDING_NO_TIME
+            0.0
         };
-        let top_padding = if self.config.show_ohlc_info {
-            sizing::TOP_PADDING_WITH_OHLC
-        } else {
-            sizing::TOP_PADDING_NO_OHLC
-        };
-        let left_margin = sizing::PADDING;
-        let right_margin = sizing::PADDING + sizing::RIGHT_AXIS_WIDTH;
-
-        // Legend rect is at the top of the widget
+        let price_rect = Rect::from_min_size(
+            widget_rect.min + Vec2::new((padding + left_axis).min(widget_rect.width()), padding),
+            Vec2::new(
+                (widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0),
+                (widget_rect.height() - 2.0 * padding - bottom_padding).max(0.0),
+            ),
+        );
         let legend_rect = if self.config.show_ohlc_info {
-            Rect::from_min_size(
-                widget_rect.min + Vec2::new(self.config.padding, 4.0),
-                Vec2::new(widget_rect.width() * 0.7, top_padding - 8.0),
-            )
+            price_rect.shrink(8.0).intersect(Rect::from_min_size(
+                price_rect.min + Vec2::splat(8.0),
+                Vec2::new(price_rect.width(), 24.0),
+            ))
         } else {
             Rect::NOTHING
         };
-
-        let chart_rect = Rect::from_min_size(
-            widget_rect.min + Vec2::new(left_margin, top_padding),
-            Vec2::new(
-                (widget_rect.width() - left_margin - right_margin).max(sizing::MIN_CHART_WIDTH),
-                (widget_rect.height() - top_padding - bottom_padding).max(sizing::MIN_CHART_HEIGHT),
-            ),
-        );
-
-        let price_rect = chart_rect;
         let volume_rect = if self.config.show_volume && self.chart_type.supports_volume() {
-            let bottom = price_rect.bottom() - 12.0;
-            let height = (price_rect.height() - 12.0) * self.config.volume_height_fraction;
+            let inset = self
+                .config
+                .volume_baseline_inset
+                .max(0.0)
+                .min(price_rect.height());
+            let bottom = price_rect.bottom() - inset;
+            let height =
+                (price_rect.height() - inset) * self.config.volume_height_fraction.clamp(0.0, 1.0);
             Rect::from_min_max(
                 Pos2::new(price_rect.left(), bottom - height),
                 Pos2::new(price_rect.right(), bottom),

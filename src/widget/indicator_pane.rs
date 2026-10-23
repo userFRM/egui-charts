@@ -45,9 +45,9 @@ use std::ops::Range;
 /// Chart layout constants matching main chart (from ChartConfig defaults)
 mod layout {
     /// Left padding (matches ChartConfig::padding default)
-    pub const LEFT_PADDING: f32 = 40.0;
-    /// Right padding (matches ChartConfig::padding * 2.0)
-    pub const RIGHT_PADDING: f32 = 80.0;
+    pub const LEFT_PADDING: f32 = crate::styles::sizing::chart::PADDING;
+    /// Right price axis width for standalone panes
+    pub const RIGHT_PADDING: f32 = crate::styles::sizing::chart::RIGHT_AXIS_WIDTH;
     /// Minimum pixel spacing between vertical grid lines
     pub const MIN_GRID_SPACING: f32 = 80.0;
 }
@@ -420,6 +420,18 @@ impl IndicatorPane {
         visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) -> Option<PaneInteraction> {
+        self.show_aligned_interactive_in(ui, indicator, visible_range, coords, None, false)
+    }
+
+    pub(super) fn show_aligned_interactive_in(
+        &mut self,
+        ui: &mut Ui,
+        indicator: &dyn Indicator,
+        visible_range: Range<usize>,
+        coords: IndicatorCoordParams,
+        plot_x: Option<egui::emath::Rangef>,
+        collapsed: bool,
+    ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
             return None;
         }
@@ -443,7 +455,7 @@ impl IndicatorPane {
             return None;
         }
 
-        let painter = ui.painter();
+        let painter = &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
 
         // Fill background
         painter.rect_filled(rect, 0.0, chart_bg);
@@ -451,46 +463,63 @@ impl IndicatorPane {
         // Calculate drawing area to match main chart layout
         let left_padding = layout::LEFT_PADDING;
         let right_padding = layout::RIGHT_PADDING;
+        let plot_x = plot_x.unwrap_or_else(|| {
+            egui::emath::Rangef::new(
+                rect.left() + left_padding,
+                (rect.right() - right_padding).max(rect.left() + left_padding),
+            )
+        });
         let chart_rect = Rect::from_min_max(
-            Pos2::new(rect.min.x + left_padding, rect.min.y),
-            Pos2::new(rect.max.x - right_padding, rect.max.y),
+            Pos2::new(plot_x.min, rect.top()),
+            Pos2::new(plot_x.max, rect.bottom()),
         );
 
         // Determine y-axis range
         let (y_min, y_max) = self.calculate_y_range(indicator, &visible_range);
 
-        // Draw zone fills (colored bands)
-        if self.config.show_zones && self.config.zones.len() >= 2 {
-            self.draw_zone_fills(painter, chart_rect, y_min, y_max, bullish, bearish);
+        if !collapsed {
+            let plot_painter = &painter.with_clip_rect(chart_rect.intersect(painter.clip_rect()));
+            // Draw zone fills (colored bands)
+            if self.config.show_zones && self.config.zones.len() >= 2 {
+                self.draw_zone_fills(plot_painter, chart_rect, y_min, y_max, bullish, bearish);
+            }
+
+            // Draw horizontal grid lines and zone lines
+            self.draw_horizontal_lines(
+                plot_painter,
+                chart_rect,
+                y_min,
+                y_max,
+                grid_color,
+                bullish,
+                bearish,
+            );
+
+            // Draw vertical grid lines (aligned with main chart)
+            if self.config.show_grid {
+                self.draw_vertical_grid_aligned(plot_painter, chart_rect, &coords, grid_color);
+            }
+
+            // Draw indicator lines with aligned coordinates
+            self.draw_indicator_lines_aligned(
+                plot_painter,
+                chart_rect,
+                indicator,
+                &visible_range,
+                y_min,
+                y_max,
+                &coords,
+            );
+
+            // Draw y-axis labels
+            self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
         }
-
-        // Draw horizontal grid lines and zone lines
-        self.draw_horizontal_lines(
-            painter, chart_rect, y_min, y_max, grid_color, bullish, bearish,
-        );
-
-        // Draw vertical grid lines (aligned with main chart)
-        if self.config.show_grid {
-            self.draw_vertical_grid_aligned(painter, chart_rect, &coords, grid_color);
-        }
-
-        // Draw indicator lines with aligned coordinates
-        self.draw_indicator_lines_aligned(
-            painter,
-            chart_rect,
-            indicator,
-            &visible_range,
-            y_min,
-            y_max,
-            &coords,
-        );
-
-        // Draw y-axis labels
-        self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
 
         // Reserve the legend's close "x" and make it independently clickable so
         // it can surface a remove request without stealing pane-line clicks.
-        let close_rect = self.legend_close_rect(ui.painter(), chart_rect, indicator);
+        let close_rect = self
+            .legend_close_rect(painter, chart_rect, indicator)
+            .map(|close| close.intersect(chart_rect));
         let close_response = close_rect
             .map(|cr| ui.interact(cr, response.id.with("indicator_pane_close"), Sense::click()));
         let close_hovered = close_response.as_ref().is_some_and(|r| r.hovered());
@@ -500,7 +529,7 @@ impl IndicatorPane {
 
         // Draw indicator legend (and the close glyph) at top-left.
         self.draw_legend(
-            ui.painter(),
+            &painter.with_clip_rect(chart_rect.intersect(ui.clip_rect())),
             chart_rect,
             indicator,
             text_color,
@@ -936,7 +965,7 @@ impl IndicatorPane {
             Color32::WHITE,
         );
         let text_left = rect.min.x + DESIGN_TOKENS.spacing.sm;
-        let center_y = rect.min.y + DESIGN_TOKENS.spacing.xl;
+        let center_y = rect.min.y + 12.0_f32.min(rect.height() / 2.0);
         let glyph_size = typography::MD;
         let center = Pos2::new(
             text_left + galley.size().x + DESIGN_TOKENS.spacing.md,
@@ -970,7 +999,7 @@ impl IndicatorPane {
         painter.text(
             Pos2::new(
                 rect.min.x + DESIGN_TOKENS.spacing.sm,
-                rect.min.y + DESIGN_TOKENS.spacing.xl,
+                rect.min.y + 12.0_f32.min(rect.height() / 2.0),
             ),
             egui::Align2::LEFT_CENTER,
             self.legend_text(indicator),
