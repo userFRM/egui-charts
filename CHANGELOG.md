@@ -93,6 +93,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Pitchforks without custom level settings retain the drawing colour and the existing tine width. Fixed Gann grids without custom divisions retain their quarter grid.
+
 - Three-anchor projections add the first price and bar leg at the third anchor before mapping to screen coordinates, so logarithmic charts preserve the measured move. The target label shows the projected price.
 
 - Gann grid percentages suppress floating-point tails, the fixed-ratio label sizes to its text, and pitchfan labels sit at the visible ray ends where they have room.

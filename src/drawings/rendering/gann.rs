@@ -2,7 +2,7 @@
 //!
 //! Includes: Gann fan, square, box, and fixed angle tools.
 
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
@@ -73,16 +73,26 @@ impl Drawing {
     fn draw_gann_grid(&self, painter: &egui::Painter, start: Pos2, end: Pos2) {
         let config = self.gann.clone().unwrap_or_default();
         let rect = Rect::from_two_pos(start, end);
+        let default_fixed = self.gann.is_none() && self.tool_type == DrawingToolType::GannFixed;
         for (vertical, levels) in [(true, config.time_levels), (false, config.price_levels)] {
             for ratio in levels
                 .into_iter()
                 .filter(|r| r.is_finite() && *r > 0.0 && *r < 1.0)
+                .filter(|r| !default_fixed || (r * 4.0).fract() == 0.0)
             {
                 let color = Color32::from_rgba_unmultiplied(
                     self.color[0],
                     self.color[1],
                     self.color[2],
-                    if ratio == 0.5 { 120 } else { 50 },
+                    if ratio == 0.5 {
+                        120
+                    } else if (ratio * 4.0).fract() == 0.0 {
+                        80
+                    } else if self.tool_type == DrawingToolType::GannBox {
+                        40
+                    } else {
+                        50
+                    },
                 );
                 let stroke = Stroke::new(DESIGN_TOKENS.stroke.extra_thin, color);
                 if vertical {
@@ -685,6 +695,15 @@ mod tests {
             );
         }
         drawing.points = vec![Pos2::new(20.0, 200.0), Pos2::new(120.0, 100.0)];
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            drawing.render_gann_fixed(ui.painter())
+        });
+        let verticals=output.shapes.iter().filter(|s|matches!(&s.shape,egui::Shape::LineSegment{points,stroke} if stroke.width==DESIGN_TOKENS.stroke.extra_thin && points[0].x==points[1].x && points[0].y==100.0 && points[1].y==200.0)).count();
+        output.drop_without_applying_deltas();
+        assert_eq!(
+            verticals, 3,
+            "the default fixed grid keeps quarter divisions"
+        );
         let mut saved = serde_json::to_value(&drawing).unwrap();
         saved["gann"] = serde_json::json!({"price_levels":[0.3_f32],"time_levels":[0.7_f32]});
         let mut restored: Drawing = serde_json::from_value(saved.clone()).unwrap();

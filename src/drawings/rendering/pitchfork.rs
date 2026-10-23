@@ -180,24 +180,29 @@ impl Drawing {
             .iter()
             .filter(|l| l.visible && l.value.is_finite() && l.value >= 0.0)
         {
-            let color = Color32::from_rgba_unmultiplied(
-                level.color[0],
-                level.color[1],
-                level.color[2],
-                level.color[3],
-            );
+            let rgba = if self.pitchfork.is_none() {
+                self.color
+            } else {
+                level.color
+            };
+            let color = Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
+            let width = if self.pitchfork.is_none() && level.value == 1.0 {
+                stroke::HAIRLINE
+            } else {
+                self.stroke_width
+            };
             for [a, b] in level_lines(&base, level.value, rect) {
                 if let Some((dash, gap)) = level.line_style.dash_pattern() {
                     super::utils::draw_dashed_line(
                         painter,
                         a,
                         b,
-                        Stroke::new(self.stroke_width, color),
+                        Stroke::new(width, color),
                         dash,
                         gap,
                     );
                 } else {
-                    painter.line_segment([a, b], Stroke::new(self.stroke_width, color));
+                    painter.line_segment([a, b], Stroke::new(width, color));
                 }
             }
         }
@@ -435,6 +440,22 @@ mod tests {
                 let y = a.y + (40.0 - a.x) * (b.y - a.y) / (b.x - a.x);
                 assert!((y - want).abs() < 1e-3, "{tool:?}: {y} != {want}");
             }
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                drawing.draw_fork(ui.painter(), rect)
+            });
+            let first_color = output.shapes.iter().find_map(|s| {
+                if let egui::Shape::LineSegment { stroke, .. } = &s.shape {
+                    Some(stroke.color)
+                } else {
+                    None
+                }
+            });
+            output.drop_without_applying_deltas();
+            assert_eq!(
+                first_color,
+                Some(drawing.color32()),
+                "default levels inherit the drawing colour"
+            );
             let outline = drawing.outline(rect).unwrap();
             assert_eq!(outline.areas.len(), 6);
             let point = Pos2::new(40.0, ys[5]);
