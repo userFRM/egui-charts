@@ -50,15 +50,29 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+        include:
+          - os: ubuntu-latest
+            rust: 1.95.0
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run library tests (all features)
         run: cargo test --all-features --lib
+      - name: Run library tests (no default features)
+        run: cargo test --no-default-features --lib
       - name: Run doc tests (all features)
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
         run: cargo test --doc --all-features
 
   fmt:
