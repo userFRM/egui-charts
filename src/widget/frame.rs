@@ -40,7 +40,7 @@ impl Chart {
         }
     }
 
-    fn display_timezone(&self) -> crate::scales::TimezoneMode {
+    pub(super) fn display_timezone(&self) -> crate::scales::TimezoneMode {
         match &self.chart_options.time_scale.timezone {
             crate::scales::TimezoneMode::Exchange(fallback) => {
                 crate::scales::TimezoneMode::Exchange(
@@ -981,11 +981,15 @@ impl Chart {
                 .as_ref()
                 .filter(|_| self.config.show_countdown)
                 .and_then(|quote| {
-                    let duration = self.timeframe?.duration_ms() / 1000;
-                    let elapsed = quote.ts.signed_duration_since(last.time).num_seconds();
-                    (elapsed >= 0 && elapsed < duration).then(|| {
-                        let remaining = duration - elapsed;
-                        format!("{:02}:{:02}", remaining / 60, remaining % 60)
+                    let close = if let Some(link) = &self.feed_link {
+                        link.clock.next_open(link.clock.bar_open(last.time))?
+                    } else {
+                        last.time.checked_add_signed(self.timeframe?.duration())?
+                    };
+                    let remaining = (close - quote.ts).num_milliseconds();
+                    (quote.ts >= last.time && remaining > 0).then(|| {
+                        let seconds = (remaining + 999) / 1000;
+                        format!("{:02}:{:02}", seconds / 60, seconds % 60)
                     })
                 });
             let quote_tags = rendering::axes::render_quote_tags_with_countdown(
@@ -1160,13 +1164,16 @@ impl Chart {
                 };
                 legend.show_volume =
                     self.chart_type.supports_volume() && self.config.show_legend_volume;
-                if let Some(action) = ui
+                let (quote_action, study_settings) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(ui, price_rect, &colors)
                     })
-                    .inner
-                {
+                    .inner;
+                if let Some(action) = quote_action {
                     self.quote_action = Some(action);
+                }
+                if let Some(index) = study_settings {
+                    self.indicator_settings_request = self.study_ids.get(index).copied();
                 }
             }
         }

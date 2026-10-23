@@ -1,0 +1,365 @@
+//! Settings for an existing study, staged until Apply.
+
+use crate::model::Timeframe;
+use crate::studies::{
+    Indicator, InputKind, InputValue, PlotPattern, PlotType, StudyInput, StudySettings,
+};
+use crate::theme::Theme;
+use crate::ui_kit::{FormGrid, dialog::DialogFooter, modal::Modal};
+use crate::widget::SeriesId;
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Tab {
+    #[default]
+    Inputs,
+    Style,
+    Visibility,
+}
+
+/// A complete edit for the host to apply to the original study id.
+pub struct StudyEdit {
+    /// Stable id of the applied study.
+    pub id: SeriesId,
+    /// Calculation input ids and their new values.
+    pub inputs: Vec<(String, InputValue)>,
+    /// Per-plot styles, precision and interval visibility.
+    pub settings: StudySettings,
+}
+
+/// Inputs, Style and Visibility editor for an applied study. Closing or cancelling discards
+/// staged values; no study or output history is cloned while the dialog is open.
+#[derive(Default)]
+pub struct IndicatorSettingsDialog {
+    edit: Option<StudyEdit>,
+    inputs: Vec<StudyInput>,
+    title: String,
+    line_names: Vec<String>,
+    tab: Tab,
+    current_interval: Option<Timeframe>,
+}
+
+impl crate::ui_kit::tab_bar::TabLabel for Tab {
+    fn tab_label(&self) -> &str {
+        match self {
+            Self::Inputs => "Inputs",
+            Self::Style => "Style",
+            Self::Visibility => "Visibility",
+        }
+    }
+}
+
+impl IndicatorSettingsDialog {
+    /// Open on the current values of the study identified by `id`.
+    pub fn open(&mut self, id: SeriesId, study: &dyn Indicator, interval: Option<Timeframe>) {
+        self.edit = Some(StudyEdit {
+            id,
+            inputs: Vec::new(),
+            settings: study.settings(),
+        });
+        self.inputs = study.inputs();
+        self.title = format!("{} settings", study.name());
+        self.line_names = study.line_names();
+        self.current_interval = interval;
+        self.tab = Tab::Inputs;
+    }
+
+    /// Whether an edit is open.
+    pub fn is_open(&self) -> bool {
+        self.edit.is_some()
+    }
+
+    /// Show the staged edit. Apply returns it once; the host calls
+    /// [`Indicator::apply_settings`] on the original study, then lets the chart recalculate.
+    pub fn show(&mut self, ctx: &egui::Context, _theme: &Theme) -> Option<StudyEdit> {
+        let edit = self.edit.as_mut()?;
+        let mut open = true;
+        let mut apply = false;
+        let mut cancel = false;
+        Modal::new("indicator_settings", &self.title)
+            .width(620.0)
+            .height(560.0)
+            .top(120.0)
+            .show(ctx, &mut open, |ui| {
+                crate::ui_kit::tab_bar::TabBar::new(
+                    &[Tab::Inputs, Tab::Style, Tab::Visibility],
+                    &mut self.tab,
+                )
+                .show(ui);
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height((ui.available_height() - 72.0).max(0.0))
+                    .show(ui, |ui| match self.tab {
+                        Tab::Inputs => {
+                            if self.inputs.is_empty() {
+                                ui.label("This study has no editable inputs.");
+                            }
+                            FormGrid::new("study_inputs").show(ui, |ui| {
+                                for input in &mut self.inputs {
+                                    ui.label(&input.label);
+                                    match (&input.kind, &mut input.value) {
+                                        (
+                                            InputKind::Length(min, max),
+                                            InputValue::Length(value),
+                                        ) => {
+                                            ui.add(egui::DragValue::new(value).range(*min..=*max));
+                                        }
+                                        (
+                                            InputKind::Integer(min, max),
+                                            InputValue::Integer(value),
+                                        ) => {
+                                            ui.add(egui::DragValue::new(value).range(*min..=*max));
+                                        }
+                                        (
+                                            InputKind::Number(min, max),
+                                            InputValue::Number(value),
+                                        ) => {
+                                            ui.add(
+                                                egui::DragValue::new(value)
+                                                    .speed(0.1)
+                                                    .range(*min..=*max),
+                                            );
+                                        }
+                                        (InputKind::Choice(choices), InputValue::Choice(value)) => {
+                                            egui::ComboBox::from_id_salt(&input.id)
+                                                .selected_text(
+                                                    choices.get(*value).map_or("", String::as_str),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    for (index, label) in choices.iter().enumerate()
+                                                    {
+                                                        ui.selectable_value(value, index, label);
+                                                    }
+                                                });
+                                        }
+                                        (InputKind::Toggle, InputValue::Toggle(value)) => {
+                                            ui.checkbox(value, "");
+                                        }
+                                        _ => {
+                                            ui.label("This input is unavailable.");
+                                        }
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                        Tab::Style => {
+                            for (line, plot) in edit.settings.plots.iter_mut().enumerate() {
+                                ui.push_id(line, |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.checkbox(
+                                            &mut plot.visible,
+                                            self.line_names
+                                                .get(line)
+                                                .map_or("Plot", String::as_str),
+                                        );
+                                        ui.color_edit_button_srgba(&mut plot.color);
+                                        ui.add(
+                                            egui::DragValue::new(&mut plot.width)
+                                                .range(0.5..=10.0)
+                                                .suffix(" px"),
+                                        );
+                                    });
+                                    ui.horizontal_wrapped(|ui| {
+                                        egui::ComboBox::from_id_salt("pattern")
+                                            .selected_text(format!("{:?}", plot.pattern))
+                                            .show_ui(ui, |ui| {
+                                                for pattern in [
+                                                    PlotPattern::Solid,
+                                                    PlotPattern::Dashed,
+                                                    PlotPattern::Dotted,
+                                                ] {
+                                                    ui.selectable_value(
+                                                        &mut plot.pattern,
+                                                        pattern,
+                                                        format!("{pattern:?}"),
+                                                    );
+                                                }
+                                            });
+                                        egui::ComboBox::from_id_salt("plot_type")
+                                            .selected_text(format!("{:?}", plot.plot_type))
+                                            .show_ui(ui, |ui| {
+                                                for kind in [
+                                                    PlotType::Line,
+                                                    PlotType::Histogram,
+                                                    PlotType::Circles,
+                                                ] {
+                                                    ui.selectable_value(
+                                                        &mut plot.plot_type,
+                                                        kind,
+                                                        format!("{kind:?}"),
+                                                    );
+                                                }
+                                            });
+                                    });
+                                    ui.separator();
+                                });
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Precision");
+                                let mut automatic = edit.settings.precision.is_none();
+                                if ui.checkbox(&mut automatic, "Automatic").changed() {
+                                    edit.settings.precision =
+                                        if automatic { None } else { Some(2) };
+                                }
+                                if let Some(precision) = &mut edit.settings.precision {
+                                    ui.add(
+                                        egui::DragValue::new(precision)
+                                            .range(0..=12)
+                                            .suffix(" decimals"),
+                                    );
+                                }
+                            });
+                        }
+                        Tab::Visibility => {
+                            ui.label("Show this study on these intervals:");
+                            let mut intervals = Timeframe::all();
+                            for interval in self
+                                .current_interval
+                                .iter()
+                                .chain(&edit.settings.hidden_intervals)
+                            {
+                                if !intervals.contains(interval) {
+                                    intervals.push(*interval);
+                                }
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                for interval in intervals {
+                                    let mut visible =
+                                        !edit.settings.hidden_intervals.contains(&interval);
+                                    if ui.checkbox(&mut visible, interval.to_string()).changed() {
+                                        edit.settings.hidden_intervals.retain(|tf| *tf != interval);
+                                        if !visible {
+                                            edit.settings.hidden_intervals.push(interval);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    });
+                (apply, cancel) = DialogFooter::new("Apply").secondary("Cancel").show(ui);
+            });
+        if !open || cancel {
+            self.edit = None;
+            return None;
+        }
+        if apply {
+            let mut edit = self.edit.take()?;
+            edit.inputs = self
+                .inputs
+                .iter()
+                .map(|input| (input.id.clone(), input.value.clone()))
+                .collect();
+            return Some(edit);
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::{ConfiguredStudy, SMA};
+
+    #[test]
+    fn dialog_follows_the_window_when_it_shrinks() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for tab in [
+                None,
+                Some(Tab::Inputs),
+                Some(Tab::Style),
+                Some(Tab::Visibility),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let study = crate::studies::IndicatorFactory::new()
+                    .create("MA Ribbon")
+                    .unwrap();
+                let mut dialog = IndicatorSettingsDialog::default();
+                dialog.open(SeriesId(2), study.as_ref(), Some(Timeframe::Min1));
+                let mut browser = super::super::IndicatorDialog::new();
+                browser.open();
+                if let Some(tab) = tab {
+                    dialog.tab = tab;
+                }
+                for size in [
+                    egui::vec2(1440.0, 900.0),
+                    egui::vec2(320.0, 360.0),
+                    egui::vec2(600.0, 300.0),
+                ] {
+                    let size = if tab.is_none() {
+                        egui::vec2(size.x.max(600.0), size.y.max(500.0))
+                    } else {
+                        size
+                    };
+                    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                    for _ in 0..4 {
+                        ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                if tab.is_some() {
+                                    dialog.show(ui.ctx(), &theme);
+                                } else {
+                                    browser.show(ui.ctx(), &theme);
+                                }
+                            },
+                        )
+                        .drop_without_applying_deltas();
+                    }
+                    let shown = ctx
+                        .memory(|m| {
+                            m.area_rect(egui::Id::unique(if tab.is_some() {
+                                "indicator_settings"
+                            } else {
+                                "indicator_dialog"
+                            }))
+                        })
+                        .unwrap();
+                    assert!(
+                        screen.contains_rect(shown),
+                        "tab {}: {shown:?} outside {screen:?}",
+                        tab.map(|tab| tab as u8).unwrap_or(3)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn escape_discards_staged_inputs_and_presentation() {
+        let study = ConfiguredStudy::new(Box::new(SMA::new(20)));
+        let mut dialog = IndicatorSettingsDialog::default();
+        dialog.open(SeriesId(2), &study, Some(Timeframe::Min1));
+        dialog.inputs[0].value = InputValue::Length(2);
+        dialog.edit.as_mut().unwrap().settings.plots[0].visible = false;
+        let ctx = egui::Context::default();
+        for escape in [false, true] {
+            let events = if escape {
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]
+            } else {
+                Vec::new()
+            };
+            ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(dialog.show(ui.ctx(), &Theme::dark()).is_none());
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(!dialog.is_open());
+        assert_eq!(study.inputs()[0].value, InputValue::Length(20));
+        assert!(study.plot_style(0).visible);
+    }
+}

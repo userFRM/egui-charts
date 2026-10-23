@@ -159,6 +159,9 @@ impl Chart {
 
                 // A click on the legend's close "x" removes this study.
                 let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
+                if pane_response.double_clicked() {
+                    self.indicator_settings_request = Some(id);
+                }
                 if close_clicked {
                     pending_indicator_remove = Some(id);
                 }

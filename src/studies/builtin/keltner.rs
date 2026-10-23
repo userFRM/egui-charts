@@ -25,7 +25,7 @@
 use super::clamp_param;
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -35,7 +35,7 @@ pub struct KeltnerChannels {
     ema_period: usize,
     atr_period: usize,
     multiplier: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     upper_color: Color32,
     middle_color: Color32,
     lower_color: Color32,
@@ -54,7 +54,7 @@ impl KeltnerChannels {
             ema_period: ema_period.max(1),
             atr_period: atr_period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             upper_color: DESIGN_TOKENS.semantic.extended.pink, // Pink
             middle_color: DESIGN_TOKENS.semantic.extended.purple, // Purple
             lower_color: DESIGN_TOKENS.semantic.extended.pink, // Pink
@@ -85,8 +85,8 @@ impl KeltnerChannels {
     }
 
     /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let min_period = self.ema_period.max(self.atr_period);
         if data.len() < min_period {
@@ -143,7 +143,7 @@ impl KeltnerChannels {
                 let upper = middle + band_width;
                 let lower = middle - band_width;
 
-                values.push(IndicatorValue::Multiple(vec![middle, upper, lower]));
+                values.push_lines(&[middle, upper, lower]);
             }
         }
 
@@ -159,6 +159,12 @@ impl Default for KeltnerChannels {
 }
 
 impl Indicator for KeltnerChannels {
+    crate::studies::inputs::study_inputs!(self;
+        ema_period: length("EMA period", 1, usize::MAX),
+        atr_period: length("ATR period", 1, usize::MAX),
+        multiplier: number("Multiplier", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Keltner"
     }
@@ -175,7 +181,7 @@ impl Indicator for KeltnerChannels {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
