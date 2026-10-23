@@ -284,6 +284,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Bollinger Bands default to #2962ff upper and lower bands and a #ffa726 basis, and overlay study lines default to 1 point instead of 2. Study colour overrides and oscillator pane widths stay the same.
+
 - The dark preset uses #0f0f0f for panels, plot and axes, #4a4a4a separators, #dbdbdb text and toolbar icons, #b8b8b8 secondary text and time labels, #707070 muted text, #575757 disabled text, white price labels, #222222 grid lines, #089981 up candles, #f23645 down candles and #3179f5 active toggles. Light and high contrast preset values stay the same.
 
 - On Renko, Kagi, Line Break, Point and Figure and range bar charts, the indices the chart reports and accepts count elements instead of bars: the `TimeScale` and `visible_range` of `ChartState`, `ChartState::visible_data` (one bar per element), `Chart::set_start_idx`, `get_start_idx`, `get_visible_bars`, `get_chart_mapping`, `selected_bar`, `get_hover_bar_idx`, `set_synced_crosshair_bar_idx` and `RightClickTarget::Element::bar_idx`. `Chart::set_chart_type`, and `set_chart_type_params` on these types, clear the zoom history when the value changes. Migration: read the bars from `Chart::bars`, and find the bars of an element by its time.
