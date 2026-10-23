@@ -194,7 +194,12 @@ impl PriceFormatter for CurrencyFormatter {
         let space = if self.add_space { " " } else { "" };
 
         if self.symbol_before {
-            format!("{}{}{}", self.symbol, space, val_str)
+            // A negative amount reads "-$1,234.50": the sign moves in front of
+            // the symbol instead of between it and the digits.
+            match val_str.strip_prefix('-') {
+                Some(digits) => format!("-{}{}{}", self.symbol, space, digits),
+                None => format!("{}{}{}", self.symbol, space, val_str),
+            }
         } else {
             format!("{}{}{}", val_str, space, self.symbol)
         }
@@ -208,13 +213,18 @@ impl PriceFormatter for CurrencyFormatter {
 impl CurrencyFormatter {
     fn format_with_separator(&self, price: f64, separator: char) -> String {
         let formatted = format!("{:.prec$}", price, prec = self.precision);
-        let parts: Vec<&str> = formatted.split('.').collect();
+        let mut parts = formatted.splitn(2, '.');
 
-        let integer = parts[0];
-        let decimal = if parts.len() > 1 { parts[1] } else { "" };
+        let integer = parts.next().unwrap_or("");
+        let decimal = parts.next().unwrap_or("");
 
-        // Add thousands separators
-        let integer_with_sep: String = integer
+        // Group only the digits of the magnitude; the sign is never counted.
+        let (sign, magnitude) = match integer.strip_prefix('-') {
+            Some(digits) => ("-", digits),
+            None => ("", integer),
+        };
+
+        let integer_with_sep: String = magnitude
             .chars()
             .rev()
             .enumerate()
@@ -229,11 +239,12 @@ impl CurrencyFormatter {
             .rev()
             .collect();
 
-        if decimal.is_empty() {
+        let body = if decimal.is_empty() {
             integer_with_sep
         } else {
             format!("{integer_with_sep}.{decimal}")
-        }
+        };
+        format!("{sign}{body}")
     }
 }
 
@@ -444,6 +455,25 @@ mod tests {
 
         let btc = CurrencyFormatter::btc();
         assert!(btc.format(0.12345678).contains("₿"));
+    }
+
+    #[test]
+    fn test_currency_negative_amounts_sign_before_symbol_and_never_grouped() {
+        // Expected strings written by hand: the sign sits before the symbol when
+        // the symbol comes first, and no separator ever lands next to the sign.
+        let cases = [
+            (CurrencyFormatter::usd(), -123.45, "-$123.45"),
+            (CurrencyFormatter::usd(), -123456.0, "-$123,456.00"),
+            (CurrencyFormatter::new("CHF", 1), -1234.5, "-CHF1,234.5"),
+            (CurrencyFormatter::usd(), -0.5, "-$0.50"),
+            (CurrencyFormatter::usd(), 0.0, "$0.00"),
+            (CurrencyFormatter::usd(), 123.45, "$123.45"),
+            // Symbol after the value keeps the sign on the number itself.
+            (CurrencyFormatter::eur(), -1234.5, "-1.234.50 €"),
+        ];
+        for (formatter, value, expected) in cases {
+            assert_eq!(formatter.format(value), expected);
+        }
     }
 
     #[test]
