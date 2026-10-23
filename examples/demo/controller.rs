@@ -2139,8 +2139,16 @@ mod tests {
             .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
         app.chart.set_indicator_inputs(study, "2 close");
         let sources = app.build_source_items();
-        app.handle_object_tree(ObjectTreeAction::Duplicate(indicator_tree_id(study)), &sources);
-        let copy = app.chart.indicators().find(|(id, _)| *id != study).unwrap().0;
+        app.handle_object_tree(
+            ObjectTreeAction::Duplicate(indicator_tree_id(study)),
+            &sources,
+        );
+        let copy = app
+            .chart
+            .indicators()
+            .find(|(id, _)| *id != study)
+            .unwrap()
+            .0;
         assert_eq!(app.chart.indicator_inputs(copy), Some("2 close"));
         app.object_tree.state_mut().select(ids[0]);
         app.object_tree
