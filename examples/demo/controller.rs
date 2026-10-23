@@ -1080,11 +1080,12 @@ impl DemoApp {
     }
 
     fn show_chart(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        egui::CentralPanel::default()
+        let chart = egui::CentralPanel::default()
             .frame(panel_frame(bg))
             .show(ui, |ui| {
                 self.trading_chart.show(ui);
             });
+        self.replay_control.set_dock_rect(chart.response.rect);
         // Right-click context actions resolve after the chart is shown.
         while let Some(action) = self.trading_chart.take_context_action() {
             self.handle_context_action(action);

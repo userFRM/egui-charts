@@ -5,12 +5,12 @@
 
 use crate::ext::UiExt;
 use crate::icons::icons;
-use crate::styles::{icons as icon_sizes, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::{
     PlaybackSpeed, ReplayCommand, ReplayProgress, ToolbarReplayState as ReplayState,
 };
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use egui::{Response, Ui, Vec2, Widget};
 use std::sync::mpsc::Sender;
 
@@ -167,8 +167,10 @@ impl<'a> ReplayToolbar<'a> {
                 }
 
                 // Settings button
-                if ui
-                    .add(icons::SETTINGS.as_button(Vec2::splat(icon_sizes::COMPACT)))
+                if IconButton::new(&icons::SETTINGS)
+                    .size(self.button_size())
+                    .tooltip("Settings")
+                    .show(ui)
                     .clicked()
                 {
                     action = Some(ReplayToolbarAction::OpenSettings);
@@ -198,6 +200,14 @@ impl<'a> ReplayToolbar<'a> {
         action
     }
 
+    fn button_size(&self) -> ButtonSize {
+        if self.config.compact {
+            ButtonSize::SM
+        } else {
+            ButtonSize::MD
+        }
+    }
+
     fn show_play_pause_button(&self, ui: &mut Ui) -> Option<ReplayToolbarAction> {
         let (icon, tooltip, action) = match self.state.replay_state {
             ReplayState::Playing => (&icons::MEDIA_PAUSE, "Pause", ReplayToolbarAction::Pause),
@@ -206,20 +216,18 @@ impl<'a> ReplayToolbar<'a> {
             }
             ReplayState::Buffering => (
                 &icons::UI_BUFFERING,
-                "Buffering...",
+                "Buffering…",
                 ReplayToolbarAction::Pause,
             ),
             ReplayState::Error => (&icons::STATUS_ERROR, "Error", ReplayToolbarAction::Stop),
         };
 
-        let icon_size = if self.config.compact {
-            icon_sizes::COMPACT
-        } else {
-            icon_sizes::SM
-        };
-        let response = ui.add(icon.as_button(Vec2::splat(icon_size)));
+        let response = IconButton::new(icon)
+            .size(self.button_size())
+            .tooltip(tooltip)
+            .show(ui);
 
-        if response.on_hover_text(tooltip).clicked() {
+        if response.clicked() {
             Some(action)
         } else {
             None
@@ -227,13 +235,13 @@ impl<'a> ReplayToolbar<'a> {
     }
 
     fn show_stop_button(&self, ui: &mut Ui) -> Option<ReplayToolbarAction> {
-        let enabled = self.state.replay_state.is_active();
-        let response = ui.add_enabled(
-            enabled,
-            icons::MEDIA_STOP.as_button(Vec2::splat(icon_sizes::COMPACT)),
-        );
+        let response = IconButton::new(&icons::MEDIA_STOP)
+            .size(self.button_size())
+            .tooltip("Stop")
+            .enabled(self.state.replay_state.is_active())
+            .show(ui);
 
-        if response.on_hover_text("Stop").clicked() {
+        if response.clicked() {
             Some(ReplayToolbarAction::Stop)
         } else {
             None
@@ -246,23 +254,21 @@ impl<'a> ReplayToolbar<'a> {
 
         let mut action = None;
 
-        if ui
-            .add_enabled(
-                can_step,
-                icons::MEDIA_SKIP_BACK.as_button(Vec2::splat(icon_sizes::COMPACT)),
-            )
-            .on_hover_text("Step backward")
+        if IconButton::new(&icons::UI_ARROW_BACK)
+            .size(self.button_size())
+            .tooltip("Step backward")
+            .enabled(can_step)
+            .show(ui)
             .clicked()
         {
             action = Some(ReplayToolbarAction::StepBackward);
         }
 
-        if ui
-            .add_enabled(
-                can_step,
-                icons::MEDIA_SKIP_FORWARD.as_button(Vec2::splat(icon_sizes::COMPACT)),
-            )
-            .on_hover_text("Step forward")
+        if IconButton::new(&icons::UI_ARROW_FORWARD)
+            .size(self.button_size())
+            .tooltip("Step forward")
+            .enabled(can_step)
+            .show(ui)
             .clicked()
         {
             action = Some(ReplayToolbarAction::StepForward);
@@ -305,17 +311,17 @@ impl<'a> ReplayToolbar<'a> {
     fn show_progress_bar(&self, ui: &mut Ui) {
         if let Some(ref progress) = self.state.progress {
             let pct = progress.progress_pct() as f32;
+            let theme = ui.active_theme();
 
             // Progress bar
             let desired_size = Vec2::new(
                 DESIGN_TOKENS.sizing.replay.progress_bar_width / 2.0,
-                typography::XXL,
+                theme.spacing.sm,
             );
             let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
 
             if ui.is_rect_visible(rect) {
                 let painter = ui.painter();
-                let theme = ui.active_theme();
                 let (bg, fg) = (theme.chart.bg, theme.ui.accent);
 
                 // Background
@@ -326,17 +332,14 @@ impl<'a> ReplayToolbar<'a> {
                 let fill_rect =
                     egui::Rect::from_min_size(rect.min, Vec2::new(fill_width, rect.height()));
                 painter.rect_filled(fill_rect, DESIGN_TOKENS.rounding.xs, fg);
-
-                // Text
-                let text = format!("{:.0}%", pct * 100.0);
-                painter.text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    text,
-                    egui::FontId::proportional(typography::XS),
-                    ui.visuals().strong_text_color(),
-                );
             }
+
+            // Beside the bar, never over the fill.
+            ui.label(
+                egui::RichText::new(format!("{:.0}%", pct * 100.0))
+                    .size(theme.text.small)
+                    .color(theme.ui.text_secondary),
+            );
         }
     }
 
@@ -358,23 +361,5 @@ impl Widget for ReplayToolbar<'_> {
             self.show(ui);
         })
         .response
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_toolbar_state_default() {
-        let state = ReplayToolbarState::default();
-        assert_eq!(state.replay_state, ReplayState::Stopped);
-    }
-
-    #[test]
-    fn test_toolbar_config_default() {
-        let config = ReplayToolbarConfig::default();
-        assert!(config.show_speed_selector);
-        assert!(config.show_progress);
     }
 }

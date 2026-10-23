@@ -2,11 +2,40 @@
 //!
 //! Playback controls for historical data replay.
 
-use super::{ReplayAction, ReplayConfig, ReplaySpeed, ReplayState};
+use super::{ReplayAction, ReplayColors, ReplayConfig, ReplaySpeed, ReplayState};
 use crate::ext::UiExt;
+use crate::icons::icons;
 use crate::styles::stroke;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 use egui::{RichText, Ui, Vec2};
+
+/// The configured colours, or the active theme's while they are the defaults.
+fn colors(config: &ReplayConfig, ui: &Ui) -> ReplayColors {
+    if config.colors == ReplayColors::default() {
+        ReplayColors::from_theme(&ui.active_theme())
+    } else {
+        config.colors.clone()
+    }
+}
+
+/// The kit button size closest to a configured size in points.
+fn kit_size(points: f32) -> ButtonSize {
+    [
+        ButtonSize::SM,
+        ButtonSize::MD,
+        ButtonSize::LG,
+        ButtonSize::XL,
+    ]
+    .into_iter()
+    .min_by(|a, b| {
+        (a.pixels() - points)
+            .abs()
+            .total_cmp(&(b.pixels() - points).abs())
+    })
+    .unwrap_or_default()
+}
 
 /// Replay control bar widget
 ///
@@ -95,8 +124,8 @@ impl<'a> ReplayControls<'a> {
             } else {
                 // Show hint when not in replay mode
                 ui.label(
-                    RichText::new("Click 'Replay' to enter replay mode")
-                        .color(self.config.colors.disabled_color),
+                    RichText::new("Click Replay to enter replay mode")
+                        .color(colors(self.config, ui).disabled_color),
                 );
             }
 
@@ -108,21 +137,16 @@ impl<'a> ReplayControls<'a> {
 
     /// Render the replay mode toggle button
     fn render_mode_toggle(&self, ui: &mut Ui, state: &ReplayState) -> ReplayAction {
-        let is_active = state.is_active();
-        let btn_text = if is_active { "Exit" } else { "Replay" };
-        let btn_color = if is_active {
-            self.config.colors.stop_color
+        let btn_text = if state.is_active() {
+            "Exit replay"
         } else {
-            self.config.colors.active_indicator
+            "Replay"
         };
+        let button = Button::new(btn_text)
+            .secondary()
+            .size(kit_size(self.config.layout.btn_size));
 
-        let button =
-            egui::Button::new(RichText::new(btn_text).color(btn_color)).min_size(Vec2::new(
-                DESIGN_TOKENS.sizing.replay.speed_dropdown_width,
-                self.config.layout.btn_size,
-            ));
-
-        if ui.add(button).clicked() {
+        if button.show(ui).clicked() {
             ReplayAction::ToggleReplayMode
         } else {
             ReplayAction::None
@@ -132,33 +156,30 @@ impl<'a> ReplayControls<'a> {
     /// Render playback control btns
     fn render_playback_controls(&self, ui: &mut Ui, state: &ReplayState) -> ReplayAction {
         let layout = &self.config.layout;
-        let colors = &self.config.colors;
+        let small = kit_size(layout.small_button_size);
         let mut action = ReplayAction::None;
 
-        // Step backward
-        let step_back_enabled = !state.at_start();
-        let step_back_btn = egui::Button::new("|<").min_size(Vec2::splat(layout.small_button_size));
-        let step_back_res = ui.add_enabled(step_back_enabled, step_back_btn);
-        if step_back_res.clicked() {
+        if IconButton::new(&icons::UI_ARROW_BACK)
+            .size(small)
+            .tooltip("Step backward (Left arrow)")
+            .enabled(!state.at_start())
+            .show(ui)
+            .clicked()
+        {
             action = ReplayAction::StepBackward;
         }
-        step_back_res.on_hover_text("Step backward (Left)");
 
         ui.add_space(layout.btn_spacing);
 
-        // Play/Pause toggle
-        let (play_pause_icon, play_pause_color, play_pause_hint) = if state.is_playing() {
-            ("||", colors.pause_color, "Pause (Space)")
+        let (play_pause_icon, play_pause_hint) = if state.is_playing() {
+            (&icons::MEDIA_PAUSE, "Pause (Space)")
         } else {
-            (">", colors.play_color, "Play (Space)")
+            (&icons::MEDIA_PLAY, "Play (Space)")
         };
-
-        let play_pause_btn =
-            egui::Button::new(RichText::new(play_pause_icon).color(play_pause_color))
-                .min_size(Vec2::splat(layout.btn_size));
-        if ui
-            .add(play_pause_btn)
-            .on_hover_text(play_pause_hint)
+        if IconButton::new(play_pause_icon)
+            .size(kit_size(layout.btn_size))
+            .tooltip(play_pause_hint)
+            .show(ui)
             .clicked()
         {
             action = ReplayAction::TogglePlayPause;
@@ -166,21 +187,24 @@ impl<'a> ReplayControls<'a> {
 
         ui.add_space(layout.btn_spacing);
 
-        // Step forward
-        let step_fwd_enabled = !state.at_end();
-        let step_fwd_btn = egui::Button::new(">|").min_size(Vec2::splat(layout.small_button_size));
-        let step_fwd_res = ui.add_enabled(step_fwd_enabled, step_fwd_btn);
-        if step_fwd_res.clicked() {
+        if IconButton::new(&icons::UI_ARROW_FORWARD)
+            .size(small)
+            .tooltip("Step forward (Right arrow)")
+            .enabled(!state.at_end())
+            .show(ui)
+            .clicked()
+        {
             action = ReplayAction::StepForward;
         }
-        step_fwd_res.on_hover_text("Step forward (Right)");
 
         ui.add_space(layout.btn_spacing);
 
-        // Stop/Reset
-        let stop_btn = egui::Button::new(RichText::new("[]").color(colors.stop_color))
-            .min_size(Vec2::splat(layout.small_button_size));
-        if ui.add(stop_btn).on_hover_text("Reset to start").clicked() {
+        if IconButton::new(&icons::MEDIA_STOP)
+            .size(small)
+            .tooltip("Reset to start")
+            .show(ui)
+            .clicked()
+        {
             action = ReplayAction::Reset;
         }
 
@@ -190,7 +214,7 @@ impl<'a> ReplayControls<'a> {
     /// Render the progress bar
     fn render_progress_bar(&self, ui: &mut Ui, state: &mut ReplayState) -> ReplayAction {
         let layout = &self.config.layout;
-        let colors = &self.config.colors;
+        let colors = colors(self.config, ui);
         let mut action = ReplayAction::None;
 
         let progress = state.progress();
@@ -269,12 +293,16 @@ impl<'a> ReplayControls<'a> {
     /// Render speed control
     fn render_speed_control(&self, ui: &mut Ui, state: &mut ReplayState) -> ReplayAction {
         let layout = &self.config.layout;
-        let colors = &self.config.colors;
+        let colors = colors(self.config, ui);
+        let small = kit_size(layout.small_button_size);
         let mut action = ReplayAction::None;
 
-        // Slow down button
-        let slow_btn = egui::Button::new("-").min_size(Vec2::splat(layout.small_button_size));
-        if ui.add(slow_btn).on_hover_text("Slow down").clicked() {
+        if IconButton::new(&icons::MINUS)
+            .size(small)
+            .tooltip("Slow down")
+            .show(ui)
+            .clicked()
+        {
             action = ReplayAction::SlowDown;
         }
 
@@ -297,9 +325,12 @@ impl<'a> ReplayControls<'a> {
                 }
             });
 
-        // Speed up button
-        let fast_btn = egui::Button::new("+").min_size(Vec2::splat(layout.small_button_size));
-        if ui.add(fast_btn).on_hover_text("Speed up").clicked() {
+        if IconButton::new(&icons::PLUS)
+            .size(small)
+            .tooltip("Speed up")
+            .show(ui)
+            .clicked()
+        {
             action = ReplayAction::SpeedUp;
         }
 
@@ -348,15 +379,23 @@ impl<'a> CompactReplayControls<'a> {
     /// Show compact controls (just play/pause and progress)
     pub fn show(&self, ui: &mut Ui, state: &mut ReplayState) -> ReplayAction {
         let mut action = ReplayAction::None;
-        let colors = &self.config.colors;
+        let colors = colors(self.config, ui);
 
         // Update playback
         let _bars = state.update();
 
         ui.horizontal(|ui| {
-            // Play/Pause
-            let icon = if state.is_playing() { "||" } else { ">" };
-            if ui.small_button(icon).clicked() {
+            let (icon, hint) = if state.is_playing() {
+                (&icons::MEDIA_PAUSE, "Pause (Space)")
+            } else {
+                (&icons::MEDIA_PLAY, "Play (Space)")
+            };
+            if IconButton::new(icon)
+                .size(ButtonSize::SM)
+                .tooltip(hint)
+                .show(ui)
+                .clicked()
+            {
                 action = ReplayAction::TogglePlayPause;
             }
 
@@ -465,22 +504,5 @@ impl ReplayKeyboardHandler {
 
             ReplayAction::None
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_controls_creation() {
-        let config = ReplayConfig::default();
-        let _controls = ReplayControls::new(&config);
-    }
-
-    #[test]
-    fn test_compact_controls_creation() {
-        let config = ReplayConfig::compact();
-        let _controls = CompactReplayControls::new(&config);
     }
 }

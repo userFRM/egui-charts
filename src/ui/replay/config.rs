@@ -3,11 +3,12 @@
 //! Visual and behavioral configuration for replay mode.
 
 use super::actions::ReplaySpeed;
+use crate::theme::Theme;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Colors for replay UI elements
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReplayColors {
     /// Play button color
     pub play_color: Color32,
@@ -31,20 +32,31 @@ pub struct ReplayColors {
     pub disabled_color: Color32,
 }
 
+impl ReplayColors {
+    /// Colours from a theme's UI palette.
+    ///
+    /// The replay widgets paint with the active theme's colours while the configured colours
+    /// equal [`ReplayColors::default`]; set any other colours with [`ReplayConfig::with_colors`].
+    pub fn from_theme(theme: &Theme) -> Self {
+        let ui = &theme.ui;
+        Self {
+            play_color: ui.success,
+            pause_color: ui.warning,
+            stop_color: ui.error,
+            progress_bg: ui.btn_bg_hover,
+            progress_fill: ui.accent,
+            progress_cursor: ui.text,
+            marker_color: ui.warning,
+            speed_color: ui.text,
+            active_indicator: ui.success,
+            disabled_color: ui.text_muted,
+        }
+    }
+}
+
 impl Default for ReplayColors {
     fn default() -> Self {
-        Self {
-            play_color: DESIGN_TOKENS.semantic.extended.success,
-            pause_color: DESIGN_TOKENS.semantic.extended.favorite_gold,
-            stop_color: DESIGN_TOKENS.semantic.extended.error,
-            progress_bg: DESIGN_TOKENS.semantic.extended.chart_axis_bg,
-            progress_fill: DESIGN_TOKENS.semantic.extended.info,
-            progress_cursor: Color32::WHITE,
-            marker_color: DESIGN_TOKENS.semantic.extended.warning,
-            speed_color: DESIGN_TOKENS.semantic.extended.purple,
-            active_indicator: DESIGN_TOKENS.semantic.extended.success,
-            disabled_color: DESIGN_TOKENS.semantic.extended.disabled,
-        }
+        Self::from_theme(&Theme::dark())
     }
 }
 
