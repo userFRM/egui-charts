@@ -81,6 +81,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The cursor flyout uses 40 px rows, larger glyphs, a neutral selected row and a labelled values switch. Held values have wider columns and more space between rows.
+
 - Time axes use denser calendar marks and semibold day, month and year labels. Vertical time grids share those marks, while round price levels use semibold labels.
 
 - Volume uses muted teal and salmon at the theme opacity. Dark plot and panel surfaces are black, with dotted grids in both themes. The demo places volume flush above the time axis and opens with candle bodies at 75% of the bar pitch.

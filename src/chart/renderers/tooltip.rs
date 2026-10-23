@@ -126,11 +126,26 @@ pub fn render_floating_tooltip(
         .iter()
         .map(|(_, value)| value.size().x)
         .fold(0.0, f32::max);
-    let line_height = rows[0].0.size().y + theme.spacing.xs;
-    let padding = theme.spacing.lg;
+    let row_gap = if options.on_long_press {
+        8.0
+    } else {
+        theme.spacing.xs
+    };
+    let line_height = rows[0].0.size().y + row_gap;
+    let padding = if options.on_long_press {
+        16.0
+    } else {
+        theme.spacing.lg
+    };
     let size = Vec2::new(
-        label_width + theme.spacing.lg + value_width,
-        rows.len() as f32 * line_height - theme.spacing.xs,
+        label_width
+            + if options.on_long_press {
+                24.0
+            } else {
+                theme.spacing.lg
+            }
+            + value_width,
+        rows.len() as f32 * line_height - row_gap,
     ) + Vec2::splat(2.0 * padding);
 
     let inset = theme.spacing.lg;

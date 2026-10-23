@@ -11,8 +11,7 @@ use crate::icons::{Icon, icons};
 use egui::Ui;
 
 use super::{DrawingToolbarAction, ToolCategory};
-use crate::tokens::DESIGN_TOKENS;
-use crate::ui::drawing_toolbar::submenu_builder::{FlyoutRow, flyout_row, row_width};
+use crate::theme::ThemeExt;
 use crate::ui::drawing_toolbar::toolbar::CursorStateData;
 
 /// Cursor tool types (not drawing tools, but cursor modes)
@@ -113,34 +112,64 @@ impl ToolCategory for CursorsCategory {
         };
         let values_label = "Values tooltip on long press";
 
-        let rows: Vec<FlyoutRow> = CursorType::all()
-            .iter()
-            .map(|cursor| FlyoutRow {
-                icon: Some(cursor.icon()),
-                label: cursor.name(),
-                selected: state.is_active(*cursor),
-                check: state.is_active(*cursor),
-                ..Default::default()
-            })
-            .collect();
-        let values_row = FlyoutRow {
-            label: values_label,
-            check: state.values_tooltip,
-            ..Default::default()
-        };
-        let width = rows
-            .iter()
-            .chain([&values_row])
-            .map(|row| row_width(ui, row))
-            .fold(
-                DESIGN_TOKENS.sizing.drawing_toolbar_ext.submenu_width_xl,
-                f32::max,
-            );
+        let theme = ui.active_theme();
+        let font = egui::FontId::proportional(16.0);
+        let width = ui
+            .painter()
+            .layout_no_wrap(
+                values_label.into(),
+                egui::FontId::proportional(14.0),
+                theme.ui.text,
+            )
+            .size()
+            .x
+            + 64.0;
         ui.set_min_width(width);
-
         let mut action = DrawingToolbarAction::None;
-        for (cursor, row) in CursorType::all().iter().zip(&rows) {
-            if flyout_row(ui, width, row).row.clicked() {
+        for cursor in CursorType::all() {
+            if *cursor == CursorType::Eraser {
+                ui.separator();
+            }
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
+            let active = state.is_active(*cursor);
+            let foreground = if active {
+                theme.ui.panel_bg
+            } else {
+                theme.ui.text
+            };
+            if active || response.hovered() {
+                ui.painter().rect_filled(
+                    rect,
+                    6,
+                    if active {
+                        theme.ui.text
+                    } else {
+                        theme.ui.btn_bg_hover
+                    },
+                );
+            }
+            cursor
+                .icon()
+                .as_image_tinted(egui::Vec2::splat(24.0), foreground)
+                .paint_at(
+                    ui,
+                    egui::Rect::from_center_size(
+                        egui::pos2(rect.left() + 20.0, rect.center().y),
+                        egui::Vec2::splat(24.0),
+                    ),
+                );
+            ui.painter().text(
+                egui::pos2(rect.left() + 40.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                cursor.name(),
+                font.clone(),
+                foreground,
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::Role::RadioButton, true, active, cursor.name())
+            });
+            if response.clicked() {
                 action = match cursor {
                     CursorType::Eraser => DrawingToolbarAction::ToggleEraserMode,
                     _ => DrawingToolbarAction::SetCursorType(*cursor),
@@ -148,7 +177,42 @@ impl ToolCategory for CursorsCategory {
             }
         }
         ui.separator();
-        if flyout_row(ui, width, &values_row).row.clicked() {
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
+        ui.painter().text(
+            rect.left_center() + egui::vec2(8.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            values_label,
+            egui::FontId::proportional(14.0),
+            theme.ui.text,
+        );
+        let switch = egui::Rect::from_center_size(
+            rect.right_center() - egui::vec2(24.0, 0.0),
+            egui::vec2(38.0, 20.0),
+        );
+        ui.painter().rect_filled(
+            switch,
+            10,
+            if state.values_tooltip {
+                theme.ui.text
+            } else {
+                theme.ui.border_control
+            },
+        );
+        let knob_x = if state.values_tooltip {
+            switch.right() - 10.0
+        } else {
+            switch.left() + 10.0
+        };
+        ui.painter().circle_filled(
+            egui::pos2(knob_x, switch.center().y),
+            7.0,
+            theme.ui.panel_bg,
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Switch, true, state.values_tooltip, values_label)
+        });
+        if response.clicked() {
             action = DrawingToolbarAction::ToggleValuesTooltip;
         }
         action
