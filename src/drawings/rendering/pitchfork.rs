@@ -32,9 +32,7 @@ impl Drawing {
             return;
         }
 
-        if let Some(lines) = self.pitchfork_lines(chart_rect) {
-            self.draw_fork(painter, &lines);
-        }
+        self.draw_fork(painter, chart_rect);
     }
 
     pub(crate) fn render_modified_schiff_pitchfork(
@@ -59,9 +57,7 @@ impl Drawing {
             return;
         }
 
-        if let Some(lines) = self.pitchfork_lines(chart_rect) {
-            self.draw_fork(painter, &lines);
-        }
+        self.draw_fork(painter, chart_rect);
     }
 
     pub(crate) fn render_inside_pitchfork(&self, painter: &egui::Painter, chart_rect: Rect) {
@@ -82,15 +78,13 @@ impl Drawing {
             return;
         }
 
-        if let Some(lines) = self.pitchfork_lines(chart_rect) {
-            self.draw_fork(painter, &lines);
-        }
+        self.draw_fork(painter, chart_rect);
     }
 
     /// The pitchfork's lines as drawn: the median and its parallels to the right
     /// edge of `rect`, then the lines between anchors the tool draws. `None`
     /// below three anchors.
-    pub(super) fn pitchfork_lines(&self, rect: Rect) -> Option<Vec<[Pos2; 2]>> {
+    fn pitchfork_base_lines(&self, rect: Rect) -> Option<Vec<[Pos2; 2]>> {
         let &[p0, p1, p2, ..] = self.points.as_slice() else {
             return None;
         };
@@ -121,20 +115,100 @@ impl Drawing {
         Some(lines)
     }
 
-    /// Paints [`Self::pitchfork_lines`] and the three anchors.
-    fn draw_fork(&self, painter: &egui::Painter, lines: &[[Pos2; 2]]) {
-        let color = self.color32();
-        let link = Stroke::new(stroke::HAIRLINE / 2.0, Color32::from_white_alpha(100));
-        for (i, &line) in lines.iter().enumerate() {
-            let line_stroke = match i {
-                0 => Stroke::new(self.stroke_width, color),
-                1 | 2 => Stroke::new(stroke::HAIRLINE, color),
-                _ => link,
-            };
-            painter.line_segment(line, line_stroke);
+    /// All visible level lines, followed by the construction links, shared with selection.
+    pub(super) fn pitchfork_lines(&self, rect: Rect) -> Option<Vec<[Pos2; 2]>> {
+        let base = self.pitchfork_base_lines(rect)?;
+        let config = self.pitchfork.clone().unwrap_or_default();
+        let mut lines = Vec::new();
+        for level in config
+            .levels
+            .iter()
+            .filter(|l| l.visible && l.value.is_finite() && l.value >= 0.0)
+        {
+            lines.extend(level_lines(&base, level.value, rect));
+        }
+        lines.extend_from_slice(&base[3..]);
+        Some(lines)
+    }
+
+    /// Bands stop on either side of a hidden level instead of bridging across it.
+    pub(super) fn pitchfork_bands(&self, rect: Rect) -> Vec<Vec<Pos2>> {
+        let Some(base) = self.pitchfork_base_lines(rect) else {
+            return Vec::new();
+        };
+        let mut config = self.pitchfork.clone().unwrap_or_default();
+        if !config.show_background {
+            return Vec::new();
+        }
+        config
+            .levels
+            .retain(|l| l.value.is_finite() && l.value >= 0.0);
+        config.levels.sort_by(|a, b| a.value.total_cmp(&b.value));
+        let mut bands = Vec::new();
+        for pair in config
+            .levels
+            .windows(2)
+            .filter(|p| p[0].visible && p[1].visible)
+        {
+            let inner = level_lines(&base, pair[0].value, rect);
+            let outer = level_lines(&base, pair[1].value, rect);
+            for (side, outside) in outer.iter().enumerate() {
+                let inside = inner[side.min(inner.len() - 1)];
+                bands.push(vec![inside[0], inside[1], outside[1], outside[0]]);
+            }
+        }
+        bands
+    }
+
+    /// Paints the levels, band fill, construction links and anchors.
+    fn draw_fork(&self, painter: &egui::Painter, rect: Rect) {
+        let Some(base) = self.pitchfork_base_lines(rect) else {
+            return;
+        };
+        let config = self.pitchfork.clone().unwrap_or_default();
+        let fill = Color32::from_rgba_unmultiplied(
+            self.color[0],
+            self.color[1],
+            self.color[2],
+            config.background_opacity,
+        );
+        for band in self.pitchfork_bands(rect) {
+            painter.add(egui::Shape::convex_polygon(band, fill, Stroke::NONE));
+        }
+        for level in config
+            .levels
+            .iter()
+            .filter(|l| l.visible && l.value.is_finite() && l.value >= 0.0)
+        {
+            let color = Color32::from_rgba_unmultiplied(
+                level.color[0],
+                level.color[1],
+                level.color[2],
+                level.color[3],
+            );
+            for [a, b] in level_lines(&base, level.value, rect) {
+                if let Some((dash, gap)) = level.line_style.dash_pattern() {
+                    super::utils::draw_dashed_line(
+                        painter,
+                        a,
+                        b,
+                        Stroke::new(self.stroke_width, color),
+                        dash,
+                        gap,
+                    );
+                } else {
+                    painter.line_segment([a, b], Stroke::new(self.stroke_width, color));
+                }
+            }
+        }
+        for &line in &base[3..] {
+            painter.line_segment(
+                line,
+                Stroke::new(stroke::HAIRLINE / 2.0, self.color32().gamma_multiply(0.4)),
+            );
         }
         for &p in &self.points[..3] {
-            painter.circle_filled(p, DESIGN_TOKENS.rounding.md, color);
+            painter.circle_filled(p, DESIGN_TOKENS.rounding.md, self.color32());
         }
     }
 
@@ -195,6 +269,22 @@ impl Drawing {
         painter.circle_filled(center, DESIGN_TOKENS.rounding.md, color);
         painter.circle_filled(end, DESIGN_TOKENS.rounding.sm, color);
     }
+}
+
+/// Interpolate each tine's anchor from the median origin, then run parallel to the median.
+fn level_lines(base: &[[Pos2; 2]], value: f32, rect: Rect) -> Vec<[Pos2; 2]> {
+    if value == 0.0 {
+        return vec![base[0]];
+    }
+    let origin = base[0][0];
+    let direction = base[0][1] - origin;
+    base[1..3]
+        .iter()
+        .map(|line| {
+            let start = origin + (line[0] - origin) * value;
+            [start, super::lines::ray_end(start, start + direction, rect)]
+        })
+        .collect()
 }
 
 /// The fan lines' ratios: 0 turns 45 degrees one way from the line to the
@@ -291,7 +381,7 @@ mod tests {
             let mut drawing = Drawing::new(0, tool);
             drawing.points = anchors.to_vec();
             let lines = drawing
-                .pitchfork_lines(Rect::from_min_max(
+                .pitchfork_base_lines(Rect::from_min_max(
                     Pos2::new(-100.0, -1000.0),
                     Pos2::new(100.0, 1000.0),
                 ))
@@ -307,6 +397,80 @@ mod tests {
                     "{tool:?}: {a:?} {b:?}"
                 );
             }
+        }
+    }
+    #[test]
+    fn pitchfork_levels_are_mirrored_filled_saved_and_selectable() {
+        let rect = Rect::from_min_max(Pos2::new(-100.0, -2000.0), Pos2::new(400.0, 2000.0));
+        // At x=40: median, half-distance lines, tines, one-and-a-half-distance lines.
+        for (tool, ys) in [
+            (
+                DrawingToolType::Pitchfork,
+                [66.6667, 108.3333, 25.0, 150.0, -16.6667, 191.6667, -58.3333],
+            ),
+            (
+                DrawingToolType::SchiffPitchfork,
+                [-16.6667, 16.6667, -50.0, 50.0, -83.3333, 83.3333, -116.6667],
+            ),
+            (
+                DrawingToolType::ModifiedSchiffPitchfork,
+                [-37.5, -6.25, -68.75, 25.0, -100.0, 56.25, -131.25],
+            ),
+            (
+                DrawingToolType::InsidePitchfork,
+                [
+                    -141.6667, -162.5, -120.8333, -183.3333, -100.0, -204.1667, -79.1667,
+                ],
+            ),
+        ] {
+            let mut drawing = Drawing::new(12, tool);
+            drawing.points = vec![Pos2::ZERO, Pos2::new(10.0, 100.0), Pos2::new(20.0, -50.0)];
+            let lines = drawing.pitchfork_lines(rect).unwrap();
+            assert!(lines.len() >= 7, "{tool:?}: {lines:?}");
+            for ([a, b], want) in lines.iter().take(7).zip(ys) {
+                let y = a.y + (40.0 - a.x) * (b.y - a.y) / (b.x - a.x);
+                assert!((y - want).abs() < 1e-3, "{tool:?}: {y} != {want}");
+            }
+            let outline = drawing.outline(rect).unwrap();
+            assert_eq!(outline.areas.len(), 6);
+            let point = Pos2::new(40.0, ys[5]);
+            assert_eq!(
+                crate::drawings::services::DrawingInteraction::new().hit_test(
+                    point,
+                    &[drawing.clone()],
+                    "1m"
+                ),
+                Some(12)
+            );
+
+            // Inject custom settings through the saved form so old files and new fields both use serde.
+            let mut saved = serde_json::to_value(&drawing).unwrap();
+            let config = serde_json::json!({"levels":[
+                {"value":0.0,"visible":true,"color":[10,20,30,255],"line_style":"Dotted"},
+                {"value":0.5,"visible":false,"color":[10,20,30,255],"line_style":"Dashed"},
+                {"value":1.0,"visible":true,"color":[10,20,30,255],"line_style":"Solid"},
+                {"value":1.5,"visible":true,"color":[10,20,30,255],"line_style":"Solid"}
+            ],"show_background":true,"background_opacity":35});
+            saved["pitchfork"] = config.clone();
+            let mut restored: Drawing = serde_json::from_value(saved.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(&restored).unwrap()["pitchfork"],
+                config
+            );
+            restored.points = drawing.points.clone();
+            assert_eq!(restored.outline(rect).unwrap().areas.len(), 2);
+            assert_eq!(
+                restored.pitchfork_lines(rect).unwrap().len(),
+                lines.len() - 2
+            );
+            saved["pitchfork"]["show_background"] = false.into();
+            let mut unfilled: Drawing = serde_json::from_value(saved.clone()).unwrap();
+            unfilled.points = drawing.points.clone();
+            assert!(unfilled.outline(rect).unwrap().areas.is_empty());
+            saved.as_object_mut().unwrap().remove("pitchfork");
+            let mut legacy: Drawing = serde_json::from_value(saved).unwrap();
+            legacy.points = drawing.points;
+            assert_eq!(legacy.pitchfork_lines(rect).unwrap(), lines);
         }
     }
 }

@@ -9,8 +9,8 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, LineStyle, PositionSize,
-    RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
+    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, LineStyle,
+    PitchforkConfig, PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -106,6 +106,13 @@ pub struct Drawing {
     /// Band width of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
 
+    /// Whether a parallel channel draws its dashed halfway line.
+    #[serde(default)]
+    pub channel_midline: bool,
+    /// Level lines and band fill of the pitchfork tools.
+    #[serde(default)]
+    pub pitchfork: Option<PitchforkConfig>,
+
     // === Z-Order (rendering layer) ===
     /// Z-order for rendering priority (higher = drawn on top)
     pub z_order: i32,
@@ -143,6 +150,8 @@ impl Drawing {
             fib_config: None,
             volume_profile: None,
             regression_trend: None,
+            pitchfork: None,
+            channel_midline: false,
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }

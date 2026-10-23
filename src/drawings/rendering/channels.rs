@@ -17,34 +17,76 @@ thread_local! {
 }
 
 impl Drawing {
-    pub(crate) fn render_parallel_channel(&self, painter: &egui::Painter) {
-        if self.points.len() < 3 {
+    pub(crate) fn render_parallel_channel(&self, painter: &egui::Painter, rect: Rect) {
+        let Some(outline) = self.parallel_channel_outline(rect) else {
             return;
-        }
-
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-        let stroke = Stroke::new(self.stroke_width, color);
-
-        // Draw first trendline
-        painter.line_segment([p1, p2], stroke);
-
-        let Some([p4, p5]) = self.parallel_channel_second_line() else {
-            return; // Degenerate line
         };
-        painter.line_segment([p4, p5], stroke);
+        if let Some(fill) = self.fill_color {
+            for area in outline.areas {
+                painter.add(egui::Shape::convex_polygon(
+                    area,
+                    Color32::from_rgba_unmultiplied(fill[0], fill[1], fill[2], fill[3]),
+                    Stroke::NONE,
+                ));
+            }
+        }
+        for (i, [a, b]) in outline.lines.into_iter().enumerate() {
+            if i == 2 && self.channel_midline {
+                super::utils::draw_dashed_line(
+                    painter,
+                    a,
+                    b,
+                    Stroke::new(self.stroke_width, self.color32()),
+                    8.0,
+                    4.0,
+                );
+            } else {
+                self.styled_segment(
+                    painter,
+                    a,
+                    b,
+                    Stroke::new(self.stroke_width, self.color32()),
+                );
+            }
+        }
+    }
 
-        // Draw conn lines (dashed)
-        let dashed_stroke = Stroke::new(stroke::HAIRLINE, Color32::from_white_alpha(128));
-        painter.line_segment([p1, p4], dashed_stroke);
-        painter.line_segment([p2, p5], dashed_stroke);
+    pub(super) fn parallel_channel_outline(&self, rect: Rect) -> Option<super::Outline> {
+        let [c, d] = self.parallel_channel_second_line()?;
+        let [a, b] = [self.points[0], self.points[1]];
+        let extend = |a: Pos2, b: Pos2| {
+            let [left, right] = super::lines::extended_line(a, b, rect);
+            let forward = if (b.x - a.x).abs() < 1e-6 {
+                b.y >= a.y
+            } else {
+                b.x >= a.x
+            };
+            let (before, after) = if forward {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            [
+                if self.extend_left { before } else { a },
+                if self.extend_right { after } else { b },
+            ]
+        };
+        let (base, other) = (extend(a, b), extend(c, d));
+        let mut outline = super::Outline {
+            lines: vec![base, other],
+            ..Default::default()
+        };
+        if self.channel_midline {
+            outline
+                .lines
+                .push([base[0].lerp(other[0], 0.5), base[1].lerp(other[1], 0.5)]);
+        }
+        if self.fill_color.is_some() {
+            outline
+                .areas
+                .push(vec![base[0], base[1], other[1], other[0]]);
+        }
+        Some(outline)
     }
 
     /// The channel's second line: the base line from the first to the second
@@ -653,6 +695,42 @@ mod tests {
                 "anchors {anchors:?}: got {got:?}, want {want:?}"
             );
         }
+    }
+
+    #[test]
+    fn parallel_channel_options_share_rendered_and_selected_geometry() {
+        let mut drawing = Drawing::new(1, crate::drawings::DrawingToolType::ParallelChannel);
+        drawing.points = vec![
+            Pos2::new(10.0, 100.0),
+            Pos2::new(30.0, 80.0),
+            Pos2::new(20.0, 120.0),
+        ];
+        drawing.extend_left = true;
+        drawing.extend_right = true;
+        drawing.fill_color = Some([33, 150, 243, 30]);
+        let mut saved = serde_json::to_value(&drawing).unwrap();
+        saved["channel_midline"] = true.into();
+        let mut restored: Drawing = serde_json::from_value(saved).unwrap();
+        restored.points = drawing.points;
+        restored.id = 1;
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 200.0));
+        let outline = restored.outline(rect).unwrap();
+        assert_eq!(
+            outline.lines,
+            vec![
+                [Pos2::new(0.0, 110.0), Pos2::new(100.0, 10.0)],
+                [Pos2::new(0.0, 140.0), Pos2::new(100.0, 40.0)],
+                [Pos2::new(0.0, 125.0), Pos2::new(100.0, 25.0)],
+            ]
+        );
+        assert_eq!(outline.areas.len(), 1);
+        let hit = crate::drawings::services::DrawingInteraction::new();
+        assert_eq!(
+            hit.hit_test(Pos2::new(80.0, 45.0), &[restored.clone()], "1m"),
+            Some(1)
+        );
+        restored.fill_color = None;
+        assert!(restored.outline(rect).unwrap().areas.is_empty());
     }
 
     /// Reference: ordinary least squares of the closes of bars 0..=5 against

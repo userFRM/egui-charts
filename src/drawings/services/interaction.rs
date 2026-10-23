@@ -298,24 +298,6 @@ impl DrawingInteraction {
                         return Some(drawing.id);
                     }
                 }
-                // Parallel channel
-                DrawingToolType::ParallelChannel => {
-                    if drawing.points.len() >= 3 {
-                        let p1 = drawing.points[0];
-                        let p2 = drawing.points[1];
-
-                        let dist1 = point_to_line_distance(point, p1, p2);
-                        if dist1 <= hit_distance {
-                            return Some(drawing.id);
-                        }
-
-                        if let Some([p4, p5]) = drawing.parallel_channel_second_line()
-                            && point_to_line_distance(point, p4, p5) <= hit_distance
-                        {
-                            return Some(drawing.id);
-                        }
-                    }
-                }
                 _ => {
                     // Lines that run to the chart's edge are cut at a box around the anchors and
                     // the point, which holds every part of a line within reach of the point.

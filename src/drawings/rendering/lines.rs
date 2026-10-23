@@ -11,7 +11,7 @@ use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
 impl Drawing {
     /// Draws the straight segment from `a` to `b` in the drawing's line style.
-    fn styled_segment(&self, painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke) {
+    pub(super) fn styled_segment(&self, painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke) {
         match self.line_style.dash_pattern() {
             None => {
                 painter.line_segment([a, b], stroke);

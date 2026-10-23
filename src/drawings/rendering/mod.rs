@@ -298,6 +298,7 @@ impl Drawing {
             }
             T::Pitchfork | T::SchiffPitchfork | T::ModifiedSchiffPitchfork | T::InsidePitchfork => {
                 outline.lines = self.pitchfork_lines(rect)?;
+                outline.areas = self.pitchfork_bands(rect);
             }
             T::Pitchfan => outline.lines = pitchfork::pitchfan_lines(first, second, rect),
             T::GannFan => outline.lines = gann::gann_fan_lines(first, second, rect),
@@ -308,6 +309,7 @@ impl Drawing {
                     .areas
                     .push(channels::flat_top_bottom_fill(first, second, third));
             }
+            T::ParallelChannel => return self.parallel_channel_outline(rect),
             T::DisjointChannel => {
                 let &third = p.get(2)?;
                 let [_, fourth] = channels::disjoint_second_line(first, second, third);
@@ -395,7 +397,7 @@ impl Drawing {
             DrawingToolType::InsidePitchfork => self.render_inside_pitchfork(painter, rect),
 
             // Channels (4 tools)
-            DrawingToolType::ParallelChannel => self.render_parallel_channel(painter),
+            DrawingToolType::ParallelChannel => self.render_parallel_channel(painter, rect),
             DrawingToolType::RegressionTrend => self.render_regression_trend(painter, view),
             DrawingToolType::FlatTopBottom => self.render_flat_top_bottom(painter, view),
             DrawingToolType::DisjointChannel => self.render_disjoint_channel(painter, view),
