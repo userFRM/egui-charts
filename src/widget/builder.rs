@@ -40,7 +40,7 @@ use crate::config::{ChartConfig, ChartOptions};
 use crate::data::FeedState;
 use crate::drawings::DrawingManager;
 use crate::model::ChartType;
-use crate::model::{BarData, ChartState};
+use crate::model::{BarClock, BarData, ChartState};
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::IndicatorRegistry;
 
@@ -60,7 +60,7 @@ impl Chart {
     /// * `data` -- The OHLCV bar data to display
     pub fn new(data: BarData) -> Self {
         let chart_options = ChartOptions::default();
-        let (bars, rejected_bars) = super::series::clean(data.bars);
+        let (bars, rejected_bars) = super::series::clean(data.bars, &BarClock::exact());
         let mut state = ChartState::new(BarData::from_bars(bars));
 
         // Initialize TimeScale with defaults (apply all constraints)
@@ -111,7 +111,8 @@ impl Chart {
             zoom_mode_active: false,
             zoom_just_applied: false,
             symbol: String::new(),
-            timeframe: String::new(),
+            timeframe: None,
+            feed_link: None,
             cursor_modes: CursorModeState::new(),
             last_price_map: PriceMap::new(
                 PriceTransform::default(),

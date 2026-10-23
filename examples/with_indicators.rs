@@ -18,7 +18,7 @@
 
 use chrono::{Duration, Utc};
 use egui_charts::ChartType;
-use egui_charts::model::{Bar, BarData};
+use egui_charts::model::{Bar, BarData, Timeframe};
 use egui_charts::studies::{BollingerBands, EMA, RSI, SMA};
 use egui_charts::theme::Theme;
 use egui_charts::widget::Chart;
@@ -51,7 +51,7 @@ impl IndicatorApp {
         chart.set_chart_type(ChartType::Candles);
         chart.set_visible_bars(120);
         chart.set_symbol("BTCUSDT");
-        chart.set_timeframe_label("1h");
+        chart.set_timeframe(Timeframe::Hour1);
 
         // Add indicators, each calculated on the bars at once
         chart.add_indicator(Box::new(SMA::new(20)));

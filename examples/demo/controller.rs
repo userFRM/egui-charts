@@ -180,7 +180,6 @@ impl DemoApp {
             .with_chart_type(ChartType::Candles)
             .with_indicators(default_indicators())
             .with_visible_candles(100)
-            .with_initial_bars(None)
             .build();
 
         let bars = generate_sample_bars(symbol, 500, timeframe);

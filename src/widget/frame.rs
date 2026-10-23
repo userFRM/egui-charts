@@ -141,10 +141,12 @@ impl Chart {
     /// Overlay studies (moving averages, Bollinger Bands) are drawn on the main
     /// pane, any other visible study (RSI, MACD) in a pane below it with its
     /// x-axis aligned to the main pane; [`Chart::get_rendered_indicator_panes`]
-    /// returns their layout. Studies are brought up to date first.
+    /// returns their layout. A chart built with a feed first asks it for what it needs and
+    /// applies what it sent; studies are then brought up to date.
     ///
     /// Returns an [`egui::Response`] for additional interaction handling.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
+        self.pump(ui.ctx());
         self.refresh_studies();
         self.last_rendered_indicator_panes.clear();
         // Only pane studies need the pane layout, which gives the main pane at
@@ -163,20 +165,18 @@ impl Chart {
 
     /// Resolve the timeframe used to pick a session-break granularity.
     ///
-    /// The legend `timeframe` label is the primary source (it parses forms like
-    /// `"1H"`, `"15min"`, `"1D"`). When it is empty or unrecognized, the cadence
+    /// The chart's timeframe is the primary source. Without one, the cadence
     /// is inferred from the visible bars by taking the median gap between
     /// consecutive timestamps and snapping it to the nearest preset, so session
-    /// breaks work even when the host never set a label. Falls back to the
+    /// breaks work even when the host never set a timeframe. Falls back to the
     /// default (1-minute) when there are too few bars to measure.
     fn resolve_session_timeframe(
         &self,
         visible_data: &[crate::model::Bar],
     ) -> crate::model::Timeframe {
         use crate::model::Timeframe;
-        use std::str::FromStr;
 
-        if let Ok(tf) = Timeframe::from_str(self.timeframe.trim()) {
+        if let Some(tf) = self.timeframe {
             return tf;
         }
 
@@ -711,7 +711,7 @@ impl Chart {
                     &painter,
                     rect,
                     &self.symbol,
-                    &self.timeframe,
+                    &self.timeframe.map(|tf| tf.as_str()).unwrap_or_default(),
                     visible_data,
                     prev_close,
                     &colors,

@@ -14,7 +14,7 @@
 
 use chrono::{Duration, Utc};
 use egui_charts::ChartType;
-use egui_charts::model::{Bar, BarData};
+use egui_charts::model::{Bar, BarData, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::widget::Chart;
 
@@ -46,7 +46,7 @@ impl BasicChartApp {
         chart.set_chart_type(ChartType::Candles);
         chart.set_visible_bars(100);
         chart.set_symbol("SYNTH");
-        chart.set_timeframe_label("1h");
+        chart.set_timeframe(Timeframe::Hour1);
 
         Self { chart }
     }

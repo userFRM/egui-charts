@@ -56,8 +56,8 @@ use std::time::Duration;
 
 pub(crate) mod depth;
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
+    not(any(test, feature = "widget")),
+    expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod inbox;
 #[cfg_attr(
@@ -67,8 +67,8 @@ pub(crate) mod inbox;
 pub(crate) mod merge;
 mod resample;
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
+    not(any(test, feature = "widget")),
+    expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod trades;
 
@@ -418,8 +418,8 @@ pub trait MaybeSend {}
 #[cfg(target_arch = "wasm32")]
 impl<T: ?Sized> MaybeSend for T {}
 
-/// Source of instrument metadata, history and live updates. No chart consumes it yet;
-/// `TradingChart` reads a [`DataSource`].
+/// Source of instrument metadata, history and live updates for a chart, given to it with
+/// `ChartBuilder::with_feed`.
 ///
 /// Methods are called on the UI thread and must return promptly. Do the work elsewhere and answer
 /// through the [`Reply`] or [`Sink`] you were given, from any thread, runtime or browser task.
@@ -461,6 +461,21 @@ pub trait Datafeed: MaybeSend + 'static {
 
     /// Stops what `subscribe` started. Pushes that arrive afterwards are ignored. The default does
     /// nothing; a producer can then poll [`Sink::is_active`] to know when to stop.
+    ///
+    /// Also called when the chart is dropped, which an application may do while egui holds the
+    /// lock of its `Context`, for example inside `Context::input` or `Ui::input`. A push into a
+    /// [`Sink`] or an answer through a [`Reply`] may wake a chart, and waking waits for that lock
+    /// until the application's closure returns. So:
+    ///
+    /// - Return without waiting for a thread that pushes or answers: do not join it, and do not
+    ///   take a lock it holds while it pushes or answers.
+    /// - Answer or drop here only the replies of the chart that held `id`, and push into no other
+    ///   subscription's `Sink`: another chart would be woken on this thread, which holds the
+    ///   lock. A feed that cannot tell which chart a `Reply` is for keeps its replies and answers
+    ///   them as usual; an answer for a dropped chart is never read.
+    ///
+    /// When the chart held the last reference to the feed, the feed's own `Drop` runs right
+    /// after this call and must not wait for such a thread either.
     fn unsubscribe(&self, id: SubscriptionId) {
         let _ = id;
     }

@@ -108,6 +108,7 @@ use crate::data::FeedState;
 use crate::drawings::DrawingManager;
 use crate::model::ChartState;
 use crate::model::ChartType;
+use crate::model::Timeframe;
 use crate::scales::{PriceMap, PriceScale};
 use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
@@ -123,6 +124,7 @@ pub use indicator_pane::{
 use crate::chart::state;
 
 pub mod builder;
+mod feed;
 mod frame;
 pub(crate) mod interaction;
 pub(crate) mod pan_zoom;
@@ -130,6 +132,7 @@ mod panes;
 mod selection;
 mod series;
 mod sync;
+use feed::FeedLink;
 pub(crate) mod tool_interaction;
 
 pub use state::{BoxZoomMode, BoxZoomState, ElasticBounceState, KineticScrollState};
@@ -247,8 +250,10 @@ pub struct Chart {
     pub(crate) zoom_just_applied: bool,
     /// Current symbol being displayed (for legend)
     pub(crate) symbol: String,
-    /// Current timeframe (for legend)
-    pub(crate) timeframe: String,
+    /// Timeframe of the bars, for the legend, the session breaks and the feed
+    pub(crate) timeframe: Option<Timeframe>,
+    /// The feed the chart loads from, if it was built with one.
+    pub(crate) feed_link: Option<FeedLink>,
     /// Cursor mode state (Demonstration, Magic, Eraser effects)
     pub(crate) cursor_modes: CursorModeState,
     /// Price mapping of the last rendered frame (includes zoom adjustments)
@@ -463,16 +468,6 @@ impl Chart {
     /// completes a zoom selection.
     pub fn zoom_was_applied(&self) -> bool {
         self.zoom_just_applied
-    }
-
-    /// Sets the trading symbol displayed in the chart legend (e.g., "BTCUSD", "AAPL").
-    pub fn set_symbol(&mut self, symbol: &str) {
-        self.symbol = symbol.to_string();
-    }
-
-    /// Sets the timeframe label displayed in the chart legend (e.g., "1H", "1D", "1W").
-    pub fn set_timeframe_label(&mut self, timeframe: &str) {
-        self.timeframe = timeframe.to_string();
     }
 
     /// Sets the crosshair rendering style (Full, Dot, or Arrow).

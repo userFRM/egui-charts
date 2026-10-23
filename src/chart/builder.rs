@@ -34,8 +34,8 @@
 
 use crate::chart::selection::SeriesId;
 use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
-use crate::data::DataSource;
 use crate::data::merge::Origin;
+use crate::data::{DataSource, Datafeed};
 use crate::model::BarData;
 use crate::model::ChartType;
 use crate::model::Timeframe;
@@ -43,6 +43,7 @@ use crate::studies::IndicatorRegistry;
 use crate::theme::Theme;
 use crate::widget::Chart;
 use log;
+use std::sync::Arc;
 
 /// Fluent builder for constructing a [`TradingChart`].
 ///
@@ -69,6 +70,7 @@ use log;
 ///     .build();
 /// ```
 pub struct ChartBuilder {
+    feed: Option<Arc<dyn Datafeed>>,
     data_src: Option<Box<dyn DataSource>>,
     symbol: Option<String>,
     timeframe: Timeframe,
@@ -78,8 +80,8 @@ pub struct ChartBuilder {
     chart_options: ChartOptions,
     indicators: Option<IndicatorRegistry>,
     visible_candles: usize,
-    /// Number of bars to fetch on initial load (None = no auto-fetch)
-    initial_bars: Option<usize>,
+    /// Bars asked for in the first page of history.
+    initial_bars: usize,
     /// Auto-fetch on symbol change
     auto_fetch_on_symbol_change: bool,
     /// Auto-fetch on timeframe change
@@ -91,9 +93,10 @@ impl ChartBuilder {
     ///
     /// Fetches 1000 bars when built, and again when the symbol or timeframe
     /// changes, if a symbol is set and the data source returns `true` from
-    /// `supports_historical`. `with_initial_bars(None)` turns this off.
+    /// `supports_historical`.
     pub fn new() -> Self {
         Self {
+            feed: None,
             data_src: None,
             symbol: None,
             timeframe: Timeframe::Min1,
@@ -103,7 +106,7 @@ impl ChartBuilder {
             chart_options: ChartOptions::default(),
             indicators: None,
             visible_candles: 100,
-            initial_bars: Some(1000), // Default: auto-fetch 1000 bars
+            initial_bars: 1000,
             auto_fetch_on_symbol_change: true,
             auto_fetch_on_timeframe_change: true,
         }
@@ -201,6 +204,18 @@ impl ChartBuilder {
             .with_visible_candles(50)
     }
 
+    /// Source of instrument, history and live updates. Without one, feed the chart with
+    /// [`Chart::set_data`] and [`Chart::update`].
+    ///
+    /// [`build`](Self::build) calls no feed method: with a symbol, the chart's first
+    /// [`show`](Chart::show) asks the feed for the instrument and the latest page of history,
+    /// and subscribes once the instrument resolves.
+    #[must_use]
+    pub fn with_feed(mut self, feed: Arc<dyn Datafeed>) -> Self {
+        self.feed = Some(feed);
+        self
+    }
+
     /// Attach a [`DataSource`] for live and historical data.
     ///
     /// Without a data source the chart will render but remain empty until
@@ -286,23 +301,17 @@ impl ChartBuilder {
         self
     }
 
-    /// Set number of bars to fetch on initial load
-    ///
-    /// Pass `Some(n)` to auto-fetch n bars, or `None` to disable auto-fetch.
-    /// Default: `Some(1000)`
+    /// Bars asked for in the first page of history (default 1,000); scroll-back pages ask for
+    /// at least 600.
     ///
     /// # Examples
     /// ```
     /// use egui_charts::ChartBuilder;
     ///
-    /// // Fetch 500 bars on initial load
-    /// let chart = ChartBuilder::new().with_initial_bars(Some(500)).build();
-    ///
-    /// // Disable auto-fetch (manual control)
-    /// let manual = ChartBuilder::new().with_initial_bars(None).build();
+    /// let chart = ChartBuilder::new().with_initial_bars(500).build();
     /// ```
     #[must_use]
-    pub fn with_initial_bars(mut self, bars: Option<usize>) -> Self {
+    pub fn with_initial_bars(mut self, bars: usize) -> Self {
         self.initial_bars = bars;
         self
     }
@@ -462,7 +471,7 @@ impl ChartBuilder {
 
         // Set symbol and timeframe for legend display
         chart.set_symbol(&symbol);
-        chart.set_timeframe_label(&self.timeframe.as_str());
+        chart.set_timeframe(self.timeframe);
 
         // Subscribe to symbol and fetch historical data if data source provided
         if !symbol.is_empty()
@@ -471,10 +480,9 @@ impl ChartBuilder {
             // Subscribe for real-time updates
             let _ = source.subscribe(symbol.clone(), self.timeframe);
 
-            // Fetch historical data if configured and supported
-            if let Some(bars_cnt) = self.initial_bars
-                && source.supports_historical()
-            {
+            // Fetch historical data if supported
+            if source.supports_historical() {
+                let bars_cnt = self.initial_bars;
                 let request = crate::data::HistoricalDataRequest {
                     symbol: symbol.clone(),
                     timeframe: self.timeframe,
@@ -500,6 +508,10 @@ impl ChartBuilder {
             }
         }
 
+        if let Some(feed) = self.feed {
+            chart.attach_feed(feed, self.initial_bars);
+        }
+
         let mut studies = self.indicators.unwrap_or_default();
         while let Some(study) = studies.remove_indicator(0) {
             chart.add_indicator(study);
@@ -510,7 +522,7 @@ impl ChartBuilder {
             data_src: self.data_src,
             symbol,
             timeframe: self.timeframe,
-            initial_bars: self.initial_bars.unwrap_or(1000),
+            initial_bars: self.initial_bars,
             auto_fetch_on_symbol_change: self.auto_fetch_on_symbol_change,
             auto_fetch_on_timeframe_change: self.auto_fetch_on_timeframe_change,
             is_fetching_historical: false,
@@ -805,7 +817,6 @@ impl TradingChart {
         self.symbol = symbol;
         // Update chart legend display
         self.chart.set_symbol(&self.symbol);
-        self.chart.set_timeframe_label(&self.timeframe.as_str());
     }
 
     /// Change the bar aggregation timeframe.
@@ -869,7 +880,7 @@ impl TradingChart {
 
         self.timeframe = timeframe;
         // Update chart legend display
-        self.chart.set_timeframe_label(&timeframe.as_str());
+        self.chart.set_timeframe(timeframe);
     }
 
     /// Change the chart visualization type (e.g., Candles, Line, Area).

@@ -13,17 +13,18 @@ impl Chart {
     /// Replaces the bars of `series`, for history or a replay window. Invalid bars (a non-finite
     /// value, a high or low on the wrong side of the open and close, negative volume) are dropped
     /// and counted in [`feed_state`](Self::feed_state), the rest sorted by time, and of several
-    /// bars with one open time the last is kept. If the new bars still hold the former first bar,
-    /// the drawings move with it, so older history can be loaded in front of the bars. The
-    /// studies are updated from the first bar that changed on the next [`show`](Self::show), and
-    /// near the live edge the view follows a new last bar, as with [`update`](Self::update).
+    /// bars with one open time, or in one slot of the timeframe for a chart built with a feed, the
+    /// last is kept. If the new bars still hold the former first bar, the drawings move with it,
+    /// so older history can be loaded in front of the bars. The studies are updated from the
+    /// first bar that changed on the next [`show`](Self::show), and near the live edge the view
+    /// follows a new last bar, as with [`update`](Self::update).
     ///
     /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
         if !holds_bars(series, "set_data") {
             return;
         }
-        let (bars, rejected) = clean(bars);
+        let (bars, rejected) = clean(bars, &self.clock());
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();
         let before = self.edge();
@@ -38,11 +39,11 @@ impl Chart {
     }
 
     /// Merges `bar` into the bars of `series` as [`Sink::push_bar`](crate::data::Sink::push_bar)
-    /// does, matched by exact open time: a bar with the open time of a stored bar replaces it, a
-    /// newer one is appended and an older one is inserted in order. An invalid bar is dropped and
-    /// counted in [`feed_state`](Self::feed_state). Drawings move with their bars, studies follow
-    /// them on the next [`show`](Self::show), and near the live edge the view follows a new last
-    /// bar.
+    /// does, matched by open time, or by the slot of the timeframe for a chart built with a feed:
+    /// a bar that matches a stored bar replaces it, a newer one is appended and an older one is
+    /// inserted in order. An invalid bar is dropped and counted in
+    /// [`feed_state`](Self::feed_state). Drawings move with their bars, studies follow them on the
+    /// next [`show`](Self::show), and near the live edge the view follows a new last bar.
     ///
     /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
     pub fn update(&mut self, series: SeriesId, bar: Bar) {
@@ -79,11 +80,17 @@ impl Chart {
     /// Merges `incoming` into the main bars by the rules of each bar's origin and counts the
     /// invalid ones in the feed state.
     pub(crate) fn apply(&mut self, incoming: Vec<(Bar, Origin)>) -> Merged {
+        let clock = self.clock();
+        self.apply_by(&clock, incoming)
+    }
+
+    /// [`apply`](Self::apply) with the slots of `clock`, the chart's.
+    pub(super) fn apply_by(&mut self, clock: &BarClock, incoming: Vec<(Bar, Origin)>) -> Merged {
         let before = self.edge();
-        let (from_ticks, clock) = (&mut self.from_ticks, BarClock::exact());
+        let from_ticks = &mut self.from_ticks;
         let mut merged = Merged::default();
         self.state.edit_bars(|bars| {
-            merged = merge(bars, from_ticks, &clock, incoming);
+            merged = merge(bars, from_ticks, clock, incoming);
             merged.first_changed
         });
         self.feed.rejected_bars += merged.rejected;
@@ -225,21 +232,17 @@ struct Edge {
     tail: Option<Bar>,
 }
 
-/// `bars` without the invalid ones, sorted by time, with the last of several bars of one open
-/// time; and the number of invalid bars dropped.
-pub(super) fn clean(bars: Vec<Bar>) -> (Vec<Bar>, u64) {
+/// `bars` without the invalid ones, sorted by time, with the last of several bars of one slot of
+/// `clock`; and the number of invalid bars dropped.
+pub(super) fn clean(bars: Vec<Bar>, clock: &BarClock) -> (Vec<Bar>, u64) {
     // Bars already in order pass as they are, without the copy through the merge.
-    if bars.windows(2).all(|pair| pair[0].time < pair[1].time) && bars.iter().all(valid) {
+    let slot = |bar: &Bar| clock.bar_open(bar.time);
+    if bars.windows(2).all(|pair| slot(&pair[0]) < slot(&pair[1])) && bars.iter().all(valid) {
         return (bars, 0);
     }
     let mut clean = Vec::with_capacity(bars.len());
     let incoming = bars.into_iter().map(|bar| (bar, Origin::History)).collect();
-    let merged = merge(
-        &mut clean,
-        &mut BTreeSet::new(),
-        &BarClock::exact(),
-        incoming,
-    );
+    let merged = merge(&mut clean, &mut BTreeSet::new(), clock, incoming);
     (clean, merged.rejected)
 }
 

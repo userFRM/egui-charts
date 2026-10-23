@@ -20,7 +20,7 @@
 use chrono::{Duration, Utc};
 use egui_charts::ChartType;
 use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
-use egui_charts::model::{Bar, BarData};
+use egui_charts::model::{Bar, BarData, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::widget::Chart;
 
@@ -50,7 +50,7 @@ impl DrawingApp {
         chart.set_chart_type(ChartType::Candles);
         chart.set_visible_bars(100);
         chart.set_symbol("ETHUSDT");
-        chart.set_timeframe_label("4h");
+        chart.set_timeframe(Timeframe::Hour4);
 
         let drawing_manager = chart.drawings_mut();
 
