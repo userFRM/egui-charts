@@ -154,10 +154,13 @@ impl DatePicker {
                 action = self.draw_content(ui);
             });
 
-        self.is_open = is_open;
-        if !is_open {
+        // Go, Cancel and the close button all close the picker.
+        if action != DatePickerAction::None {
+            is_open = false;
+        } else if !is_open {
             action = DatePickerAction::Cancel;
         }
+        self.is_open = is_open;
 
         action
     }
@@ -265,12 +268,10 @@ impl DatePicker {
                     } else {
                         action = DatePickerAction::GoToDate(self.sel_date);
                     }
-                    self.is_open = false;
                 }
 
                 if ui.button("Cancel").clicked() {
                     action = DatePickerAction::Cancel;
-                    self.is_open = false;
                 }
             });
         });
