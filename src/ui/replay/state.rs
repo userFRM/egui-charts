@@ -558,6 +558,27 @@ mod tests {
     }
 
     #[test]
+    fn any_speed_keeps_playback_advancing() {
+        let speeds = [
+            ReplaySpeed::from(f32::NAN),
+            ReplaySpeed::from(-1.0),
+            ReplaySpeed::from(f32::INFINITY),
+            ReplaySpeed::from(0.0),
+            ReplaySpeed::Custom(f32::NAN),
+        ];
+        let bars = speeds.map(|speed| {
+            let mut state = ReplayState::new();
+            state.total_bars = 100;
+            state.set_speed(speed);
+            state.play();
+            state.last_update = Instant::now().checked_sub(std::time::Duration::from_secs(10));
+            state.update()
+        });
+        // 10 s at 1 s per bar: a speed plays clamped to 0.1x..100x, and at 1x when not finite.
+        assert_eq!(bars, [10, 1, 10, 1, 10]);
+    }
+
+    #[test]
     fn test_markers() {
         let mut state = ReplayState::new();
         state.curr_bar = 5;

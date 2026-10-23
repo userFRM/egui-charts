@@ -166,12 +166,13 @@ pub enum ReplaySpeed {
     Turbo,
     /// 100x speed (max)
     Max,
-    /// Custom speed value
+    /// Custom speed multiplier, clamped to 0.1 to 100; a value that is not finite plays at 1x
     Custom(f32),
 }
 
 impl ReplaySpeed {
-    /// Get the speed multiplier value
+    /// Get the speed multiplier value; a custom speed is clamped to 0.1 to 100, and plays at 1x
+    /// when it is not finite
     pub fn multiplier(&self) -> f32 {
         match self {
             ReplaySpeed::Slowest => 0.1,
@@ -184,7 +185,8 @@ impl ReplaySpeed {
             ReplaySpeed::Fastest => 25.0,
             ReplaySpeed::Turbo => 50.0,
             ReplaySpeed::Max => 100.0,
-            ReplaySpeed::Custom(v) => *v,
+            ReplaySpeed::Custom(v) if v.is_finite() => v.clamp(0.1, 100.0),
+            ReplaySpeed::Custom(_) => 1.0,
         }
     }
 
@@ -200,7 +202,7 @@ impl ReplaySpeed {
             ReplaySpeed::VeryFast => ReplaySpeed::Fastest,
             ReplaySpeed::Fastest => ReplaySpeed::Turbo,
             ReplaySpeed::Turbo | ReplaySpeed::Max => ReplaySpeed::Max,
-            ReplaySpeed::Custom(v) => ReplaySpeed::Custom((*v * 2.0).min(100.0)),
+            ReplaySpeed::Custom(_) => ReplaySpeed::Custom((self.multiplier() * 2.0).min(100.0)),
         }
     }
 
@@ -216,16 +218,13 @@ impl ReplaySpeed {
             ReplaySpeed::Normal => ReplaySpeed::Slow,
             ReplaySpeed::Slow => ReplaySpeed::Slower,
             ReplaySpeed::Slower | ReplaySpeed::Slowest => ReplaySpeed::Slowest,
-            ReplaySpeed::Custom(v) => ReplaySpeed::Custom((*v / 2.0).max(0.1)),
+            ReplaySpeed::Custom(_) => ReplaySpeed::Custom((self.multiplier() / 2.0).max(0.1)),
         }
     }
 
     /// Get display label for the speed
     pub fn label(&self) -> String {
-        match self {
-            ReplaySpeed::Custom(v) => format!("{v:.1}x"),
-            _ => format!("{:.1}x", self.multiplier()),
-        }
+        format!("{:.1}x", self.multiplier())
     }
 
     /// All standard presets
@@ -247,6 +246,7 @@ impl ReplaySpeed {
 
 impl From<f32> for ReplaySpeed {
     fn from(value: f32) -> Self {
+        let value = ReplaySpeed::Custom(value).multiplier();
         // Try to match a preset
         for preset in Self::presets() {
             if (preset.multiplier() - value).abs() < 0.01 {

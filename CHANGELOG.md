@@ -173,6 +173,7 @@ All notable changes to this project are documented in this file. The format is b
 - Acceleration Bands average each bar's widened high and low, as Headley defines them, instead of widening the average high and low by the average range, and draw all three bands.
 - Klinger Oscillator weighs volume by Klinger's volume force, built from each bar's range and the cumulative range of the current trend, instead of by the trend sign alone, and draws its signal line. Equal sums of high, low and close keep the current trend, a series too short for the long average has no values instead of values from a partial average, and a bar with a non-finite price has no value without ending the study. Migration: values differ from the signed-volume averages computed before, and every value is `Multiple([oscillator, signal])`, the signal NaN until it exists, where it was `Single(oscillator)` until the signal existed.
 - `BarData::to_csv`, `to_csv_string` and `to_csv_with_indicators` write a bar's fraction of a second, and `BarData::from_csv` reads it, so bars less than a second apart keep their times through a CSV file. Whole-second times are written as before.
+- A replay speed that is not finite plays at 1x and a custom speed is clamped to 0.1x to 100x, so `ReplayAction::SetSpeed(f32::NAN)` or a negative speed no longer freezes a replay that still reports playing.
 
 ### Changed
 
