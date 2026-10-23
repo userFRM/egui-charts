@@ -110,7 +110,16 @@ impl Chart {
                     dot_interval: calculate_dot_interval(coords.bar_spacing),
                     ..Default::default()
                 };
-                let closes: Vec<f64> = visible_data.iter().map(|b| b.close).collect();
+                let values: Vec<f64> = visible_data
+                    .iter()
+                    .map(|b| {
+                        if series_id == SeriesId::VOLUME {
+                            b.volume
+                        } else {
+                            b.close
+                        }
+                    })
+                    .collect();
                 match series_id {
                     SeriesId::VOLUME => {
                         // Volume handles sit on the volume rect; render on the
@@ -119,13 +128,15 @@ impl Chart {
                         let max_volume = visible_data
                             .iter()
                             .map(|b| b.volume)
-                            .fold(0.0_f64, f64::max)
-                            .max(1.0);
+                            .fold(0.0_f64, f64::max);
+                        if max_volume <= 0.0 {
+                            return;
+                        }
                         render_candle_selection_dots(
                             painter,
                             visible_range,
                             &volume_coords,
-                            &closes,
+                            &values,
                             |volume| {
                                 let norm = (volume / max_volume) as f32;
                                 volume_coords.rect.bottom() - norm * volume_coords.rect.height()
@@ -138,7 +149,7 @@ impl Chart {
                             painter,
                             visible_range,
                             coords,
-                            &closes,
+                            &values,
                             |price| coords.price_to_y(price),
                             &config,
                         );
@@ -186,7 +197,20 @@ pub(super) fn hit_test_main_chart(
         }
     }
 
-    // 2. Main price series (candles/bars/line).
+    // 2. Volume is painted over the price series.
+    if let Some(volume_coords) = volume_coords
+        && let Some(hit) = hit_test_volume(
+            click_pos,
+            bars,
+            visible_range.clone(),
+            volume_coords,
+            max_volume,
+        )
+    {
+        return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
+    }
+
+    // 3. Main price series (candles/bars/line).
     if let Some(hit) = hit_test_candles(
         click_pos,
         bars,
@@ -195,14 +219,6 @@ pub(super) fn hit_test_main_chart(
         |price| coords.price_to_y(price),
         &crate::chart::series::HitTestConfig::default(),
     ) {
-        return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
-    }
-
-    // 3. Volume series (only when a volume pane was rendered).
-    if let Some(volume_coords) = volume_coords
-        && let Some(hit) =
-            hit_test_volume(click_pos, bars, visible_range, volume_coords, max_volume)
-    {
         return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
     }
 
@@ -301,7 +317,7 @@ mod selection_tests {
     }
 
     #[test]
-    fn overlay_indicator_wins_over_series_at_same_point() {
+    fn selection_follows_overlay_volume_and_price_paint_order() {
         let (mapping, bars) = fixture();
         // Place an indicator value at bar 2 and bar 3 exactly on the candle's
         // close price so its line passes through the body. A click there must
@@ -312,17 +328,36 @@ mod selection_tests {
         let registry = overlay_at(values);
 
         let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(bars[2].close));
-        let hit = hit_test_main_chart(
-            pos,
-            &registry,
-            &[SeriesId(2)],
-            &mapping,
-            None,
-            &bars,
-            100.0,
-            0..bars.len(),
-        );
-        assert_eq!(hit, Some((ChartElementId::Indicator(SeriesId(2)), 2)));
+        let volume = mapping.with_rect(egui::Rect::from_min_max(
+            Pos2::new(mapping.rect.left(), pos.y - 10.0),
+            Pos2::new(mapping.rect.right(), pos.y + 10.0),
+        ));
+        let empty = IndicatorRegistry::new();
+        for (studies, volume, expected) in [
+            (
+                &registry,
+                Some(&volume),
+                ChartElementId::Indicator(SeriesId(2)),
+            ),
+            (
+                &empty,
+                Some(&volume),
+                ChartElementId::Series(SeriesId::VOLUME),
+            ),
+            (&empty, None, ChartElementId::Series(SeriesId::MAIN)),
+        ] {
+            let hit = hit_test_main_chart(
+                pos,
+                studies,
+                &[SeriesId(2)],
+                &mapping,
+                volume,
+                &bars,
+                100.0,
+                0..bars.len(),
+            );
+            assert_eq!(hit, Some((expected, 2)));
+        }
     }
 
     #[test]

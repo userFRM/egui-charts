@@ -52,7 +52,6 @@ pub(super) fn render_high_low(
             volume_ctx,
             visible_data,
             start_idx,
-            bar_width,
             max_volume,
             colors,
             chart_rect_min_x,

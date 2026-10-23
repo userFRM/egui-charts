@@ -386,7 +386,7 @@ pub struct ChartLayoutRects {
     pub widget_rect: Rect,
     /// The main price/candle area where OHLC data is rendered.
     pub price_rect: Rect,
-    /// The volume sub-area below the price chart (empty if volume is hidden).
+    /// The volume area inside the price pane (empty if volume is hidden).
     pub volume_rect: Rect,
     /// The legend/OHLC info area at the top of the chart.
     pub legend_rect: Rect,
@@ -414,17 +414,20 @@ impl Chart {
     /// The layout respects current config flags like `show_ohlc_info`,
     /// `show_time_labels`, and `show_volume`.
     pub fn calculate_layout_rects(&self, widget_rect: Rect) -> ChartLayoutRects {
+        use crate::styles::sizing::chart as sizing;
+
         let bottom_padding = if self.config.show_time_labels {
-            30.0
+            sizing::BOTTOM_PADDING_WITH_TIME
         } else {
-            20.0
+            sizing::BOTTOM_PADDING_NO_TIME
         };
         let top_padding = if self.config.show_ohlc_info {
-            40.0
+            sizing::TOP_PADDING_WITH_OHLC
         } else {
-            20.0
+            sizing::TOP_PADDING_NO_OHLC
         };
-        let right_padding = self.config.padding * 2.0;
+        let left_margin = sizing::PADDING;
+        let right_margin = sizing::PADDING + sizing::RIGHT_AXIS_WIDTH;
 
         // Legend rect is at the top of the widget
         let legend_rect = if self.config.show_ohlc_info {
@@ -437,22 +440,23 @@ impl Chart {
         };
 
         let chart_rect = Rect::from_min_size(
-            widget_rect.min + Vec2::new(self.config.padding, top_padding),
+            widget_rect.min + Vec2::new(left_margin, top_padding),
             Vec2::new(
-                widget_rect.width() - self.config.padding - right_padding,
-                widget_rect.height() - top_padding - bottom_padding,
+                (widget_rect.width() - left_margin - right_margin).max(sizing::MIN_CHART_WIDTH),
+                (widget_rect.height() - top_padding - bottom_padding).max(sizing::MIN_CHART_HEIGHT),
             ),
         );
 
-        let (price_rect, volume_rect) = if self.config.show_volume {
-            let split_y =
-                chart_rect.min.y + chart_rect.height() * (1.0 - self.config.volume_height_fraction);
-            (
-                Rect::from_min_max(chart_rect.min, Pos2::new(chart_rect.max.x, split_y)),
-                Rect::from_min_max(Pos2::new(chart_rect.min.x, split_y), chart_rect.max),
+        let price_rect = chart_rect;
+        let volume_rect = if self.config.show_volume && self.chart_type.supports_volume() {
+            let bottom = price_rect.bottom() - 12.0;
+            let height = (price_rect.height() - 12.0) * self.config.volume_height_fraction;
+            Rect::from_min_max(
+                Pos2::new(price_rect.left(), bottom - height),
+                Pos2::new(price_rect.right(), bottom),
             )
         } else {
-            (chart_rect, Rect::NOTHING)
+            Rect::ZERO
         };
 
         ChartLayoutRects {

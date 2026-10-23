@@ -64,7 +64,7 @@ impl Theme {
                 crosshair_label_text: rgb(209, 212, 220),
                 candle_up: rgb(8, 153, 129),
                 candle_down: rgb(242, 54, 69),
-                volume_alpha: 128,
+                volume_alpha: 153,
             },
             text: TextSizes::default(),
             spacing: Spacing::default(),
@@ -113,7 +113,7 @@ impl Theme {
                 crosshair_label_text: rgb(19, 23, 34),
                 candle_up: rgb(38, 166, 154),
                 candle_down: rgb(239, 83, 80),
-                ..dark.chart
+                volume_alpha: 128,
             },
             ..dark
         }
