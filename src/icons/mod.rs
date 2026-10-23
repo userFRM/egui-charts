@@ -224,6 +224,8 @@ pub mod icons {
     pub const SETTINGS: Icon = crate::icon_from_path!("ui/settings.svg");
     pub const CAMERA: Icon = crate::icon_from_path!("ui/camera.svg");
     pub const PLUS: Icon = crate::icon_from_path!("ui/plus.svg");
+    /// Circled plus for adding a comparison series.
+    pub const COMPARE_ADD: Icon = crate::icon_from_path!("ui/compare-add.svg");
     pub const INDICATORS: Icon = crate::icon_from_path!("ui/indicators.svg");
     pub const ALERTS: Icon = crate::icon_from_path!("ui/alert.svg");
     pub const REPLAY: Icon = crate::icon_from_path!("ui/replay.svg");
@@ -267,6 +269,8 @@ pub mod icons {
     pub const STAR_EMPTY: Icon = crate::icon_from_path!("ui/star.svg");
     pub const STAR_FILLED: Icon = crate::icon_from_path!("ui/star-filled.svg");
     pub const LAYOUT_GRID: Icon = crate::icon_from_path!("ui/layout-grid.svg");
+    /// Single chart pane for choosing the chart layout.
+    pub const LAYOUT_SINGLE: Icon = crate::icon_from_path!("ui/layout-single.svg");
     pub const LAYOUT_SETUP: Icon = crate::icon_from_path!("ui/layout-setup.svg");
     pub const CLOSE: Icon = crate::icon_from_path!("ui/close.svg");
     pub const MOVE_PANE: Icon = crate::icon_from_path!("ui/move-pane.svg");
