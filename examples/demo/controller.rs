@@ -931,7 +931,9 @@ impl DemoApp {
                         .is_none_or(|(_, i)| i.is_visible());
                     chart.set_indicator_visible(study, !now);
                 } else {
-                    chart.drawings_mut().edit_drawing(id, |d| d.visible = !d.visible);
+                    chart
+                        .drawings_mut()
+                        .edit_drawing(id, |d| d.visible = !d.visible);
                 }
             }
             ObjectTreeAction::ToggleLock(id) => {
