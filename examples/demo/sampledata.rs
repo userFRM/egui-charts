@@ -4,7 +4,7 @@
 //! price series seeded from its name. Switching symbols therefore yields a
 //! stable, distinct chart rather than random noise that changes each frame.
 
-use egui_charts::model::{Bar, Symbol, SymbolType, Timeframe};
+use egui_charts::model::{Bar, Symbol, SymbolType};
 
 /// Deterministic executions inside each fixture bar's UTC slot. These are synthetic aggressors,
 /// independent of historical trades. Sizes sum to the fixture volume.
@@ -38,7 +38,7 @@ pub struct DemoSymbol {
     pub company_name: &'static str,
     pub exchange: &'static str,
     pub start_price: f64,
-    seed: usize,
+    pub seed: u64,
 }
 
 impl DemoSymbol {
@@ -140,117 +140,6 @@ impl DemoSymbol {
     }
 }
 
-/// Generate a deterministic OHLCV series for `symbol` at the given timeframe.
-///
-/// The same `(symbol, timeframe, count)` always produces identical bars, so a
-/// symbol switch is repeatable and indicators/replay see stable input.
-pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) -> Vec<Bar> {
-    use chrono::{Datelike, TimeZone, Timelike, Utc, Weekday};
-
-    if matches!(timeframe, Timeframe::Ticks(_)) {
-        return Vec::new();
-    }
-    let spec = DemoSymbol::find(symbol);
-    let mut bars = Vec::with_capacity(count);
-    let mut price = spec.start_price;
-    let session_fixture = spec.symbol == "SAMPLE";
-    let mut time = if session_fixture {
-        Utc.with_ymd_and_hms(
-            2026,
-            1,
-            5,
-            if (Timeframe::Min1.duration_ms()..Timeframe::Day1.duration_ms())
-                .contains(&timeframe.duration_ms())
-            {
-                8
-            } else {
-                14
-            },
-            30,
-            0,
-        )
-        .unwrap()
-    } else {
-        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
-    };
-    let step_ms = timeframe.duration_ms();
-
-    // Per-symbol salt so each instrument has its own price action.
-    let salt = spec.seed.wrapping_mul(0x9E37_79B1);
-
-    let mut trend = 0.0_f64;
-    let mut volatility = 1.0_f64;
-
-    for i in 0..count {
-        let r1 = hash_f64(i, salt);
-        let r2 = hash_f64(i, salt.wrapping_add(1000));
-        let r3 = hash_f64(i, salt.wrapping_add(2000));
-        let r4 = hash_f64(i, salt.wrapping_add(3000));
-        let r5 = hash_f64(i, salt.wrapping_add(4000));
-
-        // Slow-moving trend with mean reversion (momentum effect).
-        trend = trend * 0.985 + (r5 - 0.5) * 0.003;
-
-        // Return: trend + noise scaled by volatility.
-        let return_pct = trend + (r1 - 0.5) * 0.025 * volatility;
-
-        // Volatility clustering (big moves beget big moves).
-        volatility = 0.93 * volatility + 0.07 * (1.0 + return_pct.abs() * 40.0);
-        volatility = volatility.clamp(0.5, 3.0);
-
-        let open = price;
-        let close = if session_fixture {
-            open + (r1 - 0.5) * 2.0 + trend * 10.0 - (open - spec.start_price) * 0.02
-        } else {
-            open * (1.0 + return_pct)
-        };
-
-        let body_high = open.max(close);
-        let body_low = open.min(close);
-        let body_range =
-            (body_high - body_low).max(open * if session_fixture { 0.00005 } else { 0.0005 });
-        let wick_scale = if session_fixture { 0.5 } else { 2.0 };
-
-        let high = body_high + r2 * body_range * wick_scale;
-        let low = body_low - r3 * body_range * wick_scale;
-
-        let base_vol = if session_fixture {
-            10_000.0 + r4 * 40_000.0 + r4.powi(96) * 1_000_000.0
-        } else {
-            600.0 + r4 * 1400.0
-        };
-        let vol_spike = 1.0 + return_pct.abs() * 30.0;
-        let volume = base_vol * vol_spike;
-
-        bars.push(Bar {
-            time,
-            open,
-            high,
-            low,
-            close,
-            volume,
-        });
-        price = close;
-        let date = time.date_naive();
-        time += chrono::Duration::milliseconds(step_ms);
-        if session_fixture {
-            if step_ms < Timeframe::Day1.duration_ms()
-                && (time.date_naive() != date || time.hour() >= 21)
-            {
-                time = (date + chrono::Duration::days(1))
-                    .and_hms_opt(8, 30, 0)
-                    .unwrap()
-                    .and_utc();
-            }
-            while matches!(time.weekday(), Weekday::Sat | Weekday::Sun) {
-                time += chrono::Duration::days(1);
-            }
-        }
-    }
-
-    bars
-}
-
 /// Map a top-toolbar chart-style label to a `ChartType`.
 pub fn chart_type_from_name(name: &str) -> Option<egui_charts::model::ChartType> {
     use egui_charts::model::ChartType;
@@ -280,6 +169,26 @@ pub fn chart_type_from_name(name: &str) -> Option<egui_charts::model::ChartType>
     }
 }
 
+/// Trading windows shared by the synthetic feed and its session controls.
+pub fn sample_session() -> egui_charts::model::Session {
+    use chrono::{
+        NaiveTime,
+        Weekday::{Fri, Mon, Thu, Tue, Wed},
+    };
+    use egui_charts::model::{Session, SessionWindow};
+    let clock = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+    Session::new([SessionWindow::new(
+        [Mon, Tue, Wed, Thu, Fri],
+        clock(14, 30),
+        clock(21, 0),
+    )])
+    .with_extended_windows([SessionWindow::new(
+        [Mon, Tue, Wed, Thu, Fri],
+        clock(8, 30),
+        clock(14, 30),
+    )])
+}
+
 /// Derive a displayed session and dividend basis from the unchanged source history.
 ///
 /// SAMPLE supplies weekday extended hours from 08:30 to 21:00 UTC, with regular
@@ -291,16 +200,20 @@ pub fn session_bars(
     session: egui_charts::ui::timeframe_toolbar::SessionType,
     adjusted: bool,
 ) -> Vec<Bar> {
-    use chrono::{NaiveTime, TimeZone, Utc};
+    use chrono::{TimeZone, Utc};
     use egui_charts::ui::timeframe_toolbar::SessionType;
 
+    let hours = egui_charts::model::ExchangeSessionProvider::new(
+        egui_charts::model::TimezoneId::utc(),
+        Some(sample_session()),
+    );
     let dividend = Utc.with_ymd_and_hms(2026, 1, 26, 14, 30, 0).unwrap();
     source
         .iter()
         .filter(|bar| {
             symbol != "SAMPLE"
-                || session != SessionType::RTH
-                || bar.time.time() >= NaiveTime::from_hms_opt(14, 30, 0).unwrap()
+                || session == SessionType::Full24x7
+                || hours.is_open(bar.time, session == SessionType::ETH)
         })
         .map(|bar| {
             let mut bar = bar.clone();
@@ -341,133 +254,69 @@ pub fn visible_bars_for_range(
     bars.len() - start.map_or(0, |start| bars.partition_point(|bar| bar.time < start))
 }
 
-/// Deterministic pseudo-random f64 in `[0, 1)` from two seeds, without the `rand` crate.
-fn hash_f64(index: usize, salt: usize) -> f64 {
-    let mut x = (index.wrapping_mul(2654435761) ^ salt) as u32;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    x = x.wrapping_mul(1597334677);
-    (x % 100_000) as f64 / 100_000.0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Datelike, Timelike, Weekday};
+    use egui_charts::model::{BarClock, Timeframe};
+    use egui_charts::ui::timeframe_toolbar::{DateRange, SessionType};
 
     #[test]
     fn synthetic_fixture_preserves_sessions_adjustments_and_ranges() {
-        for timeframe in Timeframe::all() {
-            let bars = generate_sample_bars("SAMPLE", 600, timeframe);
-            let repeated = generate_sample_bars("SAMPLE", 600, timeframe);
-            assert_eq!(bars.len(), 600);
-            assert_eq!(bars, repeated);
-            let trades = synthetic_trades(&bars);
-            assert_eq!(trades, synthetic_trades(&bars));
-            let clock = egui_charts::model::BarClock::new(timeframe);
-            for (bar, trades) in bars.iter().zip(trades.as_chunks::<64>().0) {
-                assert!(
-                    trades
-                        .iter()
-                        .all(|trade| clock.same_bar(trade.ts, bar.time))
-                );
-                assert!(
-                    (trades.iter().map(|t| t.size).sum::<f64>() - bar.volume).abs()
-                        < bar.volume * 1e-12
-                );
-            }
-            assert!(
-                trades.windows(2).all(|t| t[0].ts <= t[1].ts),
-                "{timeframe}: {:?}",
-                trades.windows(2).find(|t| t[0].ts > t[1].ts)
-            );
-            let bodies: f64 = bars.iter().map(|bar| (bar.close - bar.open).abs()).sum();
-            let wicks: f64 = bars
-                .iter()
-                .map(|bar| bar.high - bar.low - (bar.close - bar.open).abs())
-                .sum();
-            assert!(
-                wicks < bodies,
-                "ordinary fixture wicks should not dominate bodies"
-            );
-            let peaks = bars.iter().filter(|bar| bar.volume > 250_000.0).count();
-            assert!(
-                peaks > 0 && peaks * 100 < bars.len() * 5,
-                "volume peaks should be occasional: {peaks}"
-            );
-            assert!(bars.iter().all(|b| (680.0..790.0).contains(&b.close)));
-            assert!(
-                bars.iter()
-                    .all(|b| !matches!(b.time.weekday(), Weekday::Sat | Weekday::Sun))
-            );
-            assert!(bars.windows(2).all(|b| b[0].time < b[1].time));
-            assert!(bars.iter().all(|b| (8..21).contains(&b.time.hour())));
-            assert!(
-                !session_bars(
-                    "SAMPLE",
-                    &bars,
-                    egui_charts::ui::timeframe_toolbar::SessionType::RTH,
-                    false,
-                )
-                .is_empty(),
-                "{timeframe}"
-            );
-            if timeframe == Timeframe::Hour1 {
-                assert!(bars.iter().all(|b| b.time.minute() == 30));
-                assert!(
-                    bars.windows(2)
-                        .any(|b| b[1].time - b[0].time > chrono::Duration::hours(24))
-                );
-            }
-        }
-        assert_eq!(DemoSymbol::find("SAMPLE").exchange, "Synthetic");
-
-        use egui_charts::ui::timeframe_toolbar::{DateRange, SessionType};
-        let source = generate_sample_bars("SAMPLE", 600, Timeframe::Hour1);
-        let regular = session_bars("SAMPLE", &source, SessionType::RTH, false);
-        assert!(regular.len() < source.len());
-        assert!(regular.iter().all(|b| b.time.hour() >= 14));
-        assert!(
-            regular.windows(2).all(|bars| {
-                (bars[1].open - bars[0].close).abs() < DemoSymbol::find("SAMPLE").start_price * 0.01
-            }),
-            "synthetic sessions should not form disconnected price clusters"
-        );
-        for (session, count) in [
-            (SessionType::RTH, regular.len()),
-            (SessionType::ETH, source.len()),
+        let times = [
+            "2026-01-23T08:30:00Z",
+            "2026-01-23T14:30:00Z",
+            "2026-01-23T21:00:00Z",
+            "2026-01-24T14:30:00Z",
+            "2026-01-26T14:30:00Z",
+        ];
+        let source: Vec<_> = times
+            .iter()
+            .map(|time| Bar::new(time.parse().unwrap(), 100.0, 102.0, 99.0, 101.0, 640.0))
+            .collect();
+        for (session, indices) in [
+            (SessionType::RTH, vec![1, 4]),
+            (SessionType::ETH, vec![0, 1, 4]),
+            (SessionType::Full24x7, vec![0, 1, 2, 3, 4]),
         ] {
             let raw = session_bars("SAMPLE", &source, session, false);
             let adjusted = session_bars("SAMPLE", &source, session, true);
-            assert_eq!(raw.len(), count);
-            assert_eq!(adjusted.len(), count);
+            assert_eq!(
+                raw,
+                indices
+                    .iter()
+                    .map(|i| source[*i].clone())
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(raw[0].close * 0.98, adjusted[0].close);
             assert_eq!(raw.last().unwrap().close, adjusted.last().unwrap().close);
-            for (raw, adjusted) in raw.iter().zip(adjusted.iter()) {
+            for (raw, adjusted) in raw.iter().zip(&adjusted) {
                 assert_eq!((raw.time, raw.volume), (adjusted.time, adjusted.volume));
-                assert!(adjusted.low <= adjusted.open.min(adjusted.close));
-                assert!(adjusted.high >= adjusted.open.max(adjusted.close));
             }
         }
         for (range, count) in [
-            (DateRange::Day1, 7),
-            (DateRange::Day5, 22),
-            (DateRange::Month1, 141),
-            (DateRange::Month3, regular.len()),
-            (DateRange::Month6, regular.len()),
-            (DateRange::YTD, regular.len()),
-            (DateRange::Year1, regular.len()),
-            (DateRange::Year5, regular.len()),
-            (DateRange::All, regular.len()),
+            (DateRange::Day1, 1),
+            (DateRange::Day5, 5),
+            (DateRange::Month1, 5),
+            (DateRange::All, 5),
         ] {
-            assert_eq!(visible_bars_for_range(range, &regular), count, "{range:?}");
+            assert_eq!(visible_bars_for_range(range, &source), count);
         }
         assert_eq!(visible_bars_for_range(DateRange::All, &[]), 0);
-        let daily = generate_sample_bars("SAMPLE", 600, Timeframe::Day1);
-        assert_eq!(
-            session_bars("SAMPLE", &daily, SessionType::RTH, false).len(),
-            600
-        );
+        for timeframe in Timeframe::all() {
+            let clock = BarClock::new(timeframe);
+            let mut bar = source[0].clone();
+            bar.time = clock.bar_open(bar.time);
+            let trades = synthetic_trades(&[bar.clone()]);
+            assert!(
+                trades
+                    .iter()
+                    .all(|trade| clock.same_bar(trade.ts, bar.time))
+            );
+            assert_eq!(
+                trades.iter().map(|trade| trade.size).sum::<f64>(),
+                bar.volume
+            );
+            assert!(trades.windows(2).all(|pair| pair[0].ts <= pair[1].ts));
+        }
     }
 }

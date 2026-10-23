@@ -13,7 +13,7 @@ const FIRST_MONDAY_MS: i64 = 4 * DAY_MS;
 pub struct BarClock {
     /// `None` for a clock that matches bars by their exact open time.
     timeframe: Option<Timeframe>,
-    timezone: Tz,
+    timezone: Option<Tz>,
 }
 
 impl BarClock {
@@ -21,14 +21,20 @@ impl BarClock {
     pub fn new(timeframe: Timeframe) -> Self {
         Self {
             timeframe: Some(timeframe),
-            timezone: chrono_tz::UTC,
+            timezone: Some(chrono_tz::UTC),
         }
     }
 
     /// Align time windows to the local calendar of `timezone`. Repeated clock hours remain
-    /// separate; a boundary skipped by a clock change starts at the first valid local minute.
+    /// separate; a boundary skipped by a clock change starts at the first valid local instant.
     pub fn with_timezone(mut self, timezone: Tz) -> Self {
-        self.timezone = timezone;
+        self.timezone = Some(timezone);
+        self
+    }
+
+    /// Align time windows to the system's local calendar.
+    pub fn with_local_timezone(mut self) -> Self {
+        self.timezone = None;
         self
     }
 
@@ -40,7 +46,7 @@ impl BarClock {
     pub(crate) fn exact() -> Self {
         Self {
             timeframe: None,
-            timezone: chrono_tz::UTC,
+            timezone: Some(chrono_tz::UTC),
         }
     }
 
@@ -54,11 +60,7 @@ impl BarClock {
         if matches!(timeframe, Timeframe::Ticks(_)) {
             return t;
         }
-        let offset = t
-            .with_timezone(&self.timezone)
-            .offset()
-            .fix()
-            .local_minus_utc();
+        let offset = self.offset_at(t);
         let local = t
             .naive_utc()
             .checked_add_signed(TimeDelta::seconds(i64::from(offset)))
@@ -79,23 +81,57 @@ impl BarClock {
         };
         let boundary = DateTime::from_timestamp_millis(ms - (ms - anchor).rem_euclid(period))
             .map_or(local, |time| time.naive_utc());
-        self.local_boundary(boundary, t)
+        let open = self.local_boundary(boundary, t);
+        // A repeated hour can begin inside a short bucket whose nominal open is before it.
+        if timeframe.duration() <= TimeDelta::hours(1) && t - open >= timeframe.duration() {
+            let mut lo = t
+                .checked_sub_signed(timeframe.duration())
+                .unwrap_or(t)
+                .timestamp_millis();
+            let mut hi = t.timestamp_millis();
+            if self.offset_at(DateTime::from_timestamp_millis(lo).unwrap_or(t)) != offset {
+                while hi - lo > 1 {
+                    let mid = lo + (hi - lo) / 2;
+                    if self.offset_at(DateTime::from_timestamp_millis(mid).unwrap_or(t)) == offset {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                return DateTime::from_timestamp_millis(hi).unwrap_or(open);
+            }
+        }
+        open
     }
 
-    fn local_boundary(&self, mut local: chrono::NaiveDateTime, at: DateTime<Utc>) -> DateTime<Utc> {
-        loop {
-            match self.timezone.from_local_datetime(&local) {
-                LocalResult::Single(time) => return time.with_timezone(&Utc),
-                LocalResult::Ambiguous(first, second) => {
-                    return if second <= at { second } else { first }.with_timezone(&Utc);
-                }
-                LocalResult::None => {
-                    let Some(next) = local.checked_add_signed(TimeDelta::minutes(1)) else {
-                        return at;
-                    };
-                    local = next;
+    fn offset_at(&self, t: DateTime<Utc>) -> i32 {
+        match self.timezone {
+            Some(zone) => t.with_timezone(&zone).offset().fix().local_minus_utc(),
+            None => t.with_timezone(&chrono::Local).offset().local_minus_utc(),
+        }
+    }
+
+    fn local_boundary(&self, local: chrono::NaiveDateTime, at: DateTime<Utc>) -> DateTime<Utc> {
+        let time = match self.timezone {
+            Some(zone) => zone.from_local_datetime(&local).map(|time| time.to_utc()),
+            None => chrono::Local
+                .from_local_datetime(&local)
+                .map(|time| time.to_utc()),
+        };
+        match time {
+            LocalResult::Single(time) => time,
+            LocalResult::Ambiguous(first, second) => {
+                if second <= at {
+                    second
+                } else {
+                    first
                 }
             }
+            LocalResult::None => match self.timezone {
+                Some(zone) => super::session::local_instant(zone, local),
+                None => super::session::local_instant(chrono::Local, local),
+            }
+            .unwrap_or(at),
         }
     }
 
@@ -109,7 +145,21 @@ impl BarClock {
         loop {
             let next = self.bar_open(at);
             if next > open {
-                return Some(next);
+                if self.bar_open(next - TimeDelta::milliseconds(1)) == open {
+                    return Some(next);
+                }
+                let mut lo = open.timestamp_millis();
+                let mut hi = at.timestamp_millis();
+                while hi - lo > 1 {
+                    let mid = lo + (hi - lo) / 2;
+                    let time = DateTime::from_timestamp_millis(mid)?;
+                    if self.bar_open(time) > open {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                return Some(self.bar_open(DateTime::from_timestamp_millis(hi)?));
             }
             at = at.checked_add_signed(TimeDelta::hours(1))?;
         }
@@ -162,6 +212,30 @@ mod tests {
             assert_eq!(clock.bar_open(t(at)), t(open), "{timeframe} at {at}");
         }
         for (timeframe, at, open, next) in [
+            (
+                "123s".parse().unwrap(),
+                "2024-03-10T07:00:01Z",
+                "2024-03-10T07:00:00Z",
+                "2024-03-10T07:00:24Z",
+            ),
+            (
+                "45min".parse().unwrap(),
+                "2024-11-03T06:01:00Z",
+                "2024-11-03T06:00:00Z",
+                "2024-11-03T06:30:00Z",
+            ),
+            (
+                "45min".parse().unwrap(),
+                "2024-11-03T05:45:00Z",
+                "2024-11-03T05:30:00Z",
+                "2024-11-03T06:00:00Z",
+            ),
+            (
+                "7min".parse().unwrap(),
+                "2024-03-10T06:59:30Z",
+                "2024-03-10T06:59:00Z",
+                "2024-03-10T07:00:00Z",
+            ),
             (
                 Timeframe::Hour4,
                 "2024-03-10T07:30:00Z",

@@ -287,41 +287,69 @@ impl ExchangeSessionProvider {
         let Some(session) = &self.session else {
             return false;
         };
-        let local = self.wall_time(time);
-        let contains = |window: &crate::model::SessionWindow| {
-            let overnight = window.close <= window.open && window.open != NaiveTime::MIN;
-            // During a repeated hour the clock alone cannot choose the overnight trading date.
-            [
-                Some(local.date()),
-                local.date().succ_opt().filter(|_| overnight),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|close_date| {
-                if session.holidays.contains(&close_date)
-                    || !window.days.contains(&close_date.weekday())
-                {
-                    return false;
-                }
-                let open_date = if overnight {
-                    close_date.pred_opt().unwrap_or(close_date)
-                } else {
-                    close_date
-                };
-                let end_date = if window.open == window.close && !overnight {
-                    close_date.succ_opt().unwrap_or(close_date)
-                } else {
-                    close_date
-                };
-                let Some(open) = self.instant(open_date.and_time(window.open)) else {
-                    return false;
-                };
-                // The later close retains the full repeated hour in an overnight window.
-                let close = self.close_instant(end_date.and_time(window.close));
-                close.is_some_and(|close| time >= open && time < close)
-            })
+        session
+            .extended_windows
+            .iter()
+            .any(|window| self.contains(session, window, time))
+            && !session
+                .windows
+                .iter()
+                .any(|window| self.contains(session, window, time))
+    }
+
+    /// Whether the exchange is open, optionally including extended windows.
+    pub fn is_open(&self, time: DateTime<Utc>, extended_hours: bool) -> bool {
+        let Some(session) = &self.session else {
+            return true;
         };
-        session.extended_windows.iter().any(contains) && !session.windows.iter().any(contains)
+        if session.windows.is_empty() && session.extended_windows.is_empty() {
+            return !session.holidays.contains(&self.wall_time(time).date());
+        }
+        session
+            .windows
+            .iter()
+            .chain(session.extended_windows.iter().filter(|_| extended_hours))
+            .any(|window| self.contains(session, window, time))
+    }
+
+    fn contains(
+        &self,
+        session: &Session,
+        window: &crate::model::SessionWindow,
+        time: DateTime<Utc>,
+    ) -> bool {
+        let local = self.wall_time(time);
+        let overnight = window.close <= window.open && window.open != NaiveTime::MIN;
+        // During a repeated hour the clock alone cannot choose the overnight trading date.
+        [
+            Some(local.date()),
+            local.date().succ_opt().filter(|_| overnight),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|close_date| {
+            if session.holidays.contains(&close_date)
+                || !window.days.contains(&close_date.weekday())
+            {
+                return false;
+            }
+            let open_date = if overnight {
+                close_date.pred_opt().unwrap_or(close_date)
+            } else {
+                close_date
+            };
+            let end_date = if window.open == window.close && !overnight {
+                close_date.succ_opt().unwrap_or(close_date)
+            } else {
+                close_date
+            };
+            let Some(open) = self.instant(open_date.and_time(window.open)) else {
+                return false;
+            };
+            // The later close retains the full repeated hour in an overnight window.
+            let close = self.close_instant(end_date.and_time(window.close));
+            close.is_some_and(|close| time >= open && time < close)
+        })
     }
 
     fn period(&self, date: NaiveDate) -> (i32, u32) {
@@ -871,6 +899,18 @@ mod tests {
                 .map(|bar| provider.is_extended(bar.time))
                 .collect::<Vec<_>>(),
             [true, false, false, true, true, false, true, false]
+        );
+        assert_eq!(
+            bars.iter()
+                .map(|bar| provider.is_open(bar.time, false))
+                .collect::<Vec<_>>(),
+            [false, false, false, false, false, true, false, false]
+        );
+        assert_eq!(
+            bars.iter()
+                .map(|bar| provider.is_open(bar.time, true))
+                .collect::<Vec<_>>(),
+            [true, false, false, true, true, true, true, false]
         );
         // Split regular windows do not create a second trading day after lunch.
         let split = ExchangeSessionProvider::new(

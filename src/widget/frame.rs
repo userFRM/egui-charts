@@ -40,7 +40,7 @@ impl Chart {
         }
     }
 
-    fn display_timezone(&self) -> crate::scales::TimezoneMode {
+    pub(super) fn display_timezone(&self) -> crate::scales::TimezoneMode {
         match &self.chart_options.time_scale.timezone {
             crate::scales::TimezoneMode::Exchange(fallback) => {
                 crate::scales::TimezoneMode::Exchange(
@@ -974,15 +974,8 @@ impl Chart {
                 .as_ref()
                 .filter(|_| self.config.show_countdown)
                 .and_then(|quote| {
-                    let clock = crate::model::BarClock::new(self.timeframe?).with_timezone(
-                        self.chart_options
-                            .time_scale
-                            .timezone
-                            .to_tz()
-                            .unwrap_or(chrono_tz::UTC),
-                    );
-                    let close = if self.feed_link.is_some() {
-                        clock.next_open(clock.bar_open(last.time))?
+                    let close = if let Some(link) = &self.feed_link {
+                        link.clock.next_open(link.clock.bar_open(last.time))?
                     } else {
                         last.time.checked_add_signed(self.timeframe?.duration())?
                     };

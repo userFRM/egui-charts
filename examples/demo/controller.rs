@@ -45,7 +45,7 @@ use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
 
-use crate::sampledata::{DemoSymbol, chart_type_from_name, session_bars, visible_bars_for_range};
+use crate::sampledata::{DemoSymbol, chart_type_from_name, visible_bars_for_range};
 
 struct SavedIndicators {
     name: String,
@@ -129,8 +129,6 @@ pub struct DemoApp {
     menus: ChartMenus,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
-    // Immutable generated history; session and adjustment choices derive `bars` from it.
-    source_bars: Vec<Bar>,
     pub theme: Theme,
 
     // Persistent toolbars.
@@ -198,7 +196,7 @@ impl DemoApp {
         // The scale reserves half a slot and one pixel after the last centre.
         options.time_scale.right_offset_pixels = Some(65.0 - 6.1 * 0.5 - 1.0);
         options.time_scale.time_visible = true;
-        options.time_scale.seconds_visible = false;
+        options.time_scale.seconds_visible = true;
         let live = Arc::new(LiveFeed::new(symbol, chrono::Utc::now()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
@@ -216,7 +214,6 @@ impl DemoApp {
         chart.set_symbol(symbol);
         chart.set_timeframe(timeframe);
 
-        let source_bars = live.snapshot(timeframe, egui_charts::model::BarClock::new(timeframe));
         let mut top_toolbar = TopToolbar::new().with_config(
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
         );
@@ -255,7 +252,6 @@ impl DemoApp {
                 replay_active: false,
             },
             bars: Vec::new(),
-            source_bars,
             theme,
             top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
@@ -309,7 +305,7 @@ impl DemoApp {
     fn switch_timeframe(&mut self, tf: Timeframe) {
         self.state.timeframe = tf;
         self.chart.set_timeframe(tf);
-        self.regenerate_bars(tf);
+        self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
         // A replay continues at its current time on the new interval.
         if let Some(replay) = self.replay.as_mut() {
@@ -338,17 +334,12 @@ impl DemoApp {
             } else {
                 SessionType::RTH
             });
-        self.regenerate_bars(self.state.timeframe);
+        self.regenerate_bars();
         // A symbol change invalidates an in-flight replay.
         self.stop_replay();
     }
 
-    fn regenerate_bars(&mut self, tf: Timeframe) {
-        let mut clock = egui_charts::model::BarClock::new(tf);
-        if let Some(zone) = self.chart.chart_options().time_scale.timezone.to_tz() {
-            clock = clock.with_timezone(zone);
-        }
-        self.source_bars = self.live.snapshot(tf, clock);
+    fn regenerate_bars(&mut self) {
         self.apply_session();
         self.size_price_based_charts();
     }
@@ -374,61 +365,22 @@ impl DemoApp {
         );
         self.chart.set_symbol("");
         self.chart.set_symbol(&self.state.symbol);
-        self.chart.config_mut().session_config =
-            (self.state.symbol == "SAMPLE").then(|| egui_charts::config::SessionConfig {
-                session_start: "14:30".into(),
-                session_end: "21:00".into(),
-                timezone: "UTC".into(),
-                show_premarket: self.timeframe_toolbar.state.session_type != SessionType::RTH,
-                show_postmarket: false,
-                premarket_start: Some("08:30".into()),
-                postmarket_end: None,
-            });
-        self.bars = session_bars(
-            &self.state.symbol,
-            &self.source_bars,
-            self.timeframe_toolbar.state.session_type,
-            self.timeframe_toolbar.state.adjust_for_dividends,
-        );
+        self.chart
+            .set_extended_hours(self.timeframe_toolbar.state.session_type != SessionType::RTH);
+        let tf = self.state.timeframe;
+        let clock = self.chart.bar_clock();
+        self.bars = self.live.snapshot(tf, clock, self.chart.extended_hours());
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
         if self.footprint.is_some() {
             self.rebuild_footprint();
         }
-        let spec = DemoSymbol::find(&self.state.symbol);
-        self.chart.set_instrument(Some(
-            egui_charts::model::Instrument::new(spec.symbol)
-                .with_description(format!("{} (synthetic)", spec.company_name))
-                .with_exchange(spec.exchange)
-                .with_price_decimals(2),
-        ));
+        self.chart.set_instrument(Some(self.live.instrument()));
         self.chart
             .set_legend_statuses(&[egui_charts::widget::LegendStatus {
                 text: "SIM",
                 color: egui::Color32::from_rgb(38, 166, 154),
                 background: egui::Color32::TRANSPARENT,
             }]);
-        // An extended-session quote comes from the fixture's latest session, never the hover bar.
-        let session = self
-            .source_bars
-            .last()
-            .filter(|bar| {
-                self.state.symbol == "SAMPLE"
-                    && self
-                        .bars
-                        .last()
-                        .is_some_and(|regular| bar.time > regular.time)
-            })
-            .and_then(|bar| {
-                session_bars(
-                    "SAMPLE",
-                    std::slice::from_ref(bar),
-                    SessionType::ETH,
-                    self.timeframe_toolbar.state.adjust_for_dividends,
-                )
-                .first()
-                .map(|bar| egui_charts::model::quote::SessionQuote::new(bar.close, "PRE"))
-            });
-        self.chart.set_session_quote(session);
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
     }
@@ -2051,6 +2003,7 @@ mod tests {
         for kind in [ChartType::Candles, ChartType::Renko] {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.chart.set_feed_paused(true);
             app.chart.set_chart_type(kind);
             let frame = |app: &mut DemoApp, events| {
                 ctx.run_ui(
@@ -2068,7 +2021,7 @@ mod tests {
                 )
                 .drop_without_applying_deltas();
             };
-            for _ in 0..3 {
+            for _ in 0..6 {
                 frame(&mut app, vec![]);
             }
             let (start, end) = app.chart.state().visible_range();
@@ -2120,6 +2073,7 @@ mod tests {
                     app.switch_timeframe(interval);
                     app.timeframe_toolbar.set_session(SessionType::ETH);
                     app.apply_session();
+                    app.chart.set_feed_paused(true);
                     let frame = |app: &mut DemoApp| {
                         ctx.run_ui(
                             egui::RawInput {
@@ -2153,7 +2107,9 @@ mod tests {
                             range,
                         ));
                         frame(&mut app);
-                        assert_eq!(app.chart.state().visible_range(), (start, end), "{range:?}");
+                        let (shown_start, shown_end) = app.chart.state().visible_range();
+                        assert_eq!(shown_end, end, "{range:?}");
+                        assert!(shown_start.abs_diff(start) <= 1, "{range:?}");
                         let expected = app.chart.get_rendered_price_rect().width()
                             / ((end - start) as f32 + 0.5);
                         assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);

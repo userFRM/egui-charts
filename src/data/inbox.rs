@@ -345,7 +345,7 @@ pub struct Sink {
 impl Sink {
     /// A bar of the subscribed timeframe, stamped with its open or any instant inside it:
     /// replaces the bar it shares a slot with, appends a newer one, corrects an older one. A bar
-    /// of a day or longer is stamped inside its UTC period, as [`HistoryPage::bars`] describes. A
+    /// of a day or longer is stamped inside its calendar period, as [`HistoryPage::bars`] describes. A
     /// bar stamped too far ahead of the feed's current time is rejected, as
     /// [`Sink::set_server_time`] describes.
     ///
