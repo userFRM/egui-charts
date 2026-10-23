@@ -14,7 +14,7 @@ use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 ///
 /// When no drawing tool is active, clicks are interpreted as selection attempts.
 /// If a drawing is already selected, its handles can be dragged. In eraser mode,
-/// clicking on a drawing deletes it.
+/// clicking on a drawing deletes it instead, whatever is selected, unless it is locked.
 pub fn handle_selection<F1, F2>(
     ui: &Ui,
     drawing_manager: &mut DrawingManager,
@@ -55,7 +55,7 @@ pub fn handle_selection<F1, F2>(
             return;
         }
 
-        // Handle eraser mode hover preview
+        // Eraser mode: a click deletes the drawing under the pointer, selected or not.
         if drawing_manager.eraser_mode {
             // A locked drawing cannot be erased, so it is not offered.
             let hit = drawing_manager.hit_test(pos).filter(|&id| {
@@ -65,15 +65,20 @@ pub fn handle_selection<F1, F2>(
                     .any(|d| d.id == id && !d.locked)
             });
             cursor_modes.eraser.set_hover(hit);
-
-            if hit.is_some() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+            ui.ctx().set_cursor_icon(if hit.is_some() {
+                egui::CursorIcon::NotAllowed
             } else {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+                egui::CursorIcon::Default
+            });
+            if response.clicked()
+                && let Some(hit_id) = hit
+            {
+                drawing_manager.delete_drawing(hit_id);
+                cursor_modes.eraser.set_hover(None);
             }
-        } else {
-            cursor_modes.eraser.set_hover(None);
+            return;
         }
+        cursor_modes.eraser.set_hover(None);
 
         if let Some(sel_id) = drawing_manager.sel_drawing() {
             if response.drag_started() {
@@ -90,16 +95,7 @@ pub fn handle_selection<F1, F2>(
                 }
             }
         } else if response.clicked() {
-            // Eraser mode: delete drawing on click
-            if drawing_manager.eraser_mode {
-                if let Some(hit_id) = drawing_manager.hit_test(pos) {
-                    log::info!("Eraser: deleting drawing {hit_id}");
-                    drawing_manager.delete_drawing(hit_id);
-                    cursor_modes.eraser.set_hover(None);
-                }
-            } else {
-                drawing_manager.select_at(pos);
-            }
+            drawing_manager.select_at(pos);
         }
     } else {
         cursor_modes.eraser.set_hover(None);
@@ -117,6 +113,7 @@ pub fn handle_keyboard_shortcuts(ui: &Ui, drawing_manager: &mut DrawingManager) 
         if i.key_pressed(egui::Key::Escape) {
             drawing_manager.deselect();
             drawing_manager.active_tool = None;
+            drawing_manager.set_eraser_mode(false);
         }
     });
 }

@@ -137,30 +137,58 @@ mod tests {
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType, TimeframeVisibility};
     use crate::model::Timeframe;
     use crate::widget::test_frames::{chart, frame, shapes};
-    use egui::{Color32, Context, Event, Modifiers, PointerButton, Shape};
+    use egui::{Color32, Context, Event, Key, Modifiers, PointerButton, Shape};
 
-    /// With the eraser on, a click on a drawing deletes it.
+    /// With the eraser on, a click on a drawing deletes it, whether or not a drawing is
+    /// selected, unless it is locked or Escape has turned the eraser off.
     #[test]
-    fn an_eraser_click_deletes_the_drawing() {
-        let ctx = Context::default();
-        let mut chart = chart(&[10.0], &[20.0]);
-        let mut line = Drawing::new(1, DrawingToolType::HorizontalLine);
-        line.chart_points = vec![ChartPoint::new(50.0, 15.0)];
-        chart.drawings_mut().drawings.push(line);
-        chart.drawings_mut().set_eraser_mode(true);
-        frame(&ctx, &mut chart, 0.0, vec![]);
-        let pos = chart.drawings().drawings[0].points[0];
-        let button = |pressed| Event::PointerButton {
-            pos,
-            button: PointerButton::Primary,
-            pressed,
-            modifiers: Modifiers::NONE,
-        };
-        let frames = [vec![Event::PointerMoved(pos)], vec![button(true)], vec![button(false)]];
-        for (i, events) in frames.into_iter().enumerate() {
-            frame(&ctx, &mut chart, 0.1 * (i + 1) as f64, events);
+    fn an_eraser_click_deletes_the_drawing_unless_it_is_locked() {
+        for (selected, locked, escaped, kept) in [
+            (false, false, false, 0),
+            (true, false, false, 0),
+            (true, true, false, 1),
+            (false, false, true, 1),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let mut line = Drawing::new(1, DrawingToolType::HorizontalLine);
+            line.chart_points = vec![ChartPoint::new(50.0, 15.0)];
+            line.locked = locked;
+            chart.drawings_mut().drawings.push(line);
+            if selected {
+                chart.drawings_mut().select(1);
+            }
+            chart.drawings_mut().set_eraser_mode(true);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let pos = chart.drawings().drawings[0].points[0];
+            let button = |pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let escape = Event::Key {
+                key: Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            };
+            let frames = [
+                if escaped { vec![escape] } else { vec![] },
+                vec![Event::PointerMoved(pos)],
+                vec![button(true)],
+                vec![button(false)],
+            ];
+            for (i, events) in frames.into_iter().enumerate() {
+                frame(&ctx, &mut chart, 0.1 * (i + 1) as f64, events);
+            }
+            let left = chart.drawings().drawings.len();
+            assert_eq!(
+                left, kept,
+                "selected {selected}, locked {locked}, escaped {escaped}"
+            );
         }
-        assert!(chart.drawings().drawings.is_empty());
     }
 
     /// A drawing shown only on the daily interval is neither drawn nor hit once the chart is
