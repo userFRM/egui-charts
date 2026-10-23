@@ -1,11 +1,13 @@
 use crate::model::Bar;
-/// True Strength Index (TSI)
-/// Double-smoothed momentum indicator
-/// Shows trend direction and overbought/oversold conditions
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// True Strength Index (TSI), William Blau, "Momentum, Direction, and Divergence" (1995).
+///
+/// `TSI = 100 * EMA(EMA(m, long), short) / EMA(EMA(|m|, long), short)` with `m = close - previous close`,
+/// plus a signal line, the EMA of the TSI. Every EMA starts at its first input, and the price changes start
+/// at the first change, bar 1. Values start on bar `long + short`; earlier bars are `None`.
 #[derive(Clone)]
 pub struct TrueStrengthIndex {
     /// Long period (typically 25)
@@ -87,11 +89,8 @@ impl Indicator for TrueStrengthIndex {
             return;
         }
 
-        // Calculate price changes
-        let mut pc: Vec<f64> = vec![0.0]; // First change is 0
-        for i in 1..data.len() {
-            pc.push(data[i].close - data[i - 1].close);
-        }
+        // Price changes start at bar 1; there is no change on bar 0, and pc[k] belongs to bar k + 1
+        let pc: Vec<f64> = data.windows(2).map(|w| w[1].close - w[0].close).collect();
 
         let abs_pc: Vec<f64> = pc.iter().map(|x| x.abs()).collect();
 
@@ -104,8 +103,8 @@ impl Indicator for TrueStrengthIndex {
         let abs_pc_smooth2 = Self::ema(&abs_pc_smooth1, self.short_period);
 
         // Calculate TSI values
-        let mut tsi_values: Vec<f64> = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
+        let mut tsi_values: Vec<f64> = Vec::with_capacity(pc.len());
+        for i in 0..pc.len() {
             if abs_pc_smooth2[i] != 0.0 {
                 tsi_values.push(100.0 * pc_smooth2[i] / abs_pc_smooth2[i]);
             } else {
@@ -121,8 +120,10 @@ impl Indicator for TrueStrengthIndex {
             if i < min_period - 1 {
                 self.values.push(IndicatorValue::None);
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![tsi_values[i], signal[i]]));
+                self.values.push(IndicatorValue::Multiple(vec![
+                    tsi_values[i - 1],
+                    signal[i - 1],
+                ]));
             }
         }
     }
@@ -157,6 +158,10 @@ impl Indicator for TrueStrengthIndex {
         Box::new(self.clone())
     }
 
+    fn line_cnt(&self) -> usize {
+        2
+    }
+
     fn line_names(&self) -> Vec<String> {
         vec![
             format!("TSI({},{})", self.long_period, self.short_period),
@@ -181,14 +186,78 @@ mod tests {
         }
     }
 
+    /// Blau, "Momentum, Direction, and Divergence" (1995): TSI = 100 * EMA(EMA(m, r), s) / EMA(EMA(|m|, r), s),
+    /// m = close - previous close, signal = EMA(TSI, q), each EMA seeded with its first input, the change on bar 1.
+    /// Expected values computed independently from that definition.
     #[test]
-    fn test_tsi() {
-        let mut tsi = TrueStrengthIndex::new(10, 5, 3);
+    fn matches_blau_from_the_first_price_change() {
+        let data: Vec<Bar> = (0..45)
+            .map(|i| make_bar(100.0 + ((7 * i) % 11) as f64 * 0.5 + 0.25 * i as f64))
+            .collect();
+        let expected: [(usize, f64, f64); 37] = [
+            (8, 7.733160885593845, 23.105328984649127),
+            (9, 22.895446351093035, 23.00038766787108),
+            (10, 13.559429204247552, 18.279908436059316),
+            (11, -3.963663540739121, 7.158122447660097),
+            (12, 15.901736419454355, 11.529929433557227),
+            (13, 8.499761248063109, 10.014845340810169),
+            (14, 27.695613274277775, 18.855229307543972),
+            (15, 19.32380136640505, 19.08951533697451),
+            (16, 1.7491579409064582, 10.419336638940484),
+            (17, 19.782709407674567, 15.101023023307526),
+            (18, 11.553161103469721, 13.327092063388623),
+            (19, -5.360304089082964, 3.983393987152829),
+            (20, 15.152793499512779, 9.568093743332804),
+            (21, 7.999846354811868, 8.783970049072336),
+            (22, -8.191866413110832, 0.29605181798075186),
+            (23, 13.469528628351672, 6.882790223166212),
+            (24, 6.781726711786284, 6.832258467476247),
+            (25, 26.70845833486408, 16.770358401170164),
+            (26, 18.61951357662223, 17.694935988896198),
+            (27, 1.2122951925180985, 9.453615590707148),
+            (28, 19.4702811998816, 14.461948395294375),
+            (29, 11.331080578433813, 12.896514486864094),
+            (30, -5.528067840318502, 3.684223323272796),
+            (31, 15.056684499060852, 9.370453911166823),
+            (32, 7.93217590340769, 8.651314907287256),
+            (33, -8.242630490746267, 0.20434220827049465),
+            (34, 13.440660068325553, 6.822501138298024),
+            (35, 6.761481101120903, 6.791991119709463),
+            (36, 26.696890975662672, 16.744441047686067),
+            (37, 18.61129062462302, 17.677865836154545),
+            (38, 1.2060431173990807, 9.441954476776813),
+            (39, 19.466650340338127, 14.45430240855747),
+            (40, 11.328503246861152, 12.89140282770931),
+            (41, -5.5300128725456, 3.680694977581855),
+            (42, 15.05557110285549, 9.368133040218673),
+            (43, 7.931392380445344, 8.64976271033201),
+            (44, -8.24321803448801, 0.20327233792199983),
+        ];
 
-        let data: Vec<Bar> = (0..30).map(|i| make_bar(100.0 + i as f64)).collect();
-
+        let mut tsi = TrueStrengthIndex::new(5, 3, 3);
         tsi.calculate(&data);
 
-        assert_eq!(tsi.values.len(), 30);
+        assert_eq!(tsi.values.len(), data.len());
+        assert!(
+            tsi.values[..8]
+                .iter()
+                .all(|v| matches!(v, IndicatorValue::None))
+        );
+        for (bar, main, signal) in expected {
+            let IndicatorValue::Multiple(ref got) = tsi.values[bar] else {
+                panic!("bar {bar}: expected a value, got {:?}", tsi.values[bar]);
+            };
+            assert_eq!(got.len(), tsi.line_cnt());
+            assert!(
+                (got[0] - main).abs() < 1e-12,
+                "bar {bar}: TSI {} vs {main}",
+                got[0]
+            );
+            assert!(
+                (got[1] - signal).abs() < 1e-12,
+                "bar {bar}: signal {} vs {signal}",
+                got[1]
+            );
+        }
     }
 }

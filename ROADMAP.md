@@ -267,7 +267,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Williams %R, CCI, ROC, Momentum, Aroon, Awesome Oscillator
 - [x] Ultimate Oscillator, Connors RSI, Coppock Curve
 - [x] DPO, TRIX (signal line not drawn), Mass Index, Chande Momentum (CMO)
-- [x] True Strength Index (TSI), KDJ, Know Sure Thing (KST): only the first line is drawn (no D/J or signal lines)
+- [x] Know Sure Thing (KST): only the first line is drawn (no signal line)
 - [x] Schaff Trend Cycle, Double Stochastic, Elder Ray (Bear Power not drawn)
 - [x] Fisher Transform (signal not drawn), Ehlers Fisher (trigger not drawn), Force Index
 - [x] Center of Gravity (signal not drawn), Pretty Good Oscillator, Rainbow Oscillator
