@@ -218,6 +218,7 @@ pub struct PriceScale {
     /// Larger magnitude of the data at the last fit, in scale units
     level: f64,
     price_precision: Option<u8>,
+    bar_ratio: Option<f64>,
 }
 
 impl PriceScale {
@@ -230,6 +231,7 @@ impl PriceScale {
             manual: false,
             level: 0.0,
             price_precision: None,
+            bar_ratio: None,
         }
     }
 
@@ -237,6 +239,41 @@ impl PriceScale {
     /// Values above 16 use 16 decimals, the useful precision of an `f64` price.
     pub fn set_price_precision(&mut self, decimals: Option<u8>) {
         self.price_precision = decimals.map(|decimals| decimals.min(16));
+    }
+
+    /// Locks scale units per bar at the current bar spacing and pane height.
+    /// Invalid dimensions leave the scale unlocked. Unlocking keeps the current manual range.
+    pub fn set_bar_ratio_locked(&mut self, locked: bool, bar_spacing: f32, height: f32) {
+        self.bar_ratio = (locked
+            && bar_spacing.is_finite()
+            && bar_spacing > 0.0
+            && height.is_finite()
+            && height > 0.0)
+            .then(|| (self.range.max - self.range.min) * f64::from(bar_spacing / height));
+        if self.bar_ratio.is_some() {
+            self.manual = true;
+        }
+    }
+
+    /// Whether horizontal zoom and pane resizing preserve scale units per bar.
+    pub fn bar_ratio_locked(&self) -> bool {
+        self.bar_ratio.is_some()
+    }
+
+    /// Preserves the locked ratio about the range centre after horizontal zoom or pane resize.
+    pub fn update_bar_ratio(&mut self, bar_spacing: f32, height: f32) {
+        if let Some(ratio) = self.bar_ratio
+            && bar_spacing.is_finite()
+            && bar_spacing > 0.0
+            && height.is_finite()
+            && height > 0.0
+        {
+            let span = ratio * f64::from(height / bar_spacing);
+            let centre = self.range.min / 2.0 + self.range.max / 2.0;
+            if span.is_finite() && span > 0.0 {
+                self.range = PriceRange::new(centre - span / 2.0, centre + span / 2.0);
+            }
+        }
     }
 
     /// Returns the options.
@@ -304,6 +341,14 @@ impl PriceScale {
     /// The bounds are in the units of the transform the last fit returned
     /// ([`ChartState::fit_price_scale`](crate::model::ChartState::fit_price_scale)).
     pub fn set_range(&mut self, min: f64, max: f64) {
+        if let Some(ratio) = &mut self.bar_ratio {
+            let span = self.range.max - self.range.min;
+            if span > 0.0 && span.is_finite() && (max - min).is_finite() && max > min {
+                *ratio *= (max - min) / span;
+            } else {
+                self.bar_ratio = None;
+            }
+        }
         self.range = PriceRange::new(min, max);
         self.manual = true;
     }
@@ -355,6 +400,7 @@ impl PriceScale {
     /// Returns to auto-scaling (double click on the axis).
     pub fn reset(&mut self) {
         self.manual = false;
+        self.bar_ratio = None;
     }
 
     /// Mapping for one series for one frame, given the pane's vertical extent in points.

@@ -578,6 +578,10 @@ impl Chart {
                 .map(|(study, _)| study.as_ref()),
         );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
+        let bar_spacing = self.state.time_scale().bar_spacing();
+        self.state
+            .price_scale_mut()
+            .update_bar_ratio(bar_spacing, price_rect.height());
         let price_map = self
             .state
             .price_scale()

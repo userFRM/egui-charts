@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Right-clicking either price axis or the time axis opens scale and session controls through `ChartMenus`. Price menus apply auto/manual scale, regular, percent, indexed and logarithmic modes, inversion, placement, label visibility and a price-to-bar ratio lock; time menus apply UTC, local or exchange time and session choices. `PriceScale` exposes the ratio lock for hosts composing their own controls. ([#110](https://github.com/userFRM/egui-charts/issues/110))
+
 - Price axes show the instrument currency in a tick-sized button above their labels. The menu checks the current currency and emits host conversion choices through `Chart::set_currency_choices` and `take_currency_choice`; hosts supply converted bars and metadata together. `chart::render_axis_currency` supports composed axes. ([#734](https://github.com/userFRM/egui-charts/issues/734))
 
 - `MACombination` combines two to fourteen `AverageLine`s with independent simple, exponential, weighted, Wilder, volume-weighted or Hull formulas, lengths, sources and colours. `MACross`, `EMACross` and `MultipleMA` share its calculations with their existing defaults. The factory adds `SMA/EMA Cross`, `Triple MA` and `MA Ribbon`; the ribbon has twelve evenly spaced lengths, individual direction colours, a thicker slowest line and a fading purple bottom fill, with a muted variant available directly. Crossing markers identify changes of side, ignore touches and disappear when a live correction cancels the cross. ([#549](https://github.com/userFRM/egui-charts/issues/549))
