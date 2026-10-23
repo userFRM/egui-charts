@@ -1,8 +1,6 @@
 //! Actions emitted by the top toolbar.
 
 use super::components::layout_menu::LayoutAction;
-use crate::ui::model::ChartLayoutMode;
-use crate::ui::multi_chart::ChartSyncOptions;
 
 /// Actions emitted by the top toolbar
 #[derive(Debug, Clone, PartialEq)]
@@ -47,8 +45,4 @@ pub enum TopToolbarAction {
     ThemeToggle,
     /// Layout management actions
     Layout(LayoutAction),
-    /// Multi-chart grid layout changed
-    ChartGridChanged(ChartLayoutMode),
-    /// Multi-chart sync options changed
-    SetSyncOptions(ChartSyncOptions),
 }

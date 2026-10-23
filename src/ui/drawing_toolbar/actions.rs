@@ -26,20 +26,12 @@ pub enum DrawingToolbarAction {
     None,
     /// A drawing tool was selected
     SelectTool(DrawingToolType),
-    /// Selection cleared (cursor mode)
-    ClearSelection,
     /// Set cursor type (Cross, Dot, Arrow, Magic)
     SetCursorType(CursorType),
     /// Magnet mode toggled
     ToggleMagnet,
     /// Stay-in-drawing mode toggled
     ToggleStayInDrawingMode,
-    /// Tool added to favorites
-    AddFavorite(DrawingToolType),
-    /// Tool removed from favorites
-    RemoveFavorite(DrawingToolType),
-    /// Settings requested
-    OpenSettings,
     /// Clear all drawings requested
     ClearAllDrawings,
     /// Drawing color changed (RGBA)
@@ -82,16 +74,6 @@ pub enum DrawingToolbarAction {
         /// Template ID to load
         template_id: String,
     },
-    /// Delete a saved drawing template
-    DeleteTemplate {
-        /// Template ID to delete
-        template_id: String,
-    },
     /// Open the template management menu
     OpenTemplateMenu,
-    /// Insert an emoji/icon as a text annotation
-    InsertEmoji {
-        /// Icon reference to insert
-        icon_name: &'static str,
-    },
 }

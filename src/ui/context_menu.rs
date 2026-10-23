@@ -64,28 +64,8 @@ pub enum ContextMenuAction {
     OpenSeriesSettings,
     /// Export chart data to CSV
     ExportCsv,
-    /// Navigate to a specific date
-    GoToDate,
     /// Reset the chart view to defaults
     ResetChart,
-    /// Open symbol change dialog
-    ChangeSymbol,
-    /// Open interval/timeframe change dialog
-    ChangeInterval,
-    /// Show symbol information
-    SymbolInfo,
-    /// Open indicator insertion dialog
-    InsertIndicator,
-    /// Compare or overlay another symbol
-    CompareOrAddSymbol,
-    /// Open drawing tools panel
-    DrawingTools,
-    /// Toggle mark visibility on bars
-    HideMarksOnBars,
-    /// Open price scale settings
-    PriceScale,
-    /// Open time scale settings
-    TimeScale,
 }
 
 // ============================================================================

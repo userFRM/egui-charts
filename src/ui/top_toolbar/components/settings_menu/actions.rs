@@ -1,7 +1,6 @@
 //! Actions emitted by settings UI components
 
 use super::data::ChartSettingsState;
-use crate::ui::model::LayoutStyle;
 
 /// Settings action (emitted by both SettingsMenu and SettingsDialog)
 #[derive(Clone)]
@@ -16,6 +15,4 @@ pub enum SettingsAction {
     SaveTemplate(String),
     /// Load a previously saved settings template by name
     LoadTemplate(String),
-    /// Layout style changed (Modern or Classic)
-    LayoutStyleChanged(LayoutStyle),
 }

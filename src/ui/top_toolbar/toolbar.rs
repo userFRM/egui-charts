@@ -17,10 +17,8 @@ use super::{
     actions::TopToolbarAction,
     buttons::{PillButtonFilled, PillButtonOutlined, TextIconButton, ToolbarIconButton, Trigger},
     components::{
-        chart_grid_selector::ChartGridSelector,
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
         layout_menu::{LayoutAction, LayoutMenu},
-        sync_button::SyncButton,
         timeframe_selector::{Timeframe, TimeframeAction, TimeframeSelector, TimeframeUnit},
     },
     config::TopToolbarConfig,
@@ -196,10 +194,6 @@ pub struct TopToolbar {
     pub chart_type_selector: ChartTypeSelector,
     /// Layout selector dropdown
     pub layout_menu: LayoutMenu,
-    /// Chart grid layout selector
-    pub chart_grid_selector: ChartGridSelector,
-    /// Multi-chart sync options button
-    pub sync_button: SyncButton,
 }
 
 impl Default for TopToolbar {
@@ -210,8 +204,6 @@ impl Default for TopToolbar {
             timeframe_selector: TimeframeSelector::new(Timeframe::new(1, TimeframeUnit::Day)),
             chart_type_selector: ChartTypeSelector::new(ChartType::Candles),
             layout_menu: LayoutMenu::new(),
-            chart_grid_selector: ChartGridSelector::default(),
-            sync_button: SyncButton::new(),
         }
     }
 }

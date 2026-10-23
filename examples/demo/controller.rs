@@ -419,19 +419,11 @@ impl DemoApp {
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
         // Indicators: build the configured indicator and add it live.
-        match self.indicator_dialog.show(ctx, &self.theme) {
-            IndicatorDialogAction::AddConfiguredIndicator(cfg) => {
-                let indicator = self.indicator_dialog.create_indicator(cfg.indicator_type);
-                self.chart.add_indicator(indicator);
-            }
-            IndicatorDialogAction::AddIndicator(id) => {
-                use egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorType;
-                if let Some(kind) = IndicatorType::from_id(&id) {
-                    let indicator = self.indicator_dialog.create_indicator(kind);
-                    self.chart.add_indicator(indicator);
-                }
-            }
-            _ => {}
+        if let IndicatorDialogAction::AddConfiguredIndicator(cfg) =
+            self.indicator_dialog.show(ctx, &self.theme)
+        {
+            let indicator = self.indicator_dialog.create_indicator(cfg.indicator_type);
+            self.chart.add_indicator(indicator);
         }
 
         // Chart settings.
@@ -460,9 +452,6 @@ impl DemoApp {
         match self.series_settings.show(ctx) {
             SeriesSettingsAction::Apply(_id, settings) => {
                 self.chart.apply_series_settings(&settings);
-            }
-            SeriesSettingsAction::ResetToDefault(_id) => {
-                self.chart.apply_series_settings(&SeriesSettings::default());
             }
             SeriesSettingsAction::None | SeriesSettingsAction::Cancel => {}
         }
@@ -713,8 +702,8 @@ impl DemoApp {
             TopToolbarAction::OpenMenu | TopToolbarAction::Layout(_) => {
                 self.open_panel = Some(SidePanel::ObjectTree);
             }
-            // The remaining controls need a broker (trading), a backend
-            // (publish), or the multi-chart grid (a stub in this engine). The
+            // The remaining controls need a broker (trading) or a backend
+            // (publish). The
             // library toolbar renders them unconditionally and exposes no
             // per-button visibility flag, so rather than swallow the click we
             // surface an honest notice describing the missing dependency.
@@ -723,9 +712,6 @@ impl DemoApp {
             }
             TopToolbarAction::Publish => {
                 self.notify("Publishing needs an account backend, which the demo does not have")
-            }
-            TopToolbarAction::ChartGridChanged(_) | TopToolbarAction::SetSyncOptions(_) => {
-                self.notify("Multi-chart layouts are not part of this single-chart demo")
             }
             TopToolbarAction::None => {}
         }
@@ -785,8 +771,7 @@ impl DemoApp {
                 return;
             }
             DrawingToolbarAction::SaveTemplate { .. }
-            | DrawingToolbarAction::LoadTemplate { .. }
-            | DrawingToolbarAction::DeleteTemplate { .. } => {
+            | DrawingToolbarAction::LoadTemplate { .. } => {
                 self.notify("Drawing templates are not persisted in this demo");
                 return;
             }
@@ -802,10 +787,6 @@ impl DemoApp {
         let dm = self.chart.drawings_mut();
         match action {
             DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
-            DrawingToolbarAction::ClearSelection => {
-                dm.set_active_tool(None);
-                dm.eraser_mode = false;
-            }
             DrawingToolbarAction::SetCursorType(cursor) => {
                 use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
                 dm.eraser_mode = matches!(cursor, CursorType::Eraser);
@@ -835,11 +816,7 @@ impl DemoApp {
             DrawingToolbarAction::ZoomOut => {
                 let _ = dm.undo();
             }
-            DrawingToolbarAction::InsertEmoji { icon_name } => {
-                dm.start_icon_insertion(icon_name.to_string());
-            }
-            // The rest (favorites add/remove, favorites-bar toggle, the values
-            // tooltip toggle, and the menu-open signals OpenSettings /
+            // The rest (the favorites-bar toggle, the values tooltip toggle and
             // OpenTemplateMenu) mutate only the toolbar's own popup state, which
             // it manages internally; there is nothing for the host to do.
             _ => {}
@@ -1087,15 +1064,9 @@ impl DemoApp {
                 let visible = visible_bars_for_range(range, self.bars.len());
                 self.chart.set_visible_bars(visible);
             }
-            TimeframeToolbarAction::ZoomFitAll => {
-                self.chart.set_visible_bars(self.bars.len());
-            }
-            TimeframeToolbarAction::TimeframeChanged(tf) => self.switch_timeframe(tf),
-            TimeframeToolbarAction::GoToDate(dt) => self.go_to_date(dt.date_naive()),
             TimeframeToolbarAction::OpenDatePicker => self.date_picker.open(),
-            // Timezone / session / dividend-adjustment have no backing in the
-            // demo's synthetic single-session UTC series, and the corresponding
-            // controls are hidden in the toolbar config.
+            // Time zone, session and dividend adjustment have no backing in the
+            // demo's synthetic single-session UTC series.
             _ => {}
         }
     }
@@ -1127,23 +1098,18 @@ impl DemoApp {
                 self.settings_dialog.open(self.settings_state.clone());
             }
             ContextMenuAction::OpenSeriesSettings => self.open_series_settings_dialog(),
-            ContextMenuAction::InsertIndicator => self.indicator_dialog.open(),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::ResetChart => {
                 self.chart.set_visible_bars(100);
             }
-            ContextMenuAction::ChangeSymbol | ContextMenuAction::CompareOrAddSymbol => {
-                self.symbol_search.open()
-            }
             ContextMenuAction::ExportCsv => self.export_csv(None),
-            ContextMenuAction::GoToDate => self.date_picker.open(),
             ContextMenuAction::CopyPrice(price) => {
                 log::info!("[demo] copy price {price}");
             }
-            // Remaining items (paste, table view, broker orders, price/time
-            // scale popovers) are not modeled in this demo.
+            // Remaining items (paste, table view, broker orders) are not
+            // modeled in this demo.
             _ => {}
         }
     }

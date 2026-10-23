@@ -60,8 +60,6 @@ pub struct TimeframeToolbarState {
     pub adjust_for_dividends: bool,
     /// Current display time (for timezone display)
     pub curr_time: Option<chrono::DateTime<chrono::Utc>>,
-    /// Whether the trading panel row is expanded
-    pub trading_panel_expanded: bool,
 }
 
 impl Default for TimeframeToolbarState {
@@ -77,20 +75,7 @@ impl Default for TimeframeToolbarState {
             session_menu_open: false,
             adjust_for_dividends: false,
             curr_time: None,
-            trading_panel_expanded: false,
         }
-    }
-}
-
-impl TimeframeToolbarState {
-    /// Toggle trading panel expanded state
-    pub fn toggle_trading_panel(&mut self) {
-        self.trading_panel_expanded = !self.trading_panel_expanded;
-    }
-
-    /// Set trading panel expanded state
-    pub fn set_trading_panel_expanded(&mut self, expanded: bool) {
-        self.trading_panel_expanded = expanded;
     }
 }
 

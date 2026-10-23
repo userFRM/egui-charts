@@ -404,6 +404,12 @@ All notable changes to this project are documented in this file. The format is b
 - `model::TickSource` and `model::OrderBookSource`, which the chart never polled: push trades with `Sink::push_tick` and the order book with `Sink::push_depth_snapshot` and `Sink::push_depth_delta`.
 - `model::LibrarySymbolInfo`, `DataStatus`, `SymbolFormat`, `SubsessionInfo` and the `model::symbol_info` module, which nothing read: describe an instrument with `model::Instrument`. `SymbolType` is unchanged at `model::SymbolType`.
 - `model::bar::{MAX_BARS, MAX_VISIBLE_BARS}` and `BarData::{trim_to_limit, push_with_limit}`, which nothing applied.
+- `TopToolbarAction::{ChartGridChanged, SetSyncOptions}` and the `TopToolbar::{chart_grid_selector, sync_button}` fields, which the toolbar never drew: no control emits them. `ChartGridSelector` and `SyncButton` stay in `top_toolbar::components`.
+- `DrawingToolbarAction::{ClearSelection, AddFavorite, RemoveFavorite, OpenSettings, DeleteTemplate, InsertEmoji}`, which no control emits.
+- `TimeframeToolbarAction::{TimeframeChanged, GoToDate, TimezoneChanged, SessionChanged, ZoomFitAll, ZoomToRange, ToggleTradingPanel, TradingPanelFullscreen}`, which no control emits, and `ui::timeframe_toolbar::{TradingPanelRow, TradingPanelRowAction, TradingPanelRowConfig}`, which nothing drew, with the `PanelSizingTokens::{trading_panel_row_height, trading_panel_row_icon_size, trading_panel_row_btn_size}` tokens that sized it and `TimeframeToolbarState::{trading_panel_expanded, toggle_trading_panel, set_trading_panel_expanded}`, which nothing read. Migration: the date picker emits `DatePickerAction::GoToDate`.
+- `ObjectTreeAction::{ShowSelected, LockSelected, UnlockSelected, UpdateProperties, Reorder, BringSelectedToFront, SendSelectedToBack, PanTo, SaveAsTemplate, LoadTemplate, DeleteTemplate, ToggleDataWindow}`, which no control emits.
+- `ContextMenuAction::{GoToDate, ChangeSymbol, ChangeInterval, SymbolInfo, InsertIndicator, CompareOrAddSymbol, DrawingTools, HideMarksOnBars, PriceScale, TimeScale}`, which no menu entry emits.
+- `IndicatorDialogAction::AddIndicator`, `SettingsAction::LayoutStyleChanged` and `SeriesSettingsAction::ResetToDefault`, which no control emits. Migration: the indicator dialog emits `AddConfiguredIndicator`.
 
 ## [0.2.0] - 2026-06-04
 

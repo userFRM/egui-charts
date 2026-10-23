@@ -93,15 +93,10 @@ pub struct ToolbarSizingTokens {
     pub separator_width: f32,
 }
 
-/// Panel dimensions (bottom panel heights, widget default sizes, trading panel rows).
+/// Panel dimensions (bottom panel heights, widget default sizes).
 #[derive(Clone, Debug)]
 pub struct PanelSizingTokens {
     pub bottom_default_height: f32,
-
-    // Trading panel row dimensions
-    pub trading_panel_row_height: f32,
-    pub trading_panel_row_icon_size: f32,
-    pub trading_panel_row_btn_size: f32,
 }
 
 #[derive(Clone, Debug)]

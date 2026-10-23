@@ -11,6 +11,4 @@ pub enum SeriesSettingsAction {
     Cancel,
     /// Apply settings to series
     Apply(SeriesId, SeriesSettings),
-    /// Reset series to default settings
-    ResetToDefault(SeriesId),
 }

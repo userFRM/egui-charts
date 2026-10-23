@@ -6,8 +6,6 @@ use super::data::ConfiguredIndicator;
 pub enum IndicatorDialogAction {
     /// No action
     None,
-    /// Add indicator by ID
-    AddIndicator(String),
     /// Add indicator with configuration
     AddConfiguredIndicator(ConfiguredIndicator),
     /// Toggle favorite status
@@ -17,12 +15,8 @@ pub enum IndicatorDialogAction {
 }
 
 impl IndicatorDialogAction {
-    /// Check if this action is adding an indicator (either by ID or configured)
+    /// Check if this action is adding an indicator
     pub fn is_add(&self) -> bool {
-        matches!(
-            self,
-            IndicatorDialogAction::AddIndicator(_)
-                | IndicatorDialogAction::AddConfiguredIndicator(_)
-        )
+        matches!(self, IndicatorDialogAction::AddConfiguredIndicator(_))
     }
 }
