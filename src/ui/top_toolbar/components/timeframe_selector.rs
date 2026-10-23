@@ -15,7 +15,7 @@ use std::collections::HashSet;
 /// Height of the interval menu's rows and section headers.
 const ROW_H: f32 = 32.0;
 
-/// Least width of the menu, so that the custom interval form fits a field, a unit button and "Add".
+/// Width reserved while the custom interval form is expanded.
 const CUSTOM_FORM_W: f32 = 232.0;
 
 /// Timeframe unit
@@ -155,7 +155,7 @@ impl Timeframe {
 pub struct TimeframeSelectorConfig {
     /// Minimum width of the button; it is otherwise sized to its label.
     pub btn_width: f32,
-    /// Minimum width of the menu; never below 232 px, the width the custom interval form needs.
+    /// Minimum menu content width; the expanded custom form reserves at least 232 px.
     pub dropdown_width: f32,
     /// Not read: rows are laid out by the menu.
     pub item_height: f32,
@@ -179,7 +179,7 @@ impl Default for TimeframeSelectorConfig {
         // ui.style().visuals at render time for proper theme support.
         Self {
             btn_width: 0.0,
-            dropdown_width: 180.0,
+            dropdown_width: 184.0,
             item_height: DESIGN_TOKENS.sizing.button_md,
             bg_color: Color32::TRANSPARENT,
             hover_color: Color32::TRANSPARENT,
@@ -433,11 +433,13 @@ impl TimeframeSelector {
         let bar = spacing.scroll.allocated_width();
 
         let (_, desc_w) = self.column_widths(ui, theme);
-        ui.set_width(
-            (desc_w + 64.0 + bar)
-                .max(self.config.dropdown_width)
-                .max(CUSTOM_FORM_W),
-        );
+        ui.set_width((desc_w + 64.0 + bar).max(self.config.dropdown_width).max(
+            if self.show_custom_input {
+                CUSTOM_FORM_W
+            } else {
+                0.0
+            },
+        ));
         ui.visuals_mut().selection.bg_fill = theme.ui.text;
         ui.visuals_mut().selection.stroke.color = theme.ui.panel_bg;
         // A popup is first measured inside a 400 px high area; this lets the list use the room below.
