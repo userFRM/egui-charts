@@ -305,12 +305,20 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
     let mut profiles: Vec<TPOProfile> = Vec::new();
     let mut current_profile: Option<TPOProfile> = None;
     let mut current_session_start: Option<DateTime<Utc>> = None;
-    // The open period: its index, the open time of its first bar and the rows its bars touched
+    // The open period: its index, first bar time and row-range endpoints
     let mut period_idx = 0;
     let mut period_ts = bars[0].time;
-    let mut period_rows: Vec<RangeInclusive<i64>> = Vec::new();
     let period_minutes = i64::from(config.period_minutes.max(1));
     let tick_size = level_grid(bars, config.tick_size);
+    let keys = bars.iter().filter_map(|bar| bar_level_keys(bar, tick_size));
+    let Some((first_key, last_key)) = keys.reduce(|(low, high), (l, h)| (low.min(l), high.max(h)))
+    else {
+        return Vec::new();
+    };
+    // One extra endpoint closes a range ending at the highest row, including i64::MAX.
+    let mut row_changes = vec![0isize; last_key.abs_diff(first_key) as usize + 2];
+
+    let mut touched = RangeInclusive::new(usize::MAX, 0);
 
     for bar in bars {
         let Some((low_key, high_key)) = bar_level_keys(bar, tick_size) else {
@@ -332,7 +340,16 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
         if is_new_session || bar_period != period_idx {
             if let Some(ref mut profile) = current_profile {
                 let letter = letters[period_idx % letters.len()];
-                add_tpo_letters(profile, &mut period_rows, letter, period_idx, period_ts);
+                let (lo, hi) = std::mem::replace(&mut touched, RangeInclusive::new(usize::MAX, 0))
+                    .into_inner();
+                add_tpo_letters(
+                    profile,
+                    row_changes.get_mut(lo..=hi).unwrap_or_default(),
+                    first_key + lo as i64,
+                    letter,
+                    period_idx,
+                    period_ts,
+                );
             }
             period_idx = bar_period;
             period_ts = bar.time;
@@ -355,7 +372,13 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
             }
         }
 
-        insert_rows(&mut period_rows, low_key..=high_key);
+        let (lo, hi) = (
+            low_key.abs_diff(first_key) as usize,
+            high_key.abs_diff(first_key) as usize + 1,
+        );
+        row_changes[lo] += 1;
+        row_changes[hi] -= 1;
+        touched = (*touched.start()).min(lo)..=(*touched.end()).max(hi);
 
         if let Some(ref mut profile) = current_profile {
             // Update profile high/low
@@ -381,9 +404,11 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
     // Don't forget the last profile
     if let Some(mut profile) = current_profile.take() {
         let letter = letters[period_idx % letters.len()];
+        let (lo, hi) = touched.into_inner();
         add_tpo_letters(
             &mut profile,
-            &mut period_rows,
+            row_changes.get_mut(lo..=hi).unwrap_or_default(),
+            first_key + lo as i64,
             letter,
             period_idx,
             period_ts,
@@ -395,38 +420,30 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
     profiles
 }
 
-/// Merge `new` into `rows`, a sorted list of disjoint row ranges
-fn insert_rows(rows: &mut Vec<RangeInclusive<i64>>, new: RangeInclusive<i64>) {
-    let (mut low, mut high) = new.into_inner();
-    // Ranges that overlap or adjoin `new` are contiguous in the list
-    let first = rows.partition_point(|r| r.end().saturating_add(1) < low);
-    let mut last = first;
-    while last < rows.len() && *rows[last].start() <= high.saturating_add(1) {
-        low = low.min(*rows[last].start());
-        high = high.max(*rows[last].end());
-        last += 1;
-    }
-    rows.splice(first..last, std::iter::once(low..=high));
-}
-
-/// Add one TPO letter and one count at each row of a period, and clear `rows`
+/// Emit the union of a period's ranges once per row, then clear its endpoints.
 fn add_tpo_letters(
     profile: &mut TPOProfile,
-    rows: &mut Vec<RangeInclusive<i64>>,
+    row_changes: &mut [isize],
+    first_key: i64,
     letter: char,
     period_idx: usize,
     ts: DateTime<Utc>,
 ) {
-    for key in rows.drain(..).flatten() {
+    let mut covering = 0;
+    for (offset, change) in row_changes.iter_mut().enumerate() {
+        covering += *change;
+        *change = 0;
+        if covering == 0 {
+            continue;
+        }
+        let key = first_key + offset as i64;
         let price = key_to_price(key, profile.tick_size);
-
         profile.letters.push(TPOLetter {
             price,
             letter,
             period_idx,
             ts,
         });
-
         *profile.price_tpo_count.entry(key).or_insert(0) += 1;
     }
 }

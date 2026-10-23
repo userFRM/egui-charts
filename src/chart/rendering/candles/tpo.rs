@@ -13,11 +13,14 @@
 //! the currently visible bars and anchors each session's letter histogram under
 //! the session it summarises, staying correct under pan and zoom.
 
+use std::{cell::RefCell, rc::Rc};
+
 use crate::scales::PriceMap;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use crate::model::{
-    Bar, TPOColorMode, TPOConfig, TPODisplayMode, TPOProfile, derive_tick_size, to_tpo_profiles,
+    Bar, SpanCache, TPOColorMode, TPOConfig, TPODisplayMode, TPOProfile, derive_tick_size,
+    to_tpo_profiles,
 };
 use crate::tokens::DESIGN_TOKENS;
 
@@ -102,11 +105,94 @@ impl TpoRenderConfig {
     }
 }
 
+/// A session's profiles and the inputs they were built from.
+struct CachedProfile {
+    revision: u64,
+    first: usize,
+    len: usize,
+    last: Bar,
+    config: TPOConfig,
+    profiles: Rc<Vec<TPOProfile>>,
+}
+
+thread_local! {
+    static GRID_CACHE: RefCell<SpanCache<f64, u64>> = const { RefCell::new(SpanCache::new(8)) };
+    static PROFILE_CACHE: RefCell<Vec<CachedProfile>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Profiles of the visible sessions, reusing those whose inputs are unchanged.
+fn cached_profiles(
+    mut bars: &[Bar],
+    revision: u64,
+    mut start_idx: usize,
+    config: &TPOConfig,
+) -> Vec<Rc<Vec<TPOProfile>>> {
+    // Sessions must share the visible series' grid, including when only one session changes.
+    let tick = config.tick_size;
+    let grid = GRID_CACHE.with_borrow_mut(|cache| {
+        cache.get(tick.to_bits(), start_idx, bars, revision, |b| {
+            crate::model::bar::level_grid(b, tick)
+        })
+    });
+    let config = TPOConfig {
+        tick_size: *grid,
+        ..config.clone()
+    };
+    PROFILE_CACHE.with_borrow_mut(|cache| {
+        let mut profiles = Vec::new();
+        while let Some(first) = bars.first() {
+            let day = first.time.date_naive();
+            let end = bars.partition_point(|bar| bar.time.date_naive() == day);
+            let (session, rest) = bars.split_at(end);
+            let last = session.last().unwrap();
+            let pos = cache.iter().position(|entry| {
+                let old = &entry.config;
+                old.tick_size.to_bits() == config.tick_size.to_bits()
+                    && old.period_minutes == config.period_minutes
+                    && old.initial_balance_minutes == config.initial_balance_minutes
+                    && old.value_area_pct.to_bits() == config.value_area_pct.to_bits()
+                    && old.custom_letters == config.custom_letters
+                    && entry.revision == revision
+                    && entry.first == start_idx
+                    && entry.len == session.len()
+                    && entry.last.time == last.time
+                    && {
+                        let bits = |bar: &Bar| {
+                            [bar.open, bar.high, bar.low, bar.close, bar.volume].map(f64::to_bits)
+                        };
+                        bits(&entry.last) == bits(last)
+                    }
+            });
+            let entry = match pos {
+                Some(pos) => cache.remove(pos),
+                None => CachedProfile {
+                    revision,
+                    first: start_idx,
+                    len: session.len(),
+                    last: last.clone(),
+                    config: config.clone(),
+                    profiles: Rc::new(to_tpo_profiles(session, &config)),
+                },
+            };
+            profiles.push(Rc::clone(&entry.profiles));
+            cache.push(entry);
+            start_idx += session.len();
+            bars = rest;
+        }
+        // Keep every visible session, with room for another view and small multi-chart layouts.
+        let limit = 8.max(profiles.len().saturating_mul(2));
+        if cache.len() > limit {
+            cache.drain(..cache.len() - limit);
+        }
+        profiles
+    })
+}
+
 /// Render a real Market Profile for the visible bars, anchored in chart time.
 ///
 /// This is the live entry point used by `render_chart_type`. It builds the
-/// profiles from the currently visible bars and anchors each session's letter
-/// histogram at the x-coordinate of that session's first visible bar.
+/// profiles from the currently visible bars, reuses unchanged sessions, and anchors
+/// each session's letter histogram at its first visible bar's x-coordinate.
 /// Coordinates flow through the chart's shared price mapping ([`PriceMap`])
 /// and the supplied `idx_to_coord`, so the profile stays correct under pan and
 /// zoom.
@@ -120,6 +206,7 @@ pub fn render_live_tpo(
     painter: &Painter,
     price_rect: Rect,
     visible_data: &[Bar],
+    revision: u64,
     start_idx: usize,
     price_map: &PriceMap,
     base_config: &TPOConfig,
@@ -144,7 +231,7 @@ pub fn render_live_tpo(
         config.tick_size = derive_tick_size(price_range, TARGET_ROWS);
     }
 
-    let profiles = to_tpo_profiles(visible_data, &config);
+    let profiles = cached_profiles(visible_data, revision, start_idx, &config);
     if profiles.is_empty() {
         return;
     }
@@ -154,7 +241,7 @@ pub fn render_live_tpo(
     // Map each profile back to the index of its first visible bar so it anchors
     // under the session it summarises. Sessions split on calendar day, mirroring
     // `to_tpo_profiles`; a profile with no matching visible bar is skipped.
-    let mut profile_iter = profiles.iter();
+    let mut profile_iter = profiles.iter().flat_map(|session| session.iter());
     let mut current = profile_iter.next();
     let mut anchor_idx: Option<usize> = None;
     let mut last_day = None;
@@ -436,5 +523,73 @@ mod tests {
         assert!(config.poc_line_width > 0.0);
         assert!(config.letter_font_size > 0.0);
         assert!(config.row_height > 0.0);
+    }
+
+    #[test]
+    fn unchanged_sessions_reuse_profiles_and_changed_inputs_rebuild() {
+        let mut bars: Vec<_> = [0, 30, 1440]
+            .into_iter()
+            .map(|minute| Bar {
+                time: chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(minute),
+                open: 101.0,
+                high: 102.0,
+                low: 100.0,
+                close: 101.0,
+                volume: 1.0,
+            })
+            .collect();
+        let mut config = TPOConfig::default();
+        let mut revision = 1;
+        let mut start_idx = 0;
+        let mut previous = cached_profiles(&bars, revision, start_idx, &config);
+        // (input change, reused sessions, letters per session, first letter, row height)
+        let cases = [
+            ("steady", [true, true], [6, 3], 'A', 1.0),
+            ("forming bar", [true, false], [6, 4], 'A', 1.0),
+            ("revision", [false, false], [6, 4], 'A', 1.0),
+            ("older correction", [false, false], [7, 4], 'A', 1.0),
+            ("start index", [false, false], [7, 4], 'A', 1.0),
+            ("append", [true, false], [7, 4], 'A', 1.0),
+            ("last bits", [true, false], [7, 4], 'A', 1.0),
+            ("last time", [true, false], [7, 8], 'A', 1.0),
+            ("steady NaN", [true, true], [7, 8], 'A', 1.0),
+            ("period", [false, false], [4, 4], 'A', 1.0),
+            ("letters", [false, false], [4, 4], 'x', 1.0),
+            ("grid", [false, false], [3, 3], 'x', 2.0),
+            ("global span", [false, false], [2, 502], 'x', 4.0),
+        ];
+        for (change, reused, counts, first_letter, tick) in cases {
+            match change {
+                "steady" | "steady NaN" => {}
+                "forming bar" => bars[2].high = 103.0,
+                "revision" => revision += 1,
+                "older correction" => {
+                    bars[0].high = 103.0;
+                    revision += 1;
+                }
+                "start index" => start_idx += 1,
+                "append" => bars.push(bars.last().unwrap().clone()),
+                "last time" => bars.last_mut().unwrap().time += chrono::Duration::minutes(30),
+                "last bits" => bars.last_mut().unwrap().volume = f64::NAN,
+                "period" => config.period_minutes = 60,
+                "letters" => config.custom_letters = Some("xy".into()),
+                "grid" => config.tick_size = 2.0,
+                "global span" => bars.last_mut().unwrap().high = 2103.0,
+                _ => unreachable!(),
+            }
+            let current = cached_profiles(&bars, revision, start_idx, &config);
+            assert_eq!(current.len(), 2, "{change}");
+            for (i, profile) in current.iter().enumerate() {
+                assert_eq!(
+                    Rc::ptr_eq(profile, &previous[i]),
+                    reused[i],
+                    "{change}, session {i}"
+                );
+                assert_eq!(profile[0].letters.len(), counts[i], "{change}, session {i}");
+                assert_eq!(profile[0].letters[0].letter, first_letter, "{change}");
+                assert_eq!(profile[0].tick_size, tick, "{change}");
+            }
+            previous = current;
+        }
     }
 }

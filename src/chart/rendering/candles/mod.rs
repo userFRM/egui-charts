@@ -424,6 +424,7 @@ pub fn render_chart_type(
                 painter,
                 price_rect,
                 ctx.visible_data,
+                ctx.revision,
                 ctx.start_idx,
                 ctx.price_scale,
                 &tpo_config,
