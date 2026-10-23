@@ -146,7 +146,10 @@ impl super::Chart {
     /// Text fields, other focused widgets and open popups keep their input.
     pub fn dispatch_shortcuts(&mut self, ctx: &Context) {
         let pass = ctx.cumulative_pass_nr();
-        if shortcuts_suppressed(ctx) || self.keyboard.last_pass == Some(pass) {
+        if !self.chart_options.keyboard.enabled
+            || shortcuts_suppressed(ctx)
+            || self.keyboard.last_pass == Some(pass)
+        {
             return;
         }
         self.keyboard.last_pass = Some(pass);
@@ -184,8 +187,7 @@ impl super::Chart {
             }
         }
         let was_elsewhere = std::mem::replace(&mut self.keyboard.focus_elsewhere, elsewhere);
-        if !self.chart_options.keyboard.enabled
-            || elsewhere
+        if elsewhere
             || egui::Popup::is_any_open(ctx)
             || (was_elsewhere
                 && ctx
