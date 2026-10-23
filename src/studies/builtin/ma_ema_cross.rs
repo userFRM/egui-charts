@@ -11,7 +11,7 @@ pub struct EMACross {
 impl EMACross {
     /// Create two exponential averages with lengths clamped to at least one.
     pub fn new(fast_period: usize, slow_period: usize) -> Self {
-        let mut inner = MACombination::new(vec![
+        let inner = MACombination::new(vec![
             AverageLine::new(
                 AverageType::Exponential,
                 fast_period,
@@ -24,7 +24,6 @@ impl EMACross {
             ),
         ])
         .unwrap();
-        inner.wait_for_all = false;
         Self { inner }
     }
 }

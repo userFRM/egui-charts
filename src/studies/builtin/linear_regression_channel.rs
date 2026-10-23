@@ -1,7 +1,6 @@
 use super::clamp_param;
 use crate::model::{Bar, PriceSource};
-use crate::studies::math::LinearFit;
-use crate::studies::math::Moments;
+use crate::studies::math::{LinearFit, Moments};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;

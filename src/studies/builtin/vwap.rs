@@ -117,6 +117,7 @@ pub struct VolumeWeightedAvgPrice {
     anchor: VwapAnchor,
     time_zone: TimezoneId,
     windows: Vec<SessionWindow>,
+    instrument_session: Option<(TimezoneId, Vec<SessionWindow>)>,
     bands: Vec<f64>,
     percentage_bands: bool,
     event_anchors: Vec<DateTime<Utc>>,
@@ -144,6 +145,7 @@ impl VolumeWeightedAvgPrice {
             anchor: VwapAnchor::Session,
             time_zone: TimezoneId::utc(),
             windows: Vec::new(),
+            instrument_session: None,
             bands: Vec::new(),
             percentage_bands: false,
             event_anchors: Vec::new(),
@@ -244,7 +246,10 @@ impl Indicator for VolumeWeightedAvgPrice {
         let daily = self.shared.is_none();
         let from = if daily != self.daily { 0 } else { from };
         self.daily = daily;
-        let zone = self.time_zone.tz();
+        let (zone, windows) = self.instrument_session.as_ref().map_or(
+            (self.time_zone.tz(), self.windows.as_slice()),
+            |(zone, windows)| (zone.tz(), windows.as_slice()),
+        );
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
                 // A bar with a non-finite price or volume has no value and adds nothing.
@@ -257,7 +262,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                 let day = if daily {
                     bar.time.date_naive()
                 } else {
-                    trading_day(bar.time, zone, &self.windows)
+                    trading_day(bar.time, zone, windows)
                 };
                 let current = Some(self.anchor.period(day));
                 let events = if self.anchor == VwapAnchor::Events {
@@ -309,17 +314,25 @@ impl Indicator for VolumeWeightedAvgPrice {
             });
     }
 
-    fn set_instrument(&mut self, instrument: &crate::model::Instrument) -> bool {
-        let zone = instrument.time_zone.clone().unwrap_or_else(TimezoneId::utc);
-        let windows = instrument
-            .session
+    fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
+        let session = instrument.map(|instrument| {
+            (
+                instrument.time_zone.clone().unwrap_or_else(TimezoneId::utc),
+                instrument
+                    .session
+                    .as_ref()
+                    .map_or(&[][..], |s| s.windows.as_slice()),
+            )
+        });
+        if self
+            .instrument_session
             .as_ref()
-            .map_or(&[][..], |s| s.windows.as_slice());
-        if self.time_zone == zone && self.windows == windows {
+            .map(|(zone, windows)| (zone, windows.as_slice()))
+            == session.as_ref().map(|(zone, windows)| (zone, *windows))
+        {
             return false;
         }
-        self.time_zone = zone;
-        self.windows = windows.to_vec();
+        self.instrument_session = session.map(|(zone, windows)| (zone, windows.to_vec()));
         true
     }
 
@@ -691,7 +704,8 @@ mod tests {
             let mut study = VolumeWeightedAvgPrice::new().with_anchor(anchor);
             if anchor == VwapAnchor::Events {
                 // Duplicate events in a closed-market gap still cause exactly one reset.
-                study = study.with_event_anchors([times[2], times[2], times[0]]);
+                let event = times[2] - chrono::Duration::hours(12);
+                study = study.with_event_anchors([event, event, times[0]]);
             }
             study = study.with_percentage_bands([1.0]);
             let bars: Vec<_> = times
@@ -750,7 +764,25 @@ mod tests {
                 "late={late}: {:?}",
                 study.values()
             );
+            chart.set_instrument(None);
+            shapes(&egui::Context::default(), &mut chart, 1.0, Vec::new());
+            let study = chart.indicators().next().unwrap().1;
+            assert!(
+                matches!(study.values()[2], IndicatorValue::Single(v) if v == 16.0),
+                "clearing metadata must restore UTC: {:?}",
+                study.values()
+            );
         }
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.add_indicator(Box::new(
+            VolumeWeightedAvgPrice::new()
+                .with_time_zone(TimezoneId::named("America/New_York").unwrap()),
+        ));
+        shapes(&egui::Context::default(), &mut chart, 0.0, Vec::new());
+        assert!(matches!(
+            chart.indicators().next().unwrap().1.values()[2],
+            IndicatorValue::Single(v) if v == 14.0
+        ));
     }
 
     /// The local time of a bar at either end of the representable range is out of range

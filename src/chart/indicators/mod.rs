@@ -6,7 +6,6 @@
 //! [`SelectionState<ChartElementId>`](crate::chart::selection::SelectionState).
 
 pub mod hit_test;
-pub(crate) mod render;
 pub mod selection_render;
 
 pub use hit_test::{hit_test_indicator, hit_test_pane_indicator};

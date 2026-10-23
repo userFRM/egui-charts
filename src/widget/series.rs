@@ -137,9 +137,7 @@ impl Chart {
     /// main pane if [`Indicator::is_overlay`], otherwise in a pane below it. Returns the study's
     /// id, which stays valid when other studies are removed.
     pub fn add_indicator(&mut self, mut indicator: Box<dyn Indicator>) -> SeriesId {
-        if let Some(instrument) = self.instrument() {
-            indicator.set_instrument(instrument);
-        }
+        indicator.set_instrument(self.instrument());
         indicator.calculate(&self.state.data().bars);
         let id = SeriesId(self.next_series);
         self.next_series += 1;
@@ -242,7 +240,7 @@ impl Chart {
         let studies = self.studies.indicators_mut();
         let mut due = None::<usize>;
         for (at, study) in studies.iter_mut().enumerate() {
-            if instrument.as_ref().is_some_and(|i| study.set_instrument(i)) {
+            if study.set_instrument(instrument.as_ref()) {
                 self.pending_from[at] = Some(0);
             }
             let Some(from) = self.pending_from[at] else {

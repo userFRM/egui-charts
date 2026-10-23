@@ -96,7 +96,7 @@ enum Ribbon {
 #[derive(Clone)]
 pub struct MACombination {
     lines: Vec<AverageLine>,
-    pub(super) values: Vec<IndicatorValue>,
+    values: Vec<IndicatorValue>,
     markers: Vec<IndicatorMarker>,
     pair: Option<(usize, usize)>,
     pub(super) wait_for_all: bool,
