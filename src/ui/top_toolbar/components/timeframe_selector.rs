@@ -1,40 +1,22 @@
 //! Timeframe Selector
 //!
 //! A dropdown menu for selecting chart timeframes with favorites support.
-use crate::ext::UiExt;
-use crate::styles::typography;
+use crate::icons::icons as embedded_icons;
+use crate::styles::focus::focus_ring_color;
+use crate::styles::icons as icon_sizes;
+use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::top_toolbar::buttons::Trigger;
-use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use crate::ui_kit::buttons::Button;
+use crate::ui_kit::list_item::{ContentContext, LabelContent, ListItem, ListItemContent};
+use egui::{Color32, Rect, RichText, Role, Ui, WidgetInfo, pos2, vec2};
 use std::collections::HashSet;
 
-/// Theme colors for dropdown rendering
-struct DropdownColors {
-    bg: Color32,
-    hover: Color32,
-    selected: Color32,
-    on_selected: Color32,
-    text: Color32,
-    muted: Color32,
-    border: Color32,
-    favorite: Color32,
-}
+/// Height of the interval menu's rows and section headers.
+const ROW_H: f32 = 28.0;
 
-impl DropdownColors {
-    fn from_ui(ui: &Ui) -> Self {
-        let visuals = &ui.style().visuals;
-        Self {
-            bg: visuals.window_fill,
-            hover: visuals.widgets.hovered.bg_fill,
-            selected: visuals.selection.bg_fill,
-            on_selected: visuals.selection.stroke.color,
-            text: visuals.text_color(),
-            muted: visuals.widgets.noninteractive.fg_stroke.color,
-            border: visuals.widgets.noninteractive.bg_stroke.color,
-            favorite: visuals.warn_fg_color,
-        }
-    }
-}
+/// Least width of the menu, so that the custom interval form fits a field, a unit button and "Add".
+const CUSTOM_FORM_W: f32 = 232.0;
 
 /// Timeframe unit
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -176,13 +158,21 @@ impl Timeframe {
 pub struct TimeframeSelectorConfig {
     /// Minimum width of the button; it is otherwise sized to its label.
     pub btn_width: f32,
+    /// Minimum width of the menu; never below 232 px, the width the custom interval form needs.
     pub dropdown_width: f32,
+    /// Not read: rows are laid out by the menu.
     pub item_height: f32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub bg_color: Color32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub hover_color: Color32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub sel_color: Color32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub text_color: Color32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub muted_color: Color32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub favorite_color: Color32,
 }
 
@@ -210,6 +200,7 @@ pub enum TimeframeAction {
     None,
     Select(Timeframe),
     ToggleFavorite(Timeframe),
+    /// Not emitted: a custom interval is returned as `Select`.
     AddCustom,
 }
 
@@ -275,59 +266,55 @@ impl CustomTimeframeDialog {
     /// Show the custom timeframe dialog inside the dropdown.
     /// Returns Some(Timeframe) if the user confirms, None otherwise.
     pub fn show(&mut self, ui: &mut Ui) -> Option<Timeframe> {
+        let theme = ui.active_theme();
         let mut result = None;
-        let text_color = ui.style().visuals.text_color();
-        let error_color = ui.style().visuals.error_fg_color;
 
-        ui.spaced_separator();
-
-        ui.label(
-            RichText::new("Custom Timeframe")
-                .size(typography::SM)
-                .color(text_color),
-        );
-        ui.space_xs();
-
-        ui.horizontal(|ui| {
-            // Number input
-            let input = egui::TextEdit::singleline(&mut self.value_input)
-                .desired_width(DESIGN_TOKENS.sizing.button_lg)
-                .font(egui::FontId::proportional(typography::MD));
-            ui.add(input);
-
-            // Unit selector
-            ui.combo_select_width(
-                "custom_tf_unit",
-                &mut self.unit,
-                Self::available_units().iter().map(|(u, _)| *u),
-                |u| {
-                    match u {
-                        TimeframeUnit::Second => "Seconds",
-                        TimeframeUnit::Minute => "Minutes",
-                        TimeframeUnit::Hour => "Hours",
-                        TimeframeUnit::Day => "Days",
-                        other => other.name(),
+        ui.add_space(theme.spacing.lg);
+        // Right to left, so that the field takes the width the buttons leave.
+        ui.allocate_ui_with_layout(
+            vec2(ui.available_width(), DESIGN_TOKENS.sizing.button_md),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.add_space(theme.spacing.lg);
+                // The controls share the height of the button.
+                ui.spacing_mut().interact_size.y = DESIGN_TOKENS.sizing.button_md;
+                // The menu style draws inactive controls without a frame; the form's fields need one.
+                let inactive = &mut ui.visuals_mut().widgets.inactive;
+                inactive.bg_stroke = egui::Stroke::new(1.0, theme.ui.border_control);
+                inactive.weak_bg_fill = theme.ui.btn_bg_hover;
+                if Button::new("Add").primary().show(ui).clicked() {
+                    result = self.validate();
+                }
+                let unit = Self::available_units()
+                    .iter()
+                    .find(|(u, _)| *u == self.unit)
+                    .map_or_else(|| self.unit.name(), |(_, label)| label);
+                // A submenu keeps the interval menu open when a unit is picked.
+                ui.menu_button(unit, |ui| {
+                    for (u, label) in Self::available_units() {
+                        if ui.selectable_label(self.unit == *u, *label).clicked() {
+                            self.unit = *u;
+                        }
                     }
-                    .to_string()
-                },
-                DESIGN_TOKENS.sizing.button_lg,
-            );
-        });
+                });
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.value_input)
+                        .desired_width(ui.available_width() - theme.spacing.lg)
+                        .align(egui::Align2::LEFT_CENTER)
+                        .font(egui::FontId::proportional(theme.text.body)),
+                );
+            },
+        );
 
-        // Error message
-        if let Some(ref err) = self.error {
-            ui.space_xs();
-            ui.label(RichText::new(err).size(typography::XS).color(error_color));
-        }
-
-        ui.space_sm();
-
-        // Apply button
-        if ui
-            .button(RichText::new("Apply").size(typography::SM))
-            .clicked()
-        {
-            result = self.validate();
+        if let Some(err) = &self.error {
+            ui.horizontal(|ui| {
+                ui.add_space(theme.spacing.lg);
+                ui.label(
+                    RichText::new(err)
+                        .size(theme.text.small)
+                        .color(ui.visuals().error_fg_color),
+                );
+            });
         }
 
         result
@@ -387,35 +374,20 @@ impl TimeframeSelector {
 
     /// Show the timeframe selector
     pub fn show(&mut self, ui: &mut Ui) -> TimeframeAction {
-        let mut action = TimeframeAction::None;
-
         // Main button
         let btn_res = self.trigger().show(ui, self.is_open);
-        if btn_res.clicked() {
-            self.is_open = !self.is_open;
-        }
 
-        // Dropdown
-        if self.is_open {
-            let btn_rect = btn_res.rect;
-            action = self.draw_dropdown(ui, btn_rect);
-
-            // Close if clicked outside
-            if ui.input(|i| i.pointer.any_click())
-                && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
-                && !btn_rect.contains(pos)
-            {
-                // Check if inside dropdown
-                let dropdown_rect = Rect::from_min_size(
-                    Pos2::new(btn_rect.min.x, btn_rect.max.y + 2.0),
-                    Vec2::new(self.config.dropdown_width, 400.0),
-                );
-                if !dropdown_rect.contains(pos) {
-                    self.is_open = false;
-                }
-            }
-        }
-
+        let theme = ui.active_theme();
+        let id = ui.make_persistent_id("timeframe_menu");
+        let max_height = menu_list_height(ui, btn_res.rect, ROW_H);
+        let action = egui::Popup::menu(&btn_res)
+            .id(id)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .align_alternatives(&[])
+            .gap(theme.spacing.xs)
+            .show(|ui| self.menu_ui(ui, &theme, max_height))
+            .map_or(TimeframeAction::None, |menu| menu.inner);
+        self.is_open = egui::Popup::is_id_open(ui.ctx(), id);
         action
     }
 
@@ -430,287 +402,227 @@ impl TimeframeSelector {
         }
     }
 
-    fn draw_dropdown(&mut self, ui: &mut Ui, btn_rect: Rect) -> TimeframeAction {
-        let mut action = TimeframeAction::None;
-        let colors = DropdownColors::from_ui(ui);
-        let current = self.current;
-        let favorites = self.favorites.clone();
-        let custom_tfs = self.custom_timeframes.clone();
-        let show_custom = self.show_custom_input;
-
-        // fixed dropdown dimensions
-        let dropdown_height = 380.0;
-        let dropdown_width = self.config.dropdown_width;
-
-        // Calculate position - ensure dropdown stays within screen bounds
-        let screen_rect = ui.ctx().content_rect();
-        let ideal_pos = Pos2::new(btn_rect.min.x, btn_rect.max.y + DESIGN_TOKENS.spacing.xs);
-
-        // Desktop: ensure dropdown doesn't go off right edge
-        let dropdown_pos = {
-            let x = ideal_pos
+    /// Widths of the widest interval code and the widest description in the menu.
+    fn column_widths(&self, ui: &Ui, theme: &Theme) -> (f32, f32) {
+        let font = egui::FontId::proportional(theme.text.body);
+        let width = |text: String| {
+            ui.painter()
+                .layout_no_wrap(text, font.clone(), Color32::PLACEHOLDER)
+                .size()
                 .x
-                .min(screen_rect.max.x - dropdown_width - DESIGN_TOKENS.spacing.sm);
-            // Ensure dropdown doesn't go off bottom edge
-            let y = if ideal_pos.y + dropdown_height > screen_rect.max.y - DESIGN_TOKENS.spacing.sm
-            {
-                // Position above the button if not enough space below
-                (btn_rect.min.y - dropdown_height - DESIGN_TOKENS.spacing.xs)
-                    .max(DESIGN_TOKENS.spacing.sm)
-            } else {
-                ideal_pos.y
+        };
+        Timeframe::all_presets()
+            .iter()
+            .chain(&self.custom_timeframes)
+            .chain(&self.favorites)
+            .fold((0.0, 0.0), |(code, description), tf| {
+                (
+                    f32::max(code, width(tf.display())),
+                    f32::max(description, width(tf.display_long())),
+                )
+            })
+    }
+
+    fn menu_ui(&mut self, ui: &mut Ui, theme: &Theme, max_height: f32) -> TimeframeAction {
+        let mut action = TimeframeAction::None;
+        // Rows sit edge to edge, and the scroll bar is visible whenever the list overflows.
+        let spacing = ui.spacing_mut();
+        spacing.item_spacing.y = 0.0;
+        spacing.scroll.floating = false;
+        spacing.scroll.fade.strength = 0.0;
+        let bar = spacing.scroll.allocated_width();
+
+        let (code_w, desc_w) = self.column_widths(ui, theme);
+        let row_w = theme.spacing.lg * 2.0
+            + icon_sizes::SM
+            + theme.spacing.lg
+            + code_w
+            + theme.spacing.xl
+            + desc_w;
+        ui.set_width(
+            (row_w + bar)
+                .max(self.config.dropdown_width)
+                .max(CUSTOM_FORM_W),
+        );
+        // A popup is first measured inside a 400 px high area; this lets the list use the room below.
+        ui.set_max_height(max_height);
+
+        let mut favorites: Vec<_> = self.favorites.iter().copied().collect();
+        favorites.sort_by_key(|tf| (tf.unit as u8, tf.value));
+        let row = |ui: &mut Ui, tf: Timeframe, favorite: bool, current: Timeframe| {
+            let content = TimeframeRow {
+                tf,
+                favorite,
+                code_w,
+                theme,
             };
-            Pos2::new(x.max(DESIGN_TOKENS.spacing.sm), y)
+            ListItem::new()
+                .selected(current == tf)
+                .height(ROW_H)
+                .show(ui, content)
+                .clicked()
         };
 
-        let mut toggle_custom = false;
-        let mut custom_dialog = self.custom_dialog.clone();
-
-        egui::Area::new(egui::Id::unique("timeframe_dropdown"))
-            .fixed_pos(dropdown_pos)
-            .order(egui::Order::Foreground)
-            .show(ui.ctx(), |ui| {
-                // Rows are sized to sit edge to edge.
-                ui.spacing_mut().item_spacing.y = 0.0;
-                Self::draw_dropdown_frame(ui, &colors, dropdown_width, |ui| {
-                    Self::draw_dropdown_content(ui, &colors, current, &favorites, &mut action);
-
-                    // Custom timeframes section
-                    if !custom_tfs.is_empty() {
-                        ui.space_sm();
-                        Self::draw_section_label(ui, "Custom", colors.muted);
-                        let item_height = DESIGN_TOKENS.sizing.button_sm - DESIGN_TOKENS.spacing.xs;
-                        for tf in &custom_tfs {
-                            if Self::draw_tf_row(
-                                ui,
-                                *tf,
-                                current == *tf,
-                                false,
-                                &colors,
-                                170.0,
-                                item_height,
-                            ) {
-                                action = TimeframeAction::Select(*tf);
-                            }
+        let current = self.current;
+        egui::ScrollArea::vertical()
+            .max_height(max_height)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                if !favorites.is_empty() {
+                    section_header(ui, theme, "Favorites");
+                    for tf in &favorites {
+                        if row(ui, *tf, true, current) {
+                            action = TimeframeAction::Select(*tf);
                         }
                     }
-
-                    // "Custom..." button
-                    ui.space_sm();
-                    let custom_btn_size = Vec2::new(
-                        170.0,
-                        DESIGN_TOKENS.sizing.button_sm - DESIGN_TOKENS.spacing.xs,
-                    );
-                    let (rect, response) = ui.allocate_exact_size(custom_btn_size, Sense::click());
-
-                    if response.hovered() {
-                        ui.painter()
-                            .rect_filled(rect, DESIGN_TOKENS.rounding.sm, colors.hover);
+                }
+                for (unit, header) in [
+                    (TimeframeUnit::Second, "Seconds"),
+                    (TimeframeUnit::Minute, "Minutes"),
+                    (TimeframeUnit::Hour, "Hours"),
+                    (TimeframeUnit::Day, "Days"),
+                    (TimeframeUnit::Week, "Weeks"),
+                    (TimeframeUnit::Month, "Months"),
+                ] {
+                    section_header(ui, theme, header);
+                    for tf in Timeframe::by_unit(unit) {
+                        if row(ui, tf, self.favorites.contains(&tf), current) {
+                            action = TimeframeAction::Select(tf);
+                        }
                     }
-                    ui.painter().text(
-                        Pos2::new(rect.min.x + DESIGN_TOKENS.spacing.lg, rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        "+",
-                        egui::FontId::proportional(typography::MD),
-                        colors.muted,
-                    );
-                    ui.painter().text(
-                        Pos2::new(rect.min.x + DESIGN_TOKENS.sizing.button_md, rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        "Custom...",
-                        egui::FontId::proportional(typography::MD),
-                        colors.text,
-                    );
-                    if response.clicked() {
-                        toggle_custom = true;
+                }
+                if !self.custom_timeframes.is_empty() {
+                    section_header(ui, theme, "Custom");
+                    for tf in &self.custom_timeframes {
+                        if row(ui, *tf, false, current) {
+                            action = TimeframeAction::Select(*tf);
+                        }
                     }
+                }
 
-                    // Custom dialog
-                    if show_custom && let Some(tf) = custom_dialog.show(ui) {
-                        action = TimeframeAction::Select(tf);
-                    }
-                });
+                let custom = ListItem::new().height(ROW_H).show(
+                    ui,
+                    LabelContent::new("Custom interval\u{2026}").with_icon(&embedded_icons::PLUS),
+                );
+                if custom.clicked() {
+                    self.show_custom_input = !self.show_custom_input;
+                }
+                if self.show_custom_input
+                    && let Some(tf) = self.custom_dialog.show(ui)
+                {
+                    action = TimeframeAction::Select(tf);
+                }
             });
 
-        self.custom_dialog = custom_dialog;
-        if toggle_custom {
-            self.show_custom_input = !self.show_custom_input;
-        }
-
         if matches!(action, TimeframeAction::Select(_)) {
-            self.is_open = false;
             self.show_custom_input = false;
+            ui.close();
         }
         action
     }
+}
 
-    fn draw_dropdown_frame(
-        ui: &mut Ui,
-        colors: &DropdownColors,
-        width: f32,
-        content: impl FnOnce(&mut Ui),
-    ) {
-        egui::Frame::new()
-            .fill(colors.bg)
-            .stroke(Stroke::new(DESIGN_TOKENS.stroke.hairline, colors.border))
-            .corner_radius(DESIGN_TOKENS.rounding.md)
-            .shadow(egui::Shadow {
-                spread: 2,
-                blur: 8,
-                offset: [2, 2],
-                color: Color32::from_black_alpha(40),
-            })
-            .inner_margin(egui::Margin::same(DESIGN_TOKENS.spacing.sm as i8))
-            .show(ui, |ui| {
-                ui.set_min_width(width - DESIGN_TOKENS.spacing.lg);
-                ui.set_max_height(400.0);
-                egui::ScrollArea::vertical()
-                    .max_height(380.0)
-                    .show(ui, content);
-            });
-    }
+/// Height of a menu list that ends on a whole row above the window's bottom edge, so the last
+/// row is never cut. At least three rows.
+pub(super) fn menu_list_height(ui: &Ui, trigger: Rect, row_h: f32) -> f32 {
+    let theme = ui.active_theme();
+    let available = ui.ctx().content_rect().bottom()
+        - trigger.bottom()
+        - theme.spacing.xs
+        - theme.spacing.lg
+        - ui.spacing().menu_margin.sum().y;
+    (available / row_h).floor().max(3.0) * row_h
+}
 
-    fn draw_dropdown_content(
-        ui: &mut Ui,
-        colors: &DropdownColors,
-        current: Timeframe,
-        favorites: &HashSet<Timeframe>,
-        action: &mut TimeframeAction,
-    ) {
-        const ITEM_WIDTH: f32 = 170.0;
-        let item_height = DESIGN_TOKENS.sizing.button_sm - DESIGN_TOKENS.spacing.xs;
-
-        // Favorites section
-        if !favorites.is_empty() {
-            Self::draw_section_label(ui, "Favorites", colors.muted);
-            let mut favorites_vec: Vec<_> = favorites.iter().copied().collect();
-            favorites_vec.sort_by_key(|tf| (tf.unit as u8, tf.value));
-            for tf in favorites_vec {
-                if Self::draw_tf_row(ui, tf, current == tf, true, colors, ITEM_WIDTH, item_height) {
-                    *action = TimeframeAction::Select(tf);
-                }
-            }
-            ui.space_lg();
-        }
-
-        // Unit sections
-        Self::draw_unit_sections(
-            ui,
-            colors,
-            current,
-            favorites,
-            action,
-            ITEM_WIDTH,
-            item_height,
+/// Draws the focus ring inside a menu row, which the scroll area would clip outside it, and keeps
+/// a row focused with the arrow keys in view.
+pub(super) fn menu_row_focus(ui: &Ui, response: &egui::Response) {
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect,
+            ui.visuals().menu_corner_radius,
+            egui::Stroke::new(DESIGN_TOKENS.stroke.thick, focus_ring_color(ui)),
+            egui::StrokeKind::Inside,
         );
     }
-
-    fn draw_section_label(ui: &mut Ui, text: &str, color: Color32) {
-        ui.label(RichText::new(text).size(typography::SM).color(color));
-        ui.space_xs();
+    if response.gained_focus() {
+        response.scroll_to_me(None);
     }
+}
 
-    fn draw_unit_sections(
-        ui: &mut Ui,
-        colors: &DropdownColors,
-        current: Timeframe,
-        favorites: &HashSet<Timeframe>,
-        action: &mut TimeframeAction,
-        item_width: f32,
-        item_height: f32,
-    ) {
-        let units = [
-            (TimeframeUnit::Second, "Seconds"),
-            (TimeframeUnit::Minute, "Minutes"),
-            (TimeframeUnit::Hour, "Hours"),
-            (TimeframeUnit::Day, "Days"),
-            (TimeframeUnit::Week, "Weeks"),
-            (TimeframeUnit::Month, "Months"),
-        ];
+/// A section title on the menu's row grid, with its text on the bottom of the row.
+fn section_header(ui: &mut Ui, theme: &Theme, text: &str) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), egui::Sense::hover());
+    // A child Ui, so that the row keeps its full height in the parent's layout.
+    let mut title = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(vec2(theme.spacing.lg, theme.spacing.sm)))
+            .layout(egui::Layout::bottom_up(egui::Align::Min)),
+    );
+    title.add(
+        egui::Label::new(
+            RichText::new(text.to_uppercase())
+                .size(theme.text.small)
+                .color(theme.ui.text_secondary),
+        )
+        .selectable(false),
+    );
+}
 
-        for (unit, header) in units {
-            let tfs = Timeframe::by_unit(unit);
-            if tfs.is_empty() {
-                continue;
-            }
-            Self::draw_section_label(ui, header, colors.muted);
-            for tf in tfs {
-                let is_fav = favorites.contains(&tf);
-                if Self::draw_tf_row(
-                    ui,
-                    tf,
-                    current == tf,
-                    is_fav,
-                    colors,
-                    item_width,
-                    item_height,
-                ) {
-                    *action = TimeframeAction::Select(tf);
-                }
-            }
-            ui.space_sm();
-        }
-    }
+/// One interval row: favourite star, code, description.
+struct TimeframeRow<'a> {
+    tf: Timeframe,
+    favorite: bool,
+    code_w: f32,
+    theme: &'a Theme,
+}
 
-    fn draw_tf_row(
-        ui: &mut Ui,
-        tf: Timeframe,
-        is_current: bool,
-        is_fav: bool,
-        colors: &DropdownColors,
-        width: f32,
-        height: f32,
-    ) -> bool {
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-
-        // Background
-        if is_current {
-            ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.sm, colors.selected);
-        } else if response.hovered() {
-            ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.sm, colors.hover);
-        }
-
-        let (text, muted) = if is_current {
-            (colors.on_selected, colors.on_selected)
+impl ListItemContent for TimeframeRow<'_> {
+    fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> egui::Response {
+        let theme = self.theme;
+        let rect = context.rect;
+        let (code, description, star) = if context.selected {
+            let on_selection = theme.ui.selection_text;
+            (on_selection, on_selection, on_selection)
         } else {
-            (colors.text, colors.muted)
+            (theme.ui.text, theme.ui.text_secondary, theme.ui.warning)
         };
+        context.response.widget_info(|| {
+            WidgetInfo::selected(
+                Role::Button,
+                ui.is_enabled(),
+                context.selected,
+                self.tf.display_long(),
+            )
+        });
 
-        // Star indicator
-        let (star_char, star_color) = if is_fav {
-            ("*", colors.favorite)
-        } else {
-            ("*", muted)
-        };
+        if self.favorite {
+            let star_rect = Rect::from_min_size(
+                pos2(rect.min.x, rect.center().y - icon_sizes::SM / 2.0),
+                vec2(icon_sizes::SM, icon_sizes::SM),
+            );
+            embedded_icons::STAR_FILLED
+                .as_image_tinted(star_rect.size(), star)
+                .paint_at(ui, star_rect);
+        }
+        let font = egui::FontId::proportional(theme.text.body);
+        let code_x = rect.min.x + icon_sizes::SM + theme.spacing.lg;
         ui.painter().text(
-            Pos2::new(rect.min.x + DESIGN_TOKENS.spacing.lg, rect.center().y),
+            pos2(code_x, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            star_char,
-            egui::FontId::proportional(typography::SM),
-            star_color,
+            self.tf.display(),
+            font.clone(),
+            code,
         );
-
-        // Timeframe display
         ui.painter().text(
-            Pos2::new(rect.min.x + DESIGN_TOKENS.sizing.button_md, rect.center().y),
+            pos2(code_x + self.code_w + theme.spacing.xl, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            tf.display(),
-            egui::FontId::proportional(typography::MD),
-            text,
+            self.tf.display_long(),
+            font,
+            description,
         );
-
-        // Long description
-        ui.painter().text(
-            Pos2::new(rect.min.x + 60.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            tf.display_long(),
-            egui::FontId::proportional(typography::SM),
-            muted,
-        );
-
-        response.clicked()
+        menu_row_focus(ui, context.response);
+        context.response.clone()
     }
 }
 
