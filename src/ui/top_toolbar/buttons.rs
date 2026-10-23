@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use crate::icons::{Icon, icons::CHEVRON_DOWN};
-use crate::styles::{icons as icon_sizes, stroke, typography};
+use crate::icons::Icon;
+use crate::styles::{icons as icon_sizes, stroke};
 use egui::{Color32, Galley, Pos2, Rect, Response, Role, Sense, Ui, Vec2, WidgetInfo};
 
 use super::TopToolbarConfig;
@@ -64,13 +64,14 @@ impl<'a> ToolbarIconButton<'a> {
             let icon_color = if is_active || is_hovered {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
+                ui.visuals().text_color()
             };
             self.icon
                 .as_image_tinted(Vec2::splat(icon_size), icon_color)
                 .paint_at(ui, icon_rect);
         }
 
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.tooltip));
         response.on_hover_text(self.tooltip)
     }
 }
@@ -94,18 +95,20 @@ impl<'a> IconTextButton<'a> {
         }
     }
 
+    pub(crate) fn width(&self, ui: &Ui) -> f32 {
+        let galley = ui.painter().layout_no_wrap(
+            self.label.to_owned(),
+            egui::FontId::proportional(ui.active_theme().text.title),
+            Color32::PLACEHOLDER,
+        );
+        self.config.small_icon_size + self.config.padding * 3.0 + galley.size().x
+    }
+
     pub fn show(self, ui: &mut Ui) -> Response {
         let icon_size = self.config.small_icon_size;
         let padding = self.config.padding;
         // Measure actual text width instead of approximation
-        let font_id = egui::FontId::proportional(typography::LG);
-        let galley = ui.painter().layout_no_wrap(
-            self.label.to_string(),
-            font_id,
-            DESIGN_TOKENS.semantic.ui.text_light,
-        );
-        let text_width = galley.rect.width();
-        let total_width = icon_size + padding * 3.0 + text_width;
+        let total_width = self.width(ui);
         let height = self.config.btn_size;
 
         let (rect, response) =
@@ -136,7 +139,7 @@ impl<'a> IconTextButton<'a> {
             let icon_color = if is_active || is_hovered {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
+                ui.visuals().text_color()
             };
             self.icon
                 .as_image_tinted(Vec2::splat(icon_size), icon_color)
@@ -146,7 +149,7 @@ impl<'a> IconTextButton<'a> {
             let color = if is_hovered || is_active {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
+                ui.visuals().text_color()
             };
 
             // Text
@@ -154,12 +157,13 @@ impl<'a> IconTextButton<'a> {
                 Pos2::new(rect.min.x + padding + icon_size + padding, rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 self.label,
-                egui::FontId::proportional(typography::LG),
+                egui::FontId::proportional(ui.active_theme().text.title),
                 color,
             );
         }
 
-        response
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.label));
+        response.on_hover_text(self.label)
     }
 }
 
@@ -189,7 +193,7 @@ impl TextButton {
     pub fn show(self, ui: &mut Ui) -> Response {
         let padding = self.config.padding;
         // Measure actual text width
-        let font_id = egui::FontId::proportional(typography::LG);
+        let font_id = egui::FontId::proportional(ui.active_theme().text.title);
         let galley = ui.painter().layout_no_wrap(
             self.text.clone(),
             font_id,
@@ -220,7 +224,7 @@ impl TextButton {
             rect.center(),
             egui::Align2::CENTER_CENTER,
             &self.text,
-            egui::FontId::proportional(typography::LG),
+            egui::FontId::proportional(ui.active_theme().text.title),
             ui.visuals().text_color(),
         );
 
@@ -270,7 +274,7 @@ impl<'a> TextIconButton<'a> {
     }
 
     pub(crate) fn width(&self, ui: &Ui) -> f32 {
-        let font_id = egui::FontId::proportional(typography::LG);
+        let font_id = egui::FontId::proportional(ui.active_theme().text.title);
         let galley =
             ui.painter()
                 .layout_no_wrap(self.text.to_owned(), font_id, Color32::PLACEHOLDER);
@@ -280,7 +284,7 @@ impl<'a> TextIconButton<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let padding = self.config.padding;
         let icon_size = icon_sizes::XS;
-        let font_id = egui::FontId::proportional(typography::LG);
+        let font_id = egui::FontId::proportional(ui.active_theme().text.title);
         let size = Vec2::new(self.width(ui), self.config.btn_size);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response);
@@ -320,42 +324,53 @@ impl<'a> TextIconButton<'a> {
             let icon_color = if response.hovered() {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
+                ui.visuals().text_color()
             };
             self.icon
                 .as_image_tinted(Vec2::splat(icon_size), icon_color)
                 .paint_at(ui, icon_rect);
         }
 
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.tooltip));
         response.on_hover_text(self.tooltip)
     }
 }
 
-/// Dropdown trigger of the top toolbar: an optional icon, a label and a chevron, sized to the
-/// laid-out label.
-///
-/// It has a hairline outline, the hover fill while hovered and the pressed fill while pressed
-/// or open, and reports itself to accessibility tools as a button called `name`.
+/// Toolbar menu trigger: plain text or an icon, or a filled symbol pill.
 pub(crate) struct Trigger<'a> {
     pub icon: Option<&'a Icon>,
     pub label: String,
     pub name: String,
     /// The trigger is at least this wide.
     pub min_width: f32,
+    /// Filled symbol pill with a semibold label and a trailing icon.
+    pub filled: bool,
 }
 
 impl Trigger<'_> {
     fn galley(&self, ui: &Ui, theme: &Theme) -> Arc<Galley> {
-        let font_id = egui::FontId::proportional(theme.text.title);
+        let mut format = egui::text::TextFormat::simple(
+            egui::FontId::proportional(theme.text.title),
+            theme.ui.text,
+        );
+        if self.filled {
+            format.coords.push("wght", 600.0);
+        }
         ui.painter()
-            .layout_no_wrap(self.label.clone(), font_id, Color32::PLACEHOLDER)
+            .layout_job(egui::text::LayoutJob::single_section(
+                self.label.clone(),
+                format,
+            ))
     }
 
     fn width_for(&self, theme: &Theme, label_width: f32) -> f32 {
-        let gap = theme.spacing.sm;
-        let icon = self.icon.map_or(0.0, |_| icon_sizes::MD + gap);
-        let content = icon + label_width + gap + icon_sizes::XS;
-        (content + theme.spacing.lg * 2.0).max(self.min_width)
+        let icon = self.icon.map_or(0.0, |_| icon_sizes::LG);
+        let gap = if icon > 0.0 && !self.label.is_empty() {
+            theme.spacing.sm
+        } else {
+            0.0
+        };
+        (icon + gap + label_width + theme.spacing.lg * 2.0).max(self.min_width)
     }
 
     pub(crate) fn width(&self, ui: &Ui) -> f32 {
@@ -368,7 +383,11 @@ impl Trigger<'_> {
         let galley = self.galley(ui, &theme);
         let size = Vec2::new(
             self.width_for(&theme, galley.size().x),
-            DESIGN_TOKENS.sizing.button_md,
+            if self.filled {
+                28.0
+            } else {
+                super::config::BUTTON_SIZE
+            },
         );
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response);
@@ -381,20 +400,24 @@ impl Trigger<'_> {
                 widgets.active.bg_fill
             } else if hovered {
                 widgets.hovered.bg_fill
+            } else if self.filled {
+                theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.085)
             } else {
                 Color32::TRANSPARENT
             };
             let icon_color = if pressed || hovered {
                 widgets.hovered.fg_stroke.color
             } else {
-                widgets.noninteractive.fg_stroke.color
+                theme.ui.text
             };
-            ui.painter().rect(
+            ui.painter().rect_filled(
                 rect,
-                theme.radius.md,
+                if self.filled {
+                    rect.height() / 2.0
+                } else {
+                    theme.radius.md
+                },
                 fill,
-                widgets.inactive.bg_stroke,
-                egui::StrokeKind::Inside,
             );
 
             let paint_icon = |icon: &Icon, x: f32, size: f32| {
@@ -402,15 +425,28 @@ impl Trigger<'_> {
                 icon.as_image_tinted(Vec2::splat(size), icon_color)
                     .paint_at(ui, Rect::from_min_size(min, Vec2::splat(size)));
             };
-            let mut x = rect.min.x + theme.spacing.lg;
-            if let Some(icon) = self.icon {
-                paint_icon(icon, x, icon_sizes::MD);
-                x += icon_sizes::MD + theme.spacing.sm;
-            }
+            let content_width = galley.size().x
+                + self.icon.map_or(0.0, |_| icon_sizes::LG)
+                + if self.icon.is_some() && !self.label.is_empty() {
+                    theme.spacing.sm
+                } else {
+                    0.0
+                };
+            let x = if self.filled {
+                rect.min.x + theme.spacing.lg + theme.spacing.sm
+            } else {
+                rect.center().x - content_width / 2.0
+            };
             let label_pos = Pos2::new(x, rect.center().y - galley.size().y / 2.0);
             ui.painter().galley(label_pos, galley, theme.ui.text);
-            let chevron_x = rect.max.x - theme.spacing.lg - icon_sizes::XS;
-            paint_icon(&CHEVRON_DOWN, chevron_x, icon_sizes::XS);
+            if let Some(icon) = self.icon {
+                let icon_x = if self.filled {
+                    rect.max.x - theme.spacing.sm - icon_sizes::LG
+                } else {
+                    x
+                };
+                paint_icon(icon, icon_x, icon_sizes::LG);
+            }
         }
 
         response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &self.name));
