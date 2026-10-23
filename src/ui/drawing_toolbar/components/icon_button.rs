@@ -156,7 +156,7 @@ pub fn draw_icon_button_padded(
 /// - Outer rect: 52×38px
 /// - Inner hover rect: 9px horizontal margin, 2px vertical margin
 /// - Inner rounding: 6px
-/// - Icon: 20×20 centered in outer rect
+/// - Icon: 28×28 centered in outer rect
 ///
 /// A selected button is filled with the accent colour and its icon uses the accent text colour.
 /// The tooltip opens to the right of the bar, so it never covers the next button.
@@ -217,13 +217,16 @@ pub fn draw_tool_button(ui: &mut Ui, icon: &Icon, tooltip: &str, is_selected: bo
         }
 
         // Icon centered in OUTER rect
-        let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(icon_sizes::MD));
-        if is_selected {
-            icon.as_image_tinted(icon_rect.size(), theme.ui.accent_text)
-                .paint_at(ui, icon_rect);
+        let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(icon_sizes::TOOLBAR));
+        let icon_color = if !ui.is_enabled() {
+            theme.ui.text_disabled
+        } else if is_selected {
+            theme.ui.accent_text
         } else {
-            render_svg_at_rect_themed(ui, icon, icon_rect, response.hovered(), false);
-        }
+            theme.ui.text
+        };
+        icon.as_image_tinted(icon_rect.size(), icon_color)
+            .paint_at(ui, icon_rect);
     }
 
     let mut tip = Tooltip::for_enabled(&response);
