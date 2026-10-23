@@ -65,9 +65,19 @@ impl CursorStateData {
 /// in AppState.drawing, not UI-specific state like expanded menus.
 #[derive(Clone, Debug)]
 pub struct DrawingToolbarDomainState {
+    /// The chart's active drawing tool, or `None` after construction finishes.
     pub sel_tool: Option<DrawingToolType>,
+    /// Whether snapping is enabled.
     pub magnet_mode: bool,
+    /// The snapping strength, retained while snapping is off.
+    pub magnet_type: MagnetType,
+    /// The chart cursor used while the eraser is off.
+    pub current_cursor_type: CursorType,
+    /// Whether the chart is erasing drawings.
+    pub eraser_mode_enabled: bool,
+    /// Whether the active drawing tool remains selected after construction.
     pub stay_in_drawing_mode: bool,
+    /// Default colour for new drawings, in straight RGBA.
     pub drawing_color: [u8; 4],
 }
 
@@ -80,7 +90,7 @@ use super::{
     },
     components::{draw_separator_styled, draw_tool_button, render_svg_at_rect_themed},
     data, icons,
-    state::ToolbarState,
+    state::{MagnetType, ToolbarState},
     submenu_builder::{flyout_id, section_header, show_flyout},
     utilities::{
         HideMenu, LockButton, MagnetButton, MeasureButton, RemoveMenu, StayInDrawingButton,
@@ -131,6 +141,9 @@ impl DrawingToolbar {
     pub fn sync_from_domain_state(&mut self, domain: &DrawingToolbarDomainState) {
         self.state.sel_tool = domain.sel_tool;
         self.state.magnet_mode = domain.magnet_mode;
+        self.state.magnet_type = domain.magnet_type;
+        self.state.current_cursor_type = domain.current_cursor_type;
+        self.state.eraser_mode_enabled = domain.eraser_mode_enabled;
         self.state.stay_in_drawing_mode = domain.stay_in_drawing_mode;
         self.state.drawing_color = domain.drawing_color;
     }
@@ -143,6 +156,9 @@ impl DrawingToolbar {
         DrawingToolbarDomainState {
             sel_tool: self.state.sel_tool,
             magnet_mode: self.state.magnet_mode,
+            magnet_type: self.state.magnet_type,
+            current_cursor_type: self.state.current_cursor_type,
+            eraser_mode_enabled: self.state.eraser_mode_enabled,
             stay_in_drawing_mode: self.state.stay_in_drawing_mode,
             drawing_color: self.state.drawing_color,
         }
@@ -1003,6 +1019,36 @@ impl DrawingToolbar {
 mod tests {
     use super::*;
     use egui::{Context, Event, Key, Modifiers, RawInput};
+
+    /// Host snapshots round trip every mode without changing local menus or tool history.
+    #[test]
+    fn domain_snapshots_restore_magnet_cursor_and_eraser_modes() {
+        for (magnet, cursor, eraser) in [
+            (MagnetType::Weak, CursorType::Cross, false),
+            (MagnetType::Strong, CursorType::Dot, false),
+            (MagnetType::OHLC, CursorType::Demonstration, true),
+        ] {
+            let mut source = DrawingToolbar::new();
+            source.state.magnet_mode = true;
+            source.state.magnet_type = magnet;
+            source.state.current_cursor_type = cursor;
+            source.state.eraser_mode_enabled = eraser;
+            let mut target = DrawingToolbar::new();
+            target.select_tool(DrawingToolType::TrendLine);
+            target.state.expanded_category = Some("Magnet".into());
+            target.sync_from_domain_state(&source.get_domain_state());
+            assert_eq!(target.state.magnet_type, magnet);
+            assert_eq!(target.state.current_cursor_type, cursor);
+            assert_eq!(target.state.eraser_mode_enabled, eraser);
+            assert!(target.state.magnet_mode);
+            assert_eq!(target.state.sel_tool, None);
+            assert_eq!(target.state.expanded_category.as_deref(), Some("Magnet"));
+            assert_eq!(
+                target.state.recent.front(),
+                Some(&DrawingToolType::TrendLine)
+            );
+        }
+    }
 
     /// The bar keeps its grid and utility order, with distinct selection and magnet fills.
     #[test]
