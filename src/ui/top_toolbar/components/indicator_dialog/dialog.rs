@@ -191,7 +191,9 @@ impl IndicatorDialog {
 
         // Profiles and patterns have no categories.
         if self.active_tab != IndicatorTab::Indicators {
-            TabBar::new(IndicatorTab::all(), &mut self.active_tab).show(ui);
+            TabBar::new(IndicatorTab::all(), &mut self.active_tab)
+                .pills()
+                .show(ui);
             self.draw_empty_state(ui);
             return IndicatorDialogAction::None;
         }
@@ -226,7 +228,9 @@ impl IndicatorDialog {
             },
             |ui| {
                 self.sel_category = category.get();
-                TabBar::new(IndicatorTab::all(), &mut self.active_tab).show(ui);
+                TabBar::new(IndicatorTab::all(), &mut self.active_tab)
+                    .pills()
+                    .show(ui);
                 ui.add_space(12.0);
                 action = self.draw_results(ui, config, theme);
             },

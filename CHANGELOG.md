@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `TabBar::pills` renders rounded tab chips through the shared tab component; the indicator browser uses them.
+
 - `top_toolbar::buttons::toolbar_tooltip` attaches compact toolbar tips with optional platform shortcut chips. `Modal::rounding` and `Modal::fill` preserve per-dialog styling, and an empty modal title lets a search row serve as the header.
 - `Chart::set_instrument`, `set_legend_badge`, `set_legend_statuses` and `set_quote` connect host metadata and current bid/ask to the responsive legend. Historical OHLC and study values follow the pointer independently of quotes, including over the axis add cell. `take_quote_action` retains buy/sell intents until taken; changing symbols clears supplied metadata and quotes. The demo labels generated data with SIM and records quote intents without submitting orders.
 - `Chart::set_session_quote` and `set_events` connect independent session prices and event badges. `take_event_click` and `take_scale_settings_request` route clicks to the host; the price-tag add cell opens the existing context menu at the displayed price, including in Magnet mode. Current close tags include a countdown when a supplied quote belongs to that bar, and volume has a separate tag at the pane bottom.
