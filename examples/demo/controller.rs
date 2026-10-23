@@ -39,6 +39,8 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
+use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
+use egui_charts::ui_kit::{EmptyState, IconButton, PanelHeader};
 use std::sync::{Arc, mpsc};
 
 use crate::sampledata::{
@@ -173,6 +175,7 @@ pub struct DemoApp {
     // stub/network/broker surface an honest message here rather than silently
     // doing nothing, since the library toolbar renders them unconditionally.
     notice: Option<(String, f64)>,
+    toasts: Toasts,
 }
 
 impl DemoApp {
@@ -283,6 +286,7 @@ impl DemoApp {
             screenshot_requested: None,
             screenshots: mpsc::channel(),
             notice: None,
+            toasts: Toasts::new(),
         };
         app.apply_session();
         app
@@ -1407,15 +1411,25 @@ impl DemoApp {
     }
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading("Alerts");
-            if ui.button("+ New").clicked() {
+        PanelHeader::new("Alerts").show(ui, |ui| {
+            if IconButton::new(&egui_charts::icons::icons::PLUS)
+                .tooltip("New alert")
+                .show(ui)
+                .clicked()
+            {
                 self.alert_dialog.open(self.state.symbol.clone());
             }
         });
-        ui.separator();
         if self.alerts.is_empty() {
-            ui.label("No alerts. Click + New, the bell button, or right-click the chart.");
+            if EmptyState::new("No alerts yet")
+                .icon(&egui_charts::icons::icons::ALERTS)
+                .description("Create an alert with the + button or the chart menu.")
+                .action("Create alert")
+                .fill_height()
+                .show(ui)
+            {
+                self.alert_dialog.open(self.state.symbol.clone());
+            }
             return;
         }
         let mut remove: Option<usize> = None;
@@ -1740,6 +1754,7 @@ impl DemoApp {
 
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
         if let Some(target) = self.screenshot_requested.take() {
+            self.toasts.clear();
             self.request_screenshot(ctx, target);
         }
 
@@ -1756,34 +1771,12 @@ impl DemoApp {
     }
 
     fn show_notice(&mut self, ctx: &egui::Context) {
-        let now = ctx.input(|i| i.time);
-        let text = {
-            let Some((msg, shown_at)) = self.notice.as_mut() else {
-                return;
-            };
-            if *shown_at == 0.0 {
-                *shown_at = now;
-            }
-            if now - *shown_at > 4.0 {
-                None
-            } else {
-                Some(msg.clone())
-            }
-        };
-        let Some(text) = text else {
-            self.notice = None;
-            return;
-        };
-        egui::Area::new(egui::Id::unique("demo_notice"))
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -56.0))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(ui.visuals().widgets.active.bg_fill)
-                    .show(ui, |ui| {
-                        ui.label(text);
-                    });
-            });
-        ctx.request_repaint();
+        if let Some((message, _)) = self.notice.take() {
+            self.toasts.info(message);
+        }
+        NotificationPanel::new()
+            .width(340.0)
+            .show_with_toasts(ctx, &mut self.toasts);
     }
 
     fn save_screenshot(&mut self, image: &egui::ColorImage, path: Option<std::path::PathBuf>) {
