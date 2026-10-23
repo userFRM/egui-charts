@@ -1980,7 +1980,9 @@ mod tests {
                         "width {width}, scale {scale}"
                     );
                     assert!(
-                        (time_scale.right_offset() - (65.0 - 6.1 * 0.5 - 1.0) / 6.1).abs() < 1e-5
+                        (time_scale.right_offset() - (65.0 - 6.1 * 0.5 - 1.0) / 6.1).abs() < 1e-5,
+                        "width {width}, scale {scale}: offset {}",
+                        time_scale.right_offset()
                     );
                 }
             }
@@ -2367,6 +2369,7 @@ mod tests {
             let latest = bars.last().unwrap().close;
             frame(&mut app, vec![egui::Event::PointerGone]);
             assert_eq!(app.build_data_window().close, latest);
+            app.open_chart_settings_dialog();
             let mut settings = app.settings_state.clone();
             settings.timezone = "Europe/Paris".to_owned();
             let view = app.chart.get_time_scale_state();

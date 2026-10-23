@@ -320,8 +320,8 @@ impl Chart {
                 .calculate_layout_rects(response.rect)
                 .price_rect
                 .width();
-            // Fitting the labels must not reveal a different set of bars.
-            if old_width > 0.0 && new_width > 0.0 {
+            // After the first layout, fitting labels keeps the visible bar range.
+            if previous_axis_width > 0.0 && old_width > 0.0 && new_width > 0.0 {
                 let scale = self.state.time_scale_mut();
                 scale.set_bar_spacing(scale.bar_spacing() * new_width / old_width);
             }
