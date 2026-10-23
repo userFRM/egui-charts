@@ -4,7 +4,7 @@
 //! price series seeded from its name. Switching symbols therefore yields a
 //! stable, distinct chart rather than random noise that changes each frame.
 
-use egui_charts::model::{Bar, Symbol, Timeframe};
+use egui_charts::model::{Bar, Symbol, SymbolType, Timeframe};
 
 /// A tradable instrument the demo knows how to render, including the seed and
 /// starting price used to synthesize its bars.
@@ -101,7 +101,16 @@ impl DemoSymbol {
     pub fn symbols() -> Vec<Symbol> {
         Self::catalog()
             .iter()
-            .map(|s| Symbol::new(s.symbol, s.company_name))
+            .map(|s| {
+                let kind = match s.exchange {
+                    "Crypto" => SymbolType::Crypto,
+                    "Index" => SymbolType::Index,
+                    "Forex" => SymbolType::Forex,
+                    "Synthetic" => SymbolType::Fund,
+                    _ => SymbolType::Stock,
+                };
+                Symbol::new(s.symbol, s.company_name).with_market(s.exchange, kind)
+            })
             .collect()
     }
 }

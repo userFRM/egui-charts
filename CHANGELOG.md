@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `Symbol::with_market` supplies an exchange and optional instrument kind for symbol search. Empty queries list the host catalog, with host-supplied recents first, category chips for available kinds and kind/exchange metadata in each row. Migration: `Symbol` struct literals need `exchange` and `symbol_type`, or use `Symbol::new`.
+
 - `TabBar::pills` renders rounded tab chips through the shared tab component; the indicator browser uses them.
 
 - `top_toolbar::buttons::toolbar_tooltip` attaches compact toolbar tips with optional platform shortcut chips. `Modal::rounding` and `Modal::fill` preserve per-dialog styling, and an empty modal title lets a search row serve as the header.

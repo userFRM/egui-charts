@@ -45,18 +45,46 @@
 
 use crate::ext::UiExt;
 use crate::icons::icons;
-use crate::model::Symbol;
+use crate::model::{Symbol, SymbolType};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::modal::Modal;
+use crate::ui_kit::tab_bar::{TabBar, TabLabel};
 use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2};
 
 // =============================================================================
 // Symbol Search Dialog
 // =============================================================================
+
+#[derive(Clone, Copy, PartialEq)]
+struct Category(Option<SymbolType>);
+
+impl TabLabel for Category {
+    fn tab_label(&self) -> &str {
+        match self.0 {
+            None => "All",
+            Some(SymbolType::Stock) => "Stocks",
+            Some(SymbolType::Index) => "Indices",
+            Some(SymbolType::Forex) => "Forex",
+            Some(SymbolType::Futures) => "Futures",
+            Some(SymbolType::Crypto) => "Crypto",
+            Some(SymbolType::Cfd) => "CFDs",
+            Some(SymbolType::Bond) => "Bonds",
+            Some(SymbolType::Fund) => "Funds",
+            Some(SymbolType::Option) => "Options",
+            Some(SymbolType::Commodity) => "Commodities",
+            Some(SymbolType::Economic) => "Economy",
+            Some(SymbolType::Dr) => "Depositary receipts",
+            Some(SymbolType::Right) => "Rights",
+            Some(SymbolType::Warrant) => "Warrants",
+            Some(SymbolType::Expression) => "Expressions",
+            Some(SymbolType::Spread) => "Spreads",
+        }
+    }
+}
 
 /// Configuration for symbol search dialog
 ///
@@ -82,7 +110,7 @@ pub struct SymbolSearchConfig {
     pub show_description: bool,
     /// Max number of results to display
     pub max_results: usize,
-    /// Min characters required before showing results
+    /// Min characters for a nonempty query; an empty query lists the catalog
     pub min_search_len: usize,
 }
 
@@ -134,6 +162,8 @@ pub struct SymbolSearchDialog {
     search_query: String,
     sel_idx: usize,
     filtered_symbols: Vec<Symbol>,
+    category: Category,
+    recent_symbols: Vec<String>,
     config: SymbolSearchConfig,
 }
 
@@ -151,6 +181,8 @@ impl SymbolSearchDialog {
             search_query: String::new(),
             sel_idx: 0,
             filtered_symbols: Vec::new(),
+            category: Category(None),
+            recent_symbols: Vec::new(),
             config: SymbolSearchConfig::default(),
         }
     }
@@ -174,6 +206,11 @@ impl SymbolSearchDialog {
         self
     }
 
+    /// Supply recent symbol names, newest first. Unknown names are ignored.
+    pub fn set_recent_symbols(&mut self, symbols: Vec<String>) {
+        self.recent_symbols = symbols;
+    }
+
     /// Opens the symbol search dialog
     ///
     /// Clears any previous search state and shows the dialog.
@@ -181,6 +218,7 @@ impl SymbolSearchDialog {
         self.is_open = true;
         self.search_query.clear();
         self.sel_idx = 0;
+        self.category = Category(None);
         self.filtered_symbols.clear();
     }
 
@@ -236,6 +274,7 @@ impl SymbolSearchDialog {
             return None;
         }
 
+        self.update_filtered_symbols(all_symbols);
         let mut sel_symbol = None;
         let mut should_close = false;
 
@@ -266,7 +305,8 @@ impl SymbolSearchDialog {
                     {
                         should_close = true;
                     }
-                    if response.changed() || self.filtered_symbols.is_empty() {
+                    if response.changed() {
+                        self.sel_idx = 0;
                         self.update_filtered_symbols(all_symbols);
                     }
                     if self.search_query.is_empty() && !response.has_focus() {
@@ -274,15 +314,36 @@ impl SymbolSearchDialog {
                     }
                 });
                 ui.add_space(16.0);
-                ui.label(RichText::new("All symbols").size(14.0).strong());
-                ui.add_space(16.0);
+                let mut categories = vec![Category(None)];
+                for symbol in all_symbols {
+                    let category = Category(symbol.symbol_type);
+                    if !categories.contains(&category) {
+                        categories.push(category);
+                    }
+                }
+                if !categories.contains(&self.category) {
+                    self.category = Category(None);
+                }
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    if TabBar::new(&categories, &mut self.category)
+                        .pills()
+                        .show(ui)
+                    {
+                        self.sel_idx = 0;
+                        self.update_filtered_symbols(all_symbols);
+                    }
+                });
+                ui.add_space(4.0);
 
                 // Results list
                 egui::ScrollArea::vertical()
                     .max_height(ui.available_height())
                     .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
                         if self.filtered_symbols.is_empty() {
-                            if self.search_query.len() < self.config.min_search_len {
+                            if !self.search_query.is_empty()
+                                && self.search_query.len() < self.config.min_search_len
+                            {
                                 ui.label(format!(
                                     "Type at least {} {} to search",
                                     self.config.min_search_len,
@@ -339,7 +400,7 @@ impl SymbolSearchDialog {
     }
 
     fn update_filtered_symbols(&mut self, all_symbols: &[Symbol]) {
-        if self.search_query.len() < self.config.min_search_len {
+        if !self.search_query.is_empty() && self.search_query.len() < self.config.min_search_len {
             self.filtered_symbols.clear();
             return;
         }
@@ -349,14 +410,25 @@ impl SymbolSearchDialog {
         self.filtered_symbols = all_symbols
             .iter()
             .filter(|symbol| {
-                symbol.name.to_lowercase().contains(&query_lower)
-                    || symbol.display_name.to_lowercase().contains(&query_lower)
+                (self.category.0.is_none() || symbol.symbol_type == self.category.0)
+                    && (symbol.name.to_lowercase().contains(&query_lower)
+                        || symbol.display_name.to_lowercase().contains(&query_lower))
             })
-            .take(self.config.max_results)
             .cloned()
             .collect();
 
-        self.sel_idx = 0;
+        if self.search_query.is_empty() {
+            self.filtered_symbols.sort_by_key(|symbol| {
+                self.recent_symbols
+                    .iter()
+                    .position(|name| name == &symbol.name)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        self.filtered_symbols.truncate(self.config.max_results);
+        self.sel_idx = self
+            .sel_idx
+            .min(self.filtered_symbols.len().saturating_sub(1));
     }
 
     fn render_symbol_item(&self, ui: &mut Ui, symbol: &Symbol, is_sel: bool) -> Response {
@@ -386,15 +458,61 @@ impl SymbolSearchDialog {
             egui::FontId::proportional(16.0),
             theme.ui.text,
         );
-        if self.config.show_description {
-            ui.painter().text(
-                Pos2::new(rect.left() + 48.0, rect.center().y + 10.0),
-                egui::Align2::LEFT_CENTER,
-                &symbol.display_name,
-                egui::FontId::proportional(12.0),
-                theme.ui.text_secondary,
+        let exchange = if self.config.show_exchange {
+            &symbol.exchange
+        } else {
+            ""
+        };
+        let exchange_galley = ui.painter().layout_no_wrap(
+            exchange.to_owned(),
+            egui::FontId::proportional(12.0),
+            theme.ui.text_secondary,
+        );
+        let right = rect.right() - exchange_galley.size().x - 12.0;
+        ui.painter().galley(
+            Pos2::new(right, rect.center().y - exchange_galley.size().y / 2.0),
+            exchange_galley,
+            theme.ui.text_secondary,
+        );
+        let kind = symbol
+            .symbol_type
+            .map(|kind| kind.to_string().to_uppercase())
+            .unwrap_or_default();
+        let badge =
+            ui.painter()
+                .layout_no_wrap(kind, egui::FontId::proportional(9.0), theme.ui.text);
+        let x = rect.left() + 48.0;
+        let desc = if self.config.show_description {
+            &symbol.display_name
+        } else {
+            ""
+        };
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            desc.to_owned(),
+            egui::FontId::proportional(12.0),
+            theme.ui.text_secondary,
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(
+            (right - x - badge.size().x - 24.0).max(0.0),
+        );
+        let desc = ui.painter().layout_job(job);
+        let badge_x = x + desc.size().x + 8.0;
+        ui.painter().galley(
+            Pos2::new(x, rect.center().y + 4.0),
+            desc,
+            theme.ui.text_secondary,
+        );
+        if symbol.symbol_type.is_some() {
+            let badge_rect = egui::Rect::from_min_size(
+                Pos2::new(badge_x, rect.center().y + 5.0),
+                badge.size() + Vec2::new(8.0, 2.0),
             );
+            ui.painter()
+                .rect_filled(badge_rect, 2.0, theme.ui.btn_bg_hover);
+            ui.painter()
+                .galley(badge_rect.min + Vec2::new(4.0, 1.0), badge, theme.ui.text);
         }
+
         response
     }
 }
@@ -872,14 +990,60 @@ mod tests {
 
     #[test]
     fn test_symbol_filtering() {
-        let mut dialog = SymbolSearchDialog::new();
-        let symbols = create_test_symbols();
-
-        dialog.search_query = "BTC".to_string();
-        dialog.update_filtered_symbols(&symbols);
-
-        assert_eq!(dialog.filtered_symbols.len(), 1);
-        assert_eq!(dialog.filtered_symbols[0].name, "BTCUSDT");
+        let symbols: Vec<_> = create_test_symbols()
+            .into_iter()
+            .map(|symbol| {
+                let kind = if symbol.name.ends_with("USDT") {
+                    SymbolType::Crypto
+                } else {
+                    SymbolType::Stock
+                };
+                symbol.with_market("Test", kind)
+            })
+            .collect();
+        for (query, category, recents, limit, expected) in [
+            ("BTC", None, vec![], 20, vec!["BTCUSDT"]),
+            (
+                "",
+                None,
+                vec![],
+                20,
+                vec!["BTCUSDT", "ETHUSDT", "AAPL", "TSLA"],
+            ),
+            (
+                "",
+                None,
+                vec!["TSLA", "missing", "ETHUSDT"],
+                2,
+                vec!["TSLA", "ETHUSDT"],
+            ),
+            (
+                "",
+                Some(SymbolType::Stock),
+                vec!["ETHUSDT", "TSLA"],
+                20,
+                vec!["TSLA", "AAPL"],
+            ),
+            ("bitcoin", Some(SymbolType::Stock), vec![], 20, vec![]),
+            ("a", None, vec![], 20, vec![]),
+        ] {
+            let mut dialog = SymbolSearchDialog::new();
+            dialog.config.min_search_len = 2;
+            dialog.config.max_results = limit;
+            dialog.category = Category(category);
+            dialog.set_recent_symbols(recents.into_iter().map(str::to_owned).collect());
+            dialog.search_query = query.to_owned();
+            dialog.update_filtered_symbols(&symbols);
+            assert_eq!(
+                dialog
+                    .filtered_symbols
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{query:?} / {category:?}"
+            );
+        }
     }
 
     #[test]

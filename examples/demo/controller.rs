@@ -557,6 +557,8 @@ impl DemoApp {
 
         // Symbol search (used by the pill, quick search, and compare entry).
         let symbols = DemoSymbol::symbols();
+        self.symbol_search
+            .set_recent_symbols(vec![self.state.symbol.clone()]);
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
             self.switch_symbol(&picked.name);
         }
