@@ -4,10 +4,13 @@ use egui::{Context, Ui, Vec2};
 
 use super::actions::{AlertData, AlertDialogAction};
 use super::config::AlertDialogConfig;
+use super::fields;
 use super::tabs::AlertTab;
 use crate::ext::UiExt;
 use crate::ui_kit::FormGrid;
+use crate::ui_kit::buttons::ButtonExt;
 use crate::ui_kit::dialog::{DialogFrame, dialog_header};
+use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::tab_bar::TabBar;
 
 /// Form data for price alerts
@@ -160,12 +163,17 @@ impl AlertDialog {
                     self.is_open = false;
                 }
 
+                let form = self.collect_form_data();
                 ui.right_aligned(|ui| {
                     ui.space_lg();
 
-                    // Create button (primary)
-                    if ui.primary_button("Create Alert").clicked()
-                        && let Some(data) = self.collect_form_data()
+                    // Create button (primary), disabled until every field parses
+                    let create = ui.add_enabled(form.is_ok(), "Create Alert".primary_button());
+                    if let Err(error) = &form {
+                        status_message(ui, MessageKind::Error, error);
+                    }
+                    if create.clicked()
+                        && let Ok(data) = form
                     {
                         action = AlertDialogAction::Create(data);
                         self.is_open = false;
@@ -337,11 +345,11 @@ impl AlertDialog {
             });
     }
 
-    fn collect_form_data(&self) -> Option<AlertData> {
+    fn collect_form_data(&self) -> Result<AlertData, &'static str> {
         match self.active_tab {
             AlertTab::Price => {
-                let price = self.price_form.price.parse().ok()?;
-                Some(AlertData::Price {
+                let price = fields::level(&self.price_form.price).ok_or("Enter a price")?;
+                Ok(AlertData::Price {
                     symbol: self.price_form.symbol.clone(),
                     price,
                     condition: self.price_form.condition.clone(),
@@ -351,7 +359,7 @@ impl AlertDialog {
             }
             AlertTab::Indicator => {
                 let threshold = if self.indicator_form.use_threshold {
-                    self.indicator_form.threshold.parse().ok()
+                    Some(fields::level(&self.indicator_form.threshold).ok_or("Enter a threshold")?)
                 } else {
                     None
                 };
@@ -362,7 +370,7 @@ impl AlertDialog {
                 } else {
                     None
                 };
-                Some(AlertData::Indicator {
+                Ok(AlertData::Indicator {
                     symbol: self.indicator_form.symbol.clone(),
                     indicator_a: self.indicator_form.indicator_a.clone(),
                     indicator_b,
@@ -373,15 +381,79 @@ impl AlertDialog {
                 })
             }
             AlertTab::Volume => {
-                let multiplier = self.volume_form.multiplier.parse().ok()?;
-                let lookback = self.volume_form.lookback.parse().ok()?;
-                Some(AlertData::Volume {
+                let multiplier = fields::multiplier(&self.volume_form.multiplier)
+                    .ok_or("Enter a multiplier above 0")?;
+                let lookback = fields::lookback(&self.volume_form.lookback)
+                    .ok_or("Enter a lookback of at least 1 bar")?;
+                Ok(AlertData::Volume {
                     symbol: self.volume_form.symbol.clone(),
                     multiplier,
                     lookback,
                     message: self.volume_form.message.clone(),
                 })
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_needs_a_valid_form() {
+        use AlertTab::{Indicator, Price, Volume};
+        type Edit = fn(&mut AlertDialog);
+        const PRICE: Result<(), &str> = Err("Enter a price");
+        const THRESHOLD: Result<(), &str> = Err("Enter a threshold");
+        const MULTIPLIER: Result<(), &str> = Err("Enter a multiplier above 0");
+        const LOOKBACK: Result<(), &str> = Err("Enter a lookback of at least 1 bar");
+        let rows: [(AlertTab, Edit, Result<(), &str>); 12] = [
+            (Price, |d| d.price_form.price = "NaN".into(), PRICE),
+            (Price, |d| d.price_form.price = "inf".into(), PRICE),
+            (Price, |d| d.price_form.price = "1e400".into(), PRICE),
+            (Price, |d| d.price_form.price.clear(), PRICE),
+            (Price, |d| d.price_form.price = "-12.5".into(), Ok(())),
+            (
+                Indicator,
+                |d| d.indicator_form.threshold = "1,5".into(),
+                THRESHOLD,
+            ),
+            (Indicator, |d| d.indicator_form.threshold.clear(), THRESHOLD),
+            (
+                Indicator,
+                |d| {
+                    d.indicator_form.use_threshold = false;
+                    d.indicator_form.indicator_a = "SMA(20)".into();
+                    d.indicator_form.indicator_b = "SMA(50)".into();
+                },
+                Ok(()),
+            ),
+            (
+                Volume,
+                |d| d.volume_form.multiplier = "-2".into(),
+                MULTIPLIER,
+            ),
+            (
+                Volume,
+                |d| d.volume_form.multiplier = "NaN".into(),
+                MULTIPLIER,
+            ),
+            (Volume, |d| d.volume_form.lookback = "0".into(), LOOKBACK),
+            (Volume, |_| {}, Ok(())),
+        ];
+        for (index, (tab, edit, expected)) in rows.into_iter().enumerate() {
+            let mut dialog = AlertDialog::new();
+            dialog.active_tab = tab;
+            dialog.price_form.price = "100".into();
+            dialog.indicator_form.use_threshold = true;
+            dialog.indicator_form.threshold = "1".into();
+            edit(&mut dialog);
+            assert_eq!(
+                dialog.collect_form_data().map(drop),
+                expected,
+                "row {index}"
+            );
         }
     }
 }

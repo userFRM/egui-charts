@@ -4,6 +4,7 @@
 use crate::ext::UiExt;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::dialogs::alert_dialog::fields;
 use crate::ui::model::{
     AlertCondition, AlertManager, AlertStatus, EventAlert, IndicatorAlert, IndicatorCondition,
     PriceAlert, VolumeAlert,
@@ -345,7 +346,13 @@ impl AlertsPanel {
                     let mut should_create = false;
                     let mut should_cancel = false;
                     ui.horizontal(|ui| {
-                        if ui.button("Create").clicked() {
+                        if ui
+                            .add_enabled(
+                                self.get_price_alert_form().is_some(),
+                                egui::Button::new("Create"),
+                            )
+                            .clicked()
+                        {
                             should_create = true;
                         }
                         if ui.button("Cancel").clicked() {
@@ -450,7 +457,13 @@ impl AlertsPanel {
                     let mut should_create = false;
                     let mut should_cancel = false;
                     ui.horizontal(|ui| {
-                        if ui.button("Create").clicked() {
+                        if ui
+                            .add_enabled(
+                                self.get_indicator_alert_form().is_some(),
+                                egui::Button::new("Create"),
+                            )
+                            .clicked()
+                        {
                             should_create = true;
                         }
                         if ui.button("Cancel").clicked() {
@@ -565,7 +578,13 @@ impl AlertsPanel {
                     let mut should_create = false;
                     let mut should_cancel = false;
                     ui.horizontal(|ui| {
-                        if ui.button("Create").clicked() {
+                        if ui
+                            .add_enabled(
+                                self.get_volume_alert_form().is_some(),
+                                egui::Button::new("Create"),
+                            )
+                            .clicked()
+                        {
                             should_create = true;
                         }
                         if ui.button("Cancel").clicked() {
@@ -685,7 +704,7 @@ impl AlertsPanel {
     /// Get the form data for creating a new price alert
     pub fn get_price_alert_form(&self) -> Option<(&str, f64, AlertCondition, &str, bool)> {
         self.new_price_alert.as_ref().and_then(|form| {
-            form.price.parse::<f64>().ok().map(|price| {
+            fields::level(&form.price).map(|price| {
                 (
                     form.symbol.as_str(),
                     price,
@@ -699,9 +718,8 @@ impl AlertsPanel {
 
     /// Get form data for indicator alert
     pub fn get_indicator_alert_form(&self) -> Option<IndicatorAlertFormData> {
-        self.new_indicator_alert
-            .as_ref()
-            .map(|form| IndicatorAlertFormData {
+        self.new_indicator_alert.as_ref().and_then(|form| {
+            Some(IndicatorAlertFormData {
                 indicator_a: form.indicator_a.clone(),
                 indicator_b: if form.use_threshold {
                     None
@@ -709,7 +727,7 @@ impl AlertsPanel {
                     Some(form.indicator_b.clone())
                 },
                 threshold: if form.use_threshold {
-                    form.threshold.parse().ok()
+                    Some(fields::level(&form.threshold)?)
                 } else {
                     None
                 },
@@ -726,13 +744,14 @@ impl AlertsPanel {
                 },
                 repeating: form.repeating,
             })
+        })
     }
 
     /// Get form data for volume alert
     pub fn get_volume_alert_form(&self) -> Option<VolumeAlertFormData> {
         self.new_volume_alert.as_ref().and_then(|form| {
-            let multiplier = form.multiplier.parse().ok()?;
-            let lookback = form.lookback.parse().ok()?;
+            let multiplier = fields::multiplier(&form.multiplier)?;
+            let lookback = fields::lookback(&form.lookback)? as usize;
             Some(VolumeAlertFormData {
                 symbol: form.symbol.clone(),
                 multiplier,
