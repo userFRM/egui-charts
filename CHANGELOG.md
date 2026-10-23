@@ -251,6 +251,7 @@ All notable changes to this project are documented in this file. The format is b
 - Widget bar icons are 20 px, as in the top toolbar, and their tooltips open to the left of the button instead of over the button below. The bottom bar's date button icon is 16 px.
 - `BarData::from_csv` requires the header row `ts,open,high,low,close,volume` (any case, spaces around names ignored) and returns an error naming it otherwise, instead of taking the first row as a header unchecked and reading the columns by position, which lost the first bar of a file without a header and swapped the columns of a file in another order. An empty file is refused too. Migration: give the file that header, with the columns in that order.
 - The `tauri_integration` example is now `data_source`, and its docs describe what it does: a chart with a sample `DataSource` in an eframe window. Its `fetch_historical` returns the newest bars before the requested end instead of the oldest, so scrolling back loads older bars instead of the start of the series again. Migration: run it with `cargo run --example data_source`.
+- Every CI job has a `timeout-minutes` limit, so a hung job fails in minutes instead of after the 6 hour default.
 
 ### Removed
 
