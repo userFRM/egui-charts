@@ -7,6 +7,7 @@
 //! - `DrawingProperties`: Expandable properties for drawings
 
 use crate::drawings::DrawingToolType;
+use crate::model::percent_change;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -360,11 +361,7 @@ impl DataWindowInfo {
     pub fn with_prev_close(mut self, prev: f64) -> Self {
         self.prev_close = prev;
         self.change = self.close - prev;
-        self.change_percent = if prev != 0.0 {
-            (self.change / prev) * 100.0
-        } else {
-            0.0
-        };
+        self.change_percent = percent_change(prev, self.close);
         self
     }
 
@@ -405,5 +402,12 @@ mod tests {
         assert!(info.is_bullish());
         assert_eq!(info.change, 10.0);
         assert!((info.change_percent - 0.501).abs() < 0.01);
+
+        // A negative previous close (a spread) reads with the sign of the change.
+        let spread = DataWindowInfo::new("SPREAD")
+            .with_ohlcv(-10.0, -4.0, -11.0, -5.0, 1.0)
+            .with_prev_close(-10.0);
+        assert_eq!(spread.change, 5.0);
+        assert_eq!(spread.change_percent, 50.0);
     }
 }

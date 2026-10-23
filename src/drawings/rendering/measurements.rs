@@ -3,6 +3,7 @@
 //! Includes: measure, price range, date range, date and price range, info line, and bars pattern.
 
 use crate::drawings::domain::Drawing;
+use crate::model::percent_change;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
@@ -98,11 +99,7 @@ impl Drawing {
             ));
 
             // Calculate percentage (price_diff already calculated above)
-            let price_pct = if cp1.price != 0.0 {
-                (price_diff / cp1.price) * 100.0
-            } else {
-                0.0
-            };
+            let price_pct = percent_change(cp1.price, cp2.price);
 
             // Draw arrow at top/bottom of vertical line based on direction
             if price_diff < 0.0 {
@@ -250,11 +247,7 @@ impl Drawing {
             let cp1 = &self.chart_points[0];
             let cp2 = &self.chart_points[1];
             let price_diff = cp2.price - cp1.price;
-            let price_pct = if cp1.price != 0.0 {
-                (price_diff / cp1.price) * 100.0
-            } else {
-                0.0
-            };
+            let price_pct = percent_change(cp1.price, cp2.price);
             format!("{price_diff:+.2} ({price_pct:+.2}%)")
         } else {
             let dy = (p2.y - p1.y).abs();
@@ -381,11 +374,7 @@ impl Drawing {
             let cp2 = &self.chart_points[1];
             let bars_diff = (cp2.bar_idx - cp1.bar_idx).abs() as i32;
             let price_diff = cp2.price - cp1.price;
-            let price_pct = if cp1.price != 0.0 {
-                (price_diff / cp1.price) * 100.0
-            } else {
-                0.0
-            };
+            let price_pct = percent_change(cp1.price, cp2.price);
             format!("{bars_diff} bars | {price_diff:+.2} ({price_pct:+.2}%)")
         } else {
             let dx = (p2.x - p1.x).abs();
@@ -427,11 +416,7 @@ impl Drawing {
             let cp2 = &self.chart_points[1];
             let bars_diff = (cp2.bar_idx - cp1.bar_idx).abs() as i32;
             let price_diff = cp2.price - cp1.price;
-            let price_pct = if cp1.price != 0.0 {
-                (price_diff / cp1.price) * 100.0
-            } else {
-                0.0
-            };
+            let price_pct = percent_change(cp1.price, cp2.price);
 
             // Calculate time duration (assuming 1 bar = 1 minute for intraday)
             let total_minutes = bars_diff;

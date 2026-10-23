@@ -8,6 +8,14 @@ use std::fmt;
 #[cfg(feature = "widget")]
 use std::rc::Rc;
 
+/// Percent change from `reference` to `value`, divided by the magnitude of the
+/// reference so it has the sign of the change for a negative reference too (spreads,
+/// some futures). A zero or non-finite reference or value gives 0.
+pub(crate) fn percent_change(reference: f64, value: f64) -> f64 {
+    let pct = (value - reference) / reference.abs() * 100.0;
+    if pct.is_finite() { pct } else { 0.0 }
+}
+
 /// Represents a single OHLCV (Open, High, Low, Close, Volume) bar
 ///
 /// Each bar represents a discrete time period of trading activity.
@@ -173,12 +181,10 @@ impl Bar {
         self.close - self.open
     }
 
-    /// Returns the percentage change ((close - open) / open * 100)
+    /// Returns the percentage change ((close - open) / |open| * 100), divided by the
+    /// magnitude of the open so it has the sign of the change for a negative open too
     pub fn change_percent(&self) -> f64 {
-        if self.open == 0.0 {
-            return 0.0;
-        }
-        (self.close - self.open) / self.open * 100.0
+        percent_change(self.open, self.close)
     }
 
     // ============= Body Position Helpers =============
@@ -399,10 +405,30 @@ mod tests {
         assert_eq!(bar.avg_price(), 102.5);
     }
 
+    /// The percentage has the sign of the price change for any reference sign;
+    /// a zero or non-finite reference or value gives 0 instead of inf or NaN.
     #[test]
-    fn test_change_percent() {
-        let bar = Bar::new(Utc::now(), 100.0, 110.0, 95.0, 105.0, 1000.0);
-        assert_eq!(bar.change_percent(), 5.0); // (105-100)/100 * 100
+    fn percent_change_follows_the_sign_of_the_change() {
+        let rows = [
+            // (reference, value, expected)
+            (100.0, 105.0, 5.0),
+            (10.0, 5.0, -50.0),
+            (-10.0, -5.0, 50.0),
+            (-5.0, -10.0, -100.0),
+            (0.0, 5.0, 0.0),
+            (f64::NAN, 5.0, 0.0),
+            (f64::INFINITY, 5.0, 0.0),
+            (5.0, f64::NAN, 0.0),
+        ];
+        for (reference, value, expected) in rows {
+            assert_eq!(
+                percent_change(reference, value),
+                expected,
+                "{reference} -> {value}"
+            );
+        }
+        let bar = Bar::new(Utc::now(), -10.0, -4.0, -11.0, -5.0, 1000.0);
+        assert_eq!(bar.change_percent(), 50.0);
     }
 
     /// A cached result follows the bars it was computed from: more volume on

@@ -1,7 +1,7 @@
 use super::context::{ChartMapping, RenderContext};
 use super::labels::price_decimals;
 use crate::config::{TooltipMode, TooltipOptions};
-use crate::model::Bar;
+use crate::model::{Bar, percent_change};
 use crate::scales::PriceMap;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
@@ -77,7 +77,7 @@ pub fn render_floating_tooltip(
     }
 
     if options.show_change {
-        let change_pct = (candle.close - candle.open) / candle.open * 100.0;
+        let change_pct = percent_change(candle.open, candle.close);
         let sign = if change_pct >= 0.0 { "+" } else { "" };
         rows.push(("Change", format!("{sign}{change_pct:.2}%")));
     }
@@ -183,7 +183,7 @@ pub fn render_tracking_tooltip(
     }
 
     if options.show_change {
-        let change_pct = (candle.close - candle.open) / candle.open * 100.0;
+        let change_pct = percent_change(candle.open, candle.close);
         let sign = if change_pct >= 0.0 { "+" } else { "" };
         let chart = painter.ctx().active_theme().chart;
         let change_color = if change_pct >= 0.0 {

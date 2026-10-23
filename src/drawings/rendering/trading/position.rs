@@ -2,7 +2,7 @@
 
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::{ChartView, bars_between};
-use crate::model::Bar;
+use crate::model::{Bar, percent_change};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -37,13 +37,7 @@ impl Drawing {
         // Returns are signed in the position's direction, so a level on the
         // losing side of the entry reads as negative.
         let side = if is_long { 1.0 } else { -1.0 };
-        let pct = |price: f64| {
-            if entry_price != 0.0 {
-                side * (price - entry_price) / entry_price * 100.0
-            } else {
-                0.0
-            }
-        };
+        let pct = |price: f64| side * percent_change(entry_price, price);
 
         // The tool spans from the entry bar to the right edge.
         let entry_bar = entry_at.bar_idx.round();

@@ -2,7 +2,7 @@
 
 use crate::drawings::domain::{ChartPoint, Drawing};
 use crate::drawings::rendering::{ChartView, bars_between};
-use crate::model::Bar;
+use crate::model::{Bar, percent_change};
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -21,11 +21,7 @@ impl Drawing {
         painter.line_segment([start, end], Stroke::new(self.stroke_width, self.color32()));
 
         let price_change = to.price - from.price;
-        let price_change_pct = if from.price != 0.0 {
-            price_change / from.price * 100.0
-        } else {
-            0.0
-        };
+        let price_change_pct = percent_change(from.price, to.price);
         let bar_count = (to.bar_idx - from.bar_idx).round();
 
         let (status, status_color) = match forecast_outcome(view.bars, from, to) {

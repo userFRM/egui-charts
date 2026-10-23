@@ -8,6 +8,8 @@
 //!
 //! Use [`PriceFormatterBuilder`] for a fluent construction API.
 
+use crate::model::percent_change;
+
 /// Trait for custom price formatting on the Y axis.
 ///
 /// Implement this trait to control how numeric prices are displayed as labels.
@@ -105,12 +107,9 @@ impl Default for PercentageFormatter {
 
 impl PriceFormatter for PercentageFormatter {
     fn format(&self, price: f64) -> String {
-        // A zero base has no defined percentage; emit a neutral 0% rather than
-        // dividing by zero and rendering "inf%"/"NaN%" on the axis.
-        if self.base_val.abs() < f64::EPSILON {
-            return format!("{:+.prec$}%", 0.0, prec = self.precision);
-        }
-        let percentage = ((price / self.base_val) * 100.0) - 100.0;
+        // A zero base has no defined percentage: percent_change gives a neutral 0%
+        // rather than "inf%"/"NaN%" on the axis.
+        let percentage = percent_change(self.base_val, price);
         format!("{:+.prec$}%", percentage, prec = self.precision)
     }
 
@@ -412,6 +411,14 @@ mod tests {
         let formatter = PercentageFormatter::default();
         assert_eq!(formatter.format(105.0), "+5.00%");
         assert_eq!(formatter.format(95.0), "-5.00%");
+
+        // A negative base (a spread) reads with the sign of the change.
+        let spread = PercentageFormatter {
+            precision: 2,
+            base_val: -10.0,
+        };
+        assert_eq!(spread.format(-5.0), "+50.00%");
+        assert_eq!(spread.format(-15.0), "-50.00%");
     }
 
     #[test]

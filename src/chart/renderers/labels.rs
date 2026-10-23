@@ -1,6 +1,6 @@
 use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
-use crate::model::Bar;
+use crate::model::{Bar, percent_change};
 use crate::scales::{
     PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkGenerator,
     TickMarkGeneratorConfig, TimeFormatter,
@@ -403,11 +403,7 @@ pub fn render_legend(
     // Change amount and percentage (if we have previous close)
     let reference_price = prev_close.unwrap_or(candle.open);
     let change = candle.close - reference_price;
-    let change_pct = if reference_price != 0.0 {
-        (change / reference_price) * 100.0
-    } else {
-        0.0
-    };
+    let change_pct = percent_change(reference_price, candle.close);
 
     let change_color = if change >= 0.0 {
         theme.ui.success

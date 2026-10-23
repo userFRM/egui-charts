@@ -3,6 +3,7 @@
 //! Displays symbol info, the last close and its change, bid/ask prices, and volume
 //! in a horizontal bar at the top of the chart area.
 
+use crate::model::percent_change;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -44,11 +45,7 @@ impl OhlcData {
     /// Create OHLC data and compute change values automatically
     pub fn new(open: f64, high: f64, low: f64, close: f64, volume: f64) -> Self {
         let change = close - open;
-        let change_percent = if open != 0.0 {
-            (change / open) * 100.0
-        } else {
-            0.0
-        };
+        let change_percent = percent_change(open, close);
         Self {
             open,
             high,
@@ -392,6 +389,20 @@ impl SymbolHeader {
             format!("{:.2}K", vol / 1_000.0)
         } else {
             format!("{vol:.0}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OhlcData;
+
+    #[test]
+    fn ohlc_change_percent_follows_the_sign_of_the_change() {
+        // (open, close, expected percent)
+        for (open, close, expected) in [(100.0, 105.0, 5.0), (-10.0, -5.0, 50.0), (0.0, 5.0, 0.0)] {
+            let data = OhlcData::new(open, close, open, close, 0.0);
+            assert_eq!(data.change_percent, expected, "{open} -> {close}");
         }
     }
 }
