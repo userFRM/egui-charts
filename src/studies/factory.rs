@@ -419,7 +419,12 @@ mod tests {
             Box::new(OhlcVolatility::new(l(0))),
             Box::new(VolatilityIndex::new(l(0))),
             Box::new(ZeroTrendVol::new(l(0))),
-            Box::new(CommoditySelectionIndex::new(l(0), x(1.0))),
+            Box::new(
+                CommoditySelectionIndex::new(l(0))
+                    .with_point_value(x(1.0))
+                    .with_margin(x(1.0))
+                    .with_commission(x(1.0)),
+            ),
             Box::new(OnBalanceVolume::new()),
             Box::new(VolumeWeightedAvgPrice::new().with_std_dev_bands([x(1.0), x(2.0)])),
             Box::new(AnchoredVWAP::new(0)),

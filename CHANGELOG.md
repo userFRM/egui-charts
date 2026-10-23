@@ -179,6 +179,7 @@ All notable changes to this project are documented in this file. The format is b
 - The True Strength Index starts its averages at the first price change instead of a made-up zero change on the first bar, which skewed the index for dozens of bars after its warm-up, and draws its signal line.
 - ADX starts from the mean of the first n DX values, as Wilder defines it, instead of n - 1 values divided by n, so it no longer reads low after its warm-up.
 - ATR with length 1 has a value on a single bar, its range, instead of none until a second bar exists.
+- The Commodity Selection Index computes Wilder's formula, ADXR * ATR(n) * (V / sqrt(M)) * (1 / (150 + C)) * 100, from the ADX and ATR studies, and starts on bar 3n - 1; it used a simple mean of true ranges, an unsmoothed DX and a division by the close. Migration: `CommoditySelectionIndex::new(period, cost)` is now `new(period)`; set the contract with `with_point_value`, `with_margin` and `with_commission`. The old cost parameter had no counterpart in Wilder's formula.
 
 ### Changed
 

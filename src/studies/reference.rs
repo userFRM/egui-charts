@@ -4,7 +4,7 @@
 //! `reference/expected.txt` holds one line per compared output line: the row name, the line index and one
 //! token per fixture bar, `-` where the study has no value. The values were computed once in exact
 //! rational arithmetic, with square roots to 40 digits, from the published definitions (Wilder 1978
-//! for RSI, ATR, the directional indicators and Parabolic SAR; Appel for MACD; Bollinger; Lambert
+//! for RSI, ATR, the directional indicators, the Commodity Selection Index and Parabolic SAR; Appel for MACD; Bollinger; Lambert
 //! 1980 for CCI; Quong and Soudack for MFI; Chande 1995 for Aroon; Hull; Chaikin; Lane; Williams;
 //! Donchian; Hosoda; ordinary least squares; population standard deviation) on the same fixture,
 //! and rounded to 12 significant digits.
@@ -20,10 +20,10 @@
 
 use crate::model::Bar;
 use crate::studies::{
-    ADX, ATR, Aroon, BollingerBands, CCI, ChaikinMoneyFlow, DirectionalMovement, DonchianChannels,
-    EMA, HMA, IchimokuCloud, Indicator, IndicatorValue, KeltnerChannels, LinearRegression,
-    LinearRegressionSlope, MACD, MoneyFlowIndex, ParabolicSAR, RSI, RateOfChange, SMA,
-    StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, WilliamsR,
+    ADX, ATR, Aroon, BollingerBands, CCI, ChaikinMoneyFlow, CommoditySelectionIndex,
+    DirectionalMovement, DonchianChannels, EMA, HMA, IchimokuCloud, Indicator, IndicatorValue,
+    KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD, MoneyFlowIndex, ParabolicSAR,
+    RSI, RateOfChange, SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, WilliamsR,
 };
 use chrono::{TimeZone, Utc};
 
@@ -89,6 +89,15 @@ fn staple_studies_match_published_definitions() {
         ("ATR(14)", Box::new(ATR::default())),
         ("ADX(14)", Box::new(ADX::default())),
         ("DMI(14)", Box::new(DirectionalMovement::default())),
+        (
+            "CSI(14,50,3000,25)",
+            Box::new(
+                CommoditySelectionIndex::new(14)
+                    .with_point_value(50.0)
+                    .with_margin(3000.0)
+                    .with_commission(25.0),
+            ),
+        ),
         ("CCI(20)", Box::new(CCI::default())),
         ("MFI(14)", Box::new(MoneyFlowIndex::default())),
         ("Keltner(20,10,2)", Box::new(KeltnerChannels::default())),

@@ -1,111 +1,69 @@
 use super::clamp_param;
 use crate::model::Bar;
-/// Commodity Selection Index (CSI)
-/// Developed by Welles Wilder
-/// Combines ADXR, ATR, and margin requirements for position sizing
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{ADX, ATR, Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Commodity Selection Index (CSI), J. Welles Wilder, New Concepts in Technical Trading Systems (1978).
+///
+/// `CSI = ADXR * ATR(n) * (V / sqrt(M)) * (1 / (150 + C)) * 100`, where `ADXR = (ADX + ADX n bars
+/// earlier) / 2`, `V` is the money value of a one-unit price move (the point value), `M` the margin
+/// and `C` the commission, both in money. With the defaults (V = 1, M = 1, C = 0) values are not
+/// comparable across instruments; set the contract with [`Self::with_point_value`],
+/// [`Self::with_margin`] and [`Self::with_commission`]. The first value is on bar `3n - 1`; earlier
+/// bars are `None`.
 #[derive(Clone)]
 pub struct CommoditySelectionIndex {
     /// Period for calculation
     period: usize,
-    /// Commission/cost factor
-    cost: f64,
+    point_value: f64,
+    margin: f64,
+    commission: f64,
     values: Vec<IndicatorValue>,
     color: Color32,
     visible: bool,
 }
 
 impl CommoditySelectionIndex {
-    /// `cost` is clamped into 0 to `f64::MAX`, NaN to 0.
-    pub fn new(period: usize, cost: f64) -> Self {
+    pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            cost: clamp_param(cost, 0.0, f64::MAX),
+            point_value: 1.0,
+            margin: 1.0,
+            commission: 0.0,
             values: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.brown, // Brown
             visible: true,
         }
     }
 
-    pub fn with_color(mut self, color: Color32) -> Self {
-        self.color = color;
+    /// Set `V`, the money value of a one-unit price move, 1 by default, clamped into 0 to `f64::MAX`, NaN to 0.
+    pub fn with_point_value(mut self, point_value: f64) -> Self {
+        self.point_value = clamp_param(point_value, 0.0, f64::MAX);
         self
     }
 
-    fn calculate_atr(&self, data: &[Bar], end_idx: usize) -> f64 {
-        if end_idx < self.period {
-            return 0.0;
-        }
-
-        let mut sum = 0.0;
-        for i in (end_idx - self.period + 1)..=end_idx {
-            let tr = if i > 0 {
-                let prev_close = data[i - 1].close;
-                let hl = data[i].high - data[i].low;
-                let hc = (data[i].high - prev_close).abs();
-                let lc = (data[i].low - prev_close).abs();
-                hl.max(hc).max(lc)
-            } else {
-                data[i].high - data[i].low
-            };
-            sum += tr;
-        }
-
-        sum / self.period as f64
+    /// Set `M`, the margin in money, 1 by default, clamped into `f64::EPSILON` to `f64::MAX`, NaN to `f64::EPSILON`.
+    pub fn with_margin(mut self, margin: f64) -> Self {
+        self.margin = clamp_param(margin, f64::EPSILON, f64::MAX);
+        self
     }
 
-    fn calculate_adx(&self, data: &[Bar], end_idx: usize) -> f64 {
-        if end_idx < self.period * 2 {
-            return 0.0;
-        }
+    /// Set `C`, the commission in money, 0 by default, clamped into 0 to `f64::MAX`, NaN to 0.
+    pub fn with_commission(mut self, commission: f64) -> Self {
+        self.commission = clamp_param(commission, 0.0, f64::MAX);
+        self
+    }
 
-        // Simplified ADX calculation for CSI
-        let mut plus_dm_sum = 0.0;
-        let mut minus_dm_sum = 0.0;
-        let mut tr_sum = 0.0;
-
-        for i in (end_idx - self.period + 1)..=end_idx {
-            if i > 0 {
-                let up_move = data[i].high - data[i - 1].high;
-                let down_move = data[i - 1].low - data[i].low;
-
-                if up_move > down_move && up_move > 0.0 {
-                    plus_dm_sum += up_move;
-                }
-                if down_move > up_move && down_move > 0.0 {
-                    minus_dm_sum += down_move;
-                }
-
-                let prev_close = data[i - 1].close;
-                let tr = (data[i].high - data[i].low)
-                    .max((data[i].high - prev_close).abs())
-                    .max((data[i].low - prev_close).abs());
-                tr_sum += tr;
-            }
-        }
-
-        if tr_sum == 0.0 {
-            return 0.0;
-        }
-
-        let plus_di = plus_dm_sum / tr_sum * 100.0;
-        let minus_di = minus_dm_sum / tr_sum * 100.0;
-
-        let di_sum = plus_di + minus_di;
-        if di_sum == 0.0 {
-            return 0.0;
-        }
-
-        (plus_di - minus_di).abs() / di_sum * 100.0 // Simplified - actual ADX is smoothed DX
+    pub fn with_color(mut self, color: Color32) -> Self {
+        self.color = color;
+        self
     }
 }
 
 impl Default for CommoditySelectionIndex {
     fn default() -> Self {
-        Self::new(14, 0.002) // 0.2% cost
+        Self::new(14)
     }
 }
 
@@ -121,32 +79,28 @@ impl Indicator for CommoditySelectionIndex {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        let min_period = self.period.saturating_mul(2);
-        if data.len() < min_period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
+        let mut adx = ADX::new(self.period);
+        adx.calculate(data);
+        let mut atr = ATR::new(self.period);
+        atr.calculate(data);
+        let adx_at = |i: usize| match adx.values().get(i) {
+            Some(IndicatorValue::Multiple(v)) => Some(v[0]),
+            _ => None,
+        };
+        let scale = self.point_value / self.margin.sqrt() / (150.0 + self.commission) * 100.0;
 
         for i in 0..data.len() {
-            if i < min_period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let atr = self.calculate_atr(data, i);
-                let adx = self.calculate_adx(data, i);
-
-                // CSI = ADXR * ATR14 / √(COMMISSION + COST)
-                // Simplified formula
-                let cost_factor = (self.cost).sqrt();
-                let csi = if cost_factor > 0.0 && data[i].close > 0.0 {
-                    adx * atr / cost_factor / data[i].close * 100.0
-                } else {
-                    0.0
-                };
-
-                self.values.push(IndicatorValue::Single(csi));
-            }
+            let adxr = i
+                .checked_sub(self.period)
+                .and_then(|lagged| Some((adx_at(i)? + adx_at(lagged)?) / 2.0));
+            let atr_i = match atr.values().get(i) {
+                Some(IndicatorValue::Single(v)) => Some(*v),
+                _ => None,
+            };
+            self.values.push(match (adxr, atr_i) {
+                (Some(adxr), Some(atr)) => IndicatorValue::Single(adxr * atr * scale),
+                _ => IndicatorValue::None,
+            });
         }
     }
 
@@ -307,17 +261,6 @@ mod tests {
             close,
             volume: 1000.0,
         }
-    }
-
-    #[test]
-    fn test_csi() {
-        let mut csi = CommoditySelectionIndex::new(5, 0.001);
-
-        let data: Vec<Bar> = (0..30).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        csi.calculate(&data);
-
-        assert_eq!(csi.values.len(), 30);
     }
 
     /// Reference values from M. H. Pee, "Trend Detection Index", Technical Analysis of Stocks &
