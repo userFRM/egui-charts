@@ -90,6 +90,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Opening chart settings now reads the chart's current candle, background and grid colours, so applying display controls preserves its appearance in every preset. ([#577](https://github.com/userFRM/egui-charts/issues/577))
+
 - The host Trade and Publish controls now explain their trading-account and chart-export actions on hover, using the shared toolbar tooltip.
 
 - The interval menu reserves a compact 200 px outer width until the custom form is expanded; the form retains its full input and unit controls.

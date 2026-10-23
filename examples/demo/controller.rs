@@ -513,6 +513,27 @@ impl DemoApp {
 
     // --- selection / context helpers --------------------------------------
 
+    fn open_chart_settings_dialog(&mut self) {
+        let config = self.chart.config();
+        let settings = &mut self.settings_state;
+        settings.candle_colors.body_up = config.bullish_color;
+        settings.candle_colors.body_down = config.bearish_color;
+        settings.candle_colors.border_up =
+            config.bullish_border_color.unwrap_or(config.bullish_color);
+        settings.candle_colors.border_down =
+            config.bearish_border_color.unwrap_or(config.bearish_color);
+        settings.candle_colors.wick_up = config
+            .bullish_wick_color
+            .unwrap_or(settings.candle_colors.border_up);
+        settings.candle_colors.wick_down = config
+            .bearish_wick_color
+            .unwrap_or(settings.candle_colors.border_down);
+        settings.chart_basic_styles.background_color = config.background_color;
+        settings.grid_lines.horizontal_color = config.grid_color;
+        settings.grid_lines.vertical_color = config.grid_color;
+        self.settings_dialog.open(settings.clone());
+    }
+
     fn open_series_settings_dialog(&mut self) {
         self.series_settings
             .open(SeriesId::MAIN, SeriesSettings::default());
@@ -922,7 +943,7 @@ impl DemoApp {
             TopToolbarAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
             TopToolbarAction::ToggleReplay => self.toggle_replay(),
             TopToolbarAction::OpenSettings => {
-                self.settings_dialog.open(self.settings_state.clone());
+                self.open_chart_settings_dialog();
             }
             TopToolbarAction::TakeScreenshot => {
                 self.export_dialog.close();
@@ -1507,7 +1528,7 @@ impl DemoApp {
     fn handle_chart_context(&mut self, action: ContextMenuAction) {
         match action {
             ContextMenuAction::OpenSettings => {
-                self.settings_dialog.open(self.settings_state.clone());
+                self.open_chart_settings_dialog();
             }
             ContextMenuAction::OpenSeriesSettings => self.open_series_settings_dialog(),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
@@ -1830,6 +1851,44 @@ fn apply_settings_state(state: &ChartSettingsState, config: &mut egui_charts::co
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn opening_settings_keeps_the_charts_current_colours() {
+        for (_, theme) in egui_charts::theme::presets() {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            let config = theme.apply_to_config(app.chart.config().clone());
+            *app.chart.config_mut() = config.clone();
+            app.handle_top_toolbar(&ctx, TopToolbarAction::OpenSettings);
+            let state = app.settings_state.clone();
+            apply_settings_state(&state, app.chart.config_mut());
+            let applied = app.chart.config();
+            assert_eq!(applied.grid_color, config.grid_color);
+            assert_eq!(applied.background_color, config.background_color);
+            assert_eq!(applied.bullish_color, config.bullish_color);
+            assert_eq!(applied.bearish_color, config.bearish_color);
+            assert_eq!(
+                applied
+                    .bullish_border_color
+                    .unwrap_or(applied.bullish_color),
+                config.bullish_border_color.unwrap_or(config.bullish_color)
+            );
+            assert_eq!(
+                applied
+                    .bearish_border_color
+                    .unwrap_or(applied.bearish_color),
+                config.bearish_border_color.unwrap_or(config.bearish_color)
+            );
+            assert_eq!(
+                applied.bullish_wick_color.unwrap_or(applied.bullish_color),
+                config.bullish_wick_color.unwrap_or(config.bullish_color)
+            );
+            assert_eq!(
+                applied.bearish_wick_color.unwrap_or(applied.bearish_color),
+                config.bearish_wick_color.unwrap_or(config.bearish_color)
+            );
+        }
+    }
 
     #[test]
     fn data_window_reads_the_hovered_rendered_element() {
