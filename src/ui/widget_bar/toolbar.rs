@@ -217,8 +217,10 @@ impl WidgetBar {
                             y += 1.0 + DESIGN_TOKENS.spacing.md;
                         }
                         for widget in self.widgets.iter().filter(|w| w.section == section) {
+                            let id = ui.scope_id().with(("host_widget", widget.id));
                             let response = self.render_icon_button(
                                 ui,
+                                id,
                                 &widget.icon,
                                 &widget.tooltip,
                                 self.active_widget == Some(widget.id),
@@ -237,8 +239,10 @@ impl WidgetBar {
                             .filter(|i| i.section() == section)
                             .filter(|&&i| control(i).is_none_or(|c| !self.hidden.contains(&c)))
                         {
+                            let id = ui.scope_id().with(("built_in", icon));
                             let response = self.render_icon_button(
                                 ui,
+                                id,
                                 icon.icon(),
                                 icon.tooltip(),
                                 self.active_icon == Some(*icon),
@@ -280,6 +284,7 @@ impl WidgetBar {
     fn render_icon_button(
         &self,
         ui: &mut Ui,
+        id: egui::Id,
         icon: &Icon,
         tooltip: &str,
         is_active: bool,
@@ -313,7 +318,7 @@ impl WidgetBar {
         );
 
         // Check for clicks
-        let btn_res = ui.allocate_rect(btn_rect, Sense::click());
+        let btn_res = ui.interact(btn_rect, id, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &btn_res);
         let is_hovered = btn_res.hovered();
         let is_pressed = btn_res.is_pointer_button_down_on();
@@ -394,7 +399,7 @@ mod tests {
     use egui::{Context, Event, PointerButton, RawInput, Shape};
 
     /// Host entries share the rail's grid and report their ids, without leaving a built-in
-    /// entry selected. Clicking an active entry closes it in either section.
+    /// entry selected. Clicks stay with the pressed id, and an active entry toggles closed.
     #[test]
     fn host_widgets_share_the_grid_and_report_their_own_clicks() {
         for theme in [Theme::light(), Theme::dark()] {
@@ -418,6 +423,12 @@ mod tests {
                         section: WidgetBarSection::Bottom,
                     },
                 ];
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
                 let frame = |bar: &mut WidgetBar, events| {
                     let mut origin = Pos2::ZERO;
                     let mut action = WidgetBarAction::None;
@@ -472,19 +483,69 @@ mod tests {
                 ] {
                     let pos = icons[index].center();
                     frame(&mut bar, vec![Event::PointerMoved(pos)]);
-                    let button = |pressed| Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Default::default(),
-                    };
-                    frame(&mut bar, vec![button(true)]);
-                    let (got, ..) = frame(&mut bar, vec![button(false)]);
+                    frame(&mut bar, vec![button(pos, true)]);
+                    let (got, ..) = frame(&mut bar, vec![button(pos, false)]);
                     assert_eq!(got, action);
                     assert_eq!(
                         (bar.active_icon, bar.active_widget),
                         (active_icon, active_widget)
                     );
+                }
+                let pos = icons[0].center();
+                frame(&mut bar, vec![Event::PointerMoved(pos)]);
+                frame(&mut bar, vec![button(pos, true)]);
+                bar.widgets[0].id = 99;
+                let (action, ..) = frame(&mut bar, vec![button(pos, false)]);
+                assert_eq!(
+                    action,
+                    WidgetBarAction::None,
+                    "a replacement is not the pressed entry"
+                );
+
+                bar.widgets.extend((100..120).map(|id| WidgetBarWidget {
+                    id,
+                    icon: embedded_icons::WATCHLIST,
+                    tooltip: format!("Panel {id}"),
+                    section: WidgetBarSection::Top,
+                }));
+                frame(&mut bar, vec![]);
+                frame(
+                    &mut bar,
+                    vec![Event::PointerMoved(Pos2::new(22.0, height / 2.0))],
+                );
+                frame(
+                    &mut bar,
+                    vec![Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: Vec2::new(0.0, -2000.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Wheel,
+                        modifiers: Default::default(),
+                    }],
+                );
+                for _ in 0..30 {
+                    frame(&mut bar, vec![]);
+                }
+                let (_, shapes, _) = frame(&mut bar, vec![]);
+                let help = shapes
+                    .iter()
+                    .rev()
+                    .find_map(|s| match &s.shape {
+                        Shape::Rect(r) if r.brush.is_some() => Some(r.rect),
+                        _ => None,
+                    })
+                    .expect("help remains reachable by scrolling");
+                assert!(
+                    help.top() >= 0.0 && help.bottom() <= height,
+                    "help: {help:?}"
+                );
+                let pos = help.center();
+                frame(&mut bar, vec![Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    let (action, ..) = frame(&mut bar, vec![button(pos, pressed)]);
+                    if !pressed {
+                        assert_eq!(action, WidgetBarAction::Clicked(RightBarIcon::Help));
+                    }
                 }
             }
         }
