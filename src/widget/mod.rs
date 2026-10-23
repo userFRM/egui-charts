@@ -127,6 +127,8 @@ use crate::chart::state;
 
 pub mod builder;
 mod feed;
+pub mod keyboard;
+pub use keyboard::{ShortcutMap, ShortcutRequest};
 mod frame;
 pub(crate) mod interaction;
 mod navigation;
@@ -201,6 +203,7 @@ pub struct Chart {
     pub(crate) config: ChartConfig,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
+    pub(crate) keyboard: keyboard::KeyboardState,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)

@@ -28,7 +28,7 @@ impl Default for KeyboardOptions {
     fn default() -> Self {
         Self {
             enabled: true,
-            pan_amount: 3.0,
+            pan_amount: 1.0,
             zoom_step: 0.2,
         }
     }
@@ -37,6 +37,37 @@ impl Default for KeyboardOptions {
 /// Keyboard actions that can be performed on the chart
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyboardAction {
+    /// Pan left by a page.
+    PanLeftFast,
+    /// Pan right by a page.
+    PanRightFast,
+    /// Undo the last edit.
+    Undo,
+    /// Redo the last undone edit.
+    Redo,
+    /// Open quick search.
+    OpenQuickSearch,
+    /// Open interval entry.
+    OpenIntervalSearch,
+    /// Go to a date.
+    GoToDate,
+    /// Take a chart snapshot.
+    Snapshot,
+    /// Invert the price scale.
+    InvertScale,
+    /// Copy the selected drawing.
+    CopyDrawing,
+    /// Paste a copied drawing.
+    PasteDrawing,
+    /// Hide or show drawings.
+    ToggleDrawings,
+    /// Maximize the active chart.
+    MaximizeChart,
+    /// Complete a multi-point drawing.
+    CompleteDrawing,
+    /// Select a drawing tool.
+    DrawingTool(crate::drawings::DrawingToolType),
+
     // Navigation
     /// Pan left (Left arrow)
     PanLeft,
@@ -64,7 +95,7 @@ pub enum KeyboardAction {
     FitContent,
     /// Reset zoom to default (R)
     ResetZoom,
-    /// Reset chart (includes zoom and pan) (Ctrl+R)
+    /// Reset chart (includes zoom and pan) (Alt+R)
     ResetChart,
 
     // Scale modes
@@ -155,124 +186,39 @@ impl KeyboardAction {
     /// Map egui key press to keyboard action
     /// Returns None if the key is not mapped
     pub fn from_key_press(key: Key, modifiers: &egui::Modifiers) -> Option<Self> {
-        match (
-            key,
-            modifiers.ctrl || modifiers.command,
-            modifiers.shift,
-            modifiers.alt,
-        ) {
-            // Navigation
-            (Key::ArrowLeft, false, _, false) => Some(Self::PanLeft),
-            (Key::ArrowRight, false, _, false) => Some(Self::PanRight),
-            (Key::ArrowUp, false, _, false) => Some(Self::PanUp),
-            (Key::ArrowDown, false, _, false) => Some(Self::PanDown),
-
-            // Zoom
-            (Key::Plus, false, _, false) | (Key::Equals, false, _, false) => Some(Self::ZoomIn),
-            (Key::Minus, false, _, false) => Some(Self::ZoomOut),
-            (Key::PageUp, false, _, false) => Some(Self::PageUp),
-            (Key::PageDown, false, _, false) => Some(Self::PageDown),
-
-            // Reset/Fit
-            (Key::Home, false, _, false) | (Key::End, false, _, false) => {
-                Some(Self::ScrollToRealTime)
-            }
-            (Key::F, false, _, false) => Some(Self::FitContent),
-            (Key::R, false, _, false) => Some(Self::ResetZoom),
-            (Key::R, true, _, false) => Some(Self::ResetChart),
-
-            // Scale modes
-            (Key::A, false, _, false) => Some(Self::ToggleAutoScale),
-            (Key::L, false, _, false) | (Key::L, false, false, true) => Some(Self::ToggleLogScale),
-
-            // Visual toggles
-            (Key::C, false, _, false) => Some(Self::ToggleCrosshair),
-            (Key::G, false, _, false) | (Key::G, false, false, true) => Some(Self::ToggleGrid),
-            (Key::V, false, _, false) => Some(Self::ToggleVolume),
-
-            // Chart type
-            (Key::T, false, _, false) => Some(Self::CycleChartType),
-
-            // Drawing tools
-            (Key::D, false, _, false) => Some(Self::ToggleDrawingMode),
-            (Key::Delete, false, _, false) | (Key::Backspace, false, _, false) => {
-                Some(Self::DeleteSelectedDrawing)
-            }
-            (Key::Escape, false, _, false) => Some(Self::Cancel),
-
-            // Timeframe shortcuts (number keys, no modifiers)
-            (Key::Num1, false, false, false) => Some(Self::SetTimeframe1Min),
-            (Key::Num2, false, false, false) => Some(Self::SetTimeframe5Min),
-            (Key::Num3, false, false, false) => Some(Self::SetTimeframe15Min),
-            (Key::Num4, false, false, false) => Some(Self::SetTimeframe30Min),
-            (Key::Num5, false, false, false) => Some(Self::SetTimeframe1Hour),
-            (Key::Num6, false, false, false) => Some(Self::SetTimeframe4Hour),
-            (Key::Num7, false, false, false) => Some(Self::SetTimeframeDaily),
-            (Key::Num8, false, false, false) => Some(Self::SetTimeframeWeekly),
-            (Key::Num9, false, false, false) => Some(Self::SetTimeframeMonthly),
-
-            // App-level shortcuts
-            (Key::A, false, false, true) => Some(Self::CreateAlert),
-            (Key::Slash, false, false, false) => Some(Self::OpenIndicatorSearch),
-            (Key::S, false, false, true) => Some(Self::OpenSymbolSearch),
-            (Key::S, true, false, false) => Some(Self::SaveLayout),
-            (Key::Slash, false, true, false) => Some(Self::ShowKeyboardHelp), // ? = Shift+/
-
-            // Multi-chart focus cycling
-            (Key::Tab, false, false, false) => Some(Self::CycleChartFocus),
-            (Key::Tab, false, true, false) => Some(Self::CycleChartFocusBack),
-
-            _ => None,
-        }
+        Self::all_by_category()
+            .into_iter()
+            .flat_map(|(_, actions)| actions)
+            .find(|action| {
+                action.shortcuts().iter().any(|shortcut| {
+                    shortcut.logical_key == key && modifiers.matches_exact(shortcut.modifiers)
+                })
+            })
     }
 
-    /// Get a human-readable desc of the keyboard shortcut
-    pub fn desc(&self) -> &'static str {
-        match self {
-            Self::PanLeft => "Pan left (Left)",
-            Self::PanRight => "Pan right (Right)",
-            Self::PanUp => "Pan up (Up)",
-            Self::PanDown => "Pan down (Down)",
-            Self::ZoomIn => "Zoom in (+/=)",
-            Self::ZoomOut => "Zoom out (-)",
-            Self::PageUp => "Zoom in more (Page Up)",
-            Self::PageDown => "Zoom out more (Page Down)",
-            Self::ScrollToRealTime => "Jump to latest (Home/End)",
-            Self::FitContent => "Fit to screen (F)",
-            Self::ResetZoom => "Reset zoom (R)",
-            Self::ResetChart => "Reset chart (Ctrl+R)",
-            Self::ToggleAutoScale => "Toggle auto-scale (A)",
-            Self::ToggleLogScale => "Toggle log scale (L)",
-            Self::TogglePercentageScale => "Toggle percentage scale (%)",
-            Self::ToggleCrosshair => "Toggle crosshair (C)",
-            Self::ToggleGrid => "Toggle grid (G)",
-            Self::ToggleVolume => "Toggle volume (V)",
-            Self::CycleChartType => "Cycle chart type (T)",
-            Self::ToggleDrawingMode => "Toggle drawing mode (D)",
-            Self::DeleteSelectedDrawing => "Delete drawing (Del)",
-            Self::Cancel => "Cancel (Esc)",
-            Self::SetTimeframe1Min => "1-minute timeframe (1)",
-            Self::SetTimeframe5Min => "5-minute timeframe (2)",
-            Self::SetTimeframe15Min => "15-minute timeframe (3)",
-            Self::SetTimeframe30Min => "30-minute timeframe (4)",
-            Self::SetTimeframe1Hour => "1-hour timeframe (5)",
-            Self::SetTimeframe4Hour => "4-hour timeframe (6)",
-            Self::SetTimeframeDaily => "Daily timeframe (7)",
-            Self::SetTimeframeWeekly => "Weekly timeframe (8)",
-            Self::SetTimeframeMonthly => "Monthly timeframe (9)",
-            Self::CreateAlert => "Create alert (Alt+A)",
-            Self::OpenIndicatorSearch => "Open indicators (/)",
-            Self::OpenSymbolSearch => "Symbol search (Alt+S)",
-            Self::SaveLayout => "Save layout (Ctrl+S)",
-            Self::ShowKeyboardHelp => "Keyboard shortcuts (?)",
-            Self::CycleChartFocus => "Next chart (Tab)",
-            Self::CycleChartFocusBack => "Previous chart (Shift+Tab)",
-        }
+    /// Human-readable description of the action. Use `shortcuts` for its bound keys.
+    pub fn desc(&self) -> &str {
+        self.label()
     }
 
     /// Human-readable label for the action (used in shortcuts dialog)
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> &str {
         match self {
+            Self::PanLeftFast => "Pan left by a page",
+            Self::PanRightFast => "Pan right by a page",
+            Self::Undo => "Undo the last edit",
+            Self::Redo => "Redo the last undone edit",
+            Self::OpenQuickSearch => "Open quick search",
+            Self::OpenIntervalSearch => "Open interval entry",
+            Self::GoToDate => "Go to a date",
+            Self::Snapshot => "Take a chart snapshot",
+            Self::InvertScale => "Invert the price scale",
+            Self::CopyDrawing => "Copy the selected drawing",
+            Self::PasteDrawing => "Paste a copied drawing",
+            Self::ToggleDrawings => "Hide or show drawings",
+            Self::MaximizeChart => "Maximize the active chart",
+            Self::CompleteDrawing => "Complete drawing",
+            Self::DrawingTool(tool) => tool.as_str(),
             Self::PanLeft => "Pan left",
             Self::PanRight => "Pan right",
             Self::PanUp => "Pan up",
@@ -324,17 +270,93 @@ impl KeyboardAction {
         match self {
             Self::PanLeft => const { &[key(Key::ArrowLeft)] },
             Self::PanRight => const { &[key(Key::ArrowRight)] },
-            Self::ZoomIn => const { &[key(Key::Plus), key(Key::Equals)] },
-            Self::ZoomOut => const { &[key(Key::Minus)] },
+            Self::PanLeftFast => {
+                const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::ArrowLeft)] }
+            }
+            Self::PanRightFast => {
+                const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::ArrowRight)] }
+            }
+            Self::ZoomIn => {
+                const {
+                    &[
+                        key(Key::Plus),
+                        key(Key::Equals),
+                        KeyboardShortcut::new(Modifiers::COMMAND, Key::ArrowUp),
+                    ]
+                }
+            }
+            Self::ZoomOut => {
+                const {
+                    &[
+                        key(Key::Minus),
+                        KeyboardShortcut::new(Modifiers::COMMAND, Key::ArrowDown),
+                    ]
+                }
+            }
             Self::PageUp => const { &[key(Key::PageUp)] },
             Self::PageDown => const { &[key(Key::PageDown)] },
-            Self::ScrollToRealTime => const { &[key(Key::Home)] },
-            Self::FitContent => const { &[key(Key::F)] },
-            Self::ResetChart => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::R)] },
+            Self::ScrollToRealTime => const { &[key(Key::Home), key(Key::End)] },
+
+            Self::ResetChart => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::R)] },
+
+            Self::ToggleLogScale => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::L)] },
+            Self::TogglePercentageScale => {
+                const { &[KeyboardShortcut::new(Modifiers::ALT, Key::P)] }
+            }
+            Self::InvertScale => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::I)] },
             Self::CreateAlert => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::A)] },
+            Self::OpenIndicatorSearch => const { &[key(Key::Slash)] },
+            Self::OpenQuickSearch => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::K)] },
+            Self::GoToDate => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::G)] },
+            Self::Snapshot => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::S)] },
+            Self::Undo => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)] },
+            Self::Redo => {
+                const {
+                    &[
+                        KeyboardShortcut::new(Modifiers::COMMAND, Key::Y),
+                        KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z),
+                    ]
+                }
+            }
+            Self::CopyDrawing => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::C)] },
+            Self::PasteDrawing => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::V)] },
+            Self::ToggleDrawings => {
+                const {
+                    &[KeyboardShortcut::new(
+                        Modifiers::COMMAND.plus(Modifiers::ALT),
+                        Key::H,
+                    )]
+                }
+            }
+            Self::MaximizeChart => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::Enter)] },
+            Self::CycleChartFocus => const { &[key(Key::Tab)] },
+            Self::CycleChartFocusBack => {
+                const { &[KeyboardShortcut::new(Modifiers::SHIFT, Key::Tab)] }
+            }
             Self::DeleteSelectedDrawing => const { &[key(Key::Delete), key(Key::Backspace)] },
             Self::Cancel => const { &[key(Key::Escape)] },
-            Self::ShowKeyboardHelp => const { &[key(Key::Questionmark), key(Key::F1)] },
+            Self::CompleteDrawing => const { &[key(Key::Enter)] },
+            Self::ShowKeyboardHelp => {
+                const {
+                    &[
+                        KeyboardShortcut::new(Modifiers::COMMAND, Key::Slash),
+                        key(Key::Questionmark),
+                        key(Key::F1),
+                    ]
+                }
+            }
+            Self::DrawingTool(crate::drawings::DrawingToolType::TrendLine) => {
+                const { &[KeyboardShortcut::new(Modifiers::ALT, Key::T)] }
+            }
+            Self::DrawingTool(crate::drawings::DrawingToolType::HorizontalLine) => {
+                const { &[KeyboardShortcut::new(Modifiers::ALT, Key::H)] }
+            }
+            Self::DrawingTool(crate::drawings::DrawingToolType::VerticalLine) => {
+                const { &[KeyboardShortcut::new(Modifiers::ALT, Key::V)] }
+            }
+            Self::DrawingTool(crate::drawings::DrawingToolType::FibonacciRetracement) => {
+                const { &[KeyboardShortcut::new(Modifiers::ALT, Key::F)] }
+            }
             _ => &[],
         }
     }
@@ -345,65 +367,111 @@ impl KeyboardAction {
         self.shortcuts().first().copied()
     }
 
-    /// Short display text for the action's keys. The shortcuts dialog and the menus use
-    /// [`shortcuts`](Self::shortcuts).
+    /// Short display text for default bindings. Menus format `shortcuts` for the platform.
     pub fn shortcut_key(&self) -> &'static str {
         match self {
             Self::PanLeft => "←",
             Self::PanRight => "→",
-            Self::PanUp => "↑",
-            Self::PanDown => "↓",
-            Self::ZoomIn => "+ / =",
-            Self::ZoomOut => "-",
+            Self::PanLeftFast => "Ctrl+Left",
+            Self::PanRightFast => "Ctrl+Right",
+            Self::ZoomIn => "+ / = / Ctrl+Up",
+            Self::ZoomOut => "- / Ctrl+Down",
             Self::PageUp => "Page Up",
             Self::PageDown => "Page Down",
             Self::ScrollToRealTime => "Home / End",
-            Self::FitContent => "F",
-            Self::ResetZoom => "R",
-            Self::ResetChart => "Ctrl+R",
-            Self::ToggleAutoScale => "A",
-            Self::ToggleLogScale => "L",
-            Self::TogglePercentageScale => "%",
-            Self::ToggleCrosshair => "C",
-            Self::ToggleGrid => "G",
-            Self::ToggleVolume => "V",
-            Self::CycleChartType => "T",
-            Self::ToggleDrawingMode => "D",
+            Self::ResetChart => "Alt+R",
+            Self::ToggleLogScale => "Alt+L",
+            Self::TogglePercentageScale => "Alt+P",
+            Self::InvertScale => "Alt+I",
+            Self::Undo => "Ctrl+Z",
+            Self::Redo => "Ctrl+Y / Ctrl+Shift+Z",
+            Self::CopyDrawing => "Ctrl+C",
+            Self::PasteDrawing => "Ctrl+V",
+            Self::ToggleDrawings => "Ctrl+Alt+H",
+            Self::CreateAlert => "Alt+A",
+            Self::OpenQuickSearch => "Ctrl+K",
+            Self::OpenIndicatorSearch => "/",
+            Self::GoToDate => "Alt+G",
+            Self::Snapshot => "Alt+S",
+            Self::MaximizeChart => "Alt+Enter",
             Self::DeleteSelectedDrawing => "Del / Backspace",
             Self::Cancel => "Esc",
-            Self::SetTimeframe1Min => "1",
-            Self::SetTimeframe5Min => "2",
-            Self::SetTimeframe15Min => "3",
-            Self::SetTimeframe30Min => "4",
-            Self::SetTimeframe1Hour => "5",
-            Self::SetTimeframe4Hour => "6",
-            Self::SetTimeframeDaily => "7",
-            Self::SetTimeframeWeekly => "8",
-            Self::SetTimeframeMonthly => "9",
-            Self::CreateAlert => "Alt+A",
-            Self::OpenIndicatorSearch => "/",
-            Self::OpenSymbolSearch => "Alt+S",
-            Self::SaveLayout => "Ctrl+S",
-            Self::ShowKeyboardHelp => "?",
+            Self::CompleteDrawing => "Enter",
+            Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
             Self::CycleChartFocus => "Tab",
             Self::CycleChartFocusBack => "Shift+Tab",
+            Self::DrawingTool(crate::drawings::DrawingToolType::TrendLine) => "Alt+T",
+            Self::DrawingTool(crate::drawings::DrawingToolType::HorizontalLine) => "Alt+H",
+            Self::DrawingTool(crate::drawings::DrawingToolType::VerticalLine) => "Alt+V",
+            Self::DrawingTool(crate::drawings::DrawingToolType::FibonacciRetracement) => "Alt+F",
+            _ => "",
         }
     }
 
     /// The actions with a bound key, grouped by category (for the shortcuts dialog).
     pub fn all_by_category() -> Vec<(&'static str, Vec<KeyboardAction>)> {
+        use crate::drawings::DrawingToolType;
         vec![
-            ("Navigation", vec![Self::PanLeft, Self::PanRight]),
+            (
+                "Navigation",
+                vec![
+                    Self::PanLeft,
+                    Self::PanRight,
+                    Self::PanLeftFast,
+                    Self::PanRightFast,
+                ],
+            ),
             (
                 "Zoom",
                 vec![Self::ZoomIn, Self::ZoomOut, Self::PageUp, Self::PageDown],
             ),
-            ("View", vec![Self::ScrollToRealTime, Self::FitContent]),
+            (
+                "View",
+                vec![
+                    Self::ScrollToRealTime,
+                    Self::FitContent,
+                    Self::ResetChart,
+                    Self::ToggleLogScale,
+                    Self::TogglePercentageScale,
+                    Self::InvertScale,
+                ],
+            ),
+            (
+                "Editing",
+                vec![
+                    Self::Undo,
+                    Self::Redo,
+                    Self::CopyDrawing,
+                    Self::PasteDrawing,
+                    Self::ToggleDrawings,
+                ],
+            ),
             (
                 "Drawing tools",
-                vec![Self::DeleteSelectedDrawing, Self::Cancel],
+                vec![
+                    Self::DrawingTool(DrawingToolType::TrendLine),
+                    Self::DrawingTool(DrawingToolType::HorizontalLine),
+                    Self::DrawingTool(DrawingToolType::VerticalLine),
+                    Self::DrawingTool(DrawingToolType::FibonacciRetracement),
+                    Self::DeleteSelectedDrawing,
+                    Self::Cancel,
+                    Self::CompleteDrawing,
+                ],
             ),
-            ("App", vec![Self::ShowKeyboardHelp]),
+            (
+                "App",
+                vec![
+                    Self::OpenQuickSearch,
+                    Self::OpenIndicatorSearch,
+                    Self::CreateAlert,
+                    Self::GoToDate,
+                    Self::Snapshot,
+                    Self::MaximizeChart,
+                    Self::CycleChartFocus,
+                    Self::CycleChartFocusBack,
+                    Self::ShowKeyboardHelp,
+                ],
+            ),
         ]
     }
 }

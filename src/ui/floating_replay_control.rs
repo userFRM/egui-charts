@@ -286,7 +286,11 @@ impl FloatingReplayControl {
             .memory(|m| m.focused())
             .and_then(|id| ctx.read_response(id))
             .is_some_and(|r| r.layer_id.order != egui::Order::Background);
-        if ctx.text_edit_focused() || focus_off_background || egui::Popup::is_any_open(ctx) {
+        if crate::widget::keyboard::shortcuts_suppressed(ctx)
+            || ctx.text_edit_focused()
+            || focus_off_background
+            || egui::Popup::is_any_open(ctx)
+        {
             return ReplayControlAction::None;
         }
         let play_or_pause = if self.state.is_playing {

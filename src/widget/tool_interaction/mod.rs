@@ -171,11 +171,6 @@ impl Chart {
             );
         }
 
-        // Handle keyboard shortcuts for drawing manipulation
-        if self.chart_options.keyboard.enabled {
-            selection::handle_keyboard_shortcuts(ui, response, drawing_manager);
-        }
-
         drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);
 
         // Render existing drawings against the chart's bars

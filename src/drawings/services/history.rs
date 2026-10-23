@@ -43,6 +43,13 @@ use std::collections::HashSet;
 /// Command representing a reversible drawing operation
 #[derive(Debug, Clone)]
 pub enum DrawingCommand {
+    /// All drawings before one bulk edit, including their list order.
+    Snapshot {
+        /// Drawings at this side of the bulk edit, in their original list order.
+        drawings: Vec<Drawing>,
+        /// Drawings owned by this edit; later host loads remain independent of it.
+        ids: Vec<usize>,
+    },
     /// A drawing was added
     Add(Drawing),
     /// A drawing was deleted
@@ -60,6 +67,7 @@ impl DrawingCommand {
     /// Get the drawing ID affected by this command
     pub fn drawing_id(&self) -> usize {
         match self {
+            DrawingCommand::Snapshot { ids, .. } => ids.first().copied().unwrap_or(0),
             DrawingCommand::Add(d) => d.id,
             DrawingCommand::Delete(d) => d.id,
             DrawingCommand::Modify { id, .. } => *id,
@@ -69,6 +77,11 @@ impl DrawingCommand {
     /// Shift the bar indices at or after `from` for bars inserted in front of them
     pub fn shift_bar_indices(&mut self, from: f32, delta: f32) {
         match self {
+            DrawingCommand::Snapshot { drawings, .. } => {
+                for drawing in drawings {
+                    drawing.shift_bar_indices(from, delta);
+                }
+            }
             DrawingCommand::Add(d) | DrawingCommand::Delete(d) => {
                 d.shift_bar_indices(from, delta);
             }
@@ -88,6 +101,7 @@ pub struct HistoryService {
     redo_stack: Vec<DrawingCommand>,
     /// Maximum stack size (0 = unlimited)
     max_stack_size: usize,
+    affected_ids: Vec<usize>,
 }
 
 impl HistoryService {
@@ -96,6 +110,7 @@ impl HistoryService {
         Self {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            affected_ids: Vec::new(),
             max_stack_size: 100, // Reasonable default
         }
     }
@@ -105,8 +120,31 @@ impl HistoryService {
         Self {
             undo_stack: Vec::with_capacity(max_size.min(100)),
             redo_stack: Vec::with_capacity(max_size.min(100)),
+            affected_ids: Vec::new(),
             max_stack_size: max_size,
         }
+    }
+
+    /// Record all drawings before a bulk edit, as one undo step.
+    pub fn push_snapshot(&mut self, drawings: Vec<Drawing>) {
+        if !drawings.is_empty() {
+            let ids = drawings.iter().map(|drawing| drawing.id).collect();
+            self.push_command(DrawingCommand::Snapshot { drawings, ids });
+        }
+    }
+
+    /// Ids touched by the most recent undo or redo, for host synchronization.
+    pub(crate) fn affected_ids(&self) -> &[usize] {
+        &self.affected_ids
+    }
+
+    fn track_affected(&mut self, command: &DrawingCommand) {
+        self.affected_ids = match command {
+            DrawingCommand::Snapshot { ids, .. } => ids.clone(),
+            _ => vec![command.drawing_id()],
+        };
+        self.affected_ids.sort_unstable();
+        self.affected_ids.dedup();
     }
 
     /// Record that a drawing was added
@@ -142,9 +180,20 @@ impl HistoryService {
     /// Returns the ID of the affected drawing, if any.
     pub fn undo(&mut self, drawings: &mut Vec<Drawing>) -> Option<usize> {
         let command = self.undo_stack.pop()?;
-        let affected_id = command.drawing_id();
+        self.track_affected(&command);
+        let affected_id = *self.affected_ids.first()?;
 
         match command {
+            DrawingCommand::Snapshot {
+                drawings: before,
+                ids,
+            } => {
+                let current = restore_snapshot(drawings, before, &ids);
+                self.redo_stack.push(DrawingCommand::Snapshot {
+                    drawings: current,
+                    ids,
+                });
+            }
             DrawingCommand::Add(drawing) => {
                 // Undo add = remove the drawing
                 drawings.retain(|d| d.id != drawing.id);
@@ -176,9 +225,20 @@ impl HistoryService {
     /// Returns the ID of the affected drawing, if any.
     pub fn redo(&mut self, drawings: &mut Vec<Drawing>) -> Option<usize> {
         let command = self.redo_stack.pop()?;
-        let affected_id = command.drawing_id();
+        self.track_affected(&command);
+        let affected_id = *self.affected_ids.first()?;
 
         match command {
+            DrawingCommand::Snapshot {
+                drawings: before,
+                ids,
+            } => {
+                let current = restore_snapshot(drawings, before, &ids);
+                self.undo_stack.push(DrawingCommand::Snapshot {
+                    drawings: current,
+                    ids,
+                });
+            }
             DrawingCommand::Add(drawing) => {
                 // Redo add = add the drawing back
                 drawings.push(drawing.clone());
@@ -233,6 +293,7 @@ impl HistoryService {
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.affected_ids.clear();
     }
 
     /// Shift the bar indices at or after `from` in history (for bars inserted in front of them)
@@ -256,13 +317,16 @@ impl HistoryService {
     /// what redo would restore, so it is the wrong place to enforce live-id
     /// membership.
     pub fn prune(&mut self, existing_ids: &HashSet<usize>) {
-        self.undo_stack
-            .retain(|cmd| existing_ids.contains(&cmd.drawing_id()));
+        self.undo_stack.retain(|cmd| {
+            matches!(cmd, DrawingCommand::Snapshot { .. })
+                || existing_ids.contains(&cmd.drawing_id())
+        });
     }
 
     /// Get description of the last undoable action (for UI)
     pub fn last_undo_description(&self) -> Option<&'static str> {
         self.undo_stack.last().map(|cmd| match cmd {
+            DrawingCommand::Snapshot { .. } => "Edit Drawings",
             DrawingCommand::Add(_) => "Add Drawing",
             DrawingCommand::Delete(_) => "Delete Drawing",
             DrawingCommand::Modify { .. } => "Modify Drawing",
@@ -272,11 +336,26 @@ impl HistoryService {
     /// Get description of the last redoable action (for UI)
     pub fn last_redo_description(&self) -> Option<&'static str> {
         self.redo_stack.last().map(|cmd| match cmd {
+            DrawingCommand::Snapshot { .. } => "Edit Drawings",
             DrawingCommand::Add(_) => "Add Drawing",
             DrawingCommand::Delete(_) => "Delete Drawing",
             DrawingCommand::Modify { .. } => "Modify Drawing",
         })
     }
+}
+
+// Host-restored drawings added after a bulk command are outside that command's history.
+fn restore_snapshot(
+    live: &mut Vec<Drawing>,
+    mut before: Vec<Drawing>,
+    ids: &[usize],
+) -> Vec<Drawing> {
+    let (current, independent): (Vec<_>, Vec<_>) = live
+        .drain(..)
+        .partition(|drawing| ids.contains(&drawing.id));
+    before.extend(independent);
+    *live = before;
+    current
 }
 
 #[cfg(test)]
@@ -308,7 +387,13 @@ mod tests {
     #[test]
     fn undo_and_redo_restore_each_command() {
         type Record = fn(&mut HistoryService);
-        let cases: [(&str, Vec<Drawing>, Vec<Drawing>, Record); 3] = [
+        let cases: [(&str, Vec<Drawing>, Vec<Drawing>, Record); 4] = [
+            (
+                "bulk edit and order",
+                vec![drawing(1, 2.0), drawing(2, 3.0)],
+                vec![drawing(2, 8.0)],
+                |h| h.push_snapshot(vec![drawing(1, 2.0), drawing(2, 3.0)]),
+            ),
             (
                 "add",
                 vec![drawing(2, 1.0)],
@@ -329,13 +414,29 @@ mod tests {
             ),
         ];
 
-        for (name, before, after, record) in cases {
+        for (name, mut before, mut after, record) in cases {
             let mut history = HistoryService::new();
             let mut drawings = after.clone();
             record(&mut history);
+            if name == "bulk edit and order" {
+                // A later host load must survive undo and redo of an earlier user command.
+                let independent = drawing(3, 7.0);
+                before.push(independent.clone());
+                after.push(independent.clone());
+                drawings.push(independent);
+            }
 
             assert_eq!(history.undo(&mut drawings), Some(1), "{name}: undo id");
             assert_eq!(state(&drawings), state(&before), "{name}: after undo");
+            if name == "bulk edit and order" {
+                assert_eq!(
+                    drawings
+                        .iter()
+                        .map(|drawing| drawing.id)
+                        .collect::<Vec<_>>(),
+                    before.iter().map(|drawing| drawing.id).collect::<Vec<_>>()
+                );
+            }
             assert_eq!(history.redo(&mut drawings), Some(1), "{name}: redo id");
             assert_eq!(state(&drawings), state(&after), "{name}: after redo");
             assert_eq!(history.undo(&mut drawings), Some(1), "{name}: undo again");

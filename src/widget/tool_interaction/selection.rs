@@ -107,47 +107,6 @@ pub fn handle_selection<F1, F2>(
     }
 }
 
-/// Drawing keys belong to this chart or to an otherwise unfocused canvas.
-pub(super) fn keyboard_available(ui: &Ui, response: &Response) -> bool {
-    !egui::Popup::is_any_open(ui.ctx())
-        && ui.memory(|m| m.focused().is_none_or(|id| id == response.id))
-}
-
-/// Handle Delete/Backspace to remove selected drawing, and Escape to deselect/cancel.
-pub fn handle_keyboard_shortcuts(
-    ui: &Ui,
-    response: &Response,
-    drawing_manager: &mut DrawingManager,
-) {
-    // egui releases a text field's focus before delivering its Escape frame.
-    let focus_id = response.id.with("drawing_keyboard_focus");
-    let was_elsewhere = ui
-        .ctx()
-        .data(|d| d.get_temp::<bool>(focus_id))
-        .unwrap_or(false);
-    let elsewhere = ui.memory(|m| m.focused().is_some_and(|id| id != response.id));
-    ui.ctx().data_mut(|d| d.insert_temp(focus_id, elsewhere));
-    if !keyboard_available(ui, response)
-        || (was_elsewhere && ui.input(|i| i.key_pressed(egui::Key::Escape)))
-    {
-        return;
-    }
-    ui.input_mut(|i| {
-        if (i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
-            || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
-            && let Some(sel_id) = drawing_manager.sel_drawing()
-        {
-            drawing_manager.delete_drawing(sel_id);
-        }
-        if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
-            drawing_manager.cancel_curr_drawing();
-            drawing_manager.deselect();
-            drawing_manager.active_tool = None;
-            drawing_manager.set_eraser_mode(false);
-        }
-    });
-}
-
 /// Render a highlight outline around the drawing currently hovered by the eraser cursor.
 pub fn render_eraser_highlight(
     painter: &Painter,

@@ -192,7 +192,8 @@ impl DrawingToolbar {
         let mut action = DrawingToolbarAction::None;
 
         // A tool's shortcut selects it, unless the user is typing.
-        if !ui.ctx().text_edit_focused()
+        if !crate::widget::keyboard::shortcuts_suppressed(ui.ctx())
+            && !ui.ctx().text_edit_focused()
             && let Some(tool) = DrawingToolShortcuts::default().check(ui.ctx())
         {
             self.select_tool(tool);
@@ -279,6 +280,7 @@ impl DrawingToolbar {
 
         // "/" opens the tool search, unless a text field has the keyboard.
         if !self.state.search_open
+            && !crate::widget::keyboard::shortcuts_suppressed(ui.ctx())
             && !ui.ctx().text_edit_focused()
             && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Slash))
         {

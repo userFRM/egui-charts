@@ -352,7 +352,11 @@ impl CommandPaletteHandler {
             self.open();
         }
 
-        // Show the palette if open
+        self.show(ctx)
+    }
+
+    /// Show the palette when a host dispatcher owns its opening shortcut.
+    pub fn show(&mut self, ctx: &Context) -> Option<String> {
         self.palette.show(ctx, &mut self.open)
     }
 }

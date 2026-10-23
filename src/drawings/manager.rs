@@ -304,19 +304,23 @@ impl DrawingManager {
         step: fn(&mut HistoryService, &mut Vec<Drawing>) -> Option<usize>,
     ) -> bool {
         let before: Vec<_> = self.drawings.iter().map(|d| (d.id, sync_id(d))).collect();
-        let Some(id) = step(&mut self.history, &mut self.drawings) else {
+        let Some(_) = step(&mut self.history, &mut self.drawings) else {
             return false;
         };
         self.painted
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
-            .retain(|p| p.id != id);
-        let was = before.into_iter().find(|&(i, _)| i == id);
-        match (was, self.drawings.iter().any(|d| d.id == id)) {
-            (Some(_), true) => self.queue(DrawingSyncAction::UpdateDrawing(id)),
-            (Some((_, stored_id)), false) => self.queue(DrawingSyncAction::Delete(stored_id)),
-            (None, true) => self.queue(DrawingSyncAction::SaveDrawing(id)),
-            (None, false) => {}
+            .retain(|p| !self.history.affected_ids().contains(&p.id));
+        for &id in self.history.affected_ids() {
+            let was = before.iter().find(|&&(i, _)| i == id);
+            match (was, self.drawings.iter().any(|d| d.id == id)) {
+                (Some(_), true) => self.queue(DrawingSyncAction::UpdateDrawing(id)),
+                (Some((_, stored_id)), false) => {
+                    self.queue(DrawingSyncAction::Delete(stored_id.clone()))
+                }
+                (None, true) => self.queue(DrawingSyncAction::SaveDrawing(id)),
+                (None, false) => {}
+            }
         }
         true
     }
@@ -710,8 +714,11 @@ impl DrawingManager {
     ///
     /// Queues a `Delete` for each drawing it removes, so the host deletes their stored records.
     /// To unload drawings without deleting them, clear [`Self::drawings`], then call
-    /// [`Self::cancel_curr_drawing`] and [`Self::deselect`]. It does not push to the undo history.
+    /// [`Self::cancel_curr_drawing`] and [`Self::deselect`]. A bulk removal is one undo step.
     pub fn clear_all(&mut self) {
+        if self.drawings.iter().any(|drawing| !drawing.locked) {
+            self.history.push_snapshot(self.drawings.clone());
+        }
         for drawing in self.drawings.iter().filter(|d| !d.locked) {
             self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
         }
@@ -727,14 +734,20 @@ impl DrawingManager {
 
     /// Bring a drawing to the front (drawn last, on top), above the highest z-order
     pub fn bring_to_front(&mut self, id: usize) {
-        ZOrderService::bring_to_front(&mut self.drawings, id);
-        self.queue_update(id);
+        if let Some(drawing) = self.drawings.iter().find(|drawing| drawing.id == id) {
+            self.history.push_modify(id, drawing.clone());
+            ZOrderService::bring_to_front(&mut self.drawings, id);
+            self.queue_update(id);
+        }
     }
 
     /// Send a drawing to the back (drawn first, behind others), below the lowest z-order
     pub fn send_to_back(&mut self, id: usize) {
-        ZOrderService::send_to_back(&mut self.drawings, id);
-        self.queue_update(id);
+        if let Some(drawing) = self.drawings.iter().find(|drawing| drawing.id == id) {
+            self.history.push_modify(id, drawing.clone());
+            ZOrderService::send_to_back(&mut self.drawings, id);
+            self.queue_update(id);
+        }
     }
 
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
@@ -892,13 +905,26 @@ impl DrawingManager {
     /// Toggles the visibility of all drawings. If all are visible, hides them
     /// all; otherwise shows them all.
     pub fn toggle_visibility_all(&mut self) {
-        let all_visible = self.drawings.iter().all(|d| d.visible);
+        let visible = !self.drawings.iter().all(|drawing| drawing.visible);
+        self.set_visibility_all(visible);
+    }
+
+    /// Set every drawing's visibility as one undoable edit.
+    pub fn set_visibility_all(&mut self, visible: bool) {
+        if !self
+            .drawings
+            .iter()
+            .any(|drawing| drawing.visible != visible)
+        {
+            return;
+        }
+        self.history.push_snapshot(self.drawings.clone());
         for drawing in self
             .drawings
             .iter_mut()
-            .filter(|d| d.visible == all_visible)
+            .filter(|drawing| drawing.visible != visible)
         {
-            drawing.visible = !all_visible;
+            drawing.visible = visible;
             if let Ok(mut sync) = self.pending_sync.lock() {
                 sync.push(DrawingSyncAction::UpdateDrawing(drawing.id));
             }
@@ -909,6 +935,13 @@ impl DrawingManager {
     /// all; otherwise locks them all.
     pub fn toggle_lock_all(&mut self) {
         let all_locked = self.drawings.iter().all(|d| d.locked);
+        if self
+            .drawings
+            .iter()
+            .any(|drawing| drawing.locked == all_locked)
+        {
+            self.history.push_snapshot(self.drawings.clone());
+        }
         for drawing in self.drawings.iter_mut().filter(|d| d.locked == all_locked) {
             drawing.locked = !all_locked;
             if let Ok(mut sync) = self.pending_sync.lock() {
@@ -989,6 +1022,7 @@ impl DrawingManager {
         drawing.id = self.take_id();
         if drawing.stored_id.is_none() {
             self.queue(DrawingSyncAction::SaveDrawing(drawing.id));
+            self.history.push_add(drawing.clone());
         }
         self.drawings.push(drawing);
     }
@@ -1331,12 +1365,22 @@ mod tests {
                 &["Update(0)", "Update(0)"],
             ),
         ];
-        for (edit, expected) in cases {
+        for (case, (edit, expected)) in cases.into_iter().enumerate() {
             let mut manager = DrawingManager::new();
             let mut restored = Drawing::new(5, DrawingToolType::HorizontalLine);
             restored.stored_id = Some("a1b2".into());
             manager.add_synced_drawing(restored);
+            let before = manager
+                .drawings
+                .iter()
+                .map(|drawing| (drawing.id, serde_json::to_value(drawing).unwrap()))
+                .collect::<Vec<_>>();
             edit(&mut manager);
+            let after = manager
+                .drawings
+                .iter()
+                .map(|drawing| (drawing.id, serde_json::to_value(drawing).unwrap()))
+                .collect::<Vec<_>>();
             let queued: Vec<String> = manager
                 .pending_sync
                 .lock()
@@ -1350,6 +1394,29 @@ mod tests {
                 })
                 .collect();
             assert_eq!(queued, expected);
+            if case < 5 || case == 8 || case == 9 {
+                assert!(manager.undo(), "case {case} must be undoable");
+                assert_eq!(
+                    manager
+                        .drawings
+                        .iter()
+                        .map(|drawing| (drawing.id, serde_json::to_value(drawing).unwrap()))
+                        .collect::<Vec<_>>(),
+                    before,
+                    "case {case}: undo"
+                );
+                assert!(!manager.can_undo(), "case {case}: one command per edit");
+                assert!(manager.redo(), "case {case}");
+                assert_eq!(
+                    manager
+                        .drawings
+                        .iter()
+                        .map(|drawing| (drawing.id, serde_json::to_value(drawing).unwrap()))
+                        .collect::<Vec<_>>(),
+                    after,
+                    "case {case}: redo"
+                );
+            }
         }
     }
 

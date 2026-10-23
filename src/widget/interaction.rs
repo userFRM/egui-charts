@@ -65,18 +65,8 @@ impl Chart {
         }
     }
 
-    /// Process keyboard shortcuts when the chart has focus.
-    ///
-    /// | Key | Action |
-    /// |-----|--------|
-    /// | Left/Right | Pan by configured `pan_amount` bars |
-    /// | +/- | Zoom in/out by `zoom_step` centered on chart |
-    /// | Home | Scroll to latest (real-time) data |
-    /// | F | Fit all data into the viewport |
-    /// | PageUp/PageDown | Zoom in/out by `3x zoom_step` |
-    ///
-    /// Shortcuts are only active when `chart_options.keyboard.enabled` is `true`
-    /// and the chart response has focus.
+    /// Dispatch configured shortcuts, retaining arrow-key focus on the chart.
+    /// Hosts call [`Self::dispatch_shortcuts`] before their toolbars and after dialogs.
     pub fn handle_keyboard_shortcuts(
         &mut self,
         ui: &Ui,
@@ -84,107 +74,23 @@ impl Chart {
         chart_width: f32,
         chart_rect_min_x: f32,
     ) {
-        if !self.chart_options.keyboard.enabled || !response.has_focus() {
-            return;
+        self.keyboard.chart_id = Some(response.id);
+        if response.has_focus() {
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    response.id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        ..Default::default()
+                    },
+                );
+            });
         }
-
-        ui.memory_mut(|memory| {
-            memory.set_focus_lock_filter(
-                response.id,
-                egui::EventFilter {
-                    horizontal_arrows: true,
-                    ..Default::default()
-                },
-            );
-        });
-
-        ui.input(|i| {
-            use egui::Key;
-
-            // Every shortcut below moves the view, which cancels a pending `scroll_to_time`
-            let view_keys = [
-                Key::ArrowLeft,
-                Key::ArrowRight,
-                Key::Plus,
-                Key::Equals,
-                Key::Minus,
-                Key::Home,
-                Key::F,
-                Key::PageUp,
-                Key::PageDown,
-            ];
-            if view_keys.into_iter().any(|key| i.key_pressed(key)) {
-                self.pending_scroll_time = None;
-            }
-
-            // Pan left (Left arrow)
-            if i.key_pressed(Key::ArrowLeft) {
-                self.state
-                    .time_scale_mut()
-                    .scroll_bars(-self.chart_options.keyboard.pan_amount);
-            }
-
-            // Pan right (Right arrow)
-            if i.key_pressed(Key::ArrowRight) {
-                self.state
-                    .time_scale_mut()
-                    .scroll_bars(self.chart_options.keyboard.pan_amount);
-            }
-
-            // Zoom in (+)
-            if i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals) {
-                let zoom_point_x = chart_width / 2.0;
-                self.state.time_scale_mut().zoom(
-                    self.chart_options.keyboard.zoom_step,
-                    zoom_point_x,
-                    chart_rect_min_x,
-                    chart_width,
-                );
-            }
-
-            // Zoom out (-)
-            if i.key_pressed(Key::Minus) {
-                let zoom_point_x = chart_width / 2.0;
-                self.state.time_scale_mut().zoom(
-                    -self.chart_options.keyboard.zoom_step,
-                    zoom_point_x,
-                    chart_rect_min_x,
-                    chart_width,
-                );
-            }
-
-            // Scroll to real-time / latest data (Home)
-            if i.key_pressed(Key::Home) {
-                self.state.time_scale_mut().scroll_to_realtime();
-            }
-
-            // Fit content (F) - zoom to show all data
-            if i.key_pressed(Key::F) {
-                self.state.time_scale_mut().fit_content();
-            }
-
-            // Page Up (zoom in more)
-            if i.key_pressed(Key::PageUp) {
-                let zoom_point_x = chart_width / 2.0;
-                self.state.time_scale_mut().zoom(
-                    self.chart_options.keyboard.zoom_step * 3.0,
-                    zoom_point_x,
-                    chart_rect_min_x,
-                    chart_width,
-                );
-            }
-
-            // Page Down (zoom out more)
-            if i.key_pressed(Key::PageDown) {
-                let zoom_point_x = chart_width / 2.0;
-                self.state.time_scale_mut().zoom(
-                    -self.chart_options.keyboard.zoom_step * 3.0,
-                    zoom_point_x,
-                    chart_rect_min_x,
-                    chart_width,
-                );
-            }
-        });
+        // These bounds are current even on the first frame or after resizing.
+        self.last_rendered_price_rect.min.x = chart_rect_min_x;
+        self.last_rendered_price_rect.max.x = chart_rect_min_x + chart_width;
+        self.dispatch_shortcuts(ui.ctx());
     }
 
     /// Request keyboard focus when the user actually interacts with the chart

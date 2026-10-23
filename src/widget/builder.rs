@@ -84,6 +84,7 @@ impl Chart {
             config: ChartConfig::default(),
             start_idx: 0,
             chart_options,
+            keyboard: super::keyboard::KeyboardState::default(),
             kinetic_scroll: KineticScrollState::new(),
             scroll_start_pos: None,
             scroll_start_offset: None,

@@ -222,6 +222,12 @@ impl SymbolSearchDialog {
         self.filtered_symbols.clear();
     }
 
+    /// Open symbol search with text supplied by the host's keyboard dispatcher.
+    pub fn open_with_query(&mut self, query: String) {
+        self.open();
+        self.search_query = query;
+    }
+
     /// Closes the symbol search dialog
     pub fn close(&mut self) {
         self.is_open = false;

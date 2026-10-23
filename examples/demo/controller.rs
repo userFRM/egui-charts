@@ -8,6 +8,8 @@
 
 #[path = "commands.rs"]
 mod commands;
+#[path = "interval.rs"]
+mod interval;
 #[path = "live.rs"]
 mod live;
 
@@ -151,6 +153,9 @@ pub struct DemoApp {
     series_settings: SeriesSettingsDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
+    interval_entry: Option<String>,
+    interval_focus: bool,
+    copied_drawing: Option<(String, egui_charts::drawings::Drawing)>,
     export_dialog: ExportDialog,
     date_picker: DatePicker,
 
@@ -273,6 +278,9 @@ impl DemoApp {
             series_settings: SeriesSettingsDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
+            interval_entry: None,
+            interval_focus: false,
+            copied_drawing: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
@@ -299,6 +307,7 @@ impl DemoApp {
     // --- data helpers ------------------------------------------------------
 
     fn switch_timeframe(&mut self, tf: Timeframe) {
+        self.copied_drawing = None;
         self.state.timeframe = tf;
         self.chart.set_timeframe(tf);
         self.regenerate_bars();
@@ -312,6 +321,7 @@ impl DemoApp {
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
+        self.copied_drawing = None;
         let spec = DemoSymbol::find(symbol);
         self.live.set_symbol(spec.symbol);
         self.timeframe_toolbar.state.session_menu_open = false;
@@ -575,7 +585,7 @@ impl DemoApp {
     // --- dialog wiring -----------------------------------------------------
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
-        if let Some(id) = self.quick_search.update(ctx) {
+        if let Some(id) = self.quick_search.show(ctx) {
             self.execute_search_command(ctx, &id);
         }
         // Indicators: add the study the dialog created.
@@ -686,7 +696,10 @@ impl DemoApp {
         }
 
         // Keyboard shortcuts help.
-        let _ = self.keyboard_shortcuts.show(ctx);
+        let _ = self
+            .keyboard_shortcuts
+            .show_with_shortcuts(ctx, self.chart.shortcuts());
+        self.show_interval_entry(ctx);
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
@@ -732,15 +745,7 @@ impl DemoApp {
 
     fn set_all_drawings_visible(&mut self, visible: bool) {
         let dm = self.chart.drawings_mut();
-        let ids: Vec<usize> = dm
-            .drawings
-            .iter()
-            .filter(|d| d.visible != visible)
-            .map(|d| d.id)
-            .collect();
-        for id in ids {
-            dm.edit_drawing(id, |d| d.visible = visible);
-        }
+        dm.set_visibility_all(visible);
     }
 
     fn clone_drawing(&mut self, id: usize) {
@@ -860,16 +865,32 @@ impl eframe::App for DemoApp {
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
+        // Dialogs consume their keys before chart commands and the replay transport.
+        let dialog_open = self.keyboard_shortcuts.is_open
+            || self.quick_search.is_open()
+            || self.symbol_search.is_open()
+            || self.indicator_dialog.is_open()
+            || self.settings_dialog.is_open
+            || self.drawing_props.is_open
+            || self.export_dialog.is_open()
+            || self.alert_dialog.is_open
+            || self.series_settings.is_open
+            || self.indicator_settings.is_open()
+            || self.interval_entry.is_some()
+            || self.date_picker.is_open;
+        if dialog_open {
+            self.chart.suppress_shortcuts(&ctx);
+        } else {
+            self.handle_keyboard(&ctx);
+        }
         self.show_top_toolbar(ui, panel_bg);
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.show_side_panel(ui);
         self.show_bottom_toolbar(ui, panel_bg);
-        // Give dialogs their keys before the chart and replay transport read input.
-        self.handle_keyboard(&ctx);
-        self.show_dialogs(&ctx);
         self.show_chart(ui, panel_bg);
         self.show_replay_control(&ctx);
+        self.show_dialogs(&ctx);
 
         // Transient status notice.
         self.show_notice(&ctx);
@@ -1775,13 +1796,77 @@ impl DemoApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        // F1 / "?" opens the keyboard shortcuts help.
-        let help = ctx.input(|i| {
-            i.key_pressed(egui::Key::F1)
-                || (i.modifiers.shift && i.key_pressed(egui::Key::Questionmark))
-        });
-        if help {
-            self.keyboard_shortcuts.toggle();
+        use egui_charts::config::KeyboardAction as A;
+        use egui_charts::widget::ShortcutRequest;
+        self.chart.dispatch_shortcuts(ctx);
+        for request in self.chart.take_shortcut_requests() {
+            match request {
+                ShortcutRequest::PasteDrawing(text) => {
+                    if self
+                        .copied_drawing
+                        .as_ref()
+                        .is_some_and(|(copied, _)| *copied == text)
+                    {
+                        self.paste_drawing();
+                    }
+                }
+                ShortcutRequest::SymbolSearch(text) => {
+                    self.symbol_search.open_with_query(text);
+                }
+                ShortcutRequest::IntervalEntry(text) => {
+                    self.interval_entry = Some(text);
+                    self.interval_focus = true;
+                }
+                ShortcutRequest::Action(action) => match action {
+                    A::OpenQuickSearch => self.quick_search.open(),
+                    A::ShowKeyboardHelp => self.keyboard_shortcuts.toggle(),
+                    A::OpenIndicatorSearch => self.indicator_dialog.open(),
+                    A::OpenSymbolSearch => self.symbol_search.open(),
+                    A::GoToDate => self.date_picker.open(),
+                    A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
+                    A::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
+                    A::MaximizeChart => {
+                        self.handle_top_toolbar(ctx, TopToolbarAction::ToggleFullscreen)
+                    }
+                    A::Undo => self.handle_top_toolbar(ctx, TopToolbarAction::Undo),
+                    A::Redo => self.handle_top_toolbar(ctx, TopToolbarAction::Redo),
+                    A::CopyDrawing => {
+                        self.copied_drawing = self
+                            .chart
+                            .drawings()
+                            .sel_drawing()
+                            .and_then(|id| {
+                                self.chart
+                                    .drawings()
+                                    .drawings
+                                    .iter()
+                                    .find(|drawing| drawing.id == id)
+                                    .cloned()
+                            })
+                            .map(|drawing| {
+                                let text = format!("Drawing clipboard\n{drawing:#?}");
+                                ctx.copy_text(text.clone());
+                                (text, drawing)
+                            });
+                    }
+                    A::PasteDrawing => self.paste_drawing(),
+                    // There is one chart in this host; egui still moves keyboard focus with Tab.
+                    A::CycleChartFocus | A::CycleChartFocusBack => {}
+                    _ => {}
+                },
+            }
+        }
+    }
+
+    // The demo keeps a session clipboard; hosts can decode their persistent drawing format instead.
+    fn paste_drawing(&mut self) {
+        if let Some((_, mut drawing)) = self.copied_drawing.clone() {
+            drawing.stored_id = None;
+            drawing.created_at = None;
+            for point in &mut drawing.chart_points {
+                point.bar_idx += 3.0;
+            }
+            self.chart.drawings_mut().add_synced_drawing(drawing);
         }
     }
 
@@ -2016,6 +2101,101 @@ mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
+    /// Native integrations send clipboard events instead of key events. Only our session
+    /// clipboard pastes a drawing, and the pasted copy is an ordinary undoable addition.
+    #[test]
+    fn native_drawing_clipboard_pastes_once_and_undoes_the_copy() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 120.0)];
+        drawing.completed = true;
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.drawings_mut().select(7);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Copy],
+                ..Default::default()
+            },
+            |ui| app.handle_keyboard(ui.ctx()),
+        );
+        let text = output.platform_output.commands.iter().find_map(|command| {
+            if let egui::OutputCommand::CopyText(text) = command {
+                Some(text.clone())
+            } else {
+                None
+            }
+        });
+        output.drop_without_applying_deltas();
+        let text = text.expect("copy must provide system clipboard text");
+        for (event, count) in [
+            (egui::Event::Paste("unrelated clipboard text".into()), 1),
+            (egui::Event::Paste(text), 2),
+            (
+                egui::Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                },
+                1,
+            ),
+        ] {
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![event],
+                    ..Default::default()
+                },
+                |ui| app.handle_keyboard(ui.ctx()),
+            )
+            .drop_without_applying_deltas();
+            assert_eq!(app.chart.drawings().drawings.len(), count);
+        }
+        assert_eq!(
+            app.chart.drawings().drawings[0].chart_points[0],
+            ChartPoint::new(10.0, 100.0)
+        );
+    }
+
+    /// A bare number enters minutes and Enter applies it through the normal host path.
+    #[test]
+    fn typed_interval_entry_applies_minutes() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        for events in [
+            vec![egui::Event::Text("15".into())],
+            vec![],
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(app.state.timeframe, Timeframe::Min15);
+        assert_eq!(app.state.timeframe.duration_ms(), 900_000);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min15));
+    }
+
     /// Quick search executes catalogue entries as well as opening settings.
     #[test]
     fn quick_search_executes_studies_tools_and_settings() {
@@ -2032,7 +2212,10 @@ mod tests {
                 modifiers,
             };
             for (modifiers, events) in [
-                (Modifiers::CTRL, vec![key(Key::K, Modifiers::CTRL)]),
+                (
+                    Modifiers::CTRL.plus(Modifiers::COMMAND),
+                    vec![key(Key::K, Modifiers::CTRL.plus(Modifiers::COMMAND))],
+                ),
                 (Modifiers::NONE, vec![Event::Text(query.into())]),
                 (Modifiers::NONE, vec![key(Key::Enter, Modifiers::NONE)]),
             ] {
@@ -2043,7 +2226,10 @@ mod tests {
                             .collect(),
                         ..Default::default()
                     },
-                    |ui| app.show_dialogs(ui.ctx()),
+                    |ui| {
+                        app.handle_keyboard(ui.ctx());
+                        app.show_dialogs(ui.ctx());
+                    },
                 )
                 .drop_without_applying_deltas();
             }

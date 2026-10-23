@@ -106,7 +106,10 @@ impl SeriesContextMenu {
     }
 
     /// Build menu items for the series context menu
-    fn build_menu_items(&self) -> Vec<MenuEntry<SeriesContextMenuAction>> {
+    fn build_menu_items(
+        &self,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) -> Vec<MenuEntry<SeriesContextMenuAction>> {
         let price_str = format_price(self.click_price);
         let symbol = &self.symbol;
         let has_symbol = !symbol.is_empty();
@@ -127,7 +130,7 @@ impl SeriesContextMenu {
                     SeriesContextMenuAction::AddAlert,
                 )
                 .with_icon(&embedded_icons::ALERTS)
-                .with_shortcut(KeyboardAction::CreateAlert.shortcut()),
+                .with_shortcut(shortcuts.shortcut(KeyboardAction::CreateAlert)),
             ));
         }
         items.extend([
@@ -154,10 +157,20 @@ impl SeriesContextMenu {
 
     /// Show the context menu
     pub fn show(&mut self, ctx: &Context, theme: &Theme) {
+        self.show_with_shortcuts(ctx, theme, &crate::widget::ShortcutMap::default());
+    }
+
+    /// Show menu hints from the same bindings used by chart input.
+    pub fn show_with_shortcuts(
+        &mut self,
+        ctx: &Context,
+        theme: &Theme,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items();
+        let entries = self.build_menu_items(shortcuts);
         let just_opened = std::mem::take(&mut self.just_opened);
         let id = Id::unique("series_context_menu");
         if let Some(action) = show_menu(

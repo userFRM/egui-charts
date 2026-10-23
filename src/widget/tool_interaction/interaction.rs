@@ -11,7 +11,7 @@
 //! | `ContinuousDraw` | Freehand drawing while dragging (e.g., brush, highlighter) |
 //! | `MultiPoint` | Multiple clicks, double-click or Enter to complete (e.g., path) |
 //!
-//! Also handles Escape to cancel and Enter to complete multi-point drawings.
+//! Keyboard completion and cancellation use the shared chart dispatcher.
 
 use crate::drawings::{DrawingInteractionMode, DrawingManager, DrawingToolType};
 use egui::{Rect, Response, Ui};
@@ -154,15 +154,6 @@ pub fn handle_active_tool<F1, F2>(
                 }
             }
         }
-    }
-
-    // Handle Enter to complete multi-point drawings
-    if super::selection::keyboard_available(ui, response)
-        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
-        && matches!(interaction_mode, DrawingInteractionMode::MultiPoint)
-        && drawing_manager.curr_drawing.is_some()
-    {
-        drawing_manager.complete_curr_drawing();
     }
 
     // Request repaint when drawing for live preview

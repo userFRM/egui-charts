@@ -7,10 +7,10 @@ use egui::{
     ScrollArea, Stroke, Ui, WidgetInfo,
 };
 
-use crate::config::KeyboardAction;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::{DialogFrame, dialog_frame, dialog_header};
+use crate::widget::ShortcutMap;
 
 /// Action returned by the keyboard shortcuts dialog
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +55,15 @@ impl KeyboardShortcutsDialog {
 
     /// Show the dialog. Returns the action taken.
     pub fn show(&mut self, ctx: &Context) -> KeyboardShortcutsAction {
+        self.show_with_shortcuts(ctx, &ShortcutMap::default())
+    }
+
+    /// Show only the host's bound shortcuts, using the same map as its chart.
+    pub fn show_with_shortcuts(
+        &mut self,
+        ctx: &Context,
+        shortcuts: &ShortcutMap,
+    ) -> KeyboardShortcutsAction {
         if !self.is_open {
             return KeyboardShortcutsAction::None;
         }
@@ -67,7 +76,7 @@ impl KeyboardShortcutsDialog {
             DESIGN_TOKENS.sizing.dialog.default_width,
         )
         .show(ctx, |ui| {
-            action = self.render_contents(ui);
+            action = self.render_contents(ui, shortcuts);
         });
 
         // Escape belongs to an open popup or a focused text field first. egui closes both on
@@ -90,7 +99,7 @@ impl KeyboardShortcutsDialog {
         action
     }
 
-    fn render_contents(&mut self, ui: &mut Ui) -> KeyboardShortcutsAction {
+    fn render_contents(&mut self, ui: &mut Ui, shortcuts: &ShortcutMap) -> KeyboardShortcutsAction {
         let mut action = KeyboardShortcutsAction::None;
         let theme = ui.active_theme();
 
@@ -106,7 +115,7 @@ impl KeyboardShortcutsDialog {
         );
         ui.add_space(theme.spacing.lg);
 
-        let categories = KeyboardAction::all_by_category();
+        let categories = shortcuts.by_category();
         let font = FontId::proportional(theme.text.body);
         let widest = ui.fonts_mut(|f| {
             categories
@@ -154,7 +163,14 @@ impl KeyboardShortcutsDialog {
                             .show(ui, |ui| {
                                 for action in actions {
                                     ui.label(RichText::new(action.label()).size(theme.text.body));
-                                    ui.horizontal(|ui| key_badges(ui, &theme, action.shortcuts()));
+                                    let keys: Vec<_> = shortcuts
+                                        .bindings
+                                        .iter()
+                                        .filter_map(|(key, bound)| {
+                                            (bound == action).then_some(*key)
+                                        })
+                                        .collect();
+                                    ui.horizontal(|ui| key_badges(ui, &theme, &keys));
                                     ui.end_row();
                                 }
                             });
