@@ -366,7 +366,11 @@ impl Chart {
     /// Asks for the page before the oldest bar once the view nears it.
     fn scroll_back(&mut self, link: &mut FeedLink) {
         let feed = &self.feed;
-        if feed.loading_history || feed.history_complete || link.paging_stopped {
+        if feed.loading_history
+            || feed.history_complete
+            || link.paging_stopped
+            || !self.older_bars_drawn
+        {
             return;
         }
         let Some(oldest) = self.bars(SeriesId::MAIN).first() else {
@@ -940,5 +944,26 @@ mod tests {
         chart.set_timeframe(Timeframe::Hour1);
         frames.run(&mut chart);
         assert_eq!(chart.bars(main), bars(10), "j");
+
+        // k. Scroll-back counts elements; older history adds none to a trimmed build.
+        for (size, asks) in [(1.0, true), (1.0 / 16.0, false)] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            chart.set_chart_type(crate::model::ChartType::Renko);
+            chart.set_chart_type_params(crate::model::ChartTypeParams {
+                renko_brick_size: size,
+                ..Default::default()
+            });
+            frames.run(&mut chart);
+            feed.page().send(page(bars(1000), false));
+            frames.run(&mut chart);
+            feed.calls();
+            chart.set_start_idx(0);
+            for _ in 0..5 {
+                frames.run(&mut chart);
+            }
+            let older = history("A", Timeframe::Min1, Some(bars(1)[0].time));
+            assert_eq!(feed.calls().contains(&older), asks, "k: brick {size}");
+        }
     }
 }

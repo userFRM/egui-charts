@@ -17,7 +17,7 @@ mod helpers;
 mod japanese;
 mod line;
 mod params;
-mod price_based;
+pub(crate) mod price_based;
 mod range;
 pub mod tpo;
 mod volume;
@@ -26,10 +26,7 @@ pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
 };
 
-use crate::model::{
-    ChartType, KagiConfig, LineBreakConfig, PointFigureConfig, RangeBarConfig, RenkoConfig,
-    to_kagi_lines, to_line_break_lines, to_pnf_columns, to_range_bars_from_ohlc, to_renko_bricks,
-};
+use crate::model::ChartType;
 use crate::styles::typography;
 
 /// Renders all chart types
@@ -59,11 +56,7 @@ pub fn render_chart_type(
         return;
     }
 
-    // The first and last visible bar select the window of a price-based build.
-    let (Some(first), Some(last)) = (ctx.visible_data.first(), ctx.visible_data.last()) else {
-        return;
-    };
-    let visible_times = (first.time, last.time);
+    let x_of = |i| idx_to_coord(ctx.start_idx + i, params.chart_rect_min_x());
 
     match chart_type {
         // === Standard OHLC Types ===
@@ -305,110 +298,65 @@ pub fn render_chart_type(
         }
         ChartType::Range => {
             let built = price_based::range_bars(ctx.full_data, ctx.revision, params.type_params);
-            let (t0, t1) = visible_times;
-            let size = params.type_params.range_size;
-            let range_bars = built.window(
-                |b| b.end_time,
-                t0,
-                t1,
-                || to_range_bars_from_ohlc(ctx.visible_data, &RangeBarConfig::new(size)),
-            );
             range::render_range_bars(
                 painter,
-                price_rect,
-                &range_bars,
+                built.shown(ctx.start_idx, ctx.visible_data.len()),
                 params.bar_width(),
                 ctx.price_scale,
                 params.bullish_color(),
                 params.bearish_color(),
+                x_of,
             );
         }
 
         // === Japanese Chart Types ===
         ChartType::Renko => {
             let built = price_based::renko(ctx.full_data, ctx.revision, params.type_params);
-            let (t0, t1) = visible_times;
-            let size = params.type_params.renko_brick_size;
-            let bricks = built.window(
-                |b| b.ts,
-                t0,
-                t1,
-                || to_renko_bricks(ctx.visible_data, &RenkoConfig::new(size)),
-            );
             japanese::render_renko(
                 painter,
-                price_rect,
-                &bricks,
+                built.shown(ctx.start_idx, ctx.visible_data.len()),
                 params.bar_width(),
                 ctx.price_scale,
                 params.bullish_color(),
                 params.bearish_color(),
+                x_of,
             );
         }
         ChartType::Kagi => {
             let built = price_based::kagi(ctx.full_data, ctx.revision, params.type_params);
-            let (t0, t1) = visible_times;
-            let reversal = params.type_params.kagi_reversal;
-            let lines = built.window(
-                |l| l.ts,
-                t0,
-                t1,
-                || to_kagi_lines(ctx.visible_data, &KagiConfig::new(reversal)),
-            );
             japanese::render_kagi(
                 painter,
-                price_rect,
-                &lines,
+                built.shown(ctx.start_idx, ctx.visible_data.len()),
                 ctx.price_scale,
                 params.bullish_color(),
                 params.bearish_color(),
+                x_of,
             );
         }
         ChartType::LineBreak => {
             let built = price_based::line_break(ctx.full_data, ctx.revision, params.type_params);
-            let (t0, t1) = visible_times;
-            let count = params.type_params.line_break_count;
-            let lines = built.window(
-                |l| l.ts,
-                t0,
-                t1,
-                || to_line_break_lines(ctx.visible_data, &LineBreakConfig::new(count)),
-            );
             japanese::render_line_break(
                 painter,
-                price_rect,
-                &lines,
+                built.shown(ctx.start_idx, ctx.visible_data.len()),
                 params.bar_width(),
                 ctx.price_scale,
                 params.bullish_color(),
                 params.bearish_color(),
+                x_of,
             );
         }
         ChartType::PointAndFigure => {
             let built =
                 price_based::point_and_figure(ctx.full_data, ctx.revision, params.type_params);
-            let (t0, t1) = visible_times;
-            let (box_size, reversal) = (
-                params.type_params.pnf_box_size,
-                params.type_params.pnf_reversal,
-            );
-            let columns = built.window(
-                |c| c.end_time,
-                t0,
-                t1,
-                || {
-                    let config = PointFigureConfig::new(box_size, reversal as usize);
-                    to_pnf_columns(ctx.visible_data, &config)
-                },
-            );
             japanese::render_point_and_figure(
                 painter,
                 price_rect,
-                &columns,
+                built.shown(ctx.start_idx, ctx.visible_data.len()),
                 params.bar_width(),
                 ctx.price_scale,
                 params.bullish_color(),
                 params.bearish_color(),
+                x_of,
             );
         }
 

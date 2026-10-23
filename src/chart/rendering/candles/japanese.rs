@@ -10,30 +10,18 @@ use crate::model::{Bar, ColumnDirection, RenkoBrick};
 use crate::scales::PriceMap;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
-pub(super) const MAX_ELEMENTS: usize = 2000;
-
 pub(super) fn render_renko(
     painter: &Painter,
-    price_rect: Rect,
     bricks: &[RenkoBrick],
     bar_width: f32,
     price_scale: &PriceMap,
     bullish_color: Color32,
     bearish_color: Color32,
+    x_of: impl Fn(usize) -> f32,
 ) {
     let coords = *price_scale;
-    let brick_count = bricks.len().min(MAX_ELEMENTS);
-    let spacing = calc_spacing(price_rect.width(), brick_count, bar_width);
-
-    for (i, brick) in bricks
-        .iter()
-        .skip(bricks.len().saturating_sub(MAX_ELEMENTS))
-        .enumerate()
-    {
-        let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
-        if !in_range(x, price_rect) {
-            continue;
-        }
+    for (i, brick) in bricks.iter().enumerate() {
+        let x = x_of(i);
 
         let bar = brick.to_bar();
         let color = if bar.close > bar.open {
@@ -41,59 +29,46 @@ pub(super) fn render_renko(
         } else {
             bearish_color
         };
-        let rect = calc_brick_rect(x, &bar, &coords, spacing);
+        let rect = calc_brick_rect(x, &bar, &coords, bar_width);
         draw_brick(painter, rect, color, 1.0);
     }
 }
 
 pub(super) fn render_kagi(
     painter: &Painter,
-    price_rect: Rect,
     lines: &[KagiLine],
     price_scale: &PriceMap,
     bullish_color: Color32,
     bearish_color: Color32,
+    x_of: impl Fn(usize) -> f32,
 ) {
     let coords = *price_scale;
     if lines.is_empty() {
         return;
     }
 
-    let line_count = lines.len().min(MAX_ELEMENTS);
-    let spacing = (price_rect.width() / line_count as f32).max(2.0);
-
-    let points = collect_kagi_points(lines, &coords, price_rect, spacing);
+    let points = collect_kagi_points(lines, &coords, x_of);
     draw_kagi_segments(painter, &points, bullish_color, bearish_color);
 }
 
 /// Line Break chart (Three Line Break)
 pub(super) fn render_line_break(
     painter: &Painter,
-    price_rect: Rect,
     lines: &[LineBreakLine],
     bar_width: f32,
     price_scale: &PriceMap,
     bullish_color: Color32,
     bearish_color: Color32,
+    x_of: impl Fn(usize) -> f32,
 ) {
     let coords = *price_scale;
     if lines.is_empty() {
         return;
     }
 
-    let line_count = lines.len().min(MAX_ELEMENTS);
-    let spacing = price_rect.width() / line_count as f32;
-    let actual_width = (spacing * 0.85).min(bar_width).max(3.0);
-
-    for (i, line) in lines
-        .iter()
-        .skip(lines.len().saturating_sub(MAX_ELEMENTS))
-        .enumerate()
-    {
-        let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
-        if !in_range(x, price_rect) {
-            continue;
-        }
+    let actual_width = bar_width.max(3.0);
+    for (i, line) in lines.iter().enumerate() {
+        let x = x_of(i);
 
         let color = if line.is_bullish() {
             bullish_color
@@ -114,25 +89,16 @@ pub(super) fn render_point_and_figure(
     price_scale: &PriceMap,
     bullish_color: Color32,
     bearish_color: Color32,
+    x_of: impl Fn(usize) -> f32,
 ) {
     let coords = *price_scale;
     if columns.is_empty() {
         return;
     }
 
-    let column_count = columns.len().min(1000);
-    let spacing = price_rect.width() / column_count as f32;
-    let symbol_size = (spacing * 0.7).min(bar_width * 0.8).max(4.0);
-
-    for (i, column) in columns
-        .iter()
-        .skip(columns.len().saturating_sub(1000))
-        .enumerate()
-    {
-        let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
-        if !in_range(x, price_rect) {
-            continue;
-        }
+    let symbol_size = (bar_width * 0.8).max(4.0);
+    for (i, column) in columns.iter().enumerate() {
+        let x = x_of(i);
 
         draw_pnf_column(
             painter,
@@ -149,25 +115,13 @@ pub(super) fn render_point_and_figure(
 
 // === Helper Functions ===
 
-pub(super) fn calc_spacing(width: f32, count: usize, bar_width: f32) -> f32 {
-    if count > 1 {
-        (width / count as f32).min(bar_width)
-    } else {
-        bar_width
-    }
-}
-
-fn in_range(x: f32, rect: Rect) -> bool {
-    x >= rect.min.x && x <= rect.max.x
-}
-
-pub(super) fn calc_brick_rect(x: f32, bar: &Bar, coords: &PriceMap, spacing: f32) -> Rect {
+pub(super) fn calc_brick_rect(x: f32, bar: &Bar, coords: &PriceMap, bar_width: f32) -> Rect {
     let y_open = coords.price_to_y(bar.open);
     let y_close = coords.price_to_y(bar.close);
     let top = y_open.min(y_close);
     let bottom = y_open.max(y_close);
     let height = (bottom - top).max(2.0);
-    let width = (spacing * 0.85).max(3.0);
+    let width = bar_width.max(3.0);
 
     Rect::from_min_max(
         Pos2::new(x - width / 2.0, top),
@@ -190,22 +144,14 @@ fn calc_line_break_rect(x: f32, open: f64, close: f64, coords: &PriceMap, width:
 fn collect_kagi_points(
     lines: &[crate::model::kagi::KagiLine],
     coords: &PriceMap,
-    price_rect: Rect,
-    spacing: f32,
+    x_of: impl Fn(usize) -> f32,
 ) -> Vec<(Pos2, crate::model::kagi::KagiThickness)> {
     use crate::model::kagi::KagiThickness;
 
     let mut points: Vec<(Pos2, KagiThickness)> = Vec::new();
 
-    for (i, line) in lines
-        .iter()
-        .skip(lines.len().saturating_sub(MAX_ELEMENTS))
-        .enumerate()
-    {
-        let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
-        if !in_range(x, price_rect) {
-            continue;
-        }
+    for (i, line) in lines.iter().enumerate() {
+        let x = x_of(i);
 
         let y_start = coords.price_to_y(line.start_price);
         let y_end = coords.price_to_y(line.end_price);

@@ -9,7 +9,7 @@ use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::model::{Bar, RangeBar};
 
-use super::japanese::{MAX_ELEMENTS, calc_brick_rect, calc_spacing};
+use super::japanese::calc_brick_rect;
 
 /// High-Low chart: just the range bars
 pub(super) fn render_high_low(
@@ -61,27 +61,24 @@ pub(super) fn render_high_low(
     }
 }
 
-/// Range bars: the newest ones, spread evenly over the pane like the other price-based charts
+/// Range bars at their element slots.
 pub(super) fn render_range_bars(
     painter: &Painter,
-    price_rect: Rect,
     range_bars: &[RangeBar],
     bar_width: f32,
     price_scale: &PriceMap,
     bullish_color: Color32,
     bearish_color: Color32,
+    x_of: impl Fn(usize) -> f32,
 ) {
-    let shown = &range_bars[range_bars.len().saturating_sub(MAX_ELEMENTS)..];
-    let spacing = calc_spacing(price_rect.width(), shown.len(), bar_width);
-
-    for (i, range_bar) in shown.iter().enumerate() {
-        let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
+    for (i, range_bar) in range_bars.iter().enumerate() {
+        let x = x_of(i);
         let color = if range_bar.close > range_bar.open {
             bullish_color
         } else {
             bearish_color
         };
-        let rect = calc_brick_rect(x, &range_bar.to_bar(), price_scale, spacing);
+        let rect = calc_brick_rect(x, &range_bar.to_bar(), price_scale, bar_width);
         painter.add(Shape::rect_filled(rect, 0.0, color));
     }
 }

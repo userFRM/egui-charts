@@ -28,7 +28,8 @@ impl Chart {
         self.selection.selected_id()
     }
 
-    /// Returns the bar index at which the current selection was made, if any.
+    /// Returns the index at which the current selection was made, if any.
+    /// On price-based types it counts elements, otherwise source bars.
     ///
     /// This is the data-space index of the segment that was clicked, useful for
     /// anchoring tooltips or context menus near the click.

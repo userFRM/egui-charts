@@ -9,6 +9,7 @@
 use super::{Bar, BarData, TimeScale};
 use crate::scales::{PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use crate::studies::{Indicator, IndicatorValue};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Source of [`ChartState::revision`] values, so that no two chart states or
@@ -53,6 +54,8 @@ pub struct ZoomState {
 pub struct ChartState {
     /// The OHLCV bar dataset.
     data: BarData,
+    /// The price-based elements currently shown, one bar per element.
+    elements: Option<Arc<[Bar]>>,
     /// Time coordinate system (logical index <-> pixel mapping).
     time_scale: TimeScale,
     /// The main (right) price scale.
@@ -68,6 +71,7 @@ impl Clone for ChartState {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
+            elements: self.elements.clone(),
             time_scale: self.time_scale.clone(),
             price_scale: self.price_scale.clone(),
             zoom_history: self.zoom_history.clone(),
@@ -84,6 +88,7 @@ impl ChartState {
 
         Self {
             data,
+            elements: None,
             time_scale,
             price_scale: PriceScale::new(PriceScaleOptions::default()),
             zoom_history: Vec::new(),
@@ -150,13 +155,60 @@ impl ChartState {
         {
             self.revision = next_revision();
         }
-        self.time_scale.set_bar_cnt(self.data.len());
+        self.time_scale.set_bar_cnt(self.shown().len());
         first_changed
     }
 
-    /// Get visible data based on current time scale
+    /// The series drawn on the time scale.
+    pub(crate) fn shown(&self) -> &[Bar] {
+        self.elements.as_deref().unwrap_or(&self.data.bars)
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn shows_elements(&self) -> bool {
+        self.elements.is_some()
+    }
+
+    /// Keeps the right-edge item by time and rank when the shown series changes.
+    #[cfg(any(feature = "widget", test))]
+    pub(crate) fn set_elements(&mut self, elements: Option<Arc<[Bar]>>, follow: bool) {
+        match (&self.elements, &elements) {
+            (Some(old), Some(new)) if Arc::ptr_eq(old, new) => return,
+            (None, None) => return,
+            _ => {}
+        }
+        let old = self.shown();
+        let new = elements.as_deref().unwrap_or(&self.data.bars);
+        let ts = &self.time_scale;
+        let near_live = ts.is_near_live_edge();
+        let kept = (!old.is_empty() && !new.is_empty()).then(|| {
+            // Several elements can share the completion time of one source bar.
+            let right = ts.base_idx() as f32 + ts.right_offset();
+            let at = (right.floor().max(0.0) as usize).min(old.len() - 1);
+            let time = old[at].time;
+            let rank = at - old.partition_point(|bar| bar.time < time);
+            let first = new.partition_point(|bar| bar.time < time);
+            let same = new[first..].partition_point(|bar| bar.time == time);
+            let to = (first + rank.min(same.saturating_sub(1))).min(new.len() - 1);
+            let newer = new[new.len() - 1].time > old[old.len() - 1].time;
+            (
+                to as f32 + (right - at as f32) - (new.len() - 1) as f32,
+                newer,
+            )
+        });
+        self.elements = elements;
+        self.time_scale.set_bar_cnt(self.shown().len());
+        match kept {
+            Some((_, true)) if follow && near_live => self.time_scale.scroll_to_realtime(),
+            Some(_) if follow && near_live => {}
+            Some((offset, _)) => self.time_scale.set_right_offset(offset),
+            None => {}
+        }
+    }
+
+    /// Visible source bars, or one OHLC bar per element on a price-based chart type.
     pub fn visible_data(&self) -> &[crate::model::Bar] {
-        if self.data.bars.is_empty() {
+        if self.shown().is_empty() {
             return &[];
         }
 
@@ -171,7 +223,7 @@ impl ChartState {
         log::debug!("[visible_data] BEFORE clamping: start={start}, end={end}");
 
         // Clamp to valid data range
-        let data_len = self.data.len();
+        let data_len = self.shown().len();
         end = end.min(data_len);
         start = start.min(end);
 
@@ -209,12 +261,12 @@ impl ChartState {
             end - start
         );
 
-        &self.data.bars[start..end]
+        &self.shown()[start..end]
     }
 
-    /// Get visible data range indices
+    /// Visible range indices, counting elements on price-based chart types and bars otherwise.
     pub fn visible_range(&self) -> (usize, usize) {
-        if self.data.bars.is_empty() {
+        if self.shown().is_empty() {
             return (0, 0);
         }
 
@@ -224,7 +276,7 @@ impl ChartState {
         log::debug!("[visible_range] BEFORE clamping: start={start}, end={end}");
 
         // Clamp to valid data range
-        let data_len = self.data.len();
+        let data_len = self.shown().len();
         end = end.min(data_len);
         start = start.min(end);
 
@@ -279,7 +331,7 @@ impl ChartState {
     ) -> PriceTransform {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
-        let visible = &self.data.bars[start..end];
+        let visible = &self.shown()[start..end];
         let base = visible.first().map_or(f64::NAN, |bar| bar.close);
         let relative = matches!(
             mode,
@@ -377,6 +429,62 @@ mod tests {
     use super::*;
     use crate::model::Bar;
     use chrono::{TimeZone, Utc};
+
+    /// Time and rank identify the right-edge item across type changes and trimmed builds.
+    #[test]
+    fn a_new_series_keeps_the_item_at_the_right_edge() {
+        let bars = |minutes: &[i64]| -> Vec<Bar> {
+            minutes
+                .iter()
+                .map(|&minute| {
+                    Bar::new(
+                        Utc.timestamp_opt(1_700_000_000 + minute * 60, 0).unwrap(),
+                        100.0,
+                        100.0,
+                        100.0,
+                        100.0,
+                        1.0,
+                    )
+                })
+                .collect()
+        };
+        let e: &[i64] = &[1, 3, 3, 3, 6, 9];
+        // Edge = last index + offset; duplicate times retain their rank.
+        for (name, old, offset, new, follow, expected) in [
+            ("bars to elements", None, -4.0, Some(e), true, -1.0),
+            ("elements to bars", Some(e), -2.0, None, true, -6.0),
+            (
+                "oldest element dropped",
+                Some(e),
+                -2.0,
+                Some(&[3, 3, 3, 6, 9, 12][..]),
+                true,
+                -3.0,
+            ),
+            (
+                "following off",
+                Some(e),
+                0.5,
+                Some(&[1, 3, 3, 3, 6, 9, 12][..]),
+                false,
+                -0.5,
+            ),
+            (
+                "type change at the live edge",
+                None,
+                0.5,
+                Some(&[1, 3, 6, 9, 9, 9][..]),
+                true,
+                0.5,
+            ),
+        ] {
+            let mut state = ChartState::new(BarData::from_bars(bars(&(0..10).collect::<Vec<_>>())));
+            state.set_elements(old.map(|times| Arc::from(bars(times))), true);
+            state.time_scale_mut().set_right_offset(offset);
+            state.set_elements(new.map(|times| Arc::from(bars(times))), follow);
+            assert_eq!(state.time_scale().right_offset(), expected, "{name}");
+        }
+    }
 
     /// Flat visible data must not collapse the auto range to a near-zero span,
     /// which would put any other price (a drawing anchor) ~1e14 px away.

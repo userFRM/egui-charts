@@ -205,6 +205,12 @@ impl TimeScale {
         self.right_offset
     }
 
+    /// Within 1.5 slots of the live edge, including future whitespace.
+    #[cfg(any(feature = "widget", test))]
+    pub(crate) fn is_near_live_edge(&self) -> bool {
+        self.right_offset >= -1.5
+    }
+
     /// Get current width
     pub fn width(&self) -> f32 {
         self.width

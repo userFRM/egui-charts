@@ -118,6 +118,7 @@ impl Chart {
             self.drawings.shift_bar_indices(from, run.len() as f32);
         }
         if !self.bars_changed(before, merged.first_changed)
+            && !self.state.shows_elements()
             && let Some(tail) = tail
         {
             // The right edge is the last bar plus the right offset: without this a view scrolled
@@ -248,10 +249,24 @@ impl Chart {
             first: bars.first().map(|bar| bar.time),
             // Within ~1.5 bars of the right edge. With fix_right_edge the right offset is clamped
             // to <= 0, so near means no farther than 1.5 bars to the left of the edge.
-            near_live: self.state.time_scale().right_offset() >= -1.5,
+            near_live: self.state.time_scale().is_near_live_edge(),
             len: bars.len(),
             tail: bars.last().cloned(),
         }
+    }
+
+    /// Shows the cached elements before input, keeping the view in the series' slots.
+    pub(super) fn show_elements(&mut self) {
+        let built = crate::chart::rendering::candles::price_based::elements(
+            self.chart_type,
+            &self.chart_type_params,
+            &self.state.data().bars,
+            self.state.revision(),
+        );
+        self.older_bars_drawn = built.as_ref().is_none_or(|(_, trimmed)| !trimmed);
+        let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
+        self.state
+            .set_elements(built.map(|(elements, _)| elements), follow);
     }
 
     /// Scrolls to the live edge when the view was near it and a bar was appended, or the last
@@ -421,27 +436,56 @@ mod tests {
         Bar::new(t, close, close, close, close, 1.0)
     }
 
-    /// A chart built with a right offset of 20 bars keeps it while it follows the live edge
-    /// through appended bars.
+    /// Streaming keeps the configured live offset, or the same scrolled-back element.
     #[test]
-    fn appended_bars_keep_the_configured_right_offset() {
-        let options = crate::config::ChartOptions {
-            time_scale: crate::config::TimeScaleOptions {
-                right_offset: 20.0,
+    fn appended_bars_keep_the_view() {
+        use crate::model::{ChartType, ChartTypeParams};
+        for (name, kind, offset, expected) in [
+            (
+                "candles at the live edge",
+                ChartType::Candles,
+                None,
+                [20.0; 3],
+            ),
+            ("renko at the live edge", ChartType::Renko, None, [20.0; 3]),
+            (
+                "renko scrolled back",
+                ChartType::Renko,
+                Some(-30.0),
+                [-32.0, -34.0, -36.0],
+            ),
+        ] {
+            let options = crate::config::ChartOptions {
+                time_scale: crate::config::TimeScaleOptions {
+                    right_offset: 20.0,
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut chart = Chart::new(BarData::from_bars(
-            (0..100).map(|i| bar(i * 60, 100.0)).collect(),
-        ))
-        .with_chart_options(options);
-        let ctx = egui::Context::default();
-        frame(&ctx, &mut chart, 0.0, Vec::new());
-        for i in 100..103 {
-            chart.update(SeriesId::MAIN, bar(i * 60, 101.0));
-            assert_eq!(chart.state.time_scale().right_offset(), 20.0, "bar {i}");
-            frame(&ctx, &mut chart, i as f64, Vec::new());
+            };
+            // Every bar after the first adds two bricks of 10. Brick 167 stays at the right edge.
+            let mut chart = Chart::new(BarData::from_bars(
+                (0..100)
+                    .map(|i| bar(i * 60, 120.0 + 20.0 * i as f64))
+                    .collect(),
+            ))
+            .with_chart_options(options);
+            chart.set_chart_type(kind);
+            chart.set_chart_type_params(ChartTypeParams {
+                renko_brick_size: 10.0,
+                ..Default::default()
+            });
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            if let Some(offset) = offset {
+                chart.state.time_scale_mut().set_right_offset(offset);
+            }
+            let mut got = Vec::new();
+            for i in 100..103 {
+                chart.update(SeriesId::MAIN, bar(i * 60, 120.0 + 20.0 * i as f64));
+                frame(&ctx, &mut chart, i as f64, Vec::new());
+                got.push(chart.state.time_scale().right_offset());
+            }
+            assert_eq!(got, expected, "{name}");
         }
     }
 

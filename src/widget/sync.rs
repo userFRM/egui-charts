@@ -11,12 +11,13 @@ impl Chart {
     ///
     /// When set to `Some(idx)`, a crosshair is drawn at the given bar index even
     /// if the user is not hovering over this chart. Pass `None` to clear it.
-    /// This is the receiver side of multi-chart crosshair synchronization.
+    /// This is the receiver side of multi-chart crosshair synchronization. Indices count elements
+    /// on price-based types; charts of different types still synchronize by index, not time.
     pub fn set_synced_crosshair_bar_idx(&mut self, bar_idx: Option<f64>) {
         self.synced_crosshair_bar_idx = bar_idx;
     }
 
-    /// Returns the bar index that the user was hovering over in the last frame.
+    /// Returns the hovered index in the last frame, counting elements on price-based types.
     ///
     /// Returns `None` if the cursor was not over the chart. This is the emitter
     /// side of multi-chart crosshair synchronization: read this value and pass

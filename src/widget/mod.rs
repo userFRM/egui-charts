@@ -226,6 +226,8 @@ pub struct Chart {
     pub(crate) chart_type: ChartType,
     /// Parameters of the price-based chart types and the baseline
     pub(crate) chart_type_params: ChartTypeParams,
+    /// Whether older source bars can contribute to the shown series.
+    pub(crate) older_bars_drawn: bool,
     /// Whether tracking mode is currently active
     pub(crate) tracking_mode_active: bool,
     /// Mouse entered chart area (for tracking mode exit detection)
@@ -322,7 +324,7 @@ pub enum RightClickTarget {
     Element {
         /// The selected chart element (series or indicator).
         id: ChartElementId,
-        /// Data-space bar index under the cursor.
+        /// Data-space index under the cursor, counting elements on price-based chart types.
         bar_idx: usize,
         /// Screen position of the click (menu anchor).
         pos: Pos2,
@@ -516,7 +518,8 @@ impl Chart {
     /// Returns a mapping constructed from the last rendered frame's parameters
     /// (price rect, bar spacing, right offset, price range). This is used for
     /// converting between screen coordinates and data coordinates, particularly
-    /// for drawing tool restoration and hit testing.
+    /// for drawing tool restoration and hit testing. On price-based chart types its indices
+    /// count elements instead of source bars.
     pub fn get_chart_mapping(&self) -> ChartMapping {
         ChartMapping::new(
             self.last_rendered_price_rect,

@@ -96,6 +96,7 @@ impl Chart {
             pending_scroll_time: None,
             chart_type: ChartType::Candles,
             chart_type_params: ChartTypeParams::default(),
+            older_bars_drawn: true,
             tracking_mode_active: false,
             mouse_in_chart: false,
             feed: FeedState {
@@ -193,14 +194,15 @@ impl Chart {
 
     /// Sets the starting bar index for the visible range (builder pattern).
     ///
-    /// Index `0` is the oldest bar in the data. Use this to start the chart
+    /// On price-based types indices count elements; index `0` is the oldest kept element.
+    /// Otherwise index `0` is the oldest bar in the data. Use this to start the chart
     /// at a specific point in history rather than at the latest data.
     pub fn start_idx(mut self, index: usize) -> Self {
         self.start_idx = index;
         self
     }
 
-    /// Returns the number of bars currently visible in the chart area.
+    /// Returns the number of visible slots, counting elements on price-based types.
     ///
     /// This value is computed from the bar spacing and widget width during
     /// rendering. Returns 100 as a fallback if the chart has not been rendered yet.
@@ -215,7 +217,7 @@ impl Chart {
         }
     }
 
-    /// Returns the current starting bar index of the visible range.
+    /// Returns the current starting index of the visible range, counting elements on price-based types.
     ///
     /// Useful for syncing chart position with external app state or persisting
     /// the user's scroll position across sessions.
@@ -246,7 +248,8 @@ impl Chart {
     /// Updates the starting bar index on a persistent chart instance.
     ///
     /// Only triggers an update if `index` differs from the current value.
-    /// The viewport shift is applied on the next frame.
+    /// The viewport shift is applied on the next frame. On price-based types `index` counts
+    /// elements, with zero the oldest kept element.
     pub fn set_start_idx(&mut self, index: usize) {
         if index != self.start_idx {
             self.start_idx = index;
@@ -270,9 +273,13 @@ impl Chart {
     /// Sets the chart type (Candles, Bars, Line, Area, Renko, Kagi).
     ///
     /// Takes effect on the next rendered frame. Price-based chart types take their
-    /// sizes from [`Chart::set_chart_type_params`]. A change clears the series and drawing selection.
+    /// sizes from [`Chart::set_chart_type_params`]. A change clears the zoom history and the
+    /// series and drawing selection, keeping bar spacing and the time at the right edge.
+    /// A view near the live edge stays there. On Renko, Kagi, Line Break, Point and Figure and
+    /// range bar charts, indices count elements instead of bars.
     pub fn set_chart_type(&mut self, chart_type: ChartType) {
         if self.chart_type != chart_type {
+            self.state.clear_zoom_history();
             self.selection.deselect();
             self.drawings.deselect();
             self.chart_type = chart_type;
@@ -319,8 +326,14 @@ impl Chart {
     ///
     /// Sizes are in price units and are used as given;
     /// `RenkoConfig::from_atr(chart.bars(SeriesId::MAIN), 14, 1.0).brick_size` gives an ATR-based
-    /// brick. A size the chart cannot use is reported on the chart.
+    /// brick. A size the chart cannot use is reported on the chart. On price-based types a change
+    /// clears the zoom history and selection and keeps the right-edge item by time and rank.
     pub fn set_chart_type_params(&mut self, params: ChartTypeParams) {
+        if self.chart_type.is_time_independent() && self.chart_type_params != params {
+            self.state.clear_zoom_history();
+            self.selection.deselect();
+            self.drawings.deselect();
+        }
         self.chart_type_params = params;
     }
 

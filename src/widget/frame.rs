@@ -146,6 +146,8 @@ impl Chart {
     /// applies what it sent; studies are then brought up to date. While bars stream, a study
     /// that does not update incrementally is refreshed at most four times a second.
     ///
+    /// On price-based types the time scale and reported indices count elements, one OHLC bar
+    /// per brick, line, column or range bar. Each carries the last contributing bar's time.
     /// Price-based types keep studies, drawings and markers but do not draw, hit or edit them.
     /// Studies continue to update and all three appear again on time-based types.
     ///
@@ -156,6 +158,7 @@ impl Chart {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
+        self.show_elements();
         self.last_rendered_indicator_panes.clear();
         // Only pane studies need the pane layout, which gives the main pane at
         // least 200 points; without one the chart keeps the space it is given.
@@ -433,7 +436,7 @@ impl Chart {
         self.start_idx = start_idx;
 
         // Capture near_live status for button
-        let near_live_edge = self.state.time_scale().right_offset() >= -1.5;
+        let near_live_edge = self.state.time_scale().is_near_live_edge();
 
         // Handle "Jump to Latest" button interaction
         if !near_live_edge {
@@ -656,7 +659,7 @@ impl Chart {
                 &self.study_ids,
                 &coords,
                 volume_coords.as_ref(),
-                &self.state.data().bars,
+                self.state.shown(),
                 max_volume,
                 main_visible_range.clone(),
             );
@@ -703,7 +706,7 @@ impl Chart {
                     &self.study_ids,
                     &coords,
                     volume_coords.as_ref(),
-                    &self.state.data().bars,
+                    self.state.shown(),
                     max_volume,
                     main_visible_range.clone(),
                 );
