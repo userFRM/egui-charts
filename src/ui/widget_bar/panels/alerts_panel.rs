@@ -720,11 +720,11 @@ impl AlertsPanel {
     pub fn get_indicator_alert_form(&self) -> Option<IndicatorAlertFormData> {
         self.new_indicator_alert.as_ref().and_then(|form| {
             Some(IndicatorAlertFormData {
-                indicator_a: form.indicator_a.clone(),
+                indicator_a: fields::indicator(&form.indicator_a)?,
                 indicator_b: if form.use_threshold {
                     None
                 } else {
-                    Some(form.indicator_b.clone())
+                    Some(fields::indicator(&form.indicator_b)?)
                 },
                 threshold: if form.use_threshold {
                     Some(fields::level(&form.threshold)?)

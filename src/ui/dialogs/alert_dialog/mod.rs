@@ -24,6 +24,13 @@ pub(crate) mod fields {
         level(text).filter(|&multiplier| multiplier > 0.0)
     }
 
+    /// An indicator to compare: any name that is not blank.
+    pub(crate) fn indicator(text: &str) -> Option<String> {
+        Some(text.trim())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    }
+
     /// A lookback: a whole number of bars, at least one.
     pub(crate) fn lookback(text: &str) -> Option<u32> {
         text.parse().ok().filter(|&bars| bars >= 1)

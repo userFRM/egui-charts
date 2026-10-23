@@ -358,26 +358,25 @@ impl AlertDialog {
                 })
             }
             AlertTab::Indicator => {
-                let threshold = if self.indicator_form.use_threshold {
-                    Some(fields::level(&self.indicator_form.threshold).ok_or("Enter a threshold")?)
+                let form = &self.indicator_form;
+                let indicator_a =
+                    fields::indicator(&form.indicator_a).ok_or("Choose Indicator A")?;
+                let (indicator_b, threshold) = if form.use_threshold {
+                    let threshold = fields::level(&form.threshold).ok_or("Enter a threshold")?;
+                    (None, Some(threshold))
                 } else {
-                    None
-                };
-                let indicator_b = if !self.indicator_form.use_threshold
-                    && !self.indicator_form.indicator_b.is_empty()
-                {
-                    Some(self.indicator_form.indicator_b.clone())
-                } else {
-                    None
+                    let indicator_b =
+                        fields::indicator(&form.indicator_b).ok_or("Choose Indicator B")?;
+                    (Some(indicator_b), None)
                 };
                 Ok(AlertData::Indicator {
-                    symbol: self.indicator_form.symbol.clone(),
-                    indicator_a: self.indicator_form.indicator_a.clone(),
+                    symbol: form.symbol.clone(),
+                    indicator_a,
                     indicator_b,
                     threshold,
-                    condition: self.indicator_form.condition.clone(),
-                    message: self.indicator_form.message.clone(),
-                    repeating: self.indicator_form.repeating,
+                    condition: form.condition.clone(),
+                    message: form.message.clone(),
+                    repeating: form.repeating,
                 })
             }
             AlertTab::Volume => {
@@ -406,9 +405,11 @@ mod tests {
         type Edit = fn(&mut AlertDialog);
         const PRICE: Result<(), &str> = Err("Enter a price");
         const THRESHOLD: Result<(), &str> = Err("Enter a threshold");
+        const INDICATOR_A: Result<(), &str> = Err("Choose Indicator A");
+        const INDICATOR_B: Result<(), &str> = Err("Choose Indicator B");
         const MULTIPLIER: Result<(), &str> = Err("Enter a multiplier above 0");
         const LOOKBACK: Result<(), &str> = Err("Enter a lookback of at least 1 bar");
-        let rows: [(AlertTab, Edit, Result<(), &str>); 12] = [
+        let rows: [(AlertTab, Edit, Result<(), &str>); 14] = [
             (Price, |d| d.price_form.price = "NaN".into(), PRICE),
             (Price, |d| d.price_form.price = "inf".into(), PRICE),
             (Price, |d| d.price_form.price = "1e400".into(), PRICE),
@@ -422,9 +423,18 @@ mod tests {
             (Indicator, |d| d.indicator_form.threshold.clear(), THRESHOLD),
             (
                 Indicator,
+                |d| d.indicator_form.indicator_a.clear(),
+                INDICATOR_A,
+            ),
+            (
+                Indicator,
+                |d| d.indicator_form.use_threshold = false,
+                INDICATOR_B,
+            ),
+            (
+                Indicator,
                 |d| {
                     d.indicator_form.use_threshold = false;
-                    d.indicator_form.indicator_a = "SMA(20)".into();
                     d.indicator_form.indicator_b = "SMA(50)".into();
                 },
                 Ok(()),
@@ -448,6 +458,7 @@ mod tests {
             dialog.price_form.price = "100".into();
             dialog.indicator_form.use_threshold = true;
             dialog.indicator_form.threshold = "1".into();
+            dialog.indicator_form.indicator_a = "SMA(20)".into();
             edit(&mut dialog);
             assert_eq!(
                 dialog.collect_form_data().map(drop),
