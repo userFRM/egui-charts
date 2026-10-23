@@ -439,16 +439,7 @@ impl Drawing {
 
         let is_upward = end.y < start.y;
 
-        // Fibonacci speed resistance fan ratios with labels
-        let fib_ratios: [(f32, &str); 7] = [
-            (0.0, "0%"),
-            (0.236, "23.6%"),
-            (0.382, "38.2%"),
-            (0.5, "50%"),
-            (0.618, "61.8%"),
-            (0.786, "78.6%"),
-            (1.0, "100%"),
-        ];
+        let fib_ratios = SPEED_FAN_LEVELS;
 
         // Colors for different levels (gradient from green to red for up, reversed for down)
         let level_colors: [Color32; 7] = if is_upward {
@@ -706,6 +697,33 @@ impl Drawing {
 fn fib_channel_level_line(start: Pos2, end: Pos2, width_point: Pos2, level: f32) -> [Pos2; 2] {
     let offset = super::channels::offset_onto(start, end, width_point) * level;
     [start + offset, end + offset]
+}
+
+/// The speed resistance fan's ratios and their labels.
+const SPEED_FAN_LEVELS: [(f32, &str); 7] = [
+    (0.0, "0%"),
+    (0.236, "23.6%"),
+    (0.382, "38.2%"),
+    (0.5, "50%"),
+    (0.618, "61.8%"),
+    (0.786, "78.6%"),
+    (1.0, "100%"),
+];
+
+/// The speed resistance fan's lines from `start` to the edge of `rect`.
+pub(super) fn speed_fan_lines(start: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2]> {
+    SPEED_FAN_LEVELS
+        .iter()
+        .map(|&(ratio, _)| [start, speed_fan_line_end(start, end, ratio, rect)])
+        .collect()
+}
+
+/// The time zones' vertical lines across `rect`.
+pub(super) fn time_zone_lines(start: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2]> {
+    fib_time_zone_lines(start.x, end.x, rect.x_range())
+        .into_iter()
+        .map(|(_, x)| [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)])
+        .collect()
 }
 
 /// A point of a speed resistance arc of `radius` around `end`, `angle`

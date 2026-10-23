@@ -2,7 +2,7 @@
 //!
 //! Includes: rotated rect, double curve, brush, highlighter, path, curve, and sine line.
 
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -47,17 +47,18 @@ impl Drawing {
             self.color[3],
         );
 
-        // Draw S-curve between points
-        let segments = 32;
-        let mut prev = p1;
-        for i in 1..=segments {
-            let t = i as f32 / segments as f32;
-            let x = p1.x + (p2.x - p1.x) * t;
-            let offset = ((t * std::f32::consts::PI * 2.0).sin()) * 20.0;
-            let y = p1.y + (p2.y - p1.y) * t + offset;
-            let point = Pos2::new(x, y);
-            painter.line_segment([prev, point], Stroke::new(self.stroke_width, color));
-            prev = point;
+        for pair in double_curve_points(p1, p2).windows(2) {
+            painter.line_segment([pair[0], pair[1]], Stroke::new(self.stroke_width, color));
+        }
+    }
+
+    /// The width a brush is drawn at: twice the stroke width for the brush and
+    /// paintbrush, eight times for the highlighter; `None` for other tools.
+    pub(crate) fn brush_width(&self) -> Option<f32> {
+        match self.tool_type {
+            DrawingToolType::Brush | DrawingToolType::Paintbrush => Some(self.stroke_width * 2.0),
+            DrawingToolType::Highlighter => Some(self.stroke_width * 8.0),
+            _ => None,
         }
     }
 
@@ -72,7 +73,7 @@ impl Drawing {
             if i > 0 {
                 painter.line_segment(
                     [self.points[i - 1], point],
-                    Stroke::new(self.stroke_width * 2.0, color),
+                    Stroke::new(self.brush_width().unwrap_or(self.stroke_width), color),
                 );
             }
         }
@@ -85,7 +86,7 @@ impl Drawing {
             if i > 0 {
                 painter.line_segment(
                     [self.points[i - 1], point],
-                    Stroke::new(self.stroke_width * 8.0, color),
+                    Stroke::new(self.brush_width().unwrap_or(self.stroke_width), color),
                 );
             }
         }
@@ -126,20 +127,8 @@ impl Drawing {
         if self.points.len() < 2 {
             return;
         }
-        let p0 = self.points[0];
-        let p2 = self.points[self.points.len() - 1];
-
-        // Control point is either the middle point or calculated
-        let p1 = if self.points.len() >= 3 {
-            self.points[1]
-        } else {
-            // Auto-generate control point for smooth curve
-            let mid_x = (p0.x + p2.x) / 2.0;
-            let mid_y = (p0.y + p2.y) / 2.0;
-            let dx = p2.x - p0.x;
-            let dy = p2.y - p0.y;
-            // Perpendicular offset
-            Pos2::new(mid_x - dy * 0.3, mid_y + dx * 0.3)
+        let Some([p0, p1, p2]) = self.curve_controls() else {
+            return;
         };
 
         let color = Color32::from_rgba_unmultiplied(
@@ -150,16 +139,8 @@ impl Drawing {
         );
         let stroke = Stroke::new(self.stroke_width, color);
 
-        // Draw Bezier curve using segments
-        let segments = 32;
-        let mut prev_point: Option<Pos2> = None;
-        for i in 0..=segments {
-            let t = i as f32 / segments as f32;
-            let point = Self::quadratic_bezier(p0, p1, p2, t);
-            if let Some(prev) = prev_point {
-                painter.line_segment([prev, point], stroke);
-            }
-            prev_point = Some(point);
+        for pair in curve_points(p0, p1, p2).windows(2) {
+            painter.line_segment([pair[0], pair[1]], stroke);
         }
 
         // Draw anchor points
@@ -172,4 +153,40 @@ impl Drawing {
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 128),
         );
     }
+
+    /// The curve's start, control and end points: the control point is the
+    /// second anchor of three, or else set off to the side of the midpoint.
+    /// `None` below two anchors.
+    pub(super) fn curve_controls(&self) -> Option<[Pos2; 3]> {
+        let (&p0, &p2) = (self.points.first()?, self.points.last()?);
+        if self.points.len() < 2 {
+            return None;
+        }
+        let p1 = if self.points.len() >= 3 {
+            self.points[1]
+        } else {
+            let mid = Pos2::new((p0.x + p2.x) / 2.0, (p0.y + p2.y) / 2.0);
+            Pos2::new(mid.x - (p2.y - p0.y) * 0.3, mid.y + (p2.x - p0.x) * 0.3)
+        };
+        Some([p0, p1, p2])
+    }
+}
+
+/// The quadratic Bezier curve from `p0` to `p2` pulled towards `p1`.
+pub(super) fn curve_points(p0: Pos2, p1: Pos2, p2: Pos2) -> Vec<Pos2> {
+    (0..=32)
+        .map(|i| Drawing::quadratic_bezier(p0, p1, p2, i as f32 / 32.0))
+        .collect()
+}
+
+/// The S curve from `p1` to `p2`: the straight line between them with one
+/// sine period of 20 px added to y.
+pub(super) fn double_curve_points(p1: Pos2, p2: Pos2) -> Vec<Pos2> {
+    (0..=32)
+        .map(|i| {
+            let t = i as f32 / 32.0;
+            let offset = (t * std::f32::consts::TAU).sin() * 20.0;
+            Pos2::new(p1.x + (p2.x - p1.x) * t, p1.y + (p2.y - p1.y) * t + offset)
+        })
+        .collect()
 }

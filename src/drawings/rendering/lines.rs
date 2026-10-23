@@ -65,20 +65,7 @@ impl Drawing {
     ) {
         if self.points.len() >= 2 {
             let start = self.points[0];
-            let end = self.points[1];
-            let dx = end.x - start.x;
-            let dy = end.y - start.y;
-
-            let extended_end = if dx.abs() > 1e-6 {
-                let t = (rect.max.x - start.x) / dx;
-                Pos2::new(rect.max.x, start.y + t * dy)
-            } else if dy > 0.0 {
-                Pos2::new(start.x, rect.max.y)
-            } else {
-                Pos2::new(start.x, rect.min.y)
-            };
-
-            self.styled_segment(painter, start, extended_end, stroke);
+            self.styled_segment(painter, start, ray_end(start, self.points[1], rect), stroke);
             painter.circle_filled(start, DESIGN_TOKENS.rounding.md, color);
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
@@ -96,21 +83,8 @@ impl Drawing {
         if self.points.len() >= 2 {
             let p1 = self.points[0];
             let p2 = self.points[1];
-            let dx = p2.x - p1.x;
-            let dy = p2.y - p1.y;
-
-            if dx.abs() > 1e-6 {
-                let t_left = (rect.min.x - p1.x) / dx;
-                let t_right = (rect.max.x - p1.x) / dx;
-
-                let left_point = Pos2::new(rect.min.x, p1.y + t_left * dy);
-                let right_point = Pos2::new(rect.max.x, p1.y + t_right * dy);
-
-                self.styled_segment(painter, left_point, right_point, stroke);
-            } else {
-                let (top, bottom) = (Pos2::new(p1.x, rect.min.y), Pos2::new(p1.x, rect.max.y));
-                self.styled_segment(painter, top, bottom, stroke);
-            }
+            let [a, b] = extended_line(p1, p2, rect);
+            self.styled_segment(painter, a, b, stroke);
 
             painter.circle_filled(p1, DESIGN_TOKENS.rounding.sm, color);
             painter.circle_filled(p2, DESIGN_TOKENS.rounding.sm, color);
@@ -454,20 +428,7 @@ impl Drawing {
     /// Render ellipse
     pub(crate) fn render_ellipse(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         if self.points.len() >= 2 {
-            let p1 = self.points[0];
-            let p2 = self.points[1];
-            let center = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
-            let rx = (p2.x - p1.x).abs() / 2.0;
-            let ry = (p2.y - p1.y).abs() / 2.0;
-
-            let segments = 48;
-            let mut ellipse_points: Vec<Pos2> = Vec::with_capacity(segments + 1);
-            for i in 0..=segments {
-                let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
-                let x = center.x + rx * angle.cos();
-                let y = center.y + ry * angle.sin();
-                ellipse_points.push(Pos2::new(x, y));
-            }
+            let ellipse_points = ellipse_points(self.points[0], self.points[1]);
 
             if let Some(fill) = self.fill_color {
                 let fill_color =
@@ -519,24 +480,8 @@ impl Drawing {
     pub(crate) fn render_arc(&self, painter: &egui::Painter, color: Color32, stroke: Stroke) {
         if self.points.len() >= 2 {
             let center = self.points[0];
-            let edge = self.points[1];
-            let radius = ((edge.x - center.x).powi(2) + (edge.y - center.y).powi(2)).sqrt();
-
-            let start_angle = (edge.y - center.y).atan2(edge.x - center.x);
-            let segments = 32;
-
-            let mut prev_point: Option<Pos2> = None;
-            for i in 0..=segments {
-                let t = i as f32 / segments as f32;
-                let angle = start_angle + std::f32::consts::PI * t;
-                let x = center.x + radius * angle.cos();
-                let y = center.y + radius * angle.sin();
-                let point = Pos2::new(x, y);
-
-                if let Some(prev) = prev_point {
-                    painter.line_segment([prev, point], stroke);
-                }
-                prev_point = Some(point);
+            for pair in arc_points(center, self.points[1]).windows(2) {
+                painter.line_segment([pair[0], pair[1]], stroke);
             }
 
             painter.circle_filled(center, DESIGN_TOKENS.rounding.sm, color);
@@ -649,4 +594,58 @@ impl Drawing {
             painter.add(shape);
         }
     }
+}
+
+/// Where a ray from `start` through `end` leaves `rect` on the right, or at the
+/// top or bottom when it is vertical.
+pub(super) fn ray_end(start: Pos2, end: Pos2, rect: Rect) -> Pos2 {
+    let (dx, dy) = (end.x - start.x, end.y - start.y);
+    if dx.abs() > 1e-6 {
+        let t = (rect.max.x - start.x) / dx;
+        Pos2::new(rect.max.x, start.y + t * dy)
+    } else if dy > 0.0 {
+        Pos2::new(start.x, rect.max.y)
+    } else {
+        Pos2::new(start.x, rect.min.y)
+    }
+}
+
+/// The line through `p1` and `p2` across `rect`, edge to edge.
+pub(super) fn extended_line(p1: Pos2, p2: Pos2, rect: Rect) -> [Pos2; 2] {
+    let (dx, dy) = (p2.x - p1.x, p2.y - p1.y);
+    if dx.abs() > 1e-6 {
+        [rect.min.x, rect.max.x].map(|x| Pos2::new(x, p1.y + (x - p1.x) / dx * dy))
+    } else {
+        [rect.min.y, rect.max.y].map(|y| Pos2::new(p1.x, y))
+    }
+}
+
+/// The closed outline of the ellipse inscribed in the box from `p1` to `p2`.
+pub(super) fn ellipse_points(p1: Pos2, p2: Pos2) -> Vec<Pos2> {
+    let center = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
+    let (rx, ry) = ((p2.x - p1.x).abs() / 2.0, (p2.y - p1.y).abs() / 2.0);
+    let segments = 48;
+    (0..=segments)
+        .map(|i| {
+            let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
+            Pos2::new(center.x + rx * angle.cos(), center.y + ry * angle.sin())
+        })
+        .collect()
+}
+
+/// The half circle around `center` that starts at `edge` and turns clockwise
+/// on screen.
+pub(super) fn arc_points(center: Pos2, edge: Pos2) -> Vec<Pos2> {
+    let radius = center.distance(edge);
+    let start_angle = (edge.y - center.y).atan2(edge.x - center.x);
+    let segments = 32;
+    (0..=segments)
+        .map(|i| {
+            let angle = start_angle + std::f32::consts::PI * (i as f32 / segments as f32);
+            Pos2::new(
+                center.x + radius * angle.cos(),
+                center.y + radius * angle.sin(),
+            )
+        })
+        .collect()
 }

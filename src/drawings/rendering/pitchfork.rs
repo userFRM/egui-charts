@@ -2,18 +2,14 @@
 //!
 //! Includes: standard pitchfork, modified Schiff, inside pitchfork, and pitchfan.
 
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
 impl Drawing {
-    pub(crate) fn render_pitchfork(
-        &self,
-        painter: &egui::Painter,
-        chart_rect: Rect,
-        is_schiff: bool,
-    ) {
+    /// Standard and Schiff pitchfork
+    pub(crate) fn render_pitchfork(&self, painter: &egui::Painter, chart_rect: Rect) {
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
             self.color[1],
@@ -36,43 +32,9 @@ impl Drawing {
             return;
         }
 
-        let p0 = self.points[0]; // Anchor point
-        let p1 = self.points[1]; // First swing
-        let p2 = self.points[2]; // Second swing
-
-        // Draw median line (from its origin through the midpoint of p1-p2)
-        let (origin, midpoint) = median_line(p0, p1, p2, is_schiff);
-        let median_direction = Pos2::new(midpoint.x - origin.x, midpoint.y - origin.y);
-        let median_len = chart_rect.max.x - origin.x;
-        let scale = median_len / (midpoint.x - origin.x).max(0.001);
-        let median_end = Pos2::new(
-            origin.x + median_direction.x * scale,
-            origin.y + median_direction.y * scale,
-        );
-
-        painter.line_segment([origin, median_end], Stroke::new(self.stroke_width, color));
-
-        // Calculate parallel lines through p1 and p2
-        let parallel_direction = Pos2::new(median_end.x - origin.x, median_end.y - origin.y);
-
-        // Upper parallel (through p1)
-        let upper_end = Pos2::new(p1.x + parallel_direction.x, p1.y + parallel_direction.y);
-        painter.line_segment([p1, upper_end], Stroke::new(stroke::HAIRLINE, color));
-
-        // Lower parallel (through p2)
-        let lower_end = Pos2::new(p2.x + parallel_direction.x, p2.y + parallel_direction.y);
-        painter.line_segment([p2, lower_end], Stroke::new(stroke::HAIRLINE, color));
-
-        // Draw conn lines
-        let conn_stroke = Stroke::new(stroke::HAIRLINE / 2.0, Color32::from_white_alpha(100));
-        painter.line_segment([p0, p1], conn_stroke);
-        painter.line_segment([p0, p2], conn_stroke);
-        painter.line_segment([p1, p2], conn_stroke);
-
-        // Draw anchor points
-        painter.circle_filled(p0, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.md, color);
+        if let Some(lines) = self.pitchfork_lines(chart_rect) {
+            self.draw_fork(painter, &lines);
+        }
     }
 
     pub(crate) fn render_modified_schiff_pitchfork(
@@ -97,59 +59,9 @@ impl Drawing {
             return;
         }
 
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        let p0 = self.points[0];
-        let p1 = self.points[1];
-        let p2 = self.points[2];
-
-        // Modified anchor point
-        let modified_anchor = Pos2::new((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
-        let midpoint = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
-
-        // Median line direction
-        let dir = Pos2::new(
-            midpoint.x - modified_anchor.x,
-            midpoint.y - modified_anchor.y,
-        );
-        let scale = (chart_rect.max.x - modified_anchor.x) / dir.x.max(0.001);
-        let median_end = Pos2::new(
-            modified_anchor.x + dir.x * scale,
-            modified_anchor.y + dir.y * scale,
-        );
-
-        painter.line_segment(
-            [modified_anchor, median_end],
-            Stroke::new(self.stroke_width, color),
-        );
-
-        // Parallel lines
-        let parallel_dir = Pos2::new(
-            median_end.x - modified_anchor.x,
-            median_end.y - modified_anchor.y,
-        );
-        painter.line_segment(
-            [p1, Pos2::new(p1.x + parallel_dir.x, p1.y + parallel_dir.y)],
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-        painter.line_segment(
-            [p2, Pos2::new(p2.x + parallel_dir.x, p2.y + parallel_dir.y)],
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-
-        // Conn lines
-        let light = Stroke::new(stroke::HAIRLINE / 2.0, Color32::from_white_alpha(100));
-        painter.line_segment([p0, p1], light);
-        painter.line_segment([p1, p2], light);
-
-        painter.circle_filled(p0, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.md, color);
+        if let Some(lines) = self.pitchfork_lines(chart_rect) {
+            self.draw_fork(painter, &lines);
+        }
     }
 
     pub(crate) fn render_inside_pitchfork(&self, painter: &egui::Painter, chart_rect: Rect) {
@@ -170,41 +82,51 @@ impl Drawing {
             return;
         }
 
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
+        if let Some(lines) = self.pitchfork_lines(chart_rect) {
+            self.draw_fork(painter, &lines);
+        }
+    }
 
-        let p0 = self.points[0];
-        let p1 = self.points[1];
-        let p2 = self.points[2];
+    /// The pitchfork's lines as drawn: the median and its parallels to the right
+    /// edge of `rect`, then the lines between anchors the tool draws. `None`
+    /// below three anchors.
+    pub(super) fn pitchfork_lines(&self, rect: Rect) -> Option<Vec<[Pos2; 2]>> {
+        let &[p0, p1, p2, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let mid = |a: Pos2, b: Pos2| a + (b - a) / 2.0;
+        let (origin, through, links) = match self.tool_type {
+            DrawingToolType::Pitchfork | DrawingToolType::SchiffPitchfork => {
+                let schiff = self.tool_type == DrawingToolType::SchiffPitchfork;
+                let (origin, through) = median_line(p0, p1, p2, schiff);
+                (origin, through, vec![[p0, p1], [p0, p2], [p1, p2]])
+            }
+            DrawingToolType::ModifiedSchiffPitchfork => {
+                (mid(p0, p1), mid(p1, p2), vec![[p0, p1], [p1, p2]])
+            }
+            DrawingToolType::InsidePitchfork => (p0, mid(p1, p2), Vec::new()),
+            _ => return None,
+        };
+        let mut lines = fork_lines(origin, through, p1, p2, rect).to_vec();
+        lines.extend(links);
+        Some(lines)
+    }
 
-        // Inside anchor - midpoint of p1-p2
-        let anchor = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
-
-        // Median from p0 through anchor
-        let dir = Pos2::new(anchor.x - p0.x, anchor.y - p0.y);
-        let scale = (chart_rect.max.x - p0.x) / dir.x.max(0.001);
-        let median_end = Pos2::new(p0.x + dir.x * scale, p0.y + dir.y * scale);
-
-        painter.line_segment([p0, median_end], Stroke::new(self.stroke_width, color));
-
-        // Parallel lines through p1 and p2
-        let parallel_dir = Pos2::new(median_end.x - p0.x, median_end.y - p0.y);
-        painter.line_segment(
-            [p1, Pos2::new(p1.x + parallel_dir.x, p1.y + parallel_dir.y)],
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-        painter.line_segment(
-            [p2, Pos2::new(p2.x + parallel_dir.x, p2.y + parallel_dir.y)],
-            Stroke::new(stroke::HAIRLINE, color),
-        );
-
-        painter.circle_filled(p0, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(p1, DESIGN_TOKENS.rounding.md, color);
-        painter.circle_filled(p2, DESIGN_TOKENS.rounding.md, color);
+    /// Paints [`Self::pitchfork_lines`] and the three anchors.
+    fn draw_fork(&self, painter: &egui::Painter, lines: &[[Pos2; 2]]) {
+        let color = self.color32();
+        let link = Stroke::new(stroke::HAIRLINE / 2.0, Color32::from_white_alpha(100));
+        for (i, &line) in lines.iter().enumerate() {
+            let line_stroke = match i {
+                0 => Stroke::new(self.stroke_width, color),
+                1 | 2 => Stroke::new(stroke::HAIRLINE, color),
+                _ => link,
+            };
+            painter.line_segment(line, line_stroke);
+        }
+        for &p in &self.points[..3] {
+            painter.circle_filled(p, DESIGN_TOKENS.rounding.md, color);
+        }
     }
 
     pub(crate) fn render_pitchfan(&self, painter: &egui::Painter, rect: Rect) {
@@ -221,27 +143,14 @@ impl Drawing {
         );
         let line_stroke_main = Stroke::new(self.stroke_width, color);
 
-        // Calculate base angle from center to end
-        let dx = end.x - center.x;
-        let dy = end.y - center.y;
-        let base_angle = dy.atan2(dx);
+        for (i, (&ratio, [_, fan_end])) in PITCHFAN_RATIOS
+            .iter()
+            .zip(pitchfan_lines(center, end, rect))
+            .enumerate()
+        {
+            let fan_angle = (fan_end.y - center.y).atan2(fan_end.x - center.x);
 
-        // Fibonacci fan angles (relative to base): 0°, 23.6°, 38.2°, 50%, 61.8%, 78.6%
-        let fib_ratios = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
-        let max_angle_spread = std::f32::consts::FRAC_PI_4; // 45 degrees spread
-
-        for (i, &ratio) in fib_ratios.iter().enumerate() {
-            let angle_offset = (ratio - 0.5) * max_angle_spread * 2.0;
-            let fan_angle = base_angle + angle_offset;
-
-            // Extend fan line to chart edge
-            let extend_dist = rect.width().max(rect.height()) * 2.0;
-            let fan_end = Pos2::new(
-                center.x + extend_dist * fan_angle.cos(),
-                center.y + extend_dist * fan_angle.sin(),
-            );
-
-            let line_stroke = if i == 0 || i == fib_ratios.len() - 1 {
+            let line_stroke = if i == 0 || i == PITCHFAN_RATIOS.len() - 1 {
                 line_stroke_main
             } else {
                 Stroke::new(
@@ -277,6 +186,41 @@ impl Drawing {
         painter.circle_filled(center, DESIGN_TOKENS.rounding.md, color);
         painter.circle_filled(end, DESIGN_TOKENS.rounding.sm, color);
     }
+}
+
+/// The fan lines' ratios: 0 turns 45 degrees one way from the line to the
+/// second anchor, 0.5 runs along it and 1 turns 45 degrees the other way.
+const PITCHFAN_RATIOS: [f32; 7] = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
+
+/// The pitchfan's lines from `center`, one per ratio, turned from the line to
+/// `end` and run past every edge of `rect`.
+pub(super) fn pitchfan_lines(center: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2]> {
+    let base_angle = (end.y - center.y).atan2(end.x - center.x);
+    let extend_dist = rect.width().max(rect.height()) * 2.0;
+    PITCHFAN_RATIOS
+        .iter()
+        .map(|ratio| {
+            let angle = base_angle + (ratio - 0.5) * std::f32::consts::FRAC_PI_2;
+            [
+                center,
+                center + extend_dist * egui::vec2(angle.cos(), angle.sin()),
+            ]
+        })
+        .collect()
+}
+
+/// A pitchfork's median from `origin` through `through` to the right edge of
+/// `rect`, and its parallels from `p1` and `p2`, as long.
+pub(super) fn fork_lines(
+    origin: Pos2,
+    through: Pos2,
+    p1: Pos2,
+    p2: Pos2,
+    rect: Rect,
+) -> [[Pos2; 2]; 3] {
+    let scale = (rect.max.x - origin.x) / (through.x - origin.x).max(0.001);
+    let run = (through - origin) * scale;
+    [[origin, origin + run], [p1, p1 + run], [p2, p2 + run]]
 }
 
 /// Origin of the median line and the point it passes through, the midpoint of the

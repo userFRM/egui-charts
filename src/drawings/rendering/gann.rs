@@ -23,6 +23,32 @@ fn gann_fan_line_y(start: Pos2, end: Pos2, ratio: f32, x: f32) -> f32 {
     start.y + (x - start.x) * base_slope * ratio
 }
 
+/// Slopes of the Gann fan's lines as multiples of the 1x1 slope: an NxM line
+/// moves N price units per M time units.
+pub(super) const GANN_FAN_RATIOS: [f32; 9] = [8.0, 4.0, 3.0, 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 0.125];
+
+/// The Gann fan's lines from `start` to the right edge of `rect`, then the
+/// line to `end`.
+pub(super) fn gann_fan_lines(start: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2]> {
+    let x = rect.max.x;
+    GANN_FAN_RATIOS
+        .iter()
+        .map(|&ratio| [start, Pos2::new(x, gann_fan_line_y(start, end, ratio, x))])
+        .chain([[start, end]])
+        .collect()
+}
+
+/// The corner opposite `start` of a Gann square or fixed Gann box: towards
+/// `end`, as wide and high as the larger of the two distances between them.
+pub(super) fn gann_square_corner(start: Pos2, end: Pos2) -> Pos2 {
+    let size = (end.x - start.x).abs().max((end.y - start.y).abs());
+    let sign = |a: f32, b: f32| if b >= a { 1.0 } else { -1.0 };
+    Pos2::new(
+        start.x + size * sign(start.x, end.x),
+        start.y + size * sign(start.y, end.y),
+    )
+}
+
 /// The 2x1, 3x1 and 4x1 lines of a Gann box and their 1x2, 1x3 and 1x4
 /// mirrors, from the first anchor to the far edges, where the diagonal to the
 /// second anchor is the 1x1 line.
@@ -58,19 +84,19 @@ impl Drawing {
 
         // Gann fan angles with colors - 9 standard Gann angles
         // An NxM line moves N price units per M time units: N/M times the 1x1 slope
-        let angles: [(f32, &str, Color32); 9] = [
-            (8.0, "8×1", DESIGN_TOKENS.semantic.extended.bearish), // Steepest resistance
-            (4.0, "4×1", DESIGN_TOKENS.semantic.indicators.ma),    // Strong resistance
-            (3.0, "3×1", DESIGN_TOKENS.semantic.extended.favorite_gold), // Moderate resistance
-            (2.0, "2×1", DESIGN_TOKENS.semantic.extended.caution), // Mild resistance
-            (1.0, "1×1", DESIGN_TOKENS.semantic.indicators.bb_upper), // 45° balance line
-            (0.5, "1×2", DESIGN_TOKENS.semantic.indicators.ema),   // Mild support
-            (1.0 / 3.0, "1×3", DESIGN_TOKENS.semantic.drawings.fib_100), // Moderate support
-            (0.25, "1×4", DESIGN_TOKENS.semantic.extended.bullish), // Strong support
-            (0.125, "1×8", DESIGN_TOKENS.semantic.extended.bullish), // Strongest support
+        let styles: [(&str, Color32); 9] = [
+            ("8×1", DESIGN_TOKENS.semantic.extended.bearish), // Steepest resistance
+            ("4×1", DESIGN_TOKENS.semantic.indicators.ma),    // Strong resistance
+            ("3×1", DESIGN_TOKENS.semantic.extended.favorite_gold), // Moderate resistance
+            ("2×1", DESIGN_TOKENS.semantic.extended.caution), // Mild resistance
+            ("1×1", DESIGN_TOKENS.semantic.indicators.bb_upper), // 45° balance line
+            ("1×2", DESIGN_TOKENS.semantic.indicators.ema),   // Mild support
+            ("1×3", DESIGN_TOKENS.semantic.drawings.fib_100), // Moderate support
+            ("1×4", DESIGN_TOKENS.semantic.extended.bullish), // Strong support
+            ("1×8", DESIGN_TOKENS.semantic.extended.bullish), // Strongest support
         ];
 
-        for (angle_ratio, label, angle_color) in &angles {
+        for (angle_ratio, (label, angle_color)) in GANN_FAN_RATIOS.iter().zip(&styles) {
             let end_y = gann_fan_line_y(start, end, *angle_ratio, chart_rect.max.x);
 
             // Only draw if within reasonable bounds
@@ -161,16 +187,8 @@ impl Drawing {
             self.color[3],
         );
 
-        // Calculate square dimensions (use larger of width/height for 1:1 aspect)
-        let width = (end.x - start.x).abs();
-        let height = (end.y - start.y).abs();
-        let size = width.max(height);
-
-        // Determine square position
-        let sign_x = if end.x >= start.x { 1.0 } else { -1.0 };
-        let sign_y = if end.y >= start.y { 1.0 } else { -1.0 };
-        let corner = Pos2::new(start.x + size * sign_x, start.y + size * sign_y);
-        let square_rect = Rect::from_two_pos(start, corner);
+        let square_rect = Rect::from_two_pos(start, gann_square_corner(start, end));
+        let size = square_rect.width();
 
         // Fill background
         let fill_color =
@@ -474,16 +492,7 @@ impl Drawing {
             self.color[3],
         );
 
-        // Force 1:1 aspect ratio (use the larger dimension)
-        let dx = (p2.x - p1.x).abs();
-        let dy = (p2.y - p1.y).abs();
-        let size = dx.max(dy);
-
-        // Determine direction
-        let sign_x = if p2.x >= p1.x { 1.0 } else { -1.0 };
-        let sign_y = if p2.y >= p1.y { 1.0 } else { -1.0 };
-
-        let corner = Pos2::new(p1.x + size * sign_x, p1.y + size * sign_y);
+        let corner = gann_square_corner(p1, p2);
         let rect = Rect::from_two_pos(p1, corner);
         let center = rect.center();
 

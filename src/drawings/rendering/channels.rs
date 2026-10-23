@@ -210,9 +210,7 @@ impl Drawing {
         let is_flat_top = p3.y < (p1.y + p2.y) / 2.0;
 
         // Draw flat horizontal line at p3's y level
-        let extend_amount = typography::XXL + typography::LG; // Extend beyond the trend line
-        let flat_start = Pos2::new(p1.x.min(p2.x) - extend_amount, p3.y);
-        let flat_end = Pos2::new(p1.x.max(p2.x) + extend_amount, p3.y);
+        let [flat_start, flat_end] = flat_line(p1, p2, p3);
         painter.line_segment(
             [flat_start, flat_end],
             Stroke::new(self.stroke_width, color),
@@ -225,24 +223,8 @@ impl Drawing {
         let fill_color =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 35);
 
-        // Fill polygon between trend line and flat line
-        let fill_points = if is_flat_top {
-            vec![
-                Pos2::new(p1.x, p1.y),
-                Pos2::new(p2.x, p2.y),
-                Pos2::new(p2.x, p3.y),
-                Pos2::new(p1.x, p3.y),
-            ]
-        } else {
-            vec![
-                Pos2::new(p1.x, p3.y),
-                Pos2::new(p2.x, p3.y),
-                Pos2::new(p2.x, p2.y),
-                Pos2::new(p1.x, p1.y),
-            ]
-        };
         painter.add(egui::epaint::PathShape::convex_polygon(
-            fill_points,
+            flat_top_bottom_fill(p1, p2, p3),
             fill_color,
             Stroke::NONE,
         ));
@@ -390,7 +372,7 @@ impl Drawing {
         let line_length = (dx * dx + dy * dy).sqrt();
 
         // Second segment endpoint (parallel to first)
-        let p4 = Pos2::new(p3.x + dx, p3.y + dy);
+        let [_, p4] = disjoint_second_line(p1, p2, p3);
 
         // Calculate midpoints for the connector
         let mid1 = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
@@ -596,6 +578,30 @@ impl Moments {
             correlation: (!flat).then(|| self.sxy / (self.sxx * self.syy).sqrt()),
         })
     }
+}
+
+/// The flat top/bottom's horizontal line at `p3`, run past both ends of the
+/// trend line from `p1` to `p2`.
+pub(super) fn flat_line(p1: Pos2, p2: Pos2, p3: Pos2) -> [Pos2; 2] {
+    let extend = typography::XXL + typography::LG;
+    [p1.x.min(p2.x) - extend, p1.x.max(p2.x) + extend].map(|x| Pos2::new(x, p3.y))
+}
+
+/// The area between the flat top/bottom's trend line from `p1` to `p2` and
+/// its flat line at `p3`, over the trend line's bars, wound clockwise.
+pub(super) fn flat_top_bottom_fill(p1: Pos2, p2: Pos2, p3: Pos2) -> Vec<Pos2> {
+    let (f1, f2) = (Pos2::new(p1.x, p3.y), Pos2::new(p2.x, p3.y));
+    if p3.y < (p1.y + p2.y) / 2.0 {
+        vec![p1, p2, f2, f1]
+    } else {
+        vec![f1, f2, p2, p1]
+    }
+}
+
+/// The disjoint channel's second line: from `p3`, parallel to and as long as
+/// the line from `p1` to `p2`.
+pub(super) fn disjoint_second_line(p1: Pos2, p2: Pos2, p3: Pos2) -> [Pos2; 2] {
+    [p3, p3 + (p2 - p1)]
 }
 
 /// The move that carries the line through `p1` and `p2` onto `p3`: straight up

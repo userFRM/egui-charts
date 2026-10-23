@@ -74,7 +74,7 @@ pub use traits::DrawingRenderer;
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::model::{Bar, SpanCache};
-use egui::Rect;
+use egui::{Pos2, Rect};
 use std::rc::Rc;
 
 /// The bars and coordinate mapping that drawings are rendered against.
@@ -127,6 +127,201 @@ impl ChartView<'_> {
         } else {
             cache.get(param, first, bars, self.revision, build)
         }
+    }
+}
+
+/// The lines a drawing draws and the convex areas it fills, in screen
+/// coordinates, from the geometry its renderer draws.
+#[derive(Debug, Default)]
+pub(crate) struct Outline {
+    pub(crate) lines: Vec<[Pos2; 2]>,
+    pub(crate) areas: Vec<Vec<Pos2>>,
+    /// The width the lines are stroked at, where it is wider than the
+    /// drawing's own stroke (the brushes).
+    pub(crate) width: f32,
+}
+
+impl Drawing {
+    /// What this drawing draws, with lines that run to the chart's edge cut at
+    /// the edge of `rect`. `None` for the tools not described here (text,
+    /// media, the data-driven tools and the Fibonacci arcs, circles, spiral and
+    /// wedge, the cycles, the position and projection tools) and below the
+    /// anchors a tool needs.
+    pub(crate) fn outline(&self, rect: Rect) -> Option<Outline> {
+        use DrawingToolType as T;
+        let p = self.points.as_slice();
+        let path = |closed: bool| {
+            let mut lines: Vec<[Pos2; 2]> = p.windows(2).map(|w| [w[0], w[1]]).collect();
+            if closed && p.len() >= 3 {
+                lines.push([p[p.len() - 1], p[0]]);
+            }
+            lines
+        };
+        let corners = |r: Rect| {
+            vec![
+                r.left_top(),
+                r.right_top(),
+                r.right_bottom(),
+                r.left_bottom(),
+            ]
+        };
+        let edges = |c: &[Pos2]| (0..c.len()).map(|i| [c[i], c[(i + 1) % c.len()]]).collect();
+        // A stroked and filled box: its border, and its inside.
+        let boxed = |outline: &mut Outline, r: Rect| {
+            let c = corners(r);
+            outline.lines = edges(&c);
+            outline.areas.push(c);
+        };
+        let filled = self.fill_color.is_some();
+        let &first = p.first()?;
+        let across = |y: f32| [Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y)];
+        let mut outline = Outline::default();
+        match self.tool_type {
+            T::HorizontalRay => outline.lines = vec![[first, Pos2::new(rect.max.x, first.y)]],
+            T::CrossLine => {
+                let down = [
+                    Pos2::new(first.x, rect.min.y),
+                    Pos2::new(first.x, rect.max.y),
+                ];
+                outline.lines = vec![across(first.y), down];
+            }
+            _ => {}
+        }
+        if !outline.lines.is_empty() {
+            return Some(outline);
+        }
+        let &second = p.get(1)?;
+        match self.tool_type {
+            T::TrendLine => {
+                let (left, right) = self.trend_line_ends(rect.min.x, rect.max.x)?;
+                outline.lines = vec![[left, right]];
+            }
+            T::TrendAngle
+            | T::InfoLine
+            | T::Arrow
+            | T::Polyline
+            | T::Path
+            | T::Brush
+            | T::Highlighter
+            | T::Paintbrush
+            | T::XABCDPattern
+            | T::CypherPattern
+            | T::ABCDPattern
+            | T::ThreeDrivesPattern
+            | T::ElliottImpulse
+            | T::ElliottCorrection
+            | T::ElliottTriangle
+            | T::ElliottDoubleCombo
+            | T::ElliottTripleCombo => {
+                outline.lines = path(false);
+                outline.width = self.brush_width().unwrap_or(0.0);
+            }
+            T::HeadAndShoulders => {
+                outline.lines = path(false);
+                outline.lines.extend(self.neckline().map(|(line, _)| line));
+            }
+            T::TrianglePattern => outline.lines = path(true),
+            T::Triangle => {
+                let [a, b, c, ..] = *p else { return None };
+                outline.lines = vec![[a, b], [b, c], [c, a]];
+                if filled {
+                    outline.areas.push(vec![a, b, c]);
+                }
+            }
+            T::Measure | T::DateAndPriceRange | T::GannBox => {
+                boxed(&mut outline, Rect::from_two_pos(first, second));
+            }
+            T::GannSquare | T::GannFixed => {
+                let corner = gann::gann_square_corner(first, second);
+                boxed(&mut outline, Rect::from_two_pos(first, corner));
+            }
+            T::RotatedRect => {
+                outline.lines = edges(&corners(Rect::from_two_pos(first, second)));
+            }
+            T::Ray => outline.lines = vec![[first, lines::ray_end(first, second, rect)]],
+            T::ExtendedLine => outline.lines = vec![lines::extended_line(first, second, rect)],
+            T::PriceRange => {
+                let mid_x = (first.x + second.x) / 2.0;
+                outline.lines = vec![
+                    across(first.y),
+                    across(second.y),
+                    [Pos2::new(mid_x, first.y), Pos2::new(mid_x, second.y)],
+                ];
+            }
+            T::DateRange => {
+                let band = Rect::from_x_y_ranges(
+                    first.x.min(second.x)..=first.x.max(second.x),
+                    rect.y_range(),
+                );
+                outline.lines = [first.x, second.x]
+                    .map(|x| [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)])
+                    .into();
+                outline.areas.push(corners(band));
+            }
+            T::Circle => {
+                let radius = first.distance(second);
+                let ring: Vec<Pos2> = (0..=64)
+                    .map(|i| {
+                        let angle = i as f32 / 64.0 * std::f32::consts::TAU;
+                        first + radius * egui::vec2(angle.cos(), angle.sin())
+                    })
+                    .collect();
+                outline.lines = ring.windows(2).map(|w| [w[0], w[1]]).collect();
+                if filled {
+                    outline.areas.push(ring);
+                }
+            }
+            T::Ellipse => {
+                let ring = lines::ellipse_points(first, second);
+                outline.lines = ring.windows(2).map(|w| [w[0], w[1]]).collect();
+                if filled {
+                    outline.areas.push(ring);
+                }
+            }
+            T::Arc => {
+                outline.lines = lines::arc_points(first, second)
+                    .windows(2)
+                    .map(|w| [w[0], w[1]])
+                    .collect();
+            }
+            T::Curve => {
+                let [p0, p1, p2] = self.curve_controls()?;
+                outline.lines = shapes::curve_points(p0, p1, p2)
+                    .windows(2)
+                    .map(|w| [w[0], w[1]])
+                    .collect();
+            }
+            T::DoubleCurve => {
+                outline.lines = shapes::double_curve_points(first, second)
+                    .windows(2)
+                    .map(|w| [w[0], w[1]])
+                    .collect();
+            }
+            T::Pitchfork | T::SchiffPitchfork | T::ModifiedSchiffPitchfork | T::InsidePitchfork => {
+                outline.lines = self.pitchfork_lines(rect)?;
+            }
+            T::Pitchfan => outline.lines = pitchfork::pitchfan_lines(first, second, rect),
+            T::GannFan => outline.lines = gann::gann_fan_lines(first, second, rect),
+            T::FlatTopBottom => {
+                let &third = p.get(2)?;
+                outline.lines = vec![[first, second], channels::flat_line(first, second, third)];
+                outline
+                    .areas
+                    .push(channels::flat_top_bottom_fill(first, second, third));
+            }
+            T::DisjointChannel => {
+                let &third = p.get(2)?;
+                let [_, fourth] = channels::disjoint_second_line(first, second, third);
+                outline.lines = vec![[first, second], [third, fourth]];
+                outline.areas.push(vec![first, second, fourth, third]);
+            }
+            T::FibonacciTimeZones => {
+                outline.lines = fibonacci::time_zone_lines(first, second, rect)
+            }
+            T::FibonacciSpeedFan => outline.lines = fibonacci::speed_fan_lines(first, second, rect),
+            _ => return None,
+        }
+        Some(outline)
     }
 }
 
@@ -193,8 +388,8 @@ impl Drawing {
             DrawingToolType::GannFixed => self.render_gann_fixed(painter),
 
             // Pitchforks (4 tools)
-            DrawingToolType::Pitchfork => self.render_pitchfork(painter, rect, false),
-            DrawingToolType::SchiffPitchfork => self.render_pitchfork(painter, rect, true),
+            DrawingToolType::Pitchfork => self.render_pitchfork(painter, rect),
+            DrawingToolType::SchiffPitchfork => self.render_pitchfork(painter, rect),
             DrawingToolType::ModifiedSchiffPitchfork => {
                 self.render_modified_schiff_pitchfork(painter, rect)
             }

@@ -286,9 +286,7 @@ impl Drawing {
         }
 
         // Draw neckline and target projection for complete pattern
-        let extend =
-            DESIGN_TOKENS.sizing.technical_labels.fib_label_offset_x + DESIGN_TOKENS.spacing.xxxl;
-        if let Some((neckline, target_y)) = head_and_shoulders_neckline(&self.points, extend) {
+        if let Some((neckline, target_y)) = self.neckline() {
             let neckline_color =
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200);
             let last_x = self.points[self.points.len() - 1].x;
@@ -763,6 +761,14 @@ fn head_and_shoulders_neckline(points: &[Pos2], extend: f32) -> Option<([Pos2; 2
 }
 
 impl Drawing {
+    /// The head and shoulders' neckline, run on past the last anchor, and the
+    /// y of its target.
+    pub(super) fn neckline(&self) -> Option<([Pos2; 2], f32)> {
+        let extend =
+            DESIGN_TOKENS.sizing.technical_labels.fib_label_offset_x + DESIGN_TOKENS.spacing.xxxl;
+        head_and_shoulders_neckline(&self.points, extend)
+    }
+
     /// Price ratios of an XABCD pattern: B's retracement of XA (`|B - A| / |A - X|`) and D's
     /// extension of BC (`|D - C| / |C - B|`).
     fn xabcd_ratios(&self) -> [Option<f64>; 2] {

@@ -251,24 +251,6 @@ impl DrawingInteraction {
             }
 
             match drawing.tool_type {
-                // A trend line is hit along the extensions it is drawn with.
-                DrawingToolType::TrendLine => {
-                    let reach = (point.x - hit_distance, point.x + hit_distance);
-                    if let Some((left, right)) = drawing.trend_line_ends(reach.0, reach.1)
-                        && point_to_line_distance(point, left, right) <= hit_distance
-                    {
-                        return Some(drawing.id);
-                    }
-                }
-                DrawingToolType::Measure => {
-                    if drawing.points.len() >= 2 {
-                        let dist =
-                            point_to_line_distance(point, drawing.points[0], drawing.points[1]);
-                        if dist <= hit_distance {
-                            return Some(drawing.id);
-                        }
-                    }
-                }
                 DrawingToolType::HorizontalLine => {
                     if !drawing.points.is_empty()
                         && (point.y - drawing.points[0].y).abs() <= hit_distance
@@ -316,23 +298,6 @@ impl DrawingInteraction {
                         return Some(drawing.id);
                     }
                 }
-                // Gann tools
-                DrawingToolType::GannFan => {
-                    if drawing.points.len() >= 2 {
-                        let p1 = drawing.points[0];
-                        let p2 = drawing.points[1];
-
-                        let angles = [1.0, 0.5, 0.333, 0.25, 2.0, 3.0, 4.0, 8.0];
-                        for &angle in &angles {
-                            let dy = (p2.y - p1.y) * angle;
-                            let end_point = Pos2::new(p2.x, p1.y + dy);
-                            let dist = point_to_line_distance(point, p1, end_point);
-                            if dist <= hit_distance {
-                                return Some(drawing.id);
-                            }
-                        }
-                    }
-                }
                 // Parallel channel
                 DrawingToolType::ParallelChannel => {
                     if drawing.points.len() >= 3 {
@@ -352,7 +317,28 @@ impl DrawingInteraction {
                     }
                 }
                 _ => {
-                    // Check proximity to any point
+                    // Lines that run to the chart's edge are cut at a box around the anchors and
+                    // the point, which holds every part of a line within reach of the point.
+                    let reach = Rect::from_points(&drawing.points)
+                        .union(Rect::from_pos(point))
+                        .expand(2.0 * hit_distance);
+                    if let Some(outline) = drawing.outline(reach) {
+                        let tolerance = hit_distance.max(outline.width / 2.0);
+                        let on_line = outline
+                            .lines
+                            .iter()
+                            .any(|&[a, b]| point_to_line_distance(point, a, b) <= tolerance);
+                        if on_line
+                            || outline
+                                .areas
+                                .iter()
+                                .any(|area| convex_contains(area, point))
+                        {
+                            return Some(drawing.id);
+                        }
+                        continue;
+                    }
+                    // The other tools: proximity to any anchor
                     for &p in &drawing.points {
                         let dist = ((point.x - p.x).powi(2) + (point.y - p.y).powi(2)).sqrt();
                         if dist <= hit_distance * 2.0 {
@@ -378,6 +364,22 @@ impl DrawingInteraction {
             false
         }
     }
+}
+
+/// Whether `point` lies inside the convex polygon `area`, wound either way. An
+/// area with no extent across has no inside: its edges are the only part hit.
+fn convex_contains(area: &[Pos2], point: Pos2) -> bool {
+    let sides = area.len();
+    let crosses = (0..sides).map(|i| {
+        let (edge, to_point) = (area[(i + 1) % sides] - area[i], point - area[i]);
+        edge.x * to_point.y - edge.y * to_point.x
+    });
+    let (mut left, mut right) = (false, false);
+    for cross in crosses {
+        left |= cross > 0.0;
+        right |= cross < 0.0;
+    }
+    sides >= 3 && (left || right) && !(left && right)
 }
 
 /// Calculates the perpendicular distance from `point` to the closest point on
@@ -572,6 +574,159 @@ mod tests {
             })
             .collect();
         assert!(hit.is_empty(), "hit without screen points: {hit:?}");
+    }
+
+    /// Each point is at least 40 px from every anchor. A ray from (0, 0) through (100, 50) runs on
+    /// through (300, 150) and not back through (-100, -50). The cross line through (100, 100) runs
+    /// down through (100, 300). The pattern's second leg runs from
+    /// (100, 100) to (200, 0) through (150, 50). The triangle's edge from (200, 0) to (100, 200)
+    /// passes (150, 100); without a fill its inside is empty. The circle around (100, 100)
+    /// through (150, 100) passes (100, 150), and its centre is empty. The pitchfork's median
+    /// leaves (0, 100) through the midpoint (100, 100) of the other anchors and runs on
+    /// flat. The Gann fan's 1x2 line from (0, 200), half the 1x1 slope to (100, 100), is at
+    /// y = 200 - 300 / 2 = 50 at x = 300. The measure fills its box, which holds (20, 80), 42 px
+    /// from its diagonal. A measure across bars at one price, from (0, 100) to (100, 100), is hit
+    /// 2 px off its border at (50, 102), but not 400 px past its end on the same line. A
+    /// highlighter is drawn 8 times its stroke width of 2, 16 px wide, so a point 7 px off its
+    /// line is on it. The date range fills the band between x = 100 and 200 at any height.
+    /// The ellipse in the box from (0, 0) to (200, 100) is lowest at (100, 100). Every drawing
+    /// extends both ways where its tool can: the trend line from (100, 100) to (200, 150) runs on
+    /// through (500, 300) and (0, 50).
+    #[test]
+    fn drawings_are_hit_along_what_they_draw() {
+        use DrawingToolType as T;
+        let interaction = DrawingInteraction::new();
+        // (tool, point, expected hit, anchors)
+        let cases = [
+            (
+                T::Ray,
+                (300.0, 150.0),
+                Some(7),
+                vec![(0.0, 0.0), (100.0, 50.0)],
+            ),
+            (
+                T::Ray,
+                (-100.0, -50.0),
+                None,
+                vec![(0.0, 0.0), (100.0, 50.0)],
+            ),
+            (
+                T::TrendLine,
+                (500.0, 300.0),
+                Some(7),
+                vec![(100.0, 100.0), (200.0, 150.0)],
+            ),
+            (
+                T::TrendLine,
+                (0.0, 50.0),
+                Some(7),
+                vec![(100.0, 100.0), (200.0, 150.0)],
+            ),
+            (T::CrossLine, (100.0, 300.0), Some(7), vec![(100.0, 100.0)]),
+            (
+                T::XABCDPattern,
+                (150.0, 50.0),
+                Some(7),
+                vec![
+                    (0.0, 0.0),
+                    (100.0, 100.0),
+                    (200.0, 0.0),
+                    (300.0, 100.0),
+                    (400.0, 0.0),
+                ],
+            ),
+            (
+                T::Triangle,
+                (150.0, 100.0),
+                Some(7),
+                vec![(0.0, 0.0), (200.0, 0.0), (100.0, 200.0)],
+            ),
+            (
+                T::Triangle,
+                (100.0, 50.0),
+                None,
+                vec![(0.0, 0.0), (200.0, 0.0), (100.0, 200.0)],
+            ),
+            (
+                T::Circle,
+                (100.0, 150.0),
+                Some(7),
+                vec![(100.0, 100.0), (150.0, 100.0)],
+            ),
+            (
+                T::Circle,
+                (100.0, 100.0),
+                None,
+                vec![(100.0, 100.0), (150.0, 100.0)],
+            ),
+            (
+                T::Pitchfork,
+                (400.0, 100.0),
+                Some(7),
+                vec![(0.0, 100.0), (100.0, 50.0), (100.0, 150.0)],
+            ),
+            (
+                T::GannFan,
+                (300.0, 50.0),
+                Some(7),
+                vec![(0.0, 200.0), (100.0, 100.0)],
+            ),
+            (
+                T::Measure,
+                (20.0, 80.0),
+                Some(7),
+                vec![(0.0, 0.0), (100.0, 100.0)],
+            ),
+            (
+                T::Measure,
+                (50.0, 102.0),
+                Some(7),
+                vec![(0.0, 100.0), (100.0, 100.0)],
+            ),
+            (
+                T::Measure,
+                (500.0, 100.0),
+                None,
+                vec![(0.0, 100.0), (100.0, 100.0)],
+            ),
+            (
+                T::Highlighter,
+                (50.0, 7.0),
+                Some(7),
+                vec![(0.0, 0.0), (100.0, 0.0)],
+            ),
+            (
+                T::DateRange,
+                (150.0, 400.0),
+                Some(7),
+                vec![(100.0, 50.0), (200.0, 80.0)],
+            ),
+            (
+                T::Ellipse,
+                (100.0, 100.0),
+                Some(7),
+                vec![(0.0, 0.0), (200.0, 100.0)],
+            ),
+            (
+                T::Ellipse,
+                (100.0, 50.0),
+                None,
+                vec![(0.0, 0.0), (200.0, 100.0)],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (tool, (x, y), want, anchors) in cases {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = anchors.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
+            (drawing.extend_left, drawing.extend_right) = (true, true);
+            let got = interaction.hit_test(Pos2::new(x, y), std::slice::from_ref(&drawing), "1D");
+            if got != want {
+                wrong.push(format!(
+                    "{tool:?} at ({x}, {y}): got {got:?}, want {want:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     #[test]
