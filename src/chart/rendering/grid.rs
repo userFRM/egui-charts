@@ -171,32 +171,44 @@ mod tests {
                         }
                     },
                 );
-                let lines: Vec<_> = output
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
+                let mut span_count = 0;
+                for shape in &output.shapes {
+                    match &shape.shape {
                         Shape::LineSegment { points, stroke } => {
-                            Some((points[0].distance(points[1]), stroke.width, stroke.color))
+                            assert!(!dotted, "solid light grid segment");
+                            assert_eq!(stroke.color, Color32::RED);
+                            assert_eq!(stroke.width, 1.0);
+                            assert!(points[0].distance(points[1]) >= rect.height());
+                            span_count += 1;
                         }
-                        Shape::Mesh(dot) => {
-                            let rect = dot.calc_bounds();
-                            Some((
-                                if vertical {
-                                    rect.height()
+                        Shape::Mesh(mesh) => {
+                            assert!(dotted);
+                            let dots: Vec<_> = mesh
+                                .vertices
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|vertices| {
+                                    assert!(vertices.iter().all(|v| v.color == Color32::RED));
+                                    let bounds = Rect::from_points(&vertices.map(|v| v.pos));
+                                    assert_eq!(bounds.size(), vec2(1.0, 1.0));
+                                    bounds
+                                })
+                                .collect();
+                            for pair in dots.windows(2) {
+                                let gap = if vertical {
+                                    pair[1].top() - pair[0].bottom()
                                 } else {
-                                    rect.width()
-                                },
-                                if vertical {
-                                    rect.width()
-                                } else {
-                                    rect.height()
-                                },
-                                dot.vertices[0].color,
-                            ))
+                                    pair[1].left() - pair[0].right()
+                                };
+                                assert_eq!(gap, 3.0);
+                            }
+                            span_count += dots.len();
                         }
-                        _ => None,
-                    })
-                    .collect();
+                        _ => {}
+                    }
+                }
+                assert!(span_count > 0);
                 let meshes = ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
                 output.drop_without_applying_deltas();
                 let ink_area: f32 = meshes
@@ -217,16 +229,6 @@ mod tests {
                     })
                     .sum();
                 assert!(ink_area > 0.0, "grid vanished during pixel rounding");
-                assert!(!lines.is_empty());
-                for (length, width, colour) in lines {
-                    assert_eq!(colour, Color32::RED);
-                    assert_eq!(width, 1.0);
-                    if dotted {
-                        assert!(length <= 1.001, "solid light grid segment: {length}");
-                    } else {
-                        assert!(length >= rect.height());
-                    }
-                }
             }
         }
     }

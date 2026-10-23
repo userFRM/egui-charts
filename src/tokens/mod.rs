@@ -398,8 +398,8 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
             bg_light: Color32::WHITE,
             bg_axis_light: Color32::WHITE,
             bg_selection_light: Color32::from_rgba_unmultiplied_const(41, 98, 255, 20),
-            grid_line_light: Color32::from_rgb(209, 209, 209),
-            grid_line_major_light: Color32::from_rgb(209, 209, 209),
+            grid_line_light: Color32::from_rgb(220, 220, 220),
+            grid_line_major_light: Color32::from_rgb(220, 220, 220),
             crosshair_line_light: Color32::from_rgba_unmultiplied_const(120, 120, 120, 150),
         },
         // Hover and pressed accents step darker so white text keeps 4.5:1 on all three.

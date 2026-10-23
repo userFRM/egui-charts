@@ -75,6 +75,7 @@ pub(crate) fn draw_dashed_line(
     // Integer dash indices covering [from, to]: at most visible_len / period + 2 steps.
     let first = (from / period).floor() as i64;
     let last = (to / period).ceil() as i64;
+    let mut dots = Mesh::default();
     for k in first..last {
         let dash_start = (k as f64 * period).max(from);
         let dash_end = (k as f64 * period + f64::from(dash_len)).min(to);
@@ -92,13 +93,14 @@ pub(crate) fn draw_dashed_line(
                     rect.min.round_to_pixels(painter.pixels_per_point()),
                     rect.size(),
                 );
-                let mut dot = Mesh::default();
-                dot.add_colored_rect(rect, stroke.color);
-                painter.add(dot);
+                dots.add_colored_rect(rect, stroke.color);
             } else {
                 painter.line_segment([start, end], stroke);
             }
         }
+    }
+    if !dots.is_empty() {
+        painter.add(dots);
     }
 }
 

@@ -298,10 +298,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- Light chart grids use 1 point dots with 3 point gaps in #d1d1d1, for both price and time lines. Explicit grid colours are kept, and dark chart grids keep their solid strokes.
-
+- Light chart grids use 1 point dots with 3 point gaps in #dcdcdc, for both price and time lines. Explicit grid colours are kept, and dark chart grids keep their solid strokes.
 - The light preset uses neutral text, separators, control states and panel gaps, white plot and axis surfaces, and #089981 up candles and #f23645 down candles. Semantic success and error colours stay separate from the candle palette.
-
 - `theme::apply_to_egui` installs the bundled Roboto Latin subset with tabular digits, at weight 400 with semibold symbols and time-axis years. Toolbar text is 14 px, legends 13 px, axes and price tags 12 px, and the bottom bar 12 px, with its right controls reserved at their actual width. `TimeframeToolbarSizingTokens` and `SizingTokens::timeframe_toolbar` are removed because the reservation follows the controls. Migration: remove those token fields from struct literals; to replace the bundled face, call `egui::Context::set_fonts` after applying the theme.
 - Volume bars take #26c6da up and #ec407a down from the theme at 60% opacity in dark, stand 12 points above the price pane bottom, reach 12% of the height above that baseline and span 80% of the bar pitch, with candle bodies defaulting to 60%. Reported layout bounds, hit testing and selection handles follow the overlaid bars.
 - Bollinger Bands default to #2962ff upper and lower bands and a #ffa726 basis, and overlay study lines default to 1 point instead of 2. Study colour overrides and oscillator pane widths stay the same.

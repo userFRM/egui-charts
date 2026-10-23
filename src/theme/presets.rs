@@ -103,8 +103,8 @@ impl Theme {
                 bg: Color32::WHITE,
                 bg_axis: Color32::WHITE,
                 bg_tooltip: Color32::WHITE,
-                grid_line: rgb(209, 209, 209),
-                grid_line_major: rgb(209, 209, 209),
+                grid_line: rgb(220, 220, 220),
+                grid_line_major: rgb(220, 220, 220),
                 axis_text: rgb(26, 26, 26),
                 axis_text_secondary: rgb(51, 51, 51),
                 // 3.2:1 on the white chart.
