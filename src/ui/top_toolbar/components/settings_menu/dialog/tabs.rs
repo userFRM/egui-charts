@@ -573,18 +573,24 @@ impl SettingsDialog {
                 });
                 ui.add_space(24.0);
                 self.draw_section_header(ui, "SCALE MODES", style);
-                styled_checkbox(
+                if styled_checkbox(
                     ui,
                     &mut self.settings.scales_and_lines.log_scale,
                     "Log scale",
                     style.val_text,
-                );
-                styled_checkbox(
+                ) && self.settings.scales_and_lines.log_scale
+                {
+                    self.settings.scales_and_lines.percentage_scale = false;
+                }
+                if styled_checkbox(
                     ui,
                     &mut self.settings.scales_and_lines.percentage_scale,
                     "Percentage scale",
                     style.val_text,
-                );
+                ) && self.settings.scales_and_lines.percentage_scale
+                {
+                    self.settings.scales_and_lines.log_scale = false;
+                }
                 styled_checkbox(
                     ui,
                     &mut self.settings.scales_and_lines.invert_scale,
@@ -823,38 +829,42 @@ fn styled_dropdown<R>(
         .show_ui(ui, add_contents);
 }
 
-fn styled_checkbox(ui: &mut Ui, checked: &mut bool, label: &str, text_color: Color32) {
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), 42.0),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.set_min_height(42.0);
-            ui.spacing_mut().icon_width = 18.0;
-            ui.spacing_mut().icon_width_inner = 12.0;
-            let background = ui.visuals().panel_fill;
-            let hover = ui.visuals().widgets.hovered.bg_fill;
-            let widgets = &mut ui.visuals_mut().widgets;
-            for (visuals, hovered) in [
-                (&mut widgets.inactive, false),
-                (&mut widgets.hovered, true),
-                (&mut widgets.active, true),
-            ] {
-                visuals.bg_fill = if *checked {
-                    text_color
-                } else if hovered {
-                    hover
-                } else {
-                    background
-                };
-                visuals.fg_stroke =
-                    Stroke::new(1.5, if *checked { background } else { text_color });
-                visuals.bg_stroke = Stroke::new(1.0, text_color);
-                visuals.corner_radius = egui::CornerRadius::same(3);
-            }
-            ui.checkbox(checked, RichText::new(label).size(14.0).color(text_color));
-        },
-    );
+fn styled_checkbox(ui: &mut Ui, checked: &mut bool, label: &str, text_color: Color32) -> bool {
+    let changed = ui
+        .allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 42.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_height(42.0);
+                ui.spacing_mut().icon_width = 18.0;
+                ui.spacing_mut().icon_width_inner = 12.0;
+                let background = ui.visuals().panel_fill;
+                let hover = ui.visuals().widgets.hovered.bg_fill;
+                let widgets = &mut ui.visuals_mut().widgets;
+                for (visuals, hovered) in [
+                    (&mut widgets.inactive, false),
+                    (&mut widgets.hovered, true),
+                    (&mut widgets.active, true),
+                ] {
+                    visuals.bg_fill = if *checked {
+                        text_color
+                    } else if hovered {
+                        hover
+                    } else {
+                        background
+                    };
+                    visuals.fg_stroke =
+                        Stroke::new(1.5, if *checked { background } else { text_color });
+                    visuals.bg_stroke = Stroke::new(1.0, text_color);
+                    visuals.corner_radius = egui::CornerRadius::same(3);
+                }
+                ui.checkbox(checked, RichText::new(label).size(14.0).color(text_color))
+                    .changed()
+            },
+        )
+        .inner;
     ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.row_spacing);
+    changed
 }
 
 fn styled_text_input(ui: &mut Ui, text: &mut String, width: f32) {

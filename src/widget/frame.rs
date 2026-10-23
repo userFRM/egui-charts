@@ -352,8 +352,8 @@ impl Chart {
 
         // Define axis rects
         let price_axis_rect = Rect::from_min_max(
-            Pos2::new(chart_rect.max.x, chart_rect.min.y),
-            Pos2::new(rect.max.x, chart_rect.max.y),
+            Pos2::new(axis_corner.left(), chart_rect.top()),
+            Pos2::new(axis_corner.right(), chart_rect.bottom()),
         );
         let time_axis_rect = shared_time_axis.unwrap_or_else(|| {
             Rect::from_min_max(
@@ -795,6 +795,12 @@ impl Chart {
         // The axis labels go at these depths, painted once the crosshair's tags are placed
         let price_labels = painter.add(egui::Shape::Noop);
 
+        let axis_edge = if self.config.show_right_axis {
+            rect.max.x
+        } else {
+            price_rect.left()
+        };
+        let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
         let mut tags: Vec<_> = self
             .price_lines
             .iter()
@@ -805,21 +811,21 @@ impl Chart {
                     &price_map,
                     line,
                     price_rect.min.x,
-                    self.config.show_right_axis,
-                    rect.max.x,
+                    show_price_axis,
+                    axis_edge,
                 )
             })
             .collect();
 
         if (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
             && let Some(last) = self.state.data().bars.last()
-            && let Some(previous) = self
+            && let Some(index) = self
                 .state
                 .data()
                 .bars
-                .iter()
-                .rev()
-                .find(|bar| bar.time.date_naive() < last.time.date_naive())
+                .partition_point(|bar| bar.time.date_naive() < last.time.date_naive())
+                .checked_sub(1)
+            && let Some(previous) = self.state.data().bars.get(index)
         {
             let line = PriceLine::new(previous.close, ui.active_theme().ui.text_secondary)
                 .with_style(crate::model::LineStyle::Dotted)
@@ -835,22 +841,12 @@ impl Chart {
                 &price_map,
                 &line,
                 price_rect.left(),
-                self.config.show_right_axis || self.config.show_left_axis,
-                if self.config.show_right_axis {
-                    rect.right()
-                } else {
-                    price_rect.left()
-                },
+                show_price_axis,
+                axis_edge,
             ));
         }
 
         // Last price line & label, from the newest bar even when it is scrolled out of view
-        let axis_edge = if self.config.show_right_axis {
-            rect.max.x
-        } else {
-            price_rect.left()
-        };
-        let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
         let last_price_tag = if let Some(last) = self.state.data().bars.last() {
             let color = if last.close >= last.open {
                 self.config.bullish_color
@@ -1221,7 +1217,8 @@ impl Chart {
                 } else {
                     &[]
                 };
-                legend.show_volume = show_volume && self.config.show_legend_volume;
+                legend.show_volume =
+                    self.chart_type.supports_volume() && self.config.show_legend_volume;
                 if let Some(action) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(ui, price_rect, &colors)
@@ -1299,6 +1296,7 @@ mod tests {
             (true, 7),
             (true, 8),
             (true, 9),
+            (true, 10),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0]);
@@ -1320,6 +1318,7 @@ mod tests {
             chart.set_indicator_inputs(oscillator, "2 close");
             let config = chart.config_mut();
             config.title_as_description = description;
+            config.show_volume = hidden != 10;
             config.show_symbol_labels = hidden != 1;
             config.show_quote_boxes = hidden != 2;
             config.show_ohlc_info = hidden != 3;
@@ -1375,9 +1374,10 @@ mod tests {
                 hidden != 1,
                 "{texts:?}"
             );
-            assert!(
+            assert_eq!(
                 chart.last_rendered_volume_rect.is_positive(),
-                "legend visibility must retain the histogram"
+                hidden != 10,
+                "legend visibility and histogram visibility are independent"
             );
         }
     }
@@ -1417,9 +1417,25 @@ mod tests {
                     ask_size: 1.0,
                 }));
                 chart.config.show_quote_boxes = false;
+                chart.set_price_lines(
+                    crate::chart::series::SeriesId::MAIN,
+                    vec![crate::model::PriceLine::new(115.0, egui::Color32::GOLD)],
+                );
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
                 let plot = chart.last_rendered_price_rect;
+                let custom_tag = painted
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Rect(tag) if tag.fill == egui::Color32::GOLD => Some(tag.rect),
+                        _ => None,
+                    })
+                    .expect("custom price line retains its axis label");
+                assert!(if left {
+                    custom_tag.right() <= plot.left()
+                } else {
+                    custom_tag.left() >= plot.right()
+                });
                 let close_y = chart.last_price_map.price_to_y(120.0);
                 let prev_y = chart.last_price_map.price_to_y(110.0);
                 let price_tags: Vec<_> = painted

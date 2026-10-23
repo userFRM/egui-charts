@@ -114,7 +114,8 @@ impl Modal {
         let height = self.height.map(|height| height.min(screen_height));
         let size = egui::vec2(
             self.width
-                .unwrap_or(DESIGN_TOKENS.sizing.dialog.default_width),
+                .unwrap_or(DESIGN_TOKENS.sizing.dialog.default_width)
+                .min((ctx.content_rect().width() - 48.0).max(0.0)),
             height
                 .or(self.min_height)
                 .unwrap_or(DESIGN_TOKENS.sizing.dialog.default_min_height),

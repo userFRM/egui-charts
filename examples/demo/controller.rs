@@ -531,6 +531,30 @@ impl DemoApp {
         settings.chart_basic_styles.background_color = config.background_color;
         settings.grid_lines.horizontal_color = config.grid_color;
         settings.grid_lines.vertical_color = config.grid_color;
+        settings.status_line.show_symbol = config.show_symbol_labels;
+        settings.status_line.title_as_description = config.title_as_description;
+        settings.status_line.show_quote_boxes = config.show_quote_boxes;
+        settings.status_line.show_ohlc = config.show_ohlc_info;
+        settings.status_line.show_change = config.show_ohlc_change;
+        settings.status_line.show_change_percent = config.show_ohlc_change_percent;
+        settings.status_line.show_volume = config.show_legend_volume;
+        settings.status_line.show_indicator_titles = config.show_indicator_labels;
+        settings.status_line.show_indicator_inputs = config.show_indicator_inputs;
+        settings.status_line.show_indicator_values = config.show_indicator_last_val;
+        settings.scales_and_lines.price_scale_left =
+            !config.show_right_axis && config.show_left_axis;
+        settings.scales_and_lines.show_last_price_label = config.show_symbol_last_val;
+        settings.scales_and_lines.show_price_line = config.show_price_line;
+        settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
+        settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
+        settings.scales_and_lines.show_countdown = config.show_countdown;
+        let scale = self.chart.state().price_scale();
+        settings.scales_and_lines.auto_scale = !scale.is_manual();
+        settings.scales_and_lines.log_scale =
+            scale.options().mode == egui_charts::scales::PriceScaleMode::Logarithmic;
+        settings.scales_and_lines.percentage_scale =
+            scale.options().mode == egui_charts::scales::PriceScaleMode::Percentage;
+        settings.scales_and_lines.invert_scale = scale.options().invert_scale;
         self.settings_dialog.open(settings.clone());
     }
 
@@ -1853,16 +1877,28 @@ mod tests {
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
     #[test]
-    fn opening_settings_keeps_the_charts_current_colours() {
+    fn opening_settings_keeps_the_charts_current_display() {
         for (_, theme) in egui_charts::theme::presets() {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-            let config = theme.apply_to_config(app.chart.config().clone());
+            let mut config = theme.apply_to_config(app.chart.config().clone());
+            config.show_quote_boxes = false;
+            config.show_left_axis = true;
+            config.show_right_axis = false;
+            config.show_countdown = false;
+            app.chart.price_scale_mut().options_mut().mode =
+                egui_charts::scales::PriceScaleMode::Percentage;
+            app.chart.price_scale_mut().set_range(-5.0, 5.0);
             *app.chart.config_mut() = config.clone();
             app.handle_top_toolbar(&ctx, TopToolbarAction::OpenSettings);
             let state = app.settings_state.clone();
             apply_settings_state(&state, app.chart.config_mut());
             let applied = app.chart.config();
+            assert!(!applied.show_quote_boxes);
+            assert!(applied.show_left_axis && !applied.show_right_axis);
+            assert!(!applied.show_countdown);
+            assert!(state.scales_and_lines.percentage_scale);
+            assert!(!state.scales_and_lines.auto_scale);
             assert_eq!(applied.grid_color, config.grid_color);
             assert_eq!(applied.background_color, config.background_color);
             assert_eq!(applied.bullish_color, config.bullish_color);

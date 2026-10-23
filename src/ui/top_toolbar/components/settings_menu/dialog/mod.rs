@@ -285,12 +285,9 @@ impl SettingsDialog {
                     ui.set_min_width((ui.available_width() - 8.0).max(0.0));
                     ui.add_space(24.0);
 
-                    egui::ScrollArea::vertical()
+                    egui::ScrollArea::both()
                         .auto_shrink([false, false])
-                        .max_height(
-                            content_height
-                                - DESIGN_TOKENS.sizing.settings_dialog.content_padding_top * 2.0,
-                        )
+                        .max_height((content_height - 24.0).max(0.0))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             // Rows keep the dialog's own rhythm; controls within a row get the
@@ -335,14 +332,18 @@ impl SettingsDialog {
             Vec2::new(208.0, height),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
-                ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.tab_padding_v);
-
-                for tab in SettingsTab::all() {
-                    let is_active = self.active_tab == *tab;
-                    if self.draw_tab_btn(ui, *tab, is_active, style).clicked() {
-                        self.active_tab = *tab;
-                    }
-                }
+                egui::ScrollArea::vertical()
+                    .id_salt("settings_tabs")
+                    .max_height(height)
+                    .show(ui, |ui| {
+                        ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.tab_padding_v);
+                        for tab in SettingsTab::all() {
+                            let is_active = self.active_tab == *tab;
+                            if self.draw_tab_btn(ui, *tab, is_active, style).clicked() {
+                                self.active_tab = *tab;
+                            }
+                        }
+                    });
             },
         );
 
@@ -771,40 +772,95 @@ mod tests {
         }
     }
     #[test]
-    fn changing_settings_tabs_keeps_the_top_edge() {
+    fn choosing_a_scale_mode_clears_the_other_mode() {
+        let ctx = Context::default();
+        let mut dialog = SettingsDialog::new();
+        let style = SettingsDialogStyle::from_theme(&Theme::light());
+        for (label, expected) in [
+            ("Log scale", (true, false)),
+            ("Percentage scale", (false, true)),
+            ("Log scale", (true, false)),
+        ] {
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        dialog.draw_scales_and_lines_tab(ui, &style);
+                    },
+                );
+                let pos = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                output.drop_without_applying_deltas();
+                pos
+            };
+            let pos = frame(vec![]);
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(vec![egui::Event::PointerButton {
+                    pos,
+                    pressed,
+                    button: egui::PointerButton::Primary,
+                    modifiers: Default::default(),
+                }]);
+            }
+            assert_eq!(
+                (
+                    dialog.settings.scales_and_lines.log_scale,
+                    dialog.settings.scales_and_lines.percentage_scale
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn changing_settings_tabs_keeps_the_top_edge_and_fits_the_window() {
         for theme in [Theme::light(), Theme::dark()] {
-            let ctx = Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            let mut dialog = SettingsDialog::new();
-            dialog.open(ChartSettingsState::default());
-            let mut tops = Vec::new();
-            for tab in SettingsTab::all() {
-                dialog.active_tab = *tab;
-                for _ in 0..3 {
-                    ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(Rect::from_min_size(
-                                Pos2::ZERO,
-                                Vec2::new(1440.0, 900.0),
-                            )),
-                            ..Default::default()
-                        },
-                        |ui| {
-                            dialog.show(ui.ctx(), &theme);
-                        },
-                    )
-                    .drop_without_applying_deltas();
+            for size in [Vec2::new(1440.0, 900.0), Vec2::new(600.0, 400.0)] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut dialog = SettingsDialog::new();
+                dialog.open(ChartSettingsState::default());
+                let mut tops = Vec::new();
+                for tab in SettingsTab::all() {
+                    dialog.active_tab = *tab;
+                    for _ in 0..3 {
+                        ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                dialog.show(ui.ctx(), &theme);
+                            },
+                        )
+                        .drop_without_applying_deltas();
+                    }
+                    let rect = ctx
+                        .memory(|memory| memory.area_rect(egui::Id::unique("chart_settings")))
+                        .unwrap();
+                    assert!(
+                        Rect::from_min_size(Pos2::ZERO, size).contains_rect(rect),
+                        "{tab:?}: {rect:?} in {size:?}"
+                    );
+                    tops.push(rect.top());
                 }
-                tops.push(
-                    ctx.memory(|memory| memory.area_rect(egui::Id::unique("chart_settings")))
-                        .unwrap()
-                        .top(),
+                assert!(
+                    tops.iter().all(|top| (top - tops[0]).abs() < 1.0),
+                    "{tops:?}"
                 );
             }
-            assert!(
-                tops.iter().all(|top| (top - tops[0]).abs() < 1.0),
-                "{tops:?}"
-            );
         }
     }
 }
