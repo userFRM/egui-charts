@@ -8,8 +8,7 @@ use super::fields;
 use super::tabs::AlertTab;
 use crate::ext::UiExt;
 use crate::ui_kit::FormGrid;
-use crate::ui_kit::buttons::ButtonExt;
-use crate::ui_kit::dialog::{DialogFrame, dialog_header};
+use crate::ui_kit::dialog::{DialogFooter, DialogFrame, dialog_header};
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::tab_bar::TabBar;
 
@@ -76,7 +75,7 @@ impl AlertDialog {
                 ..Default::default()
             },
             volume_form: VolumeAlertFormData {
-                multiplier: "2.0".to_string(),
+                multiplier: "2".to_string(),
                 lookback: "20".to_string(),
                 ..Default::default()
             },
@@ -140,7 +139,8 @@ impl AlertDialog {
 
         // Content area
         egui::ScrollArea::vertical()
-            .max_height(self.config.height - 150.0)
+            .max_height((ui.available_height() - 80.0).max(0.0))
+            .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.space_lg();
                 match self.active_tab {
@@ -151,56 +151,60 @@ impl AlertDialog {
                 ui.space_lg();
             });
 
-        // Footer with buttons
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-            ui.space_lg();
-            ui.horizontal(|ui| {
-                ui.space_lg();
-
-                // Cancel button
-                if ui.button("Cancel").clicked() {
-                    action = AlertDialogAction::Cancel;
-                    self.is_open = false;
+        let form = self.collect_form_data();
+        let (create, cancel) = DialogFooter::new("Create")
+            .secondary("Cancel")
+            .primary_enabled(form.is_ok())
+            .show_with_left(ui, |ui| {
+                if let Err(error) = &form {
+                    status_message(ui, MessageKind::Error, error);
                 }
-
-                let form = self.collect_form_data();
-                ui.right_aligned(|ui| {
-                    ui.space_lg();
-
-                    // Create button (primary), disabled until every field parses
-                    let create = ui.add_enabled(form.is_ok(), "Create Alert".primary_button());
-                    if let Err(error) = &form {
-                        status_message(ui, MessageKind::Error, error);
-                    }
-                    if create.clicked()
-                        && let Ok(data) = form
-                    {
-                        action = AlertDialogAction::Create(data);
-                        self.is_open = false;
-                    }
-                });
             });
-            ui.separator();
-        });
+        if cancel {
+            action = AlertDialogAction::Cancel;
+            self.is_open = false;
+        } else if create && let Ok(data) = form {
+            action = AlertDialogAction::Create(data);
+            self.is_open = false;
+        }
 
         action
     }
 
+    fn input_width(&self, ui: &Ui) -> f32 {
+        let label_width = ui
+            .painter()
+            .layout_no_wrap(
+                match self.active_tab {
+                    AlertTab::Price => "Condition:",
+                    AlertTab::Indicator => "Compare to:",
+                    AlertTab::Volume => "Multiplier:",
+                }
+                .into(),
+                egui::TextStyle::Body.resolve(ui.style()),
+                ui.visuals().text_color(),
+            )
+            .size()
+            .x;
+        (ui.available_width() - label_width - self.config.row_spacing).max(0.0)
+    }
+
     fn render_price_form(&mut self, ui: &mut Ui) {
+        let input_width = self.input_width(ui);
         FormGrid::new("price_alert_form")
             .spacing(self.config.row_spacing, self.config.row_spacing)
             .show(ui, |ui| {
                 ui.label("Symbol:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.price_form.symbol)
-                        .desired_width(self.config.input_width),
+                        .desired_width(input_width),
                 );
                 ui.end_row();
 
                 ui.label("Price:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.price_form.price)
-                        .desired_width(self.config.input_width),
+                        .desired_width(input_width),
                 );
                 ui.end_row();
 
@@ -215,14 +219,14 @@ impl AlertDialog {
                         "Greater Than",
                         "Less Than",
                     ],
-                    self.config.input_width,
+                    input_width,
                 );
                 ui.end_row();
 
                 ui.label("Message:");
                 ui.add(
                     egui::TextEdit::multiline(&mut self.price_form.message)
-                        .desired_width(self.config.input_width)
+                        .desired_width(input_width)
                         .desired_rows(2),
                 );
                 ui.end_row();
@@ -234,13 +238,14 @@ impl AlertDialog {
     }
 
     fn render_indicator_form(&mut self, ui: &mut Ui) {
+        let input_width = self.input_width(ui);
         FormGrid::new("indicator_alert_form")
             .spacing(self.config.row_spacing, self.config.row_spacing)
             .show(ui, |ui| {
                 ui.label("Symbol:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.indicator_form.symbol)
-                        .desired_width(self.config.input_width),
+                        .desired_width(input_width),
                 );
                 ui.end_row();
 
@@ -249,12 +254,13 @@ impl AlertDialog {
                     "indicator_a",
                     &mut self.indicator_form.indicator_a,
                     &["SMA(20)", "EMA(20)", "RSI(14)", "MACD", "Volume"],
-                    self.config.input_width,
+                    input_width,
                 );
                 ui.end_row();
 
                 ui.label("Compare to:");
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     ui.radio_value(&mut self.indicator_form.use_threshold, false, "Indicator");
                     ui.radio_value(&mut self.indicator_form.use_threshold, true, "Value");
                 });
@@ -264,7 +270,7 @@ impl AlertDialog {
                     ui.label("Value:");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.indicator_form.threshold)
-                            .desired_width(self.config.input_width),
+                            .desired_width(input_width),
                     );
                     ui.end_row();
                 } else {
@@ -273,7 +279,7 @@ impl AlertDialog {
                         "indicator_b",
                         &mut self.indicator_form.indicator_b,
                         &["SMA(50)", "EMA(50)", "Price", "Volume MA"],
-                        self.config.input_width,
+                        input_width,
                     );
                     ui.end_row();
                 }
@@ -289,14 +295,14 @@ impl AlertDialog {
                         "Crossing Up",
                         "Crossing Down",
                     ],
-                    self.config.input_width,
+                    input_width,
                 );
                 ui.end_row();
 
                 ui.label("Message:");
                 ui.add(
                     egui::TextEdit::multiline(&mut self.indicator_form.message)
-                        .desired_width(self.config.input_width)
+                        .desired_width(input_width)
                         .desired_rows(2),
                 );
                 ui.end_row();
@@ -308,28 +314,39 @@ impl AlertDialog {
     }
 
     fn render_volume_form(&mut self, ui: &mut Ui) {
+        let input_width = self.input_width(ui);
         FormGrid::new("volume_alert_form")
             .spacing(self.config.row_spacing, self.config.row_spacing)
             .show(ui, |ui| {
                 ui.label("Symbol:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.volume_form.symbol)
-                        .desired_width(self.config.input_width),
+                        .desired_width(input_width),
                 );
                 ui.end_row();
 
                 ui.label("Multiplier:");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.volume_form.multiplier)
-                        .desired_width(self.config.input_width),
+                        .desired_width(input_width),
                 );
                 ui.end_row();
 
                 ui.label("Lookback:");
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let unit_width = ui
+                        .painter()
+                        .layout_no_wrap(
+                            "bars".into(),
+                            egui::TextStyle::Body.resolve(ui.style()),
+                            ui.visuals().text_color(),
+                        )
+                        .size()
+                        .x;
                     ui.add(
                         egui::TextEdit::singleline(&mut self.volume_form.lookback)
-                            .desired_width(60.0),
+                            .desired_width((input_width - unit_width - 4.0).max(0.0)),
                     );
                     ui.label("bars");
                 });
@@ -338,7 +355,7 @@ impl AlertDialog {
                 ui.label("Message:");
                 ui.add(
                     egui::TextEdit::multiline(&mut self.volume_form.message)
-                        .desired_width(self.config.input_width)
+                        .desired_width(input_width)
                         .desired_rows(2),
                 );
                 ui.end_row();
@@ -398,6 +415,34 @@ impl AlertDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn form_controls_fill_the_dialog_width_on_every_tab() {
+        for tab in AlertTab::all() {
+            for width in [360.0, 560.0] {
+                let ctx = Context::default();
+                let mut dialog = AlertDialog::new();
+                dialog.active_tab = tab;
+                let mut form_width = 0.0;
+                for _ in 0..3 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        ui.set_width(width);
+                        let form = ui.vertical(|ui| match tab {
+                            AlertTab::Price => dialog.render_price_form(ui),
+                            AlertTab::Indicator => dialog.render_indicator_form(ui),
+                            AlertTab::Volume => dialog.render_volume_form(ui),
+                        });
+                        form_width = form.response.rect.width();
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert!(
+                    (form_width - width).abs() < 16.0,
+                    "{tab:?}: {form_width} at {width}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn create_needs_a_valid_form() {
