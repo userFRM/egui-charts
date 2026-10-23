@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -93,34 +94,15 @@ impl KlingerOscillator {
 
         ema
     }
-}
 
-impl Default for KlingerOscillator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Indicator for KlingerOscillator {
-    fn name(&self) -> &str {
-        "Klinger"
-    }
-
-    fn desc(&self) -> &str {
-        "Klinger Volume Oscillator - Long-term money flow trend"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
         let mut volume_force = vec![f64::NAN; data.len()];
         // 0.0 until a bar's sum first differs from the bar before.
         let mut trend = 0.0;
         let mut cm = 0.0;
-        // A bar with a non-finite price has no force and is skipped, not compared against.
         let mut prev: Option<&Bar> = None;
         for (i, bar) in data.iter().enumerate() {
-            if !(bar.high + bar.low + bar.close).is_finite() {
-                continue;
-            }
             let Some(prev) = prev.replace(bar) else {
                 continue;
             };
@@ -161,7 +143,7 @@ impl Indicator for KlingerOscillator {
             .collect();
         let signal = Self::calculate_ema(&klinger, self.signal_period);
 
-        self.values = klinger
+        klinger
             .iter()
             .zip(&signal)
             .map(|(&kvo, &signal)| {
@@ -171,7 +153,36 @@ impl Indicator for KlingerOscillator {
                     IndicatorValue::Multiple(vec![kvo, signal])
                 }
             })
-            .collect();
+            .collect()
+    }
+}
+
+impl Default for KlingerOscillator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Indicator for KlingerOscillator {
+    fn name(&self) -> &str {
+        "Klinger"
+    }
+
+    fn desc(&self) -> &str {
+        "Klinger Volume Oscillator - Long-term money flow trend"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.high.is_finite()
+                    && b.low.is_finite()
+                    && b.close.is_finite()
+                    && b.volume.is_finite()
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

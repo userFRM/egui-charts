@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Close-to-Close Volatility
 /// Standard deviation of log returns, annualized by sqrt(252)
@@ -29,23 +30,15 @@ impl Default for CloseToCloseVol {
     }
 }
 
-impl Indicator for CloseToCloseVol {
-    fn name(&self) -> &str {
-        "C2C Vol"
-    }
-
-    fn desc(&self) -> &str {
-        "Close-to-Close Volatility - Annualized standard deviation of log returns"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl CloseToCloseVol {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < 2 {
             for _ in data {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate log returns
@@ -63,7 +56,7 @@ impl Indicator for CloseToCloseVol {
         // Rolling standard deviation of log returns
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -71,7 +64,7 @@ impl Indicator for CloseToCloseVol {
             let valid: Vec<f64> = window.iter().filter(|x| !x.is_nan()).copied().collect();
 
             if valid.len() < 2 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -82,8 +75,24 @@ impl Indicator for CloseToCloseVol {
 
             // Annualize: std_dev * sqrt(252) * 100 (as percentage)
             let annualized = std_dev * 252.0_f64.sqrt() * 100.0;
-            self.values.push(IndicatorValue::Single(annualized));
+            values.push(IndicatorValue::Single(annualized));
         }
+
+        values
+    }
+}
+
+impl Indicator for CloseToCloseVol {
+    fn name(&self) -> &str {
+        "C2C Vol"
+    }
+
+    fn desc(&self) -> &str {
+        "Close-to-Close Volatility - Annualized standard deviation of log returns"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

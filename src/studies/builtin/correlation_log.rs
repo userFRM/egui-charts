@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -29,24 +30,16 @@ impl Default for CorrelationLogReturns {
     }
 }
 
-impl Indicator for CorrelationLogReturns {
-    fn name(&self) -> &str {
-        "CorrLogRet"
-    }
-
-    fn desc(&self) -> &str {
-        "Correlation Log Returns - Pearson correlation of ln(close/prev) vs time index"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl CorrelationLogReturns {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         // First bar has no log return
-        self.values.push(IndicatorValue::None);
+        values.push(IndicatorValue::None);
 
         // Compute log returns
         let mut log_returns = Vec::with_capacity(data.len());
@@ -61,7 +54,7 @@ impl Indicator for CorrelationLogReturns {
 
         for i in 1..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -89,13 +82,28 @@ impl Indicator for CorrelationLogReturns {
             let denom = (denom_x * denom_y).sqrt();
 
             if denom.abs() < 1e-15 {
-                self.values.push(IndicatorValue::Single(0.0));
+                values.push(IndicatorValue::Single(0.0));
             } else {
                 let corr = (n * sum_xy - sum_x * sum_y) / denom;
-                self.values
-                    .push(IndicatorValue::Single(corr.clamp(-1.0, 1.0)));
+                values.push(IndicatorValue::Single(corr.clamp(-1.0, 1.0)));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for CorrelationLogReturns {
+    fn name(&self) -> &str {
+        "CorrLogRet"
+    }
+
+    fn desc(&self) -> &str {
+        "Correlation Log Returns - Pearson correlation of ln(close/prev) vs time index"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

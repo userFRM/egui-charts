@@ -1,4 +1,4 @@
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 /// Historical Volatility (HV)
 /// Measures the annualized standard deviation of log returns
@@ -54,23 +54,15 @@ impl Default for HistoricalVolatility {
     }
 }
 
-impl Indicator for HistoricalVolatility {
-    fn name(&self) -> &str {
-        "HV"
-    }
-
-    fn desc(&self) -> &str {
-        "Historical Volatility - Annualized standard deviation of returns"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl HistoricalVolatility {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate log returns
@@ -89,7 +81,7 @@ impl Indicator for HistoricalVolatility {
         // Calculate rolling standard deviation
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let window = &log_returns[i + 1 - self.period..=i];
 
@@ -98,7 +90,7 @@ impl Indicator for HistoricalVolatility {
                     window.iter().filter(|&&x| !x.is_nan()).copied().collect();
 
                 if valid_returns.len() < 2 {
-                    self.values.push(IndicatorValue::None);
+                    values.push(IndicatorValue::None);
                     continue;
                 }
 
@@ -118,9 +110,25 @@ impl Indicator for HistoricalVolatility {
                 // Annualize: multiply by sqrt(trading_days) and convert to percentage
                 let annualized_hv = std_dev * self.trading_days.sqrt() * 100.0;
 
-                self.values.push(IndicatorValue::Single(annualized_hv));
+                values.push(IndicatorValue::Single(annualized_hv));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for HistoricalVolatility {
+    fn name(&self) -> &str {
+        "HV"
+    }
+
+    fn desc(&self) -> &str {
+        "Historical Volatility - Annualized standard deviation of returns"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

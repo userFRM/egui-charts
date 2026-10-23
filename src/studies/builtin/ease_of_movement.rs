@@ -1,4 +1,4 @@
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -10,8 +10,8 @@ use egui::Color32;
 /// ratio, (volume / divisor) / (high - low), and the study is the mean of the raw values of
 /// the last `period` bars. A bar with zero range has a raw value of 0. A bar with zero
 /// volume and a nonzero range has no raw value (its box ratio is 0). A bar with a NaN or
-/// infinite high, low or volume has no value, and neither it nor the next bar has a raw
-/// value. The mean is taken over the bars of the window that have a raw value, and a
+/// infinite high, low or volume has no value and is left out: the next bar's raw value
+/// compares with the last usable bar. The mean is taken over the bars of the window that have a raw value, and a
 /// window without one has no value.
 #[derive(Clone)]
 pub struct EaseOfMovement {
@@ -54,25 +54,14 @@ impl Default for EaseOfMovement {
     }
 }
 
-impl Indicator for EaseOfMovement {
-    fn name(&self) -> &str {
-        "EoM"
-    }
-
-    fn desc(&self) -> &str {
-        "Ease of Movement - Relates price change to volume"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        let finite = |b: &Bar| b.high.is_finite() && b.low.is_finite() && b.volume.is_finite();
+impl EaseOfMovement {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
         // The raw value of bar `i + 1`, or `None` where it is undefined.
         let raw: Vec<Option<f64>> = data
             .windows(2)
             .map(|pair| {
                 let (prev, current) = (&pair[0], &pair[1]);
-                if !(prev.high.is_finite() && prev.low.is_finite() && finite(current)) {
-                    return None;
-                }
                 // Distance Moved = ((High + Low) / 2) - ((Prev High + Prev Low) / 2)
                 let distance_moved =
                     (current.high + current.low) / 2.0 - (prev.high + prev.low) / 2.0;
@@ -88,11 +77,8 @@ impl Indicator for EaseOfMovement {
             .collect();
 
         // Bar 0 has no raw value, so the first full window ends on bar `period`.
-        self.values = (0..data.len())
+        (0..data.len())
             .map(|i| {
-                if !finite(&data[i]) {
-                    return IndicatorValue::None;
-                }
                 let Some(window) = i.checked_sub(self.period).map(|start| &raw[start..i]) else {
                     return IndicatorValue::None;
                 };
@@ -102,7 +88,25 @@ impl Indicator for EaseOfMovement {
                     n => IndicatorValue::Single(defined.sum::<f64>() / n as f64),
                 }
             })
-            .collect();
+            .collect()
+    }
+}
+
+impl Indicator for EaseOfMovement {
+    fn name(&self) -> &str {
+        "EoM"
+    }
+
+    fn desc(&self) -> &str {
+        "Ease of Movement - Relates price change to volume"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.volume.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -190,7 +194,7 @@ mod tests {
             (14.0, 14.0, 0.0),
             (15.0, 14.0, 20_000.0),
         ];
-        // Bar 2 has a NaN input, so neither it nor bar 3 has a raw value.
+        // Bar 2 has a NaN input and is left out: bar 3 follows bar 1, so the raw values are 0.25, 1 and 1.
         let non_finite = [
             (10.0, 9.0, 50_000.0),
             (11.0, 10.0, 40_000.0),
@@ -246,7 +250,7 @@ mod tests {
                 "non-finite bar",
                 &non_finite[..],
                 2,
-                vec![None, None, None, None, Some(1.0)],
+                vec![None, None, None, Some(0.625), Some(1.0)],
             ),
         ];
 

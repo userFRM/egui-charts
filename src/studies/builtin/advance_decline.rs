@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -27,6 +28,31 @@ impl Default for AdvanceDeclineLine {
     }
 }
 
+impl AdvanceDeclineLine {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+        if data.is_empty() {
+            return values;
+        }
+
+        // First bar: no previous close, start at 0
+        let mut cumulative = 0.0_f64;
+        values.push(IndicatorValue::Single(cumulative));
+
+        for i in 1..data.len() {
+            if data[i].close > data[i - 1].close {
+                cumulative += 1.0;
+            } else if data[i].close < data[i - 1].close {
+                cumulative -= 1.0;
+            }
+            values.push(IndicatorValue::Single(cumulative));
+        }
+
+        values
+    }
+}
+
 impl Indicator for AdvanceDeclineLine {
     fn name(&self) -> &str {
         "A/D Line"
@@ -37,24 +63,7 @@ impl Indicator for AdvanceDeclineLine {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // First bar: no previous close, start at 0
-        let mut cumulative = 0.0_f64;
-        self.values.push(IndicatorValue::Single(cumulative));
-
-        for i in 1..data.len() {
-            if data[i].close > data[i - 1].close {
-                cumulative += 1.0;
-            } else if data[i].close < data[i - 1].close {
-                cumulative -= 1.0;
-            }
-            self.values.push(IndicatorValue::Single(cumulative));
-        }
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

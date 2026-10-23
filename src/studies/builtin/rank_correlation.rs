@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -52,25 +53,17 @@ impl Default for RankCorrelationIndex {
     }
 }
 
-impl Indicator for RankCorrelationIndex {
-    fn name(&self) -> &str {
-        "RankCorr"
-    }
-
-    fn desc(&self) -> &str {
-        "Rank Correlation Index (Spearman) - Price vs time rank correlation [-100, 100]"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl RankCorrelationIndex {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         for i in 0..data.len() {
             if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -97,10 +90,26 @@ impl Indicator for RankCorrelationIndex {
             };
 
             // Scale to [-100, 100]
-            self.values.push(IndicatorValue::Single(
+            values.push(IndicatorValue::Single(
                 (spearman * 100.0).clamp(-100.0, 100.0),
             ));
         }
+
+        values
+    }
+}
+
+impl Indicator for RankCorrelationIndex {
+    fn name(&self) -> &str {
+        "RankCorr"
+    }
+
+    fn desc(&self) -> &str {
+        "Rank Correlation Index (Spearman) - Price vs time rank correlation [-100, 100]"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Zero-Trend Volatility (Parkinson)
 /// Uses high-low range for volatility estimation assuming zero drift
@@ -30,20 +31,12 @@ impl Default for ZeroTrendVol {
     }
 }
 
-impl Indicator for ZeroTrendVol {
-    fn name(&self) -> &str {
-        "Parkinson Vol"
-    }
-
-    fn desc(&self) -> &str {
-        "Zero-Trend Volatility (Parkinson) - High-low range volatility estimator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ZeroTrendVol {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         let ln2 = 2.0_f64.ln();
@@ -63,7 +56,7 @@ impl Indicator for ZeroTrendVol {
         // Rolling Parkinson estimator
         for i in 0..data.len() {
             if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -71,7 +64,7 @@ impl Indicator for ZeroTrendVol {
             let valid: Vec<f64> = window.iter().filter(|x| !x.is_nan()).copied().collect();
 
             if valid.is_empty() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -83,8 +76,28 @@ impl Indicator for ZeroTrendVol {
 
             // Annualize and convert to percentage
             let annualized = parkinson * 252.0_f64.sqrt() * 100.0;
-            self.values.push(IndicatorValue::Single(annualized));
+            values.push(IndicatorValue::Single(annualized));
         }
+
+        values
+    }
+}
+
+impl Indicator for ZeroTrendVol {
+    fn name(&self) -> &str {
+        "Parkinson Vol"
+    }
+
+    fn desc(&self) -> &str {
+        "Zero-Trend Volatility (Parkinson) - High-low range volatility estimator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

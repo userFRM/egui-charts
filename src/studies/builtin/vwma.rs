@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Volume Weighted Moving Avg (VWMA)
 /// Moving avg weighted by volume - gives more importance to high-volume periods
@@ -36,21 +37,13 @@ impl Default for VWMA {
     }
 }
 
-impl Indicator for VWMA {
-    fn name(&self) -> &str {
-        "VWMA"
-    }
-
-    fn desc(&self) -> &str {
-        "Volume Weighted Moving Avg - MA weighted by volume"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl VWMA {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         for i in 0..data.len() {
             if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let window = &data[i + 1 - self.period..=i];
 
@@ -66,9 +59,29 @@ impl Indicator for VWMA {
                     window.iter().map(|bar| bar.close).sum::<f64>() / self.period as f64
                 };
 
-                self.values.push(IndicatorValue::Single(vwma));
+                values.push(IndicatorValue::Single(vwma));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for VWMA {
+    fn name(&self) -> &str {
+        "VWMA"
+    }
+
+    fn desc(&self) -> &str {
+        "Volume Weighted Moving Avg - MA weighted by volume"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.close.is_finite() && b.volume.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

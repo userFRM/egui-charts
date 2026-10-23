@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// OHLC Volatility (Garman-Klass)
 /// Uses OHLC data for more efficient volatility estimation
@@ -30,20 +31,12 @@ impl Default for OhlcVolatility {
     }
 }
 
-impl Indicator for OhlcVolatility {
-    fn name(&self) -> &str {
-        "GK Vol"
-    }
-
-    fn desc(&self) -> &str {
-        "Garman-Klass OHLC Volatility - Efficient volatility estimator using OHLC"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl OhlcVolatility {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         let ln2 = 2.0_f64.ln();
@@ -66,7 +59,7 @@ impl Indicator for OhlcVolatility {
         // Rolling average over period, then sqrt and annualize
         for i in 0..data.len() {
             if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -74,7 +67,7 @@ impl Indicator for OhlcVolatility {
             let valid: Vec<f64> = window.iter().filter(|x| !x.is_nan()).copied().collect();
 
             if valid.is_empty() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -86,8 +79,30 @@ impl Indicator for OhlcVolatility {
                 0.0
             };
 
-            self.values.push(IndicatorValue::Single(vol));
+            values.push(IndicatorValue::Single(vol));
         }
+
+        values
+    }
+}
+
+impl Indicator for OhlcVolatility {
+    fn name(&self) -> &str {
+        "GK Vol"
+    }
+
+    fn desc(&self) -> &str {
+        "Garman-Klass OHLC Volatility - Efficient volatility estimator using OHLC"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.open.is_finite() && b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

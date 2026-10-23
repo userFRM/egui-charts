@@ -23,6 +23,7 @@
 //! cmf.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -73,20 +74,12 @@ impl Default for ChaikinMoneyFlow {
     }
 }
 
-impl Indicator for ChaikinMoneyFlow {
-    fn name(&self) -> &str {
-        "CMF"
-    }
-
-    fn desc(&self) -> &str {
-        "Chaikin Money Flow - Measures buying/selling pressure over period"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ChaikinMoneyFlow {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         // Calculate Money Flow Volume for each bar
@@ -108,7 +101,7 @@ impl Indicator for ChaikinMoneyFlow {
         // Calculate CMF for each period
         for i in 0..data.len() {
             if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -122,8 +115,33 @@ impl Indicator for ChaikinMoneyFlow {
                 0.0
             };
 
-            self.values.push(IndicatorValue::Single(cmf));
+            values.push(IndicatorValue::Single(cmf));
         }
+
+        values
+    }
+}
+
+impl Indicator for ChaikinMoneyFlow {
+    fn name(&self) -> &str {
+        "CMF"
+    }
+
+    fn desc(&self) -> &str {
+        "Chaikin Money Flow - Measures buying/selling pressure over period"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.high.is_finite()
+                    && b.low.is_finite()
+                    && b.close.is_finite()
+                    && b.volume.is_finite()
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
