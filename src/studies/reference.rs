@@ -34,14 +34,14 @@ use crate::model::Bar;
 use crate::studies::{
     ADX, ATR, AccumulationDistribution, Aroon, AwesomeOscillator, BalanceOfPower, BollingerBands,
     BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility, ChandeMomentumOscillator,
-    ChoppinessIndex, CommoditySelectionIndex, CoppockCurve, DirectionalMovement, DonchianChannels,
-    EMA, ElderRay, Envelopes, ForceIndex, HL2, HLC3, HMA, IchimokuCloud, Indicator, IndicatorValue,
-    KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD, MassIndex, MedianPrice,
-    MoneyFlowIndex, NetVolume, OHLC4, OnBalanceVolume, ParabolicSAR, ParkinsonVol, PercentB,
-    PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange, SMA, StandardDeviation,
-    Stochastic, SuperTrend, TRIX, TrueRange, TypicalPrice, UltimateOscillator, VWMA,
-    VortexIndicator, WMA, Week52HighLow, Week52HighLowLevels, WeightedClose, WilliamsR,
-    ZeroTrendVol,
+    ChoppinessIndex, CommoditySelectionIndex, CoppockCurve, DEMA, DirectionalMovement,
+    DonchianChannels, EMA, ElderRay, Envelopes, ForceIndex, HL2, HLC3, HMA, IchimokuCloud,
+    Indicator, IndicatorValue, KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD,
+    MassIndex, MedianPrice, MoneyFlowIndex, NetVolume, OHLC4, OnBalanceVolume, ParabolicSAR,
+    ParkinsonVol, PercentB, PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange, SMA,
+    StandardDeviation, Stochastic, SuperTrend, TEMA, TRIX, TrueRange, TypicalPrice,
+    UltimateOscillator, VWMA, VortexIndicator, WMA, Week52HighLow, Week52HighLowLevels,
+    WeightedClose, WilliamsR, ZeroTrendVol,
 };
 use chrono::{TimeZone, Utc};
 
@@ -240,7 +240,26 @@ fn staple_studies_match_published_definitions() {
         .iter()
         .map(|b| Bar::new(b.time, 10.0, 10.0, 10.0, 10.0, 1.0))
         .collect();
+    // With period 2, each EMA seeds with two existing inputs, alpha = 2/3.
+    let short: Vec<_> = [2.0, 4.0, 8.0, 6.0, 10.0, 5.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
+        .collect();
+    let constant = vec![Bar::new(bars[0].time, 100.0, 100.0, 100.0, 100.0, 1.0); 60];
     studies.extend([
+        (
+            "DEMA(2)-hand",
+            Box::new(DEMA::new(2)) as Box<dyn Indicator>,
+            short.clone(),
+        ),
+        ("TEMA(2)-hand", Box::new(TEMA::new(2)), short),
+        (
+            "DEMA(20)-constant",
+            Box::new(DEMA::new(20)),
+            constant.clone(),
+        ),
+        ("TEMA(20)-constant", Box::new(TEMA::new(20)), constant),
         (
             "52W-levels-calendar",
             Box::new(Week52HighLowLevels::default()) as Box<dyn Indicator>,

@@ -90,6 +90,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- DEMA and TEMA seed each inner exponential average with its own first full window, so constant input stays constant and the warm-up remains `2 * period - 2` and `3 * period - 3` bars. ([#713](https://github.com/userFRM/egui-charts/issues/713))
+
 - Chart settings read back current status and scale controls before opening. Choosing log or percentage scale clears the other mode; legend volume remains independent of the histogram. Custom price-line tags and axis gestures follow left placement, and long session tags stay inside the chart.
 - Enlarged modals fit narrow windows, with scrollable settings content and tabs. Indicator results use a 32 px row pitch.
 - Symbol search gives its category strip and results separate scroll identities, keeps keyboard selection under a stationary pointer and scrolls the selected result into view. ([#597](https://github.com/userFRM/egui-charts/issues/597))
