@@ -104,6 +104,10 @@ impl Indicator for EMA {
     fn update(&mut self, data: &[Bar], from: usize) {
         let multiplier = 2.0 / (self.period as f64 + 1.0);
         self.stepper.run(data, from, &mut self.values, |ema, bar| {
+            // A bar without a finite close has no value and leaves the average as it was.
+            if !bar.close.is_finite() {
+                return IndicatorValue::None;
+            }
             // Seed with the first close, then smooth from the second bar onward.
             let next = match *ema {
                 None => bar.close,
