@@ -21,8 +21,7 @@ impl SymbolTab {
         ui.label(settings.chart_type.name());
         ui.space_sm();
         FormGrid::new("symbol_style_grid").show(ui, |ui| {
-            if !settings.chart_type.uses_ohlc() || settings.chart_type == ChartType::LineWithMarkers
-            {
+            if !settings.chart_type.uses_ohlc() {
                 ui.label("Price source");
                 Self::price_source_dropdown(ui, &mut settings.price_source);
                 ui.end_row();
