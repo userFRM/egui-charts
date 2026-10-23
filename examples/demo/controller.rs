@@ -260,6 +260,12 @@ impl DemoApp {
         let count = bar_count_for_timeframe(tf);
         self.regenerate_bars(count, tf);
         self.symbol_header.symbol_info.timeframe = tf.as_str().to_string();
+        // A replay continues at its current time on the new interval.
+        if let Some(replay) = self.replay.as_mut() {
+            let ts = self.bars.iter().map(|b| b.time).collect();
+            replay.load_data(self.bars.clone(), ts, self.state.symbol.clone());
+            self.push_replay_window_to_chart();
+        }
     }
 
     fn switch_symbol(&mut self, symbol: &str) {

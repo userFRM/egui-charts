@@ -114,7 +114,19 @@ impl ReplayController {
     }
 
     /// Load new bar data
+    ///
+    /// During an active replay the position moves to the last bar that opens at or before the
+    /// current replay time and playback carries on, so a change of interval continues the replay
+    /// where it was. On a coarser interval the bar that contains the replay time is shown whole; a
+    /// host that wants it partial passes that bar built from the finer bars. Otherwise the replay
+    /// starts paused on the first bar.
     pub fn load_data(&mut self, bars: Vec<Bar>, ts: Vec<DateTime<Utc>>, symbol: String) {
+        let resume = self.state.is_active().then(|| {
+            (
+                self.ts.get(self.state.curr_bar).copied(),
+                self.state.is_playing(),
+            )
+        });
         self.bars = bars;
         self.ts = ts;
 
@@ -122,6 +134,14 @@ impl ReplayController {
             let start = self.ts.first().copied().unwrap_or_else(Utc::now);
             let end = self.ts.last().copied().unwrap_or_else(Utc::now);
             self.state.init(self.bars.len(), start, end, symbol);
+            if let Some((Some(time), playing)) = resume {
+                let bar = self.ts.partition_point(|&t| t <= time).saturating_sub(1);
+                self.state.jump_to_bar(bar);
+                self.update_curr_date();
+                if playing {
+                    self.state.play();
+                }
+            }
         }
     }
 
@@ -402,18 +422,19 @@ mod tests {
         assert_eq!(controller.state.curr_bar, 50);
     }
 
+    fn play_to_end(controller: &mut ReplayController) {
+        controller.state.set_bar_duration(0.001);
+        controller.handle_action(ReplayAction::SetSpeed(100.0));
+        controller.handle_action(ReplayAction::Play);
+        while controller.state.is_playing() {
+            controller.update();
+        }
+    }
+
     #[test]
     fn playback_state_follows_seeks_and_steps() {
         use ReplayAction::*;
         type Setup = fn(&mut ReplayController);
-        let play_to_end: Setup = |c| {
-            c.state.set_bar_duration(0.001);
-            c.handle_action(SetSpeed(100.0));
-            c.handle_action(Play);
-            while c.state.is_playing() {
-                c.update();
-            }
-        };
         let rows: [(Setup, Vec<ReplayAction>, (usize, PlaybackState)); 6] = [
             (
                 play_to_end,
@@ -450,6 +471,52 @@ mod tests {
             assert_eq!(
                 (state.curr_bar, state.playback_state),
                 expected,
+                "row {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn interval_change_keeps_the_replay_time() {
+        type Row = (
+            fn(&mut ReplayController),
+            (usize, PlaybackState, DateTime<Utc>),
+        );
+        let days: Vec<_> = (1..=3)
+            .map(|day| Utc.with_ymd_and_hms(2024, 1, day, 0, 0, 0).unwrap())
+            .collect();
+        let rows: [Row; 2] = [
+            // Hourly bar 30 opens 2024-01-02 06:00, inside the second daily bar.
+            (
+                |c| {
+                    c.handle_action(ReplayAction::JumpToBar(30));
+                    c.handle_action(ReplayAction::Play);
+                },
+                (1, PlaybackState::Playing, days[1]),
+            ),
+            // Toggling play after the end restarts on hourly bar 0, inside the first daily bar.
+            (
+                |c| {
+                    play_to_end(c);
+                    c.handle_action(ReplayAction::TogglePlayPause);
+                },
+                (0, PlaybackState::Playing, days[0]),
+            ),
+        ];
+        for (index, (setup, (bar, playback, date))) in rows.into_iter().enumerate() {
+            let (bars, ts) = create_test_bars(48);
+            let mut controller = ReplayController::new(bars, ts);
+            setup(&mut controller);
+            let daily = days
+                .iter()
+                .map(|&time| Bar::new(time, 100.0, 101.0, 99.0, 100.5, 1000.0))
+                .collect();
+            controller.load_data(daily, days.clone(), String::new());
+
+            let state = &controller.state;
+            assert_eq!(
+                (state.curr_bar, state.playback_state, state.curr_date),
+                (bar, playback, Some(date)),
                 "row {index}"
             );
         }
