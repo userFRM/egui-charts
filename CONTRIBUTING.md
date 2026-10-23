@@ -91,6 +91,8 @@ The scenarios are one chart of 5,000,000 bars zoomed out and zoomed in, four cha
 
 A second table prints the first frame and the median and 95th percentile of steady, tick and new-bar frames for candles and the five price-based chart types on 1,000,000 one-minute bars; `-- price-based` runs it alone.
 
+`benches/stream.rs` feeds one chart 10,000 trades a second from a thread, with 10 or 30 studies on 100,000 and 1,000,000 bars and frames paced at 60 Hz on the wall clock. It prints frame p50, p99 and max, and full recomputes per second for a fallback study: `cargo bench --bench stream`. `FRAME_TIME_FRAMES` and name filters work as above; warm-up waits for every study to have one value per bar, then runs 60 more frames.
+
 To compare two commits, build the bench on each and run the two binaries in turn, so that changes in machine load and clock speed affect both alike. `cargo bench --no-run` prints the path of the binary it builds:
 
 ```sh

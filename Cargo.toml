@@ -69,6 +69,12 @@ path = "benches/frame_time.rs"
 harness = false
 required-features = ["widget", "studies"]
 
+[[bench]]
+name = "stream"
+path = "benches/stream.rs"
+harness = false
+required-features = ["widget", "studies"]
+
 [features]
 default = ["ui"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,
