@@ -88,6 +88,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Held values use one snapped vertical guide and a compact six-row panel; ordinary Cross mode keeps both crosshair lines.
+
 - Choosing a timezone in the demo updates both the chart and the bottom clock through the existing timezone API.
 
 - The demo Data Window computes absolute and percentage change from the preceding bar, matching the in-pane legend.

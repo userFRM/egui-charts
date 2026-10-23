@@ -127,20 +127,20 @@ pub fn render_floating_tooltip(
         .map(|(_, value)| value.size().x)
         .fold(0.0, f32::max);
     let row_gap = if options.on_long_press {
-        8.0
+        6.0
     } else {
         theme.spacing.xs
     };
     let line_height = rows[0].0.size().y + row_gap;
     let padding = if options.on_long_press {
-        16.0
+        14.0
     } else {
         theme.spacing.lg
     };
     let size = Vec2::new(
         label_width
             + if options.on_long_press {
-                24.0
+                26.0
             } else {
                 theme.spacing.lg
             }

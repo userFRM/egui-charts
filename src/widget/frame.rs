@@ -963,24 +963,6 @@ impl Chart {
             self.last_hover_bar_idx = Some(coords.x_to_idx_f32(hover_pos.x) as f64);
 
             if !menu_open {
-                crosshair_tags = rendering::render_crosshair_with_options(
-                    &price_ctx,
-                    hover_pos,
-                    visible_data,
-                    &price_map,
-                    &coords,
-                    &self.chart_options.crosshair,
-                    time_axis_top,
-                    rect.max.x,
-                    last_price_tag,
-                    formatter.as_ref(),
-                    bar_seconds,
-                );
-
-                // Draw the OHLC/value readout for the bar under the cursor, matching
-                // the bar the crosshair snaps to. Resolve via the shared coordinate
-                // mapping so the readout and the crosshair never disagree, and skip
-                // it when the cursor is in the empty scroll margin past the data.
                 let mut tooltip_options = self.chart_options.tooltip.clone();
                 tooltip_options.show_volume &= self.chart_type.supports_volume();
                 let held = ui.input(|input| {
@@ -991,6 +973,29 @@ impl Chart {
                                 .press_start_time()
                                 .is_some_and(|start| input.time - start >= 0.5))
                 });
+                let held_values = tooltip_options.enabled
+                    && tooltip_options.on_long_press
+                    && held
+                    && !self.drawings.eraser_mode
+                    && self.drawings.active_tool.is_none();
+                let mut crosshair_options = self.chart_options.crosshair;
+                if held_values {
+                    crosshair_options.style = crate::config::CrosshairStyle::Arrow;
+                }
+                crosshair_tags = rendering::render_crosshair_with_options(
+                    &price_ctx,
+                    hover_pos,
+                    visible_data,
+                    &price_map,
+                    &coords,
+                    &crosshair_options,
+                    time_axis_top,
+                    rect.max.x,
+                    last_price_tag,
+                    formatter.as_ref(),
+                    bar_seconds,
+                );
+
                 if tooltip_options.on_long_press
                     && ui.input(|input| input.any_touches() && input.pointer.primary_down())
                 {
