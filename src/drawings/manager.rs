@@ -20,11 +20,15 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect};
 use std::sync::{Arc, Mutex};
 
-/// Actions queued for backend/cloud synchronization.
+/// A change to the stored drawings, queued in [`DrawingManager::pending_sync`].
 ///
-/// These are produced by [`DrawingManager`] operations (create, update, delete)
-/// and consumed by the platform integration layer to persist changes to a
-/// remote backend or local storage.
+/// Every [`DrawingManager`] method that changes a field a drawing is stored with queues one
+/// action per drawing it changes: creating, moving, styling, locking, hiding, layering,
+/// deleting, undo and redo. Restoring a stored drawing with
+/// [`DrawingManager::add_synced_drawing`] queues nothing. The chart never drains the queue;
+/// the host does, and saves or deletes each drawing it names, for example with
+/// [`drawing_to_stored`](crate::drawings::persistence::drawing_to_stored). A host that writes
+/// to [`DrawingManager::drawings`] directly queues nothing.
 #[derive(Debug, Clone)]
 pub enum DrawingSyncAction {
     /// A new drawing was created and should be saved. Carries the drawing ID.
@@ -33,7 +37,8 @@ pub enum DrawingSyncAction {
     UpdateDrawing(usize),
     /// A drawing was deleted. Carries the stored drawing ID as a string.
     Delete(String),
-    /// A batch of drawings should be restored from backend storage.
+    /// A batch of drawings should be restored from backend storage. The manager never
+    /// queues it.
     RestoreDrawings(Vec<crate::drawings::persistence::StoredDrawing>),
 }
 
@@ -173,7 +178,9 @@ pub struct DrawingManager {
     /// Drawing ID currently hovered by the eraser cursor (for visual feedback).
     pub eraser_hover_drawing: Option<usize>,
 
-    /// Queue of sync actions for backend/cloud persistence.
+    /// Changes to the stored drawings, oldest first, for the host to drain, for example
+    /// with `std::mem::take(&mut *manager.pending_sync.lock().unwrap())`. See
+    /// [`DrawingSyncAction`].
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
 }
 
@@ -262,12 +269,38 @@ impl DrawingManager {
 
     /// Undoes the last drawing operation. Returns `true` if an operation was undone.
     pub fn undo(&mut self) -> bool {
-        self.history.undo(&mut self.drawings).is_some()
+        self.step_history(HistoryService::undo)
     }
 
     /// Redoes the last undone operation. Returns `true` if an operation was redone.
     pub fn redo(&mut self) -> bool {
-        self.history.redo(&mut self.drawings).is_some()
+        self.step_history(HistoryService::redo)
+    }
+
+    /// Runs an undo or redo step and queues the change it made to its drawing.
+    fn step_history(
+        &mut self,
+        step: fn(&mut HistoryService, &mut Vec<Drawing>) -> Option<usize>,
+    ) -> bool {
+        let before: Vec<_> = self.drawings.iter().map(|d| (d.id, sync_id(d))).collect();
+        let Some(id) = step(&mut self.history, &mut self.drawings) else {
+            return false;
+        };
+        let was = before.into_iter().find(|&(i, _)| i == id);
+        match (was, self.drawings.iter().any(|d| d.id == id)) {
+            (Some(_), true) => self.queue(DrawingSyncAction::UpdateDrawing(id)),
+            (Some((_, stored_id)), false) => self.queue(DrawingSyncAction::Delete(stored_id)),
+            (None, true) => self.queue(DrawingSyncAction::SaveDrawing(id)),
+            (None, false) => {}
+        }
+        true
+    }
+
+    /// Queues a change for the host to save.
+    fn queue(&self, action: DrawingSyncAction) {
+        if let Ok(mut sync) = self.pending_sync.lock() {
+            sync.push(action);
+        }
     }
 
     /// Returns `true` if there are operations available to undo.
@@ -355,17 +388,13 @@ impl DrawingManager {
         }
     }
 
-    /// Ends the current handle drag operation, pushing a modify command to the
-    /// undo history and queuing a cloud sync update.
+    /// Ends the current handle drag or [`Self::drag_edit_drawing`] gesture, pushing one modify
+    /// command to the undo history and queuing one update for the whole gesture.
     pub fn end_drag_handle(&mut self) {
         if let Some(old_state) = self.drag_old_state.take() {
             let drawing_id = old_state.id;
             self.history.push_modify(old_state.id, old_state);
-
-            // Queue cloud sync for the updated drawing
-            if let Ok(mut sync) = self.pending_sync.lock() {
-                sync.push(DrawingSyncAction::UpdateDrawing(drawing_id));
-            }
+            self.queue(DrawingSyncAction::UpdateDrawing(drawing_id));
         }
         self.dragging_handle = None;
     }
@@ -444,21 +473,10 @@ impl DrawingManager {
         self.preview_point = false;
         drawing.add_point_with_chart_coords(point, x_to_bar, y_to_price);
 
-        if drawing.completed {
-            self.history.push_add(drawing.clone());
-            self.drawings.push(drawing);
-
-            // Queue cloud sync
-            if let Ok(mut sync) = self.pending_sync.lock() {
-                sync.push(DrawingSyncAction::SaveDrawing(drawing_id));
-            }
-
-            self.curr_drawing = None;
-            if !self.stay_in_drawing_mode {
-                self.active_tool = None;
-            }
-        } else {
-            self.curr_drawing = Some(drawing);
+        let completed = drawing.completed;
+        self.curr_drawing = Some(drawing);
+        if completed {
+            self.finish_curr_drawing();
         }
     }
 
@@ -473,27 +491,14 @@ impl DrawingManager {
         G: Fn(f32) -> f64,
     {
         if let Some(ref mut drawing) = self.curr_drawing {
-            let drawing_id = drawing.id;
             // The click takes the place of the pointer preview.
             if std::mem::take(&mut self.preview_point) {
                 drawing.points.pop();
                 drawing.chart_points.pop();
             }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
-
             if drawing.completed {
-                self.history.push_add(drawing.clone());
-                self.drawings.push(drawing.clone());
-
-                // Queue cloud sync
-                if let Ok(mut sync) = self.pending_sync.lock() {
-                    sync.push(DrawingSyncAction::SaveDrawing(drawing_id));
-                }
-
-                self.curr_drawing = None;
-                if !self.stay_in_drawing_mode {
-                    self.active_tool = None;
-                }
+                self.finish_curr_drawing();
             }
         }
     }
@@ -534,9 +539,16 @@ impl DrawingManager {
             && drawing.points.len() >= drawing.tool_type.anchors_needed().max(2)
         {
             drawing.completed = true;
+            self.finish_curr_drawing();
+        }
+    }
+
+    /// Moves the completed current drawing to the drawing list and queues it to be saved.
+    fn finish_curr_drawing(&mut self) {
+        if let Some(drawing) = self.curr_drawing.take() {
             self.history.push_add(drawing.clone());
-            self.drawings.push(drawing.clone());
-            self.curr_drawing = None;
+            self.queue(DrawingSyncAction::SaveDrawing(drawing.id));
+            self.drawings.push(drawing);
             if !self.stay_in_drawing_mode {
                 self.active_tool = None;
             }
@@ -562,11 +574,8 @@ impl DrawingManager {
         }
         if let Some(drawing) = self.drawings.iter().find(|d| d.id == id).cloned() {
             self.drawings.retain(|d| d.id != id);
-            let stored_id = drawing.stored_id.clone().unwrap_or_else(|| id.to_string());
+            self.queue(DrawingSyncAction::Delete(sync_id(&drawing)));
             self.history.push_delete(drawing);
-            if let Ok(mut sync) = self.pending_sync.lock() {
-                sync.push(DrawingSyncAction::Delete(stored_id));
-            }
         }
         if self.selection.primary() == Some(id) {
             self.selection.deselect_all();
@@ -582,8 +591,13 @@ impl DrawingManager {
 
     /// Removes every drawing that is not locked and clears the current drawing and selection.
     ///
-    /// Note: This does not push to the undo history (it is a destructive reset).
+    /// Queues a `Delete` for each drawing it removes, so the host deletes their stored records.
+    /// To unload drawings without deleting them, clear [`Self::drawings`], then call
+    /// [`Self::cancel_curr_drawing`] and [`Self::deselect`]. It does not push to the undo history.
     pub fn clear_all(&mut self) {
+        for drawing in self.drawings.iter().filter(|d| !d.locked) {
+            self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
+        }
         self.drawings.retain(|d| d.locked);
         self.cancel_curr_drawing();
         self.selection.deselect_all();
@@ -597,11 +611,45 @@ impl DrawingManager {
     /// Bring a drawing to the front (drawn last, on top), above the highest z-order
     pub fn bring_to_front(&mut self, id: usize) {
         ZOrderService::bring_to_front(&mut self.drawings, id);
+        self.queue_update(id);
     }
 
     /// Send a drawing to the back (drawn first, behind others), below the lowest z-order
     pub fn send_to_back(&mut self, id: usize) {
         ZOrderService::send_to_back(&mut self.drawings, id);
+        self.queue_update(id);
+    }
+
+    /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
+    /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
+    /// saved. Does nothing if there is no such drawing.
+    pub fn edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
+        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
+            self.history.push_modify(id, drawing.clone());
+            edit(drawing);
+            self.queue(DrawingSyncAction::UpdateDrawing(id));
+        }
+    }
+
+    /// Applies `edit` as one frame of a continuous edit, such as dragging a colour picker: the
+    /// first frame records the drawing's state and nothing is queued until
+    /// [`Self::end_drag_handle`], which makes the whole gesture one undo step and queues one
+    /// update. Does nothing if there is no such drawing.
+    pub fn drag_edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
+        if self.drag_old_state.as_ref().is_some_and(|d| d.id != id) {
+            self.end_drag_handle();
+        }
+        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
+            self.drag_old_state.get_or_insert_with(|| drawing.clone());
+            edit(drawing);
+        }
+    }
+
+    /// Queues an update of the drawing with the given ID, if there is one.
+    fn queue_update(&self, id: usize) {
+        if self.drawings.iter().any(|d| d.id == id) {
+            self.queue(DrawingSyncAction::UpdateDrawing(id));
+        }
     }
 
     /// An id above every drawing's id and every numeric id a drawing is stored under, so a new
@@ -695,8 +743,15 @@ impl DrawingManager {
     /// all; otherwise shows them all.
     pub fn toggle_visibility_all(&mut self) {
         let all_visible = self.drawings.iter().all(|d| d.visible);
-        for drawing in &mut self.drawings {
+        for drawing in self
+            .drawings
+            .iter_mut()
+            .filter(|d| d.visible == all_visible)
+        {
             drawing.visible = !all_visible;
+            if let Ok(mut sync) = self.pending_sync.lock() {
+                sync.push(DrawingSyncAction::UpdateDrawing(drawing.id));
+            }
         }
     }
 
@@ -704,8 +759,11 @@ impl DrawingManager {
     /// all; otherwise locks them all.
     pub fn toggle_lock_all(&mut self) {
         let all_locked = self.drawings.iter().all(|d| d.locked);
-        for drawing in &mut self.drawings {
+        for drawing in self.drawings.iter_mut().filter(|d| d.locked == all_locked) {
             drawing.locked = !all_locked;
+            if let Ok(mut sync) = self.pending_sync.lock() {
+                sync.push(DrawingSyncAction::UpdateDrawing(drawing.id));
+            }
         }
     }
 
@@ -779,6 +837,9 @@ impl DrawingManager {
         }
         // Assign a new ID to avoid conflicts
         drawing.id = self.take_id();
+        if drawing.stored_id.is_none() {
+            self.queue(DrawingSyncAction::SaveDrawing(drawing.id));
+        }
         self.drawings.push(drawing);
     }
 
@@ -803,6 +864,14 @@ impl DrawingManager {
             self.render_handles(painter, drawing);
         }
     }
+}
+
+/// The id a drawing is stored under.
+fn sync_id(drawing: &Drawing) -> String {
+    drawing
+        .stored_id
+        .clone()
+        .unwrap_or_else(|| drawing.id.to_string())
 }
 
 #[cfg(test)]
@@ -945,19 +1014,85 @@ mod tests {
         assert_eq!(manager.hit_test(on_both), Some(fresh_id));
     }
 
-    /// Deleting a restored drawing asks the host to delete the record it is stored under.
+    /// Every edit of a stored field queues one action per drawing it changes, so a host that
+    /// saves from the queue stores what the user sees. Restoring a stored drawing queues nothing,
+    /// and deleting it names the record it is stored under.
     #[test]
-    fn deleting_a_restored_drawing_queues_its_stored_id() {
-        let mut manager = DrawingManager::new();
-        let mut restored = Drawing::new(0, DrawingToolType::HorizontalLine);
-        restored.stored_id = Some("a1b2".into());
-        manager.add_synced_drawing(restored);
-        manager.delete_drawing(manager.drawings[0].id);
-        let queued = manager.pending_sync.lock().unwrap();
-        assert!(
-            matches!(queued.as_slice(), [DrawingSyncAction::Delete(id)] if id == "a1b2"),
-            "{queued:?}"
-        );
+    fn every_edit_queues_one_sync_action() {
+        type Edit = fn(&mut DrawingManager);
+        let cases: [(Edit, &[&str]); 11] = [
+            (|m| m.clear_all(), &["Delete(a1b2)"]),
+            (|m| m.toggle_visibility_all(), &["Update(0)"]),
+            (|m| m.toggle_lock_all(), &["Update(0)"]),
+            (|m| m.bring_to_front(0), &["Update(0)"]),
+            (|m| m.send_to_back(0), &["Update(0)"]),
+            (
+                |m| {
+                    m.delete_drawing(0);
+                    m.undo();
+                    m.redo();
+                },
+                &["Delete(a1b2)", "Save(0)", "Delete(a1b2)"],
+            ),
+            (
+                |m| {
+                    let rect = DrawingToolType::Rect;
+                    m.start_drawing_with_coords(rect, Pos2::new(1.0, 1.0), |x| x, f64::from);
+                    m.update_last_point_with_coords(Pos2::new(9.0, 9.0), |x| x, f64::from);
+                    m.complete_drag_drawing();
+                },
+                &["Save(1)"],
+            ),
+            (
+                |m| {
+                    let line = DrawingToolType::Polyline;
+                    m.start_drawing_with_coords(line, Pos2::new(1.0, 1.0), |x| x, f64::from);
+                    m.add_point_with_coords(Pos2::new(9.0, 9.0), |x| x, f64::from);
+                    m.complete_curr_drawing();
+                },
+                &["Save(1)"],
+            ),
+            (
+                |m| m.add_synced_drawing(Drawing::new(7, DrawingToolType::HorizontalLine)),
+                &["Save(1)"],
+            ),
+            (
+                |m| m.edit_drawing(0, |d| d.stroke_width = 3.0),
+                &["Update(0)"],
+            ),
+            (
+                // A colour picker dragged over 120 frames is one undo step and one update.
+                |m| {
+                    for red in 0..120 {
+                        m.drag_edit_drawing(0, |d| d.color = [red, 0, 0, 255]);
+                    }
+                    m.end_drag_handle();
+                    m.undo();
+                    m.undo();
+                },
+                &["Update(0)", "Update(0)"],
+            ),
+        ];
+        for (edit, expected) in cases {
+            let mut manager = DrawingManager::new();
+            let mut restored = Drawing::new(5, DrawingToolType::HorizontalLine);
+            restored.stored_id = Some("a1b2".into());
+            manager.add_synced_drawing(restored);
+            edit(&mut manager);
+            let queued: Vec<String> = manager
+                .pending_sync
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|action| match action {
+                    DrawingSyncAction::SaveDrawing(id) => format!("Save({id})"),
+                    DrawingSyncAction::UpdateDrawing(id) => format!("Update({id})"),
+                    DrawingSyncAction::Delete(id) => format!("Delete({id})"),
+                    DrawingSyncAction::RestoreDrawings(_) => "Restore".into(),
+                })
+                .collect();
+            assert_eq!(queued, expected);
+        }
     }
 
     #[test]

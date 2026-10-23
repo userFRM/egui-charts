@@ -117,6 +117,8 @@ impl ChartAppState for DemoAppState {
 /// The full demo application.
 pub struct DemoApp {
     pub chart: Chart,
+    /// Whether an object tree colour picker is editing a drawing, as one undo step.
+    colour_drag: bool,
     menus: ChartMenus,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
@@ -211,6 +213,7 @@ impl DemoApp {
 
         Self {
             chart,
+            colour_drag: false,
             menus: ChartMenus::default(),
             state: DemoAppState {
                 symbol: symbol.into(),
@@ -491,8 +494,7 @@ impl DemoApp {
     }
 
     fn apply_drawing_props(&mut self, id: DrawingId, props: DrawingProps) {
-        let dm = self.chart.drawings_mut();
-        if let Some(drawing) = dm.drawings.iter_mut().find(|d| d.id == id.0) {
+        self.chart.drawings_mut().edit_drawing(id.0, |drawing| {
             drawing.color = props.color.to_array();
             drawing.stroke_width = props.line_width;
             drawing.line_style = line_style_from_dialog(props.line_style);
@@ -501,6 +503,19 @@ impl DemoApp {
             if !props.label.is_empty() {
                 drawing.text = Some(props.label);
             }
+        });
+    }
+
+    fn set_all_drawings_visible(&mut self, visible: bool) {
+        let dm = self.chart.drawings_mut();
+        let ids: Vec<usize> = dm
+            .drawings
+            .iter()
+            .filter(|d| d.visible != visible)
+            .map(|d| d.id)
+            .collect();
+        for id in ids {
+            dm.edit_drawing(id, |d| d.visible = visible);
         }
     }
 
@@ -590,6 +605,12 @@ impl eframe::App for DemoApp {
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
+
+        // A colour picker drag ends, as one edit, when the pointer is released.
+        if self.colour_drag && !ctx.input(|i| i.pointer.any_down()) {
+            self.colour_drag = false;
+            self.chart.drawings_mut().end_drag_handle();
+        }
 
         let panel_bg = ui.style().visuals.panel_fill;
 
@@ -909,20 +930,14 @@ impl DemoApp {
                         .find(|(id, _)| *id == study)
                         .is_none_or(|(_, i)| i.is_visible());
                     chart.set_indicator_visible(study, !now);
-                } else if let Some(d) = chart
-                    .drawings_mut()
-                    .drawings
-                    .iter_mut()
-                    .find(|d| d.id == id)
-                {
-                    d.visible = !d.visible;
+                } else {
+                    chart.drawings_mut().edit_drawing(id, |d| d.visible = !d.visible);
                 }
             }
             ObjectTreeAction::ToggleLock(id) => {
-                let dm = self.chart.drawings_mut();
-                if let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id) {
-                    d.locked = !d.locked;
-                }
+                self.chart
+                    .drawings_mut()
+                    .edit_drawing(id, |d| d.locked = !d.locked);
             }
             ObjectTreeAction::Delete(id) | ObjectTreeAction::RemoveIndicator(id) => {
                 let chart = &mut self.chart;
@@ -943,13 +958,11 @@ impl DemoApp {
                     if let Some(ind) = chart.indicator_mut(study) {
                         ind.set_color(0, color);
                     }
-                } else if let Some(d) = chart
-                    .drawings_mut()
-                    .drawings
-                    .iter_mut()
-                    .find(|d| d.id == id)
-                {
-                    d.color = color.to_array();
+                } else {
+                    chart
+                        .drawings_mut()
+                        .drag_edit_drawing(id, |d| d.color = color.to_array());
+                    self.colour_drag = true;
                 }
             }
             ObjectTreeAction::OpenProperties(id) | ObjectTreeAction::OpenIndicatorSettings(id) => {
@@ -970,16 +983,8 @@ impl DemoApp {
             ObjectTreeAction::SendToBack(id) => {
                 self.chart.drawings_mut().send_to_back(id);
             }
-            ObjectTreeAction::HideAll => {
-                for d in &mut self.chart.drawings_mut().drawings {
-                    d.visible = false;
-                }
-            }
-            ObjectTreeAction::ShowAll => {
-                for d in &mut self.chart.drawings_mut().drawings {
-                    d.visible = true;
-                }
-            }
+            ObjectTreeAction::HideAll => self.set_all_drawings_visible(false),
+            ObjectTreeAction::ShowAll => self.set_all_drawings_visible(true),
             ObjectTreeAction::RemoveAllDrawings => {
                 self.chart.drawings_mut().clear_all();
             }
@@ -1116,16 +1121,8 @@ impl DemoApp {
             DrawingContextMenuAction::Delete => dm.delete_drawing(id),
             DrawingContextMenuAction::Edit => self.open_drawing_props_for(id),
             DrawingContextMenuAction::Clone => self.clone_drawing(id),
-            DrawingContextMenuAction::Lock => {
-                if let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id) {
-                    d.locked = !d.locked;
-                }
-            }
-            DrawingContextMenuAction::Hide => {
-                if let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id) {
-                    d.visible = !d.visible;
-                }
-            }
+            DrawingContextMenuAction::Lock => dm.edit_drawing(id, |d| d.locked = !d.locked),
+            DrawingContextMenuAction::Hide => dm.edit_drawing(id, |d| d.visible = !d.visible),
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
             DrawingContextMenuAction::None => {}
