@@ -33,6 +33,22 @@ pub fn handle_selection<F1, F2>(
         response.hover_pos()
     };
 
+    // A handle drag follows the pointer, kept on the pane, until it is released anywhere.
+    if drawing_manager.dragging_handle.is_some() {
+        if response.drag_stopped() {
+            drawing_manager.end_drag_handle();
+        } else if response.dragged()
+            && let Some(pos) = pointer_pos
+        {
+            drawing_manager.update_drag_handle_with_coords(
+                price_rect.clamp(pos),
+                x_to_bar,
+                y_to_price,
+            );
+        }
+        return;
+    }
+
     if let Some(pos) = pointer_pos {
         if !price_rect.contains(pos) {
             cursor_modes.eraser.set_hover(None);
@@ -53,14 +69,7 @@ pub fn handle_selection<F1, F2>(
             cursor_modes.eraser.set_hover(None);
         }
 
-        // Handle dragging
-        if let Some((_drawing_id, _handle)) = drawing_manager.dragging_handle {
-            if response.dragged() {
-                drawing_manager.update_drag_handle_with_coords(pos, x_to_bar, y_to_price);
-            } else if response.drag_stopped() {
-                drawing_manager.end_drag_handle();
-            }
-        } else if let Some(sel_id) = drawing_manager.sel_drawing() {
+        if let Some(sel_id) = drawing_manager.sel_drawing() {
             if response.drag_started() {
                 if let Some(handle) = drawing_manager.hit_test_handle_by_id(pos, sel_id) {
                     drawing_manager.start_drag_handle(sel_id, handle);
