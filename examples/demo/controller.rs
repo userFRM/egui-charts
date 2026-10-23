@@ -878,16 +878,11 @@ impl eframe::App for DemoApp {
         self.show_widget_bar(ui, panel_bg);
         self.show_side_panel(ui);
         self.show_bottom_toolbar(ui, panel_bg);
-        self.show_chart(ui, panel_bg);
-
-        // Floating replay transport, on top of the chart.
-        self.show_replay_control(&ctx);
-
-        // All modal dialogs.
-        self.show_dialogs(&ctx);
-
-        // Global keyboard shortcuts (e.g. the shortcuts help itself).
+        // Give dialogs their keys before the chart and replay transport read input.
         self.handle_keyboard(&ctx);
+        self.show_dialogs(&ctx);
+        self.show_chart(ui, panel_bg);
+        self.show_replay_control(&ctx);
 
         // Transient status notice.
         self.show_notice(&ctx);
@@ -2033,6 +2028,62 @@ fn apply_settings_state(
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// The dialog gets Escape before the chart or replay transport.
+    #[test]
+    fn escape_in_shortcuts_leaves_drawing_selection_and_replay_intact() {
+        use eframe::App;
+        use egui_charts::drawings::{Drawing, DrawingToolType};
+        for replay in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            if replay {
+                app.start_replay();
+            }
+            app.chart
+                .drawings_mut()
+                .drawings
+                .push(Drawing::new(7, DrawingToolType::TrendLine));
+            app.chart.drawings_mut().select(7);
+            app.chart
+                .drawings_mut()
+                .set_active_tool(Some(DrawingToolType::TrendLine));
+            app.keyboard_shortcuts.open();
+            for pass in 0..3 {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events: if pass == 2 {
+                            vec![egui::Event::Key {
+                                key: egui::Key::Escape,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            }]
+                        } else {
+                            vec![]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                )
+                .drop_without_applying_deltas();
+            }
+            assert!(!app.keyboard_shortcuts.is_open);
+            assert_eq!(app.chart.drawings().sel_drawing(), Some(7));
+            assert_eq!(
+                app.chart.drawings().active_tool,
+                Some(DrawingToolType::TrendLine)
+            );
+            assert_eq!(app.replay.is_some(), replay);
+            assert_eq!(app.replay_control.is_visible(), replay);
+        }
+    }
 
     /// Existing drawing settings survive opening and applying the dialog, and the toolbar
     /// reflects locks changed through other drawing controls rather than an optimistic toggle.

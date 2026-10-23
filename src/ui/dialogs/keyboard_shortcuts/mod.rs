@@ -59,6 +59,7 @@ impl KeyboardShortcutsDialog {
             return KeyboardShortcutsAction::None;
         }
 
+        let blocked_now = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
         let mut action = KeyboardShortcutsAction::None;
 
         DialogFrame::with_width(
@@ -76,7 +77,10 @@ impl KeyboardShortcutsDialog {
         let blocked = ctx
             .data(|d| d.get_temp::<bool>(blocked_id))
             .unwrap_or(false);
-        if !blocked && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        if !blocked
+            && !blocked_now
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
             self.is_open = false;
             action = KeyboardShortcutsAction::Close;
         }
@@ -204,5 +208,36 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
                 )
                 .widget_info(|| WidgetInfo::labeled(Role::Label, true, &name));
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_popup_opened_this_frame_gets_escape_before_the_dialog() {
+        let ctx = Context::default();
+        let mut dialog = KeyboardShortcutsDialog::new();
+        dialog.open();
+        ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                egui::Popup::open_id(ui.ctx(), Id::NULL.with("test popup"));
+                assert_eq!(dialog.show(ui.ctx()), KeyboardShortcutsAction::None);
+                assert!(dialog.is_open);
+                assert!(ui.input(|i| i.key_pressed(Key::Escape)));
+            },
+        )
+        .drop_without_applying_deltas();
     }
 }
