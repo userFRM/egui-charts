@@ -1,6 +1,6 @@
 use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
-use crate::model::{Bar, percent_change};
+use crate::model::Bar;
 use crate::scales::{
     PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkGenerator,
     TickMarkGeneratorConfig, TickMarkType, TimeFormatter,
@@ -67,7 +67,11 @@ pub fn render_price_labels_at_pos(
                 .painter
                 .layout_no_wrap(mark.label, font.clone(), colors.text);
             let rect = alignment.anchor_size(Pos2::new(x_offset, mark.y_coord), galley.size());
-            (!under_tag(tags, rect)).then(|| Shape::galley(rect.min, galley, colors.text))
+            (rect.top() >= context.rect.top()
+                && rect.bottom() <= context.rect.bottom()
+                && context.painter.clip_rect().contains_rect(rect)
+                && !under_tag(tags, rect))
+            .then(|| Shape::galley(rect.min, galley, colors.text))
         })
         .collect();
     context.painter.set(slot, labels);
@@ -278,7 +282,11 @@ pub fn render_time_labels(
                 .layout_no_wrap(mark.label, font.clone(), text_color)
         };
         let rect = egui::Align2::CENTER_TOP.anchor_size(Pos2::new(x, y), galley.size());
-        if !under_tag(tags, rect) {
+        if rect.left() >= context.rect.left()
+            && rect.right() <= context.rect.right()
+            && context.painter.clip_rect().contains_rect(rect)
+            && !under_tag(tags, rect)
+        {
             labels.push(Shape::galley(rect.min, galley, text_color));
         }
 
@@ -340,8 +348,12 @@ pub fn render_ohlc_info(
     );
 }
 
-/// Legend showing symbol info, OHLC values with colors, and change percentage
-/// Example: "BTCUSD . 1h   O 43,521.50  H 43,650.00  L 43,400.00  C 43,580.25  +58.75 (+0.14%)"
+#[path = "legend/mod.rs"]
+mod legend;
+pub use legend::{Legend, LegendStatus, QuoteSide};
+
+/// Paints a bounded series title and OHLC readout, wrapping between whole fields.
+/// Use [`Legend::show`] for metadata, quotes and interactive supplementary rows.
 pub fn render_legend(
     painter: &egui::Painter,
     rect: Rect,
@@ -352,99 +364,14 @@ pub fn render_legend(
     colors: &StyleColors,
     padding: f32,
 ) {
-    if visible_data.is_empty() {
-        return;
+    if let Some(bar) = visible_data.last() {
+        legend::paint_series(
+            painter, rect, symbol, timeframe, bar, prev_close, colors, padding,
+        );
     }
-
-    let candle = &visible_data[visible_data.len() - 1];
-    let is_bullish = candle.close >= candle.open;
-    // Text takes the theme's status colours, which read at 4.5:1, rather than the candle colours.
-    let theme = painter.ctx().active_theme();
-    let val_color = if is_bullish {
-        theme.ui.success
-    } else {
-        theme.ui.error
-    };
-
-    // Start position
-    let mut x = rect.min.x + padding;
-    let y = rect.min.y + 12.0;
-
-    // Symbol name (semibold)
-    let symbol_font = FontId::proportional(typography::MD);
-    let symbol_galley = painter.layout_job(egui::text::LayoutJob::single_section(
-        symbol.to_string(),
-        semibold(symbol_font, colors.text),
-    ));
-    painter.galley(Pos2::new(x, y), symbol_galley.clone(), colors.text);
-    x += symbol_galley.rect.width() + 8.0;
-
-    // Bullet separator, in the colour of the O, H, L and C labels
-    let label_color = theme.chart.axis_text_secondary;
-    let sep_font = FontId::proportional(typography::MD);
-    let sep = painter.layout_no_wrap("•".to_string(), sep_font.clone(), label_color);
-    painter.galley(Pos2::new(x, y), sep.clone(), label_color);
-    x += sep.rect.width() + 8.0;
-
-    // Timeframe
-    let tf_galley = painter.layout_no_wrap(timeframe.to_string(), sep_font.clone(), colors.text);
-    painter.galley(Pos2::new(x, y), tf_galley.clone(), colors.text);
-    x += tf_galley.rect.width() + 20.0;
-
-    // OHLC values with labels and color coding
-    let label_font = FontId::proportional(typography::MD);
-    let val_font = FontId::proportional(typography::MD);
-
-    // O (Open)
-    let o_label = painter.layout_no_wrap("O ".to_string(), label_font.clone(), label_color);
-    painter.galley(Pos2::new(x, y), o_label.clone(), label_color);
-    x += o_label.rect.width();
-    let o_val = painter.layout_no_wrap(format_price(candle.open), val_font.clone(), val_color);
-    painter.galley(Pos2::new(x, y), o_val.clone(), val_color);
-    x += o_val.rect.width() + 12.0;
-
-    // H (High)
-    let h_label = painter.layout_no_wrap("H ".to_string(), label_font.clone(), label_color);
-    painter.galley(Pos2::new(x, y), h_label.clone(), label_color);
-    x += h_label.rect.width();
-    let h_val = painter.layout_no_wrap(format_price(candle.high), val_font.clone(), val_color);
-    painter.galley(Pos2::new(x, y), h_val.clone(), val_color);
-    x += h_val.rect.width() + 12.0;
-
-    // L (Low)
-    let l_label = painter.layout_no_wrap("L ".to_string(), label_font.clone(), label_color);
-    painter.galley(Pos2::new(x, y), l_label.clone(), label_color);
-    x += l_label.rect.width();
-    let l_val = painter.layout_no_wrap(format_price(candle.low), val_font.clone(), val_color);
-    painter.galley(Pos2::new(x, y), l_val.clone(), val_color);
-    x += l_val.rect.width() + 12.0;
-
-    // C (Close)
-    let c_label = painter.layout_no_wrap("C ".to_string(), label_font.clone(), label_color);
-    painter.galley(Pos2::new(x, y), c_label.clone(), label_color);
-    x += c_label.rect.width();
-    let c_val = painter.layout_no_wrap(format_price(candle.close), val_font.clone(), val_color);
-    painter.galley(Pos2::new(x, y), c_val.clone(), val_color);
-    x += c_val.rect.width() + 16.0;
-
-    // Change amount and percentage (if we have previous close)
-    let reference_price = prev_close.unwrap_or(candle.open);
-    let change = candle.close - reference_price;
-    let change_pct = percent_change(reference_price, candle.close);
-
-    let change_color = if change >= 0.0 {
-        theme.ui.success
-    } else {
-        theme.ui.error
-    };
-    let sign = if change >= 0.0 { "+" } else { "" };
-
-    let change_text = format!("{sign}{change:.2} ({sign}{change_pct:.2}%)");
-    let change_galley = painter.layout_no_wrap(change_text, val_font, change_color);
-    painter.galley(Pos2::new(x, y), change_galley, change_color);
 }
 
-/// Formats a symbol or year mark at weight 600 when the face has a weight axis.
+/// Formats text at weight 600 when the face has a weight axis.
 fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
     let mut format = egui::text::TextFormat::simple(font, color);
     format.coords.push("wght", 600.0);
@@ -458,6 +385,127 @@ mod tests {
     use crate::widget::test_frames::{chart, frame, shapes};
     use chrono::{DateTime, TimeZone, Utc};
     use egui::{Context, Event, Pos2, Rect, Shape};
+
+    /// A narrow legend wraps whole fields before the plot's axis inset.
+    #[test]
+    fn legend_fields_stay_inside_the_plot() {
+        use crate::chart::renderers::StyleColors;
+        use crate::theme::apply_to_egui;
+        use egui::Vec2;
+
+        for (_, theme) in crate::theme::presets() {
+            for component in [false, true] {
+                for width in [300.0, 400.0, 1200.0] {
+                    let ctx = Context::default();
+                    apply_to_egui(&ctx, &theme);
+                    let plot = Rect::from_min_size(Pos2::new(52.0, 40.0), Vec2::new(width, 400.0));
+                    let badge = ctx.load_texture(
+                        "instrument",
+                        egui::ColorImage::filled([18, 18], egui::Color32::BLUE),
+                        Default::default(),
+                    );
+                    let statuses = [super::LegendStatus {
+                        text: "S",
+                        color: theme.ui.text,
+                        background: theme.ui.panel_bg_secondary,
+                    }];
+                    let bar = Bar::new(
+                        Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                        749.37,
+                        751.09,
+                        749.13,
+                        750.74,
+                        275_540.0,
+                    );
+                    let colors = StyleColors {
+                        bullish: theme.chart.candle_up,
+                        bearish: theme.chart.candle_down,
+                        text: theme.chart.axis_text,
+                        bullish_border: None,
+                        bearish_border: None,
+                        bullish_wick: None,
+                        bearish_wick: None,
+                        candle_border_width: 0.0,
+                    };
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        if component {
+                            let mut legend = super::Legend::new("Sample equity fund", "1h", &bar);
+                            legend.previous_close = Some(749.42);
+                            legend.badge = Some(egui::ImageSource::Texture(
+                                (badge.id(), Vec2::splat(18.0)).into(),
+                            ));
+                            legend.statuses = &statuses;
+                            legend.show_volume = false;
+                            legend.show(ui, plot);
+                        } else {
+                            super::render_legend(
+                                ui.painter(),
+                                plot,
+                                "Sample equity fund",
+                                "1h",
+                                std::slice::from_ref(&bar),
+                                Some(749.42),
+                                &colors,
+                                8.0,
+                            );
+                        }
+                    });
+                    output.textures_delta.clear();
+                    let text: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            Shape::Text(text) => Some(text),
+                            _ => None,
+                        })
+                        .collect();
+                    assert!(!text.is_empty());
+                    for shape in &output.shapes {
+                        if let Shape::Mesh(mesh) = &shape.shape
+                            && mesh.texture_id == badge.id()
+                        {
+                            assert!(plot.shrink(8.0).contains_rect(shape.clip_rect));
+                        }
+                    }
+                    for text in &text {
+                        let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            Shape::Rect(rect) if rect.fill == theme.chart.bg && rect.rect.height() >= 22.0 && rect.rect.contains_rect(bounds)
+                        )), "missing row backdrop for {}", text.galley.text());
+                        assert!(
+                            bounds.right() <= plot.right() - 8.0 + 0.1,
+                            "{width}: {} at {bounds:?}",
+                            text.galley.text()
+                        );
+                    }
+                    for field in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"] {
+                        assert!(
+                            text.iter().any(|text| text.galley.text() == field),
+                            "{width}: missing whole field {field}"
+                        );
+                    }
+                    let centres: Vec<_> = text
+                        .iter()
+                        .map(|text| text.pos.y + text.galley.size().y / 2.0)
+                        .collect();
+                    if width == 1200.0 {
+                        assert!(centres.iter().all(|y| (*y - centres[0]).abs() < 0.1));
+                    } else {
+                        assert!(centres.iter().any(|y| *y > centres[0]));
+                    }
+                    for field in text
+                        .iter()
+                        .filter(|text| text.galley.text().starts_with("O "))
+                    {
+                        let sections = &field.galley.job.sections;
+                        assert_eq!(sections[0].format.color, theme.ui.text_secondary);
+                        assert_eq!(sections[1].format.color, theme.chart.candle_up);
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
 
     /// The tick labels and the tags one frame paints in the price axis, with the pointer at
     /// `hover`. A number inside a tag is the tag's own text, not a tick.
@@ -550,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn time_ticks_use_secondary_text_and_keep_custom_colours() {
+    fn axis_ticks_fit_and_keep_theme_or_custom_colours() {
         use crate::theme::{apply_to_egui, presets};
         use egui::Color32;
 
@@ -563,8 +611,33 @@ mod tests {
                 if let Some(custom) = custom {
                     chart.config.text_color = custom;
                 }
-                let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+                shapes(&ctx, &mut chart, 0.0, Vec::new());
+                chart.state.time_scale_mut().set_right_offset(-17.5);
+                chart.state.price_scale_mut().set_range(100.0, 200.0);
+                chart.config.show_symbol_last_val = false;
+                let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
                 let plot = chart.get_rendered_price_rect();
+                let prices: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text)
+                            if text.pos.x > plot.right()
+                                && text.galley.text().parse::<f64>().is_ok() =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!prices.is_empty());
+                for text in prices {
+                    assert!(
+                        text.pos.y >= plot.top()
+                            && text.pos.y + text.galley.size().y <= plot.bottom(),
+                        "price tick crosses plot edge: {}",
+                        text.galley.text()
+                    );
+                }
                 let ticks: Vec<_> = painted
                     .iter()
                     .filter_map(|shape| match shape {
@@ -573,6 +646,14 @@ mod tests {
                     })
                     .collect();
                 assert!(!ticks.is_empty(), "{name}: no time ticks");
+                for text in &ticks {
+                    assert!(
+                        text.pos.x >= plot.left()
+                            && text.pos.x + text.galley.size().x <= plot.right(),
+                        "time tick crosses plot edge: {}",
+                        text.galley.text()
+                    );
+                }
                 let expected = custom.unwrap_or(theme.chart.axis_text_secondary);
                 assert!(
                     ticks.iter().all(|text| text.fallback_color == expected),

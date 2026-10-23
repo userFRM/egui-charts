@@ -7,7 +7,7 @@ use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
 use crate::model::PriceLine;
 use crate::scales::TimeFormatterBuilder;
-use crate::styles::{sizing, typography};
+use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
@@ -160,8 +160,7 @@ impl Chart {
         }
         self.show_elements();
         self.last_rendered_indicator_panes.clear();
-        // Only pane studies need the pane layout, which gives the main pane at
-        // least 200 points; without one the chart keeps the space it is given.
+        // Pane studies share the available height and the lowest time axis.
         let has_panes = self
             .studies
             .indicators()
@@ -170,7 +169,7 @@ impl Chart {
         if has_panes && !self.chart_type.is_time_independent() {
             self.show_with_panes(ui)
         } else {
-            self.show_internal(ui)
+            self.show_internal(ui, None)
         }
     }
 
@@ -214,7 +213,11 @@ impl Chart {
     }
 
     /// Internal rendering method that orchestrates all modules
-    pub(crate) fn show_internal(&mut self, ui: &mut Ui) -> Response {
+    pub(crate) fn show_internal(
+        &mut self,
+        ui: &mut Ui,
+        shared_time_axis: Option<Rect>,
+    ) -> Response {
         // Register the SVG image loader once per context so the embedded
         // icons used by the toolbars and panels decode without the host app
         // having to wire egui_extras itself.
@@ -236,11 +239,24 @@ impl Chart {
         self.right_click = None;
 
         let available_size = ui.available_size();
-        let (mut response, painter) = ui.allocate_painter(available_size, Sense::click_and_drag());
+        let (mut response, mut painter) =
+            ui.allocate_painter(available_size, Sense::click_and_drag());
         let rect = response.rect;
 
-        let layout = self.calculate_layout_rects(rect);
+        if let Some(axis) = shared_time_axis {
+            painter.set_clip_rect(ui.clip_rect().intersect(rect.union(axis)));
+            response = response.union(ui.interact(
+                axis,
+                response.id.with("shared_time_axis"),
+                Sense::click_and_drag(),
+            ));
+        }
+        let layout = self.pane_layout_rects(
+            rect,
+            self.config.show_time_labels && shared_time_axis.is_none(),
+        );
         let chart_rect = layout.price_rect;
+        let time_axis_top = shared_time_axis.map_or(chart_rect.bottom(), |axis| axis.top());
 
         let chart_width = chart_rect.width();
 
@@ -304,10 +320,12 @@ impl Chart {
             Pos2::new(chart_rect.max.x, chart_rect.min.y),
             Pos2::new(rect.max.x, chart_rect.max.y),
         );
-        let time_axis_rect = Rect::from_min_max(
-            Pos2::new(chart_rect.min.x, chart_rect.max.y),
-            Pos2::new(chart_rect.max.x, rect.max.y),
-        );
+        let time_axis_rect = shared_time_axis.unwrap_or_else(|| {
+            Rect::from_min_max(
+                Pos2::new(chart_rect.min.x, chart_rect.max.y),
+                Pos2::new(chart_rect.max.x, rect.max.y),
+            )
+        });
 
         // Handle double-click to reset axes
         self.handle_double_click(&response, price_axis_rect, time_axis_rect);
@@ -383,6 +401,15 @@ impl Chart {
 
         // Draw background (solid or gradient)
         self.draw_background(&painter, rect);
+        if let Some(axis) = shared_time_axis {
+            self.draw_background(
+                &painter,
+                Rect::from_min_max(
+                    Pos2::new(rect.left(), axis.top()),
+                    Pos2::new(rect.right(), axis.bottom()),
+                ),
+            );
+        }
 
         // Draw watermark overlay (if enabled)
         self.draw_watermark(&painter, chart_rect);
@@ -770,22 +797,22 @@ impl Chart {
                     None
                 };
                 rendering::render_legend(
-                    &painter,
-                    rect,
+                    &painter.with_clip_rect(price_rect),
+                    price_rect,
                     &self.symbol,
                     &self.timeframe.map(|tf| tf.as_str()).unwrap_or_default(),
                     visible_data,
                     prev_close,
                     &colors,
-                    sizing::chart::PADDING,
+                    8.0,
                 );
             } else {
                 // Fallback to basic OHLC info
                 rendering::render_ohlc_info(
-                    &painter,
-                    rect,
+                    &painter.with_clip_rect(price_rect),
+                    price_rect,
                     visible_data,
-                    sizing::chart::PADDING,
+                    8.0,
                     self.config.text_color,
                     self.chart_type.supports_volume(),
                 );
@@ -896,7 +923,7 @@ impl Chart {
                     &price_map,
                     &coords,
                     &self.chart_options.crosshair,
-                    chart_rect.max.y,
+                    time_axis_top,
                     rect.max.x,
                     last_price_tag,
                     formatter.as_ref(),
@@ -945,7 +972,7 @@ impl Chart {
                             &price_map,
                             &coords,
                             &self.chart_options.crosshair,
-                            chart_rect.max.y,
+                            time_axis_top,
                             rect.max.x,
                             last_price_tag,
                             formatter.as_ref(),
@@ -962,7 +989,9 @@ impl Chart {
             rendering::render_price_labels(&price_ctx, &price_map, &colors, &tags, price_labels);
         }
         if self.config.show_time_labels {
-            let chart_ctx = RenderContext::new(&painter, chart_rect);
+            let axis_context_rect =
+                Rect::from_min_max(chart_rect.min, Pos2::new(chart_rect.right(), time_axis_top));
+            let chart_ctx = RenderContext::new(&painter, axis_context_rect);
             rendering::render_time_labels(
                 &chart_ctx,
                 visible_data,
@@ -993,7 +1022,7 @@ mod tests {
     use crate::chart::series::SeriesSettings;
     use crate::scales::PriceScaleMode;
     use crate::widget::test_frames::{chart, frame, shapes};
-    use egui::{Event, Pos2, Shape};
+    use egui::{Event, Pos2, Rect, Shape};
 
     /// On a logarithmic scale 100 lies halfway between 10 and 1,000 (ln 100 is the mean of ln 10 and
     /// ln 1,000); a linear mapping puts it a tenth of the way up. A range zoomed by hand before the
@@ -1045,6 +1074,7 @@ mod tests {
                 true,
                 None,
                 "Jan 04, 2024",
+                false,
             ),
             (
                 ChartType::Candles,
@@ -1053,6 +1083,17 @@ mod tests {
                 false,
                 Some(50.7),
                 "Jan 04, 2024",
+                false,
+            ),
+            #[cfg(feature = "studies")]
+            (
+                ChartType::Candles,
+                &[200.0][..],
+                50,
+                true,
+                None,
+                "Jan 04, 2024",
+                true,
             ),
             // Bar 99 alone completes 300 bricks, all dated 21 February 2024.
             (
@@ -1062,11 +1103,17 @@ mod tests {
                 true,
                 None,
                 "Feb 21, 2024",
+                false,
             ),
         ] {
-            let (kind, highs, index, pointer, synced, expected) = case;
+            let (kind, highs, index, pointer, synced, expected, panes) = case;
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], highs);
+            #[cfg(feature = "studies")]
+            if panes {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+                chart.add_indicator(Box::new(crate::studies::MACD::new(12, 26, 9)));
+            }
             chart.set_chart_type(kind);
             chart.set_chart_type_params(ChartTypeParams {
                 renko_brick_size: 10.0,
@@ -1091,6 +1138,15 @@ mod tests {
                 .iter()
                 .filter_map(|shape| match shape {
                     Shape::Text(text) if text.galley.text().ends_with(", 2024") => {
+                        if panes {
+                            let bottom = chart
+                                .get_rendered_indicator_panes()
+                                .last()
+                                .unwrap()
+                                .panel_rect
+                                .bottom();
+                            assert!(text.pos.y >= bottom, "time tag above lowest pane");
+                        }
                         Some(text.galley.text().to_owned())
                     }
                     _ => None,
@@ -1101,7 +1157,40 @@ mod tests {
     }
 
     #[test]
-    fn volume_uses_themes_alpha_and_pitch_above_an_inset_baseline() {
+    fn plot_uses_the_interior_and_configured_axis_widths() {
+        let mut chart = chart(&[100.0], &[110.0]);
+        for (width, height, padding, left, right) in [
+            (800.0, 600.0, 0.0, 0.0, 70.0),
+            (640.0, 450.0, 2.0, 50.0, 80.0),
+            (45.0, 20.0, 0.0, 0.0, 70.0),
+            (800.0, 600.0, 8.0, 0.0, 0.0),
+        ] {
+            chart.config.padding = padding;
+            chart.config.show_left_axis = left > 0.0;
+            chart.config.left_axis_width = left;
+            chart.config.show_right_axis = right > 0.0;
+            chart.config.right_axis_width = right;
+            let widget = Rect::from_min_size(Pos2::new(7.0, 11.0), egui::vec2(width, height));
+            let layout = chart.calculate_layout_rects(widget);
+            assert!(widget.contains_rect(layout.price_rect));
+            assert_eq!(layout.price_rect.top(), widget.top() + padding);
+            assert_eq!(
+                layout.price_rect.left(),
+                widget.left() + (padding + left).min(width)
+            );
+            assert_eq!(
+                layout.price_rect.width(),
+                (width - 2.0 * padding - left - right).max(0.0)
+            );
+            assert_eq!(
+                layout.price_rect.height(),
+                (height - 2.0 * padding - 28.0).max(0.0)
+            );
+        }
+    }
+
+    #[test]
+    fn volume_uses_themes_alpha_and_pitch_above_a_configured_baseline() {
         use crate::chart::selection::{ChartElementId, SeriesId};
         use crate::model::ChartType;
         use crate::theme::{Theme, apply_to_egui};
@@ -1109,12 +1198,14 @@ mod tests {
 
         // At 60% opacity the premultiplied colours are (23,119,131) and (142,38,73).
         // A second opacity proves that painting reads the applied theme on every frame.
-        for (mut theme, alpha, candle_width, kind, expected) in [
+        for (mut theme, alpha, candle_width, kind, height_fraction, inset, expected) in [
             (
                 Theme::dark(),
                 153,
                 0.6,
                 ChartType::Candles,
+                0.12,
+                12.0,
                 [[23, 119, 131, 153], [142, 38, 73, 153]],
             ),
             (
@@ -1122,6 +1213,8 @@ mod tests {
                 51,
                 0.2,
                 ChartType::Heikin,
+                0.12,
+                12.0,
                 [[8, 40, 44, 51], [47, 13, 24, 51]],
             ),
             (
@@ -1129,6 +1222,8 @@ mod tests {
                 128,
                 0.6,
                 ChartType::Line,
+                0.25,
+                0.0,
                 [[19, 99, 109, 128], [118, 32, 61, 128]],
             ),
             (
@@ -1136,6 +1231,8 @@ mod tests {
                 128,
                 0.6,
                 ChartType::Area,
+                0.4,
+                6.0,
                 [[19, 99, 109, 128], [118, 32, 61, 128]],
             ),
         ] {
@@ -1151,6 +1248,8 @@ mod tests {
             last.volume = 0.5;
             chart.set_data(crate::chart::selection::SeriesId::MAIN, bars);
             chart.config.candle_width = candle_width;
+            chart.config.volume_height_fraction = height_fraction;
+            chart.config.volume_baseline_inset = inset;
             chart.set_chart_type(kind);
             chart
                 .selection
@@ -1165,10 +1264,10 @@ mod tests {
             assert_eq!(layout.price_rect, price);
             assert_eq!(layout.volume_rect, volume);
             assert!(
-                (volume.height() - (price.height() - 12.0) * 0.12).abs() < 0.001,
+                (volume.height() - (price.height() - inset) * height_fraction).abs() < 0.001,
                 "{volume:?} in {price:?}"
             );
-            assert_eq!(volume.bottom(), price.bottom() - 12.0);
+            assert_eq!(volume.bottom(), price.bottom() - inset);
             let dots: Vec<_> = painted
                 .iter()
                 .filter_map(|shape| match shape {
@@ -1239,7 +1338,7 @@ mod tests {
         }
     }
 
-    /// On the 634 px time scale, spacing 20 shows ceil(634/20 - 1) = 31 bars.
+    /// On the 714 px time scale, spacing 20 shows ceil(714/20 - 1) = 35 bars.
     /// A zoom step of 0.2 adds +/-0.2 * 20/10 to spacing and keeps the right edge
     /// (offset -20) fixed; reset restores spacing 6 and the configured 60 px / 6 = 10 bar offset.
     #[test]
@@ -1249,8 +1348,8 @@ mod tests {
         for (button, initial_manual, initial_mode, spacing, offset, manual, mode) in [
             (0, false, Normal, 19.6, -20.0, false, Normal),
             (1, false, Normal, 20.4, -20.0, false, Normal),
-            (2, false, Normal, 20.0, -51.0, false, Normal),
-            (3, false, Normal, 20.0, 11.0, false, Normal),
+            (2, false, Normal, 20.0, -55.0, false, Normal),
+            (3, false, Normal, 20.0, 15.0, false, Normal),
             (4, true, Normal, 6.0, 10.0, false, Normal),
             (5, false, Normal, 20.0, -20.0, true, Normal),
             (5, true, Normal, 20.0, -20.0, false, Normal),
@@ -1268,8 +1367,9 @@ mod tests {
                     },
                     ..Default::default()
                 });
+            chart.config.navigation_buttons = crate::config::NavigationButtons::OnHover;
             frame(&ctx, &mut chart, 0.0, Vec::new());
-            assert_eq!(chart.state.time_scale().width(), 634.0);
+            assert_eq!(chart.state.time_scale().width(), 714.0);
             chart.state.time_scale_mut().set_bar_spacing(20.0);
             chart.state.time_scale_mut().set_right_offset(-20.0);
             chart.apply_series_settings(&SeriesSettings {
@@ -1313,6 +1413,13 @@ mod tests {
         use crate::scales::PriceScaleMode::{Logarithmic, Normal, Percentage};
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[200.0]);
+        assert_eq!(chart.config.navigation_buttons, Never);
+        #[cfg(feature = "ui")]
+        assert_eq!(
+            crate::ui::top_toolbar::components::settings_menu::ButtonsSettings::default()
+                .navigation,
+            crate::ui::top_toolbar::components::settings_menu::ButtonVisibility::Hidden,
+        );
         frame(&ctx, &mut chart, 0.0, Vec::new());
         for (i, (manual, mode, visibility, hover, selected)) in [
             (false, Normal, OnHover, true, [true, false, false]),
@@ -1373,6 +1480,7 @@ mod tests {
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[200.0]);
+            chart.config.navigation_buttons = crate::config::NavigationButtons::OnHover;
             frame(&ctx, &mut chart, 0.0, Vec::new());
             chart.state.time_scale_mut().set_bar_spacing(20.0);
             chart.state.time_scale_mut().set_right_offset(-20.0);

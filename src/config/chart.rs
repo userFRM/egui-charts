@@ -37,9 +37,9 @@ pub enum NavigationButtons {
     /// Always show the buttons.
     Always,
     /// Show the buttons while the pointer is over the main pane, price and volume.
-    #[default]
     OnHover,
-    /// Hide the buttons.
+    /// Hide the buttons (the default).
+    #[default]
     Never,
 }
 
@@ -193,9 +193,11 @@ pub struct ChartConfig {
     pub show_vertical_grid: bool,
     /// Whether to show volume bars
     pub show_volume: bool,
-    /// Volume height as a fraction of the price pane above its 12 point baseline inset
+    /// Volume height as a fraction of the price pane above `volume_baseline_inset`
     pub volume_height_fraction: f32,
-    /// Padding around the chart
+    /// Distance in points from the volume baseline to the price pane bottom (12 by default).
+    pub volume_baseline_inset: f32,
+    /// Padding around the plot, excluding the axes and floating legend.
     pub padding: f32,
     /// Whether to show time labels on X-axis
     pub show_time_labels: bool,
@@ -330,7 +332,8 @@ impl Default for ChartConfig {
             show_vertical_grid: true,
             show_volume: true,
             volume_height_fraction: 0.12,
-            padding: 40.0,
+            volume_baseline_inset: 12.0,
+            padding: 0.0,
             show_time_labels: true,
             show_ohlc_info: true,
             show_right_axis: true,
