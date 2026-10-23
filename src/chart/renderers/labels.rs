@@ -370,6 +370,47 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
     use egui::{Context, Event, Pos2, Rect, Shape};
 
+    #[cfg(feature = "studies")]
+    #[test]
+    fn pane_and_price_ticks_share_font_and_colour() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0], &[110.0]);
+            *chart.config_mut() = theme.apply_to_config(chart.config().clone());
+            chart.config_mut().show_symbol_last_val = false;
+            chart.config_mut().show_volume = false;
+            chart.add_indicator(Box::new(crate::studies::RSI::default()));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let pane = &chart.get_rendered_indicator_panes()[0];
+            let ticks: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.x > pane.chart_rect.right()
+                            && text.galley.text().parse::<f64>().is_ok() =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(ticks.iter().any(|text| text.pos.y > pane.panel_rect.top()));
+            assert!(ticks.iter().any(|text| text.pos.y < pane.panel_rect.top()));
+            for tick in ticks {
+                let format = &tick.galley.job.sections[0].format;
+                assert_eq!(format.font_id, super::axis_font(&ctx));
+                assert_eq!(
+                    format.color,
+                    theme.chart.axis_text,
+                    "{}",
+                    tick.galley.text()
+                );
+            }
+        }
+    }
+
     /// A narrow legend wraps whole fields before the plot's axis inset.
     #[test]
     fn legend_fields_stay_inside_the_plot() {

@@ -325,7 +325,7 @@ impl IndicatorPane {
         );
 
         // Draw y-axis labels
-        self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
+        self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max);
 
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
@@ -411,7 +411,7 @@ impl IndicatorPane {
         );
 
         // Draw y-axis labels
-        self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
+        self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max);
 
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
@@ -530,7 +530,7 @@ impl IndicatorPane {
             );
 
             // Draw y-axis labels
-            self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
+            self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max);
         }
 
         // Reserve the legend's close "x" and make it independently clickable so
@@ -917,8 +917,8 @@ impl IndicatorPane {
         chart_rect: Rect,
         y_min: f64,
         y_max: f64,
-        text_color: Color32,
     ) {
+        let text_color = painter.ctx().active_theme().chart.axis_text;
         let range = y_max - y_min;
         let step = self.calculate_nice_step(range, 5);
         let label_x = chart_rect.max.x + DESIGN_TOKENS.spacing.sm;
