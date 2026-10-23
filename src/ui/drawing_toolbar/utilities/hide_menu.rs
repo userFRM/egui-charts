@@ -17,9 +17,9 @@ use egui::{Response, Ui};
 pub struct HideMenu;
 
 impl HideMenu {
-    /// Render the hide button. A click opens the dropdown.
+    /// Render the visibility menu button. A click opens the dropdown.
     pub fn show(ui: &mut Ui) -> Response {
-        draw_tool_button(ui, &icons::EYE_HIDE, "Hide objects", false)
+        draw_tool_button(ui, &icons::EYE, "Hide objects", false)
     }
 
     /// Render the hide dropdown rows, with the positions and orders rows when `trading`. A check
