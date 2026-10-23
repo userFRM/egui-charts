@@ -240,9 +240,9 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 
 ---
 
-## Technical Indicators (129 registered)
+## Technical Indicators (123 registered)
 
-All 129 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
+All 123 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
 Some indicators appear in more than one category below (for example Standard Error in Volatility and Statistics).
 
 ### Rendering Limitation
@@ -269,7 +269,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Know Sure Thing (KST) with its signal line
 - [x] True Strength Index (TSI) with its signal line, KDJ with its K, D and J lines
 - [x] Schaff Trend Cycle, Double Stochastic, Elder Ray (Bull and Bear Power)
-- [x] Fisher Transform and Ehlers Fisher with their triggers, Force Index
+- [x] Fisher Transform with its trigger, Force Index
 - [x] Center of Gravity with its signal line, Pretty Good Oscillator, Rainbow Oscillator
 - [x] Relative Vigor Index, Stochastic Momentum Index, each with its signal line
 - [x] Ultimate Momentum, Trend Intensity Index, Qstick
@@ -294,11 +294,10 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Bollinger Band Width (BBW), %B
 - [x] Chandelier Exit: N-bar high minus and N-bar low plus ATR*multiplier (long and short exits)
 - [x] Squeeze Momentum: momentum line and the BB-inside-KC flag (1 or 0) as a second line
-- [x] Price Channel (same values as Donchian)
 - [x] Historical Volatility: Annualized log-return std dev
 - [x] Chaikin Volatility
 - [x] Acceleration Bands
-- [x] Close-to-Close Vol, OHLC Volatility (Garman-Klass), Parkinson Vol
+- [x] OHLC Volatility (Garman-Klass), Parkinson Vol
 - [x] Volatility Index: ATR-based annualized %
 - [x] Standard Error, Standard Error Bands
 
@@ -306,7 +305,6 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] OBV, VWAP (restarts at each session, week or month in the exchange zone and trading hours, with deviation bands; the indicator dialog builds it without an instrument, so its sessions follow the UTC date), Anchored VWAP
 - [x] MFI, A/D Line, CMF, Klinger Oscillator
 - [x] Ease of Movement, Net Volume, Volume ROC, Volume Oscillator
-- [x] CVD: Cumulative Volume Delta, each bar's delta estimated from its close position, body ratio or direction, in its own pane
 - [ ] Volume Profile Visible Range, Volume Profile Fixed Range: bin volume over the whole history; bin 0 is plotted on the price scale, so nothing visible draws
 - [x] VWMA, Balance of Power
 - [x] Volume Price Trend, NVI, PVI
@@ -323,7 +321,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 
 ### Price Derivatives
 - [x] Typical Price, Weighted Close, Median Price
-- [x] OHLC4, HLC3, HL2
+- [x] OHLC4
 - [x] True Range
 - [x] Spread Study (bar high minus low), Ratio Study (close/open percent change); single symbol only
 
@@ -339,7 +337,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] PPO and PVO (Percentage Volume Oscillator): oscillator, signal and histogram, drawn as three lines
 
 ### Factory Coverage
-- [x] `IndicatorFactory` registers all 129 built-in indicators by name
+- [x] `IndicatorFactory` registers all 123 built-in indicators by name and category, each a distinct study; `CVD`, `CloseToCloseVol`, `HL2`, `HLC3` and `PriceChannel` repeat a registered study and `EhlersFisher` is a variant of Fisher Transform; these six types are built directly
 - [ ] The indicator dialog offers a fixed subset (`IndicatorType::all()`); the other indicators are reachable only from code
 
 ---
@@ -542,7 +540,7 @@ The ui_kit components are generic building blocks:
 - 19 of 19 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
 - `DrawingToolType` defines 95 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
-- 129 registered indicators with calculation code
+- 123 registered indicators with calculation code
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - Reusable ui_kit building blocks
 - Theme system with design tokens and dark, light and high-contrast presets

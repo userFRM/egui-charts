@@ -2,8 +2,11 @@
 //!
 //! The [`IndicatorFactory`] provides a registry of constructor functions
 //! keyed by indicator name strings. Every built-in indicator is
-//! pre-registered under its canonical [`Indicator::name`] key, and users can
-//! add their own at runtime.
+//! pre-registered under its canonical [`Indicator::name`] key and a category,
+//! and users can add their own at runtime. It is the catalogue of studies: a
+//! picker lists [`list`](IndicatorFactory::list), describes each entry with
+//! [`Indicator::desc`] and [`category`](IndicatorFactory::category), and
+//! creates it with [`create`](IndicatorFactory::create).
 //!
 //! # Example
 //!
@@ -25,7 +28,7 @@ use std::collections::HashMap;
 /// Type alias for indicator constructor closures stored in the factory.
 type IndicatorConstructor = Box<dyn Fn() -> Box<dyn Indicator> + Send + Sync>;
 
-/// Register every listed built-in indicator type with the factory.
+/// Register every listed built-in indicator type with the factory, under its category.
 ///
 /// Each indicator is constructed through its [`Default`] implementation --
 /// the single canonical source of its conventional parameters -- and keyed by
@@ -34,13 +37,16 @@ type IndicatorConstructor = Box<dyn Fn() -> Box<dyn Indicator> + Send + Sync>;
 /// the value the rendering layer and legends display, and a new indicator is
 /// reachable through the factory the moment it is added to this list.
 macro_rules! register_builtins {
-    ($factory:expr, $($ty:ty),+ $(,)?) => {
-        $(
+    ($factory:expr, $($category:literal => [$($ty:ty),+ $(,)?]),+ $(,)?) => {
+        $($(
             // Read the canonical name from a throwaway default instance so the
             // key is always exactly what the indicator reports at runtime.
             let key = <$ty as Default>::default().name().to_string();
-            $factory.register(key, || Box::new(<$ty as Default>::default()));
-        )+
+            $factory.constructors.insert(
+                key,
+                ($category, Box::new(|| Box::new(<$ty as Default>::default()))),
+            );
+        )+)+
     };
 }
 
@@ -48,13 +54,18 @@ macro_rules! register_builtins {
 ///
 /// On construction, every built-in indicator is registered under its canonical
 /// [`Indicator::name`] (e.g. `"SMA"`, `"RSI"`, `"MACD"`, `"SuperTrend"`) using
-/// its conventional default parameters. Additional indicators can be registered
-/// at runtime with [`register`](Self::register).
+/// its conventional default parameters. Each name is a distinct study: names
+/// that computed the same values as another under their defaults are not
+/// registered. Additional indicators can be registered at runtime with
+/// [`register`](Self::register).
 pub struct IndicatorFactory {
-    constructors: HashMap<String, IndicatorConstructor>,
+    constructors: HashMap<String, (&'static str, IndicatorConstructor)>,
 }
 
 impl IndicatorFactory {
+    /// The category of every indicator added with [`register`](Self::register).
+    pub const CUSTOM: &'static str = "Custom";
+
     /// Create a new factory pre-loaded with every built-in indicator.
     pub fn new() -> Self {
         let mut factory = Self {
@@ -73,148 +84,151 @@ impl IndicatorFactory {
     fn register_builtin(&mut self) {
         register_builtins!(
             self,
-            // Moving averages
-            SMA,
-            EMA,
-            WMA,
-            DEMA,
-            TEMA,
-            HMA,
-            ALMA,
-            VWMA,
-            LSMA,
-            SWMA,
-            KAMA,
-            SmoothedMA,
-            GuppyMA,
-            McGinleyDynamic,
-            VIDYA,
-            ZLEMA,
-            HammingMA,
-            MultipleMA,
-            MAChannel,
-            EMACross,
-            MACross,
-            // Momentum / oscillators
-            RSI,
-            MACD,
-            VolumeWeightedMACD,
-            Stochastic,
-            StochasticRSI,
-            WilliamsR,
-            CCI,
-            Momentum,
-            RateOfChange,
-            Aroon,
-            AwesomeOscillator,
-            UltimateOscillator,
-            ConnorsRSI,
-            CoppockCurve,
-            TRIX,
-            ElderRay,
-            FisherTransform,
-            EhlersFisher,
-            ForceIndex,
-            MassIndex,
-            DetrendedPriceOscillator,
-            KDJ,
-            PrettyGoodOscillator,
-            ChandeMomentumOscillator,
-            TrueStrengthIndex,
-            StochasticMomentumIndex,
-            SchaffTrendCycle,
-            RelativeVigorIndex,
-            DoubleStochastic,
-            CenterOfGravity,
-            KnowSureThing,
-            RainbowOscillator,
-            UltimateMomentum,
-            PriceOscillator,
-            PercentageVolumeOscillator,
-            VolumeOscillator,
-            BalanceOfPower,
-            EaseOfMovement,
-            // Trend
-            ADX,
-            SuperTrend,
-            IchimokuCloud,
-            ParabolicSAR,
-            DirectionalMovement,
-            VortexIndicator,
-            SqueezeMomentum,
-            TrendIntensityIndex,
-            TrendDetectionIndex,
-            Qstick,
-            ChoppinessIndex,
-            ElderImpulseSystem,
-            // Volatility
-            BollingerBands,
-            BollingerBandsWidth,
-            ATR,
-            TrueRange,
-            KeltnerChannels,
-            DonchianChannels,
-            StandardDeviation,
-            HistoricalVolatility,
-            ChaikinVolatility,
-            ChandelierExit,
-            AccelerationBands,
-            Envelopes,
-            PercentB,
-            CloseToCloseVol,
-            OhlcVolatility,
-            VolatilityIndex,
-            ZeroTrendVol,
-            CommoditySelectionIndex,
-            // Volume
-            OnBalanceVolume,
-            VolumeWeightedAvgPrice,
-            AnchoredVWAP,
-            MoneyFlowIndex,
-            AccumulationDistribution,
-            ChaikinMoneyFlow,
-            VolumeRateOfChange,
-            KlingerOscillator,
-            CVD,
-            VolProfileVisible,
-            VolProfileFixed,
-            NetVolume,
-            VolumePriceTrend,
-            PriceVolumeTrendStudy,
-            NegativeVolumeIndex,
-            PositiveVolumeIndex,
-            WilliamsAD,
-            MarketFacilitationIndex,
-            // Support / resistance
-            PivotPoints,
-            ZigZag,
-            PriceChannel,
-            // Statistics
-            CorrelationCoefficient,
-            CorrelationLogReturns,
-            LinearRegression,
-            LinearRegressionSlope,
-            StandardError,
-            StandardErrorBands,
-            RankCorrelationIndex,
-            MajorityRule,
-            AccumulationSwingIndex,
-            // Price calculations
-            TypicalPrice,
-            MedianPrice,
-            WeightedClose,
-            HL2,
-            HLC3,
-            OHLC4,
-            // Breadth & spread
-            AdvanceDeclineLine,
-            Week52HighLow,
-            SpreadStudy,
-            RatioStudy,
+            "Moving averages" => [
+                SMA,
+                EMA,
+                WMA,
+                DEMA,
+                TEMA,
+                HMA,
+                ALMA,
+                VWMA,
+                LSMA,
+                SWMA,
+                KAMA,
+                SmoothedMA,
+                GuppyMA,
+                McGinleyDynamic,
+                VIDYA,
+                ZLEMA,
+                HammingMA,
+                MultipleMA,
+                MAChannel,
+                EMACross,
+                MACross,
+            ],
+            "Momentum" => [
+                RSI,
+                MACD,
+                VolumeWeightedMACD,
+                Stochastic,
+                StochasticRSI,
+                WilliamsR,
+                CCI,
+                Momentum,
+                RateOfChange,
+                Aroon,
+                AwesomeOscillator,
+                UltimateOscillator,
+                ConnorsRSI,
+                CoppockCurve,
+                TRIX,
+                ElderRay,
+                FisherTransform,
+                ForceIndex,
+                MassIndex,
+                DetrendedPriceOscillator,
+                KDJ,
+                PrettyGoodOscillator,
+                ChandeMomentumOscillator,
+                TrueStrengthIndex,
+                StochasticMomentumIndex,
+                SchaffTrendCycle,
+                RelativeVigorIndex,
+                DoubleStochastic,
+                CenterOfGravity,
+                KnowSureThing,
+                RainbowOscillator,
+                UltimateMomentum,
+                PriceOscillator,
+                PercentageVolumeOscillator,
+                VolumeOscillator,
+                BalanceOfPower,
+                EaseOfMovement,
+            ],
+            "Trend" => [
+                ADX,
+                SuperTrend,
+                IchimokuCloud,
+                ParabolicSAR,
+                DirectionalMovement,
+                VortexIndicator,
+                SqueezeMomentum,
+                TrendIntensityIndex,
+                TrendDetectionIndex,
+                Qstick,
+                ChoppinessIndex,
+                ElderImpulseSystem,
+            ],
+            "Volatility" => [
+                BollingerBands,
+                BollingerBandsWidth,
+                ATR,
+                TrueRange,
+                KeltnerChannels,
+                DonchianChannels,
+                StandardDeviation,
+                HistoricalVolatility,
+                ChaikinVolatility,
+                ChandelierExit,
+                AccelerationBands,
+                Envelopes,
+                PercentB,
+                OhlcVolatility,
+                VolatilityIndex,
+                ZeroTrendVol,
+                CommoditySelectionIndex,
+            ],
+            "Volume" => [
+                OnBalanceVolume,
+                VolumeWeightedAvgPrice,
+                AnchoredVWAP,
+                MoneyFlowIndex,
+                AccumulationDistribution,
+                ChaikinMoneyFlow,
+                VolumeRateOfChange,
+                KlingerOscillator,
+                VolProfileVisible,
+                VolProfileFixed,
+                NetVolume,
+                VolumePriceTrend,
+                PriceVolumeTrendStudy,
+                NegativeVolumeIndex,
+                PositiveVolumeIndex,
+                WilliamsAD,
+                MarketFacilitationIndex,
+            ],
+            "Support and resistance" => [
+                PivotPoints,
+                ZigZag,
+            ],
+            "Statistics" => [
+                CorrelationCoefficient,
+                CorrelationLogReturns,
+                LinearRegression,
+                LinearRegressionSlope,
+                StandardError,
+                StandardErrorBands,
+                RankCorrelationIndex,
+                MajorityRule,
+                AccumulationSwingIndex,
+            ],
+            "Price" => [
+                TypicalPrice,
+                MedianPrice,
+                WeightedClose,
+                OHLC4,
+            ],
+            "Breadth and spread" => [
+                AdvanceDeclineLine,
+                Week52HighLow,
+                SpreadStudy,
+                RatioStudy,
+            ],
         );
     }
 
-    /// Register a named indicator constructor.
+    /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.
     ///
     /// If a constructor with the same name already exists it is replaced.
     ///
@@ -225,12 +239,20 @@ impl IndicatorFactory {
     where
         F: Fn() -> Box<dyn Indicator> + Send + Sync + 'static,
     {
-        self.constructors.insert(name.into(), Box::new(constructor));
+        self.constructors
+            .insert(name.into(), (Self::CUSTOM, Box::new(constructor)));
     }
 
     /// Create an indicator by its registered name, or `None` if not found.
     pub fn create(&self, name: &str) -> Option<Box<dyn Indicator>> {
-        self.constructors.get(name).map(|f| f())
+        self.constructors.get(name).map(|(_, f)| f())
+    }
+
+    /// The category of the indicator registered under `name`, such as `"Momentum"` or
+    /// `"Volume"` for a built-in and [`CUSTOM`](Self::CUSTOM) for one added with
+    /// [`register`](Self::register), or `None` if not found.
+    pub fn category(&self, name: &str) -> Option<&'static str> {
+        self.constructors.get(name).map(|(category, _)| *category)
     }
 
     /// Return a list of all registered indicator names (unordered).
@@ -316,6 +338,56 @@ mod tests {
                 "indicator constructed for key {name:?} reports a different name()",
             );
         }
+    }
+
+    /// Each registered name is a study of its own: on one series, no two names give the same
+    /// values on every bar, even with their lines in another order.
+    #[test]
+    fn no_two_names_compute_the_same_study() {
+        use crate::model::Bar;
+        use chrono::{TimeZone, Utc};
+
+        let bars: Vec<Bar> = (0..400)
+            .map(|i: i64| {
+                let x = i as f64;
+                let close = 100.0 + (x * 0.13).sin() * 8.0 + (x * 0.029).cos() * 5.0;
+                let open = close - (x * 0.7).sin() * 1.5;
+                Bar {
+                    time: Utc.timestamp_opt(i * 3_600, 0).unwrap(),
+                    open,
+                    high: close.max(open) + 0.5 + (x * 0.3).sin().abs(),
+                    low: close.min(open) - 0.5 - (x * 0.5).cos().abs(),
+                    close,
+                    volume: 1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                }
+            })
+            .collect();
+        let factory = IndicatorFactory::new();
+        let mut names = factory.list();
+        names.sort();
+        let mut seen = HashMap::new();
+        let mut duplicates = Vec::new();
+        for name in names {
+            let mut study = factory.create(&name).unwrap();
+            study.calculate(&bars);
+            let lines: Vec<Vec<String>> = study
+                .values()
+                .iter()
+                .map(|v| {
+                    let mut xs = match v {
+                        IndicatorValue::Single(x) => vec![*x],
+                        IndicatorValue::Multiple(xs) => xs.clone(),
+                        IndicatorValue::None => Vec::new(),
+                    };
+                    xs.sort_by(f64::total_cmp);
+                    xs.iter().map(|x| format!("{x:.9e}")).collect()
+                })
+                .collect();
+            if let Some(first) = seen.insert(lines, name.clone()) {
+                duplicates.push(format!("{first} and {name}"));
+            }
+        }
+        assert!(duplicates.is_empty(), "same values: {duplicates:?}");
     }
 
     /// Every built-in, with its `k`-th length parameter set to `l(k)` and each
@@ -544,14 +616,19 @@ mod tests {
         ];
 
         let factory = IndicatorFactory::new();
-        let mut covered: Vec<String> = builtins_with(|_| 1, |v| v)
+        let covered: Vec<String> = builtins_with(|_| 1, |v| v)
             .iter()
             .map(|s| s.name().to_string())
             .collect();
-        let mut registered = factory.list();
-        covered.sort();
-        registered.sort();
-        assert_eq!(covered, registered, "the table must cover every built-in");
+        let missing: Vec<String> = factory
+            .list()
+            .into_iter()
+            .filter(|name| !covered.contains(name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the table must cover every built-in: {missing:?}"
+        );
 
         // Every length equal, then each length alone huge, then each alone longer than the rest
         // (a swapped fast/slow pair, for example).

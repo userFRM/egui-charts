@@ -216,7 +216,7 @@ Drawings are anchored in chart coordinates (bar index and price), so they stay i
 
 ## Technical Indicators
 
-`IndicatorFactory` registers 129 indicator names, each creating a type that implements the `Indicator` trait. Some names compute the same values as another under their default settings, for example HL2 and Median Price, HLC3 and Typical Price, or A/D and CVD. The indicator dialog in the `ui` feature offers a fixed subset.
+`IndicatorFactory` registers 123 indicator names, each creating a distinct study that implements the `Indicator` trait, under a category such as Momentum or Volume. Six types are not registered and are built directly: five compute the same study as a registered one under their defaults, `CVD` (A/D), `CloseToCloseVol` (HV), `HL2` (Median Price), `HLC3` (Typical Price) and `PriceChannel` (Donchian), and `EhlersFisher` is a variant of the Fisher Transform recursion with length 10 and a clamp on the normalised price. The indicator dialog in the `ui` feature offers a fixed subset.
 
 | Category | Indicators |
 |---|---|
@@ -224,8 +224,8 @@ Drawings are anchored in chart coordinates (bar index and price), so they stay i
 | **Momentum** | RSI, MACD, Stochastic, Williams %R, CCI, ROC, Momentum, Aroon, Awesome Oscillator, Ultimate Oscillator, Connors RSI, TRIX, KDJ |
 | **Trend** | ADX, SuperTrend, Ichimoku Cloud, Parabolic SAR, Directional Movement, Vortex, Squeeze Momentum |
 | **Volatility** | Bollinger Bands, ATR, Keltner Channels, Donchian Channels, Historical Volatility, Chandelier Exit |
-| **Volume** | OBV, VWAP, MFI, A/D, CMF, Volume ROC, Klinger Oscillator, CVD, Volume Profile |
-| **Support** | Pivot Points, ZigZag, Price Channel |
+| **Volume** | OBV, VWAP, MFI, A/D, CMF, Volume ROC, Klinger Oscillator, Volume Profile |
+| **Support** | Pivot Points, ZigZag |
 | **Statistics** | Correlation, Linear Regression, Standard Error, Rank Correlation |
 
 A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it.

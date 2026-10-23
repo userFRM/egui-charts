@@ -363,6 +363,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Removed
 
+- `studies::list_builtin_indicators`, whose table listed seven names the factory could not create, and the factory names "CVD", "C2C Vol", "HL2", "HLC3" and "Price Channel", which computed the same studies as "A/D", "HV", "MP", "TP" and "Donchian", and "Ehlers Fisher", a variant of the Fisher Transform recursion with length 10 and a clamp on the normalised price. `IndicatorFactory` is now the one catalogue: `IndicatorFactory::category` gives each built-in's category, and a study added with `register` is in `IndicatorFactory::CUSTOM`. Migration: list studies with `IndicatorFactory::list` and describe each with `Indicator::desc` and `IndicatorFactory::category`; create the registered twin of a removed name, or build `CVD`, `CloseToCloseVol`, `HL2`, `HLC3`, `PriceChannel` or `EhlersFisher` directly.
 - `DatePickerConfig`, which no API ever passed to a `DatePicker`. Migration: remove any use of it; the go to date picker takes its colours from the active theme.
 - `IndicatorDialogConfig::bg_color` and `IndicatorDialogConfig::sidebar_color`, which had no effect: the dialog takes its surface from the kit modal and its sidebar from `SidebarTab`. Migration: drop both fields from struct literals; the dialog surface is `Theme::ui.panel_bg_floating`, which `apply_to_egui` applies as egui's `Visuals::window_fill`.
 - `ChartSettingsState::color_based_on_prev_close`, which had no effect.
