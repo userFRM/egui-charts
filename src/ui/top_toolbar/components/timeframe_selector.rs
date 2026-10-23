@@ -34,7 +34,7 @@ impl TimeframeUnit {
         match self {
             TimeframeUnit::Second => "S",
             TimeframeUnit::Minute => "",
-            TimeframeUnit::Hour => "H",
+            TimeframeUnit::Hour => "h",
             TimeframeUnit::Day => "D",
             TimeframeUnit::Week => "W",
             TimeframeUnit::Month => "M",
@@ -65,7 +65,7 @@ impl Timeframe {
         Self { value, unit }
     }
 
-    /// Get display string like "1D", "4H", "15"
+    /// Get display string like "1D", "4h", "15"
     pub fn display(&self) -> String {
         match self.unit {
             TimeframeUnit::Minute => format!("{}", self.value),
@@ -398,7 +398,8 @@ impl TimeframeSelector {
             icon: None,
             name: format!("Interval: {label}"),
             label,
-            min_width: self.config.btn_width,
+            min_width: self.config.btn_width.max(44.0),
+            filled: false,
         }
     }
 

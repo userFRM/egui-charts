@@ -6,6 +6,7 @@ use super::heikin_ashi;
 use super::helpers::{
     OhlcYCoords, bar_color, draw_body_filled, draw_body_hollow, draw_wicks, prev_close,
 };
+use super::volume::render_volume_bars;
 use crate::chart::renderers::{self, BarRenderParams, RenderContext, StyleColors};
 use crate::model::Bar;
 use crate::scales::PriceMap;
@@ -31,7 +32,8 @@ pub(super) fn render_candles(
         renderers::render_candle(price_ctx, bar, price_scale, colors, &params);
 
         if show_volume {
-            let volume_params = BarRenderParams::new(x, bar_width, 0.0);
+            let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
+            let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
             renderers::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
         }
     }
@@ -57,7 +59,8 @@ pub(super) fn render_ohlc_bars(
         renderers::render_ohlc_bar(price_ctx, bar, price_scale, colors, &params);
 
         if show_volume {
-            let volume_params = BarRenderParams::new(x, bar_width, 0.0);
+            let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
+            let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
             renderers::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
         }
     }
@@ -104,7 +107,8 @@ pub(super) fn render_hollow_candles(
         }
 
         if show_volume {
-            let volume_params = BarRenderParams::new(x, bar_width, 0.0);
+            let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
+            let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
             renderers::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
         }
     }
@@ -146,11 +150,10 @@ pub(super) fn render_columns(
     }
 
     if show_volume {
-        render_volume_for_bars(
+        render_volume_bars(
             volume_ctx,
             visible_data,
             start_idx,
-            bar_width,
             max_volume,
             colors,
             chart_rect_min_x,
@@ -212,11 +215,10 @@ pub(super) fn render_heikin_ashi(
     );
 
     if show_volume {
-        render_volume_for_bars(
+        render_volume_bars(
             volume_ctx,
             visible_data,
             start_idx,
-            bar_width,
             max_volume,
             colors,
             chart_rect_min_x,
@@ -263,23 +265,4 @@ pub(super) fn render_volume_candles(
 
     // Volume candles don't show separate volume bars
     let _ = (volume_ctx, colors);
-}
-
-// === Helper Functions ===
-
-fn render_volume_for_bars(
-    volume_ctx: &RenderContext,
-    visible_data: &[Bar],
-    start_idx: usize,
-    bar_width: f32,
-    max_volume: f64,
-    colors: &StyleColors,
-    chart_rect_min_x: f32,
-    idx_to_coord: impl Fn(usize, f32) -> f32,
-) {
-    for (i, bar) in visible_data.iter().enumerate() {
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let volume_params = BarRenderParams::new(x, bar_width, 0.0);
-        renderers::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
-    }
 }

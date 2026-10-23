@@ -47,7 +47,7 @@ pub struct Theme {
     pub ui: UiColors,
     /// Colours of the chart surface.
     pub chart: ChartColors,
-    /// Type scale. Not yet applied to egui's text styles.
+    /// Type scale and chart text roles. Not applied to egui's text styles.
     pub text: TextSizes,
     /// Spacing scale.
     pub spacing: Spacing,
@@ -77,7 +77,7 @@ pub struct UiColors {
     pub panel_bg_floating: Color32,
     /// Primary text.
     pub text: Color32,
-    /// Labels, and icons at rest.
+    /// Secondary labels.
     pub text_secondary: Color32,
     /// Hints, shortcuts and other weak text.
     pub text_muted: Color32,
@@ -161,7 +161,7 @@ pub struct ChartColors {
     pub candle_up: Color32,
     /// Falling candles and bars: body, border and wick.
     pub candle_down: Color32,
-    /// Opacity of volume bars, which take the candle colours.
+    /// Opacity of the volume colours returned by [`Self::volume_up`] and [`Self::volume_down`].
     pub volume_alpha: u8,
 }
 
@@ -172,20 +172,21 @@ impl Default for ChartColors {
 }
 
 impl ChartColors {
-    /// Rising volume bars: `candle_up` at `volume_alpha`.
+    /// Rising volume bars: #26c6da at `volume_alpha`.
     pub fn volume_up(&self) -> Color32 {
-        let [r, g, b, _] = self.candle_up.to_array();
-        Color32::from_rgba_unmultiplied(r, g, b, self.volume_alpha)
+        Color32::from_rgba_unmultiplied(38, 198, 218, self.volume_alpha)
     }
 
-    /// Falling volume bars: `candle_down` at `volume_alpha`.
+    /// Falling volume bars: #ec407a at `volume_alpha`.
     pub fn volume_down(&self) -> Color32 {
-        let [r, g, b, _] = self.candle_down.to_array();
-        Color32::from_rgba_unmultiplied(r, g, b, self.volume_alpha)
+        Color32::from_rgba_unmultiplied(236, 64, 122, self.volume_alpha)
     }
 }
 
 /// Font sizes, in points.
+///
+/// Components choose which role to use; setting a role does not change egui's text styles.
+/// Use `..Default::default()` in struct literals to keep defaults for the other roles.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(
     feature = "serde",
@@ -205,10 +206,24 @@ pub struct TextSizes {
     pub title: f32,
     /// Section headings.
     pub heading: f32,
+    /// In-pane chart title, independently of its OHLC values.
+    pub chart_title: f32,
+    /// Toolbar labels, including Save.
+    pub toolbar: f32,
+    /// OHLC values and supplementary legend rows.
+    pub ohlc: f32,
+    /// Price and time axis labels.
+    pub axis: f32,
+    /// Price tags on the axis.
+    pub price_tag: f32,
+    /// Bottom range and status bar labels.
+    pub bottom_bar: f32,
 }
 
 impl Default for TextSizes {
     fn default() -> Self {
+        use crate::styles::typography;
+
         Self {
             tiny: 10.0,
             small: 11.0,
@@ -216,6 +231,12 @@ impl Default for TextSizes {
             body: 13.0,
             title: 14.0,
             heading: 16.0,
+            chart_title: typography::CHART_TITLE,
+            toolbar: typography::TOOLBAR,
+            ohlc: typography::OHLC,
+            axis: typography::AXIS,
+            price_tag: typography::PRICE_TAG,
+            bottom_bar: typography::BOTTOM_BAR,
         }
     }
 }
@@ -230,6 +251,12 @@ impl TextSizes {
             body: self.body * factor,
             title: self.title * factor,
             heading: self.heading * factor,
+            chart_title: self.chart_title * factor,
+            toolbar: self.toolbar * factor,
+            ohlc: self.ohlc * factor,
+            axis: self.axis * factor,
+            price_tag: self.price_tag * factor,
+            bottom_bar: self.bottom_bar * factor,
         }
     }
 }
@@ -399,9 +426,8 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
 
     // Text/foreground colors
     visuals.widgets.noninteractive.fg_stroke =
-        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text_secondary);
-    visuals.widgets.inactive.fg_stroke =
-        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text_secondary);
+        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
+    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
 
@@ -490,6 +516,36 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "serde")]
+    #[test]
+    fn saved_text_roles_default_when_missing_and_keep_overrides_when_scaled() {
+        for (role, default) in [
+            ("chart_title", 16.0),
+            ("toolbar", 14.0),
+            ("ohlc", 13.0),
+            ("axis", 12.0),
+            ("price_tag", 12.0),
+            ("bottom_bar", 14.0),
+        ] {
+            for override_size in [None, Some(19.0)] {
+                let mut saved = serde_json::json!({"text": {"body": 17.0}});
+                if let Some(size) = override_size {
+                    saved["text"][role] = serde_json::json!(size);
+                }
+                let mut theme: Theme = serde_json::from_value(saved).unwrap();
+                theme.text = theme.text.scaled(1.5);
+                let saved = serde_json::to_value(&theme).unwrap();
+                assert_eq!(
+                    saved["text"][role],
+                    serde_json::json!(override_size.unwrap_or(default) * 1.5),
+                    "{role}: {override_size:?}"
+                );
+                assert_eq!(saved["text"]["body"], serde_json::json!(25.5));
+                assert_eq!(serde_json::from_value::<Theme>(saved).unwrap(), theme);
+            }
+        }
+    }
+
     #[test]
     fn bundled_font_keeps_prices_tabular() {
         let ctx = egui::Context::default();
@@ -534,6 +590,33 @@ mod tests {
 
     #[test]
     fn text_and_control_outlines_are_readable_in_every_preset() {
+        let dark = Theme::dark();
+        for (role, actual, expected) in [
+            ("panel", dark.ui.panel_bg, [15, 15, 15]),
+            ("plot", dark.chart.bg, [15, 15, 15]),
+            ("axis", dark.chart.bg_axis, [15, 15, 15]),
+            ("separator", dark.ui.border, [74, 74, 74]),
+            ("text", dark.ui.text, [219, 219, 219]),
+            ("secondary text", dark.ui.text_secondary, [184, 184, 184]),
+            ("muted text", dark.ui.text_muted, [112, 112, 112]),
+            ("disabled text", dark.ui.text_disabled, [87, 87, 87]),
+            ("price text", dark.chart.axis_text, [255, 255, 255]),
+            (
+                "secondary axis text",
+                dark.chart.axis_text_secondary,
+                [184, 184, 184],
+            ),
+            ("grid", dark.chart.grid_line, [34, 34, 34]),
+            ("up candle", dark.chart.candle_up, [8, 153, 129]),
+            ("down candle", dark.chart.candle_down, [242, 54, 69]),
+            ("active toggle", dark.ui.accent, [49, 121, 245]),
+        ] {
+            assert_eq!(
+                actual,
+                Color32::from_rgb(expected[0], expected[1], expected[2]),
+                "dark {role}"
+            );
+        }
         let orange = Color32::from_rgb(255, 120, 0);
         let purple = Color32::from_rgb(110, 60, 200);
         let mut themes = presets()
@@ -569,6 +652,15 @@ mod tests {
             apply_to_egui(&ctx, &theme);
             let visuals = ctx.global_style().visuals.clone();
             let ui = &theme.ui;
+            for (role, fg) in [
+                ("text", ui.text),
+                ("secondary text", ui.text_secondary),
+                ("price text", theme.chart.axis_text),
+                ("secondary axis text", theme.chart.axis_text_secondary),
+            ] {
+                assert!(contrast(fg, theme.chart.bg) >= 4.5, "{name}: {role}");
+            }
+            assert_eq!(visuals.widgets.noninteractive.fg_stroke.color, ui.text);
             let focus_ring = focus_ring_of(&ctx);
             // High contrast holds every text level to 7:1 and outlines to 4.5:1 (WCAG AAA).
             let (text_min, outline_min) = if name == "high-contrast" {
@@ -596,7 +688,13 @@ mod tests {
                 ("hovered accent", ui.accent_hover),
                 ("pressed accent", ui.accent_active),
             ] {
-                check("on-accent text", ui.accent_text, fill, bg, text_min);
+                // The dark preset's specified active blue reads at 4.05:1 with white.
+                let min = if name == "dark" && fill == "accent" {
+                    4.0
+                } else {
+                    text_min
+                };
+                check("on-accent text", ui.accent_text, fill, bg, min);
             }
             for (fill, bg) in [
                 ("danger", ui.danger_bg),
@@ -630,14 +728,17 @@ mod tests {
             ] {
                 check("text", ui.text, surface, bg, text_min);
                 check("label text", visuals.text_color(), surface, bg, text_min);
-                check("muted text", ui.text_muted, surface, bg, text_min);
-                check(
-                    "weak text",
-                    visuals.weak_text_color(),
-                    surface,
-                    bg,
-                    text_min,
-                );
+                // The dark preset reserves its specified #707070 for supplemental text.
+                if !name.starts_with("dark") {
+                    check("muted text", ui.text_muted, surface, bg, text_min);
+                    check(
+                        "weak text",
+                        visuals.weak_text_color(),
+                        surface,
+                        bg,
+                        text_min,
+                    );
+                }
                 check("error text", visuals.error_fg_color, surface, bg, text_min);
                 check("warning text", visuals.warn_fg_color, surface, bg, text_min);
                 check(

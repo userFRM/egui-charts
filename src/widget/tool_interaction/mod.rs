@@ -19,8 +19,9 @@ use crate::drawings::DrawingInteractionMode;
 use crate::drawings::DrawingManager;
 use crate::drawings::rendering::ChartView;
 use crate::scales::PriceMap;
+use crate::studies::IndicatorValue;
 use crate::widget::Chart;
-use egui::{Painter, Rect, Response, Ui};
+use egui::{Painter, Pos2, Rect, Response, Ui};
 
 impl Chart {
     /// Handles drawing tool interaction and rendering
@@ -68,6 +69,51 @@ impl Chart {
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
         drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);
+
+        // Only gather bars within the pointer's screen-space tolerance. Rebuild after pan/zoom.
+        drawing_manager.snap_targets.clear();
+        if drawing_manager.options.magnet_mode
+            && let Some(pointer) = response
+                .interact_pointer_pos()
+                .or_else(|| response.hover_pos())
+        {
+            let distance = drawing_manager.options.magnet_distance;
+            let bars = &self.state.data().bars;
+            let first = x_to_bar_precise(pointer.x - distance).floor().max(0.0) as usize;
+            let end = ((x_to_bar_precise(pointer.x + distance).ceil().max(0.0) as usize)
+                .saturating_add(1))
+            .min(bars.len());
+            for (i, bar) in bars.iter().enumerate().take(end).skip(first) {
+                let x = bar_to_x(i as f32);
+                let mut add_price = |price: f64| {
+                    if price.is_finite() {
+                        let point = Pos2::new(x, price_to_y(price));
+                        if price_rect.contains(point) {
+                            drawing_manager.snap_targets.push(point);
+                        }
+                    }
+                };
+                for price in [bar.open, bar.high, bar.low, bar.close] {
+                    add_price(price);
+                }
+                for study in self
+                    .studies
+                    .indicators()
+                    .iter()
+                    .filter(|s| s.is_visible() && s.is_overlay())
+                {
+                    match study.values().get(i) {
+                        Some(IndicatorValue::Single(price)) => add_price(*price),
+                        Some(IndicatorValue::Multiple(prices)) => {
+                            for price in prices.iter().take(study.line_cnt()) {
+                                add_price(*price);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
 
         // Handle drawing interaction
         // Select converter based on tool type: freeform tools (ContinuousDraw) use precise,
@@ -139,6 +185,117 @@ mod tests {
     use crate::widget::RightClickTarget;
     use crate::widget::test_frames::{chart, frame, shapes};
     use egui::{Color32, Context, Event, Key, Modifiers, PointerButton, Shape};
+
+    /// Drawing anchors use nearby bar and visible overlay values only while the magnet is on,
+    /// including after a view change and a handle drag that can be undone and redone.
+    #[test]
+    fn drawing_magnet_places_and_drags_anchors_in_data_coordinates() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use egui::{Pos2, vec2};
+
+        for (magnet, price, overlay_visible, snaps) in [
+            (true, 10.0, true, true),
+            (true, 20.0, true, true),
+            (true, 12.0, true, true),
+            (true, 15.0, true, true),
+            (true, 17.0, true, true),
+            (false, 15.0, true, false),
+            (true, 15.0, false, false),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
+            let overlay = CustomIndicator::new("Two levels", |bars| {
+                bars.iter()
+                    .map(|_| IndicatorValue::Multiple(vec![15.0, 17.0]))
+                    .collect()
+            })
+            .with_line_cnt(2);
+            let id = chart.add_indicator(Box::new(overlay));
+            chart.set_indicator_visible(id, overlay_visible);
+            let single = chart.add_indicator(Box::new(CustomIndicator::new("One level", |bars| {
+                bars.iter().map(|_| IndicatorValue::Single(12.0)).collect()
+            })));
+            chart.set_indicator_visible(single, overlay_visible);
+            let mut time = 0.0;
+            for (visible, start) in [(100, 0), (40, 20)] {
+                chart.drawings_mut().clear_all();
+                chart.drawings_mut().deselect();
+                chart.set_visible_bars(visible);
+                chart.set_start_idx(start);
+                chart.drawings_mut().options.magnet_mode = magnet;
+                chart.drawings_mut().update_snap_options();
+                time += 0.1;
+                frame(&ctx, &mut chart, time, vec![]);
+                let map = chart.get_chart_mapping();
+                let (first, last) = chart.state.visible_range();
+                let middle = (first + last) / 2;
+                let bar = middle + (4 - middle % 3) % 3;
+                let target = Pos2::new(map.idx_to_x(bar), map.price_to_y(price));
+                let near = target + vec2(2.0, if price == 10.0 { -3.0 } else { 3.0 });
+                let expected_price = if snaps { price } else { map.y_to_price(near.y) };
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                let mut step = |chart: &mut crate::widget::Chart, events| {
+                    time += 0.1;
+                    frame(&ctx, chart, time, events);
+                };
+                chart
+                    .drawings_mut()
+                    .set_active_tool(Some(DrawingToolType::TrendLine));
+                for pos in [near, Pos2::new(map.idx_to_x(bar + 8), map.price_to_y(13.0))] {
+                    step(&mut chart, vec![Event::PointerMoved(pos)]);
+                    step(&mut chart, vec![button(pos, true)]);
+                    step(&mut chart, vec![button(pos, false)]);
+                }
+                assert_eq!(
+                    chart.drawings().drawings.len(),
+                    1,
+                    "magnet {magnet}, price {price}, visible {visible}, near {near:?}, rect {:?}, current {:?}",
+                    map.rect,
+                    chart
+                        .drawings()
+                        .curr_drawing
+                        .as_ref()
+                        .map(|d| &d.chart_points)
+                );
+                let drawing = &chart.drawings().drawings[0];
+                assert!(
+                    (drawing.chart_points[0].price - expected_price).abs() < 1e-5,
+                    "placement: magnet {magnet}, price {price}, visible {visible}: {:?}",
+                    drawing.chart_points
+                );
+                if snaps {
+                    assert_eq!(drawing.chart_points[0].bar_idx, bar as f32);
+                }
+                let id = drawing.id;
+                let from = drawing.points[0];
+                let before = drawing.chart_points[0];
+                chart.drawings_mut().select(id);
+                let to = Pos2::new(map.idx_to_x(bar + 3), map.price_to_y(price))
+                    + vec2(2.0, if price == 20.0 { 3.0 } else { -3.0 });
+                step(&mut chart, vec![Event::PointerMoved(from)]);
+                step(&mut chart, vec![button(from, true)]);
+                step(&mut chart, vec![Event::PointerMoved(from + vec2(7.0, 0.0))]);
+                step(&mut chart, vec![Event::PointerMoved(to)]);
+                step(&mut chart, vec![button(to, false)]);
+                let after = chart.drawings().drawings[0].chart_points[0];
+                let want = if snaps { price } else { map.y_to_price(to.y) };
+                assert!(
+                    (after.price - want).abs() < 1e-5,
+                    "drag: magnet {magnet}, price {price}, visible {visible}: {after:?}"
+                );
+                assert!(chart.drawings().dragging_handle.is_none());
+                assert!(chart.drawings_mut().undo());
+                assert_eq!(chart.drawings().drawings[0].chart_points[0], before);
+                assert!(chart.drawings_mut().redo());
+                assert_eq!(chart.drawings().drawings[0].chart_points[0], after);
+            }
+        }
+    }
 
     /// With the eraser on, a click on a drawing deletes it, whether or not a drawing is
     /// selected, unless it is locked or Escape has turned the eraser off.

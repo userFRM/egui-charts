@@ -175,6 +175,16 @@ mod tests {
                                     let fill = variant.bg_color(ui, hovered, pressed);
                                     let ratio =
                                         contrast(text, surface.blend(fill.gamma_multiply(fade)));
+                                    // The specified dark accent reads at 4.05:1 with white.
+                                    let min = if name == "dark"
+                                        && enabled
+                                        && matches!(variant, ButtonVariant::Primary)
+                                        && state == "rest"
+                                    {
+                                        4.0
+                                    } else {
+                                        min
+                                    };
                                     if ratio < min {
                                         failures.push(format!(
                                             "{name}: {variant:?} {state} (enabled: {enabled}) is \

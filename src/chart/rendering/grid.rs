@@ -1,8 +1,10 @@
 //! Grid rendering logic
 //! Grid lines are fixed to bar indices and price levels, moving 1:1 with the chart
 
+use super::dashed_line::draw_dashed_line;
 use crate::chart::renderers::ChartMapping;
 use crate::scales::{PriceMap, PriceMarkGenerator};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
@@ -12,16 +14,17 @@ pub fn render_grid(painter: &Painter, rect: Rect, price_map: &PriceMap, grid_col
     let marks = PriceMarkGenerator::new().generate_marks(price_map);
 
     for mark in marks {
-        let stroke_width = if mark.weight >= 80 {
+        let stroke_width = if grid_color.is_opaque() {
+            DESIGN_TOKENS.stroke.hairline
+        } else if mark.weight >= 80 {
             DESIGN_TOKENS.stroke.light
         } else {
             DESIGN_TOKENS.stroke.extra_thin
         };
-        painter.line_segment(
-            [
-                Pos2::new(rect.min.x, mark.y_coord),
-                Pos2::new(rect.max.x, mark.y_coord),
-            ],
+        render_grid_line(
+            painter,
+            Pos2::new(rect.min.x, mark.y_coord),
+            Pos2::new(rect.max.x, mark.y_coord),
             Stroke::new(stroke_width, grid_color),
         );
     }
@@ -68,10 +71,29 @@ pub fn render_vertical_grid(
             continue;
         }
 
-        painter.line_segment(
-            [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)],
-            Stroke::new(DESIGN_TOKENS.stroke.extra_thin, grid_color),
+        render_grid_line(
+            painter,
+            Pos2::new(x, rect.min.y),
+            Pos2::new(x, rect.max.y),
+            Stroke::new(
+                if grid_color.is_opaque() {
+                    DESIGN_TOKENS.stroke.hairline
+                } else {
+                    DESIGN_TOKENS.stroke.extra_thin
+                },
+                grid_color,
+            ),
         );
+    }
+}
+
+/// Paints a grid line at the caller's price or time mark, dotted in light themes.
+pub(crate) fn render_grid_line(painter: &Painter, start: Pos2, end: Pos2, mut stroke: Stroke) {
+    if painter.ctx().active_theme().dark {
+        painter.line_segment([start, end], stroke);
+    } else {
+        stroke.width = DESIGN_TOKENS.stroke.hairline;
+        draw_dashed_line(painter, start, end, stroke, 1.0, 3.0);
     }
 }
 
@@ -105,4 +127,109 @@ fn nice_interval(raw: usize) -> usize {
         return 500;
     }
     1000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scales::{PriceRange, PriceTransform};
+    use crate::theme::{Theme, apply_to_egui};
+    use egui::{Context, LayerId, RawInput, Shape, vec2};
+
+    #[test]
+    fn light_grid_is_dotted_in_both_directions_with_the_supplied_colour() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 240.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            rect.top(),
+            rect.bottom(),
+            false,
+        );
+        let coords = ChartMapping::new(rect, 6.0, 0, 60, 0.0, price);
+        for (theme, dotted, scale) in [
+            (Theme::light(), true, 1.0),
+            (Theme::light(), true, 2.0),
+            (Theme::dark(), false, 1.0),
+            (Theme::dark(), false, 2.0),
+        ] {
+            let ctx = Context::default();
+            apply_to_egui(&ctx, &theme);
+            ctx.set_pixels_per_point(scale);
+            for vertical in [false, true] {
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |_| {
+                        let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+                        if vertical {
+                            render_vertical_grid(&painter, rect, &coords, Color32::RED);
+                        } else {
+                            render_grid(&painter, rect, &price, Color32::RED);
+                        }
+                    },
+                );
+                let mut span_count = 0;
+                for shape in &output.shapes {
+                    match &shape.shape {
+                        Shape::LineSegment { points, stroke } => {
+                            assert!(!dotted, "solid light grid segment");
+                            assert_eq!(stroke.color, Color32::RED);
+                            assert_eq!(stroke.width, 1.0);
+                            assert!(points[0].distance(points[1]) >= rect.height());
+                            span_count += 1;
+                        }
+                        Shape::Mesh(mesh) => {
+                            assert!(dotted);
+                            let dots: Vec<_> = mesh
+                                .vertices
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|vertices| {
+                                    assert!(vertices.iter().all(|v| v.color == Color32::RED));
+                                    let bounds = Rect::from_points(&vertices.map(|v| v.pos));
+                                    assert_eq!(bounds.size(), vec2(1.0, 1.0));
+                                    bounds
+                                })
+                                .collect();
+                            for pair in dots.windows(2) {
+                                let gap = if vertical {
+                                    pair[1].top() - pair[0].bottom()
+                                } else {
+                                    pair[1].left() - pair[0].right()
+                                };
+                                assert_eq!(gap, 3.0);
+                            }
+                            span_count += dots.len();
+                        }
+                        _ => {}
+                    }
+                }
+                assert!(span_count > 0);
+                let meshes = ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
+                output.drop_without_applying_deltas();
+                let ink_area: f32 = meshes
+                    .iter()
+                    .filter_map(|primitive| match &primitive.primitive {
+                        egui::epaint::Primitive::Mesh(mesh) => Some(mesh),
+                        _ => None,
+                    })
+                    .flat_map(|mesh| {
+                        mesh.indices.as_chunks::<3>().0.iter().map(|triangle| {
+                            let a = mesh.vertices[triangle[0] as usize].pos;
+                            let b = mesh.vertices[triangle[1] as usize].pos;
+                            let c = mesh.vertices[triangle[2] as usize].pos;
+                            let ab = b - a;
+                            let ac = c - a;
+                            (ab.x * ac.y - ab.y * ac.x).abs() * 0.5
+                        })
+                    })
+                    .sum();
+                assert!(ink_area > 0.0, "grid vanished during pixel rounding");
+            }
+        }
+    }
 }

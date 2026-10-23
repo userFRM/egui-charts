@@ -89,7 +89,7 @@ impl Drawing {
             ("4×1", DESIGN_TOKENS.semantic.indicators.ma),    // Strong resistance
             ("3×1", DESIGN_TOKENS.semantic.extended.favorite_gold), // Moderate resistance
             ("2×1", DESIGN_TOKENS.semantic.extended.caution), // Mild resistance
-            ("1×1", DESIGN_TOKENS.semantic.indicators.bb_upper), // 45° balance line
+            ("1×1", DESIGN_TOKENS.semantic.extended.purple),  // 45° balance line
             ("1×2", DESIGN_TOKENS.semantic.indicators.ema),   // Mild support
             ("1×3", DESIGN_TOKENS.semantic.drawings.fib_100), // Moderate support
             ("1×4", DESIGN_TOKENS.semantic.extended.bullish), // Strong support

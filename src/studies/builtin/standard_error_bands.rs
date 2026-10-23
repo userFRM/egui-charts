@@ -23,9 +23,9 @@ impl StandardErrorBands {
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: Vec::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.indicators.bb_upper,
-                DESIGN_TOKENS.semantic.indicators.bb_middle,
-                DESIGN_TOKENS.semantic.indicators.bb_lower,
+                DESIGN_TOKENS.semantic.extended.purple,
+                Color32::from_rgb(120, 123, 134),
+                DESIGN_TOKENS.semantic.extended.purple,
             ],
             visible: true,
         }

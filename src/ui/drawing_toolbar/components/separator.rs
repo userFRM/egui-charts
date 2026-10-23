@@ -48,27 +48,31 @@ pub fn draw_separator_with_margin(ui: &mut Ui, width: f32, margin: f32) {
 /// Draw a styled separator for the drawing toolbar.
 ///
 /// Creates a thin separator line with proper margins and a `spacing.lg` gap above and below.
-/// Uses exact dimensions: 1px height, 33px wide, inset 9px left and 10px right.
+/// Uses exact dimensions: 1px height, 36px wide, inset 8px on each side.
 ///
 /// # Arguments
 ///
 /// * `ui` - The egui UI context
 /// * `toolbar_width` - Total width of the toolbar (e.g., 52px)
 pub fn draw_separator_styled(ui: &mut Ui, toolbar_width: f32) {
-    let margin = DESIGN_TOKENS.sizing.toolbar.hover_margin_h;
+    let margin = DESIGN_TOKENS.sizing.toolbar.separator_margin;
     let gap = ui.active_theme().spacing.lg;
 
     // Add gap above
     ui.add_space(gap);
 
     // Draw 1px separator with margins
-    let sep_width = toolbar_width - margin * 2.0 - 1.0;
+    let sep_width = toolbar_width - margin * 2.0;
     let sep_rect = Rect::from_min_size(
         ui.cursor().min + Vec2::new(margin, 0.0),
         Vec2::new(sep_width, 1.0),
     );
-    ui.painter()
-        .rect_filled(sep_rect, 0.0, Color32::from_gray(74));
+    let color = if ui.active_theme().dark {
+        Color32::from_gray(74)
+    } else {
+        Color32::from_gray(235)
+    };
+    ui.painter().rect_filled(sep_rect, 0.0, color);
 
     // Allocate space for the separator line
     ui.add_space(1.0);

@@ -232,6 +232,12 @@ pub fn render_time_labels(
 ) {
     let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter);
     let font = axis_font(context.painter.ctx());
+    let theme = context.painter.ctx().active_theme();
+    let text_color = if colors.text == theme.chart.axis_text {
+        theme.chart.axis_text_secondary
+    } else {
+        colors.text
+    };
 
     // Track last rendered label position to prevent overlap
     let min_label_spacing = 80.0; // Min pixels between label centers
@@ -264,16 +270,16 @@ pub fn render_time_labels(
                 .painter
                 .layout_job(egui::text::LayoutJob::single_section(
                     mark.label,
-                    semibold(font.clone(), colors.text),
+                    semibold(font.clone(), text_color),
                 ))
         } else {
             context
                 .painter
-                .layout_no_wrap(mark.label, font.clone(), colors.text)
+                .layout_no_wrap(mark.label, font.clone(), text_color)
         };
         let rect = egui::Align2::CENTER_TOP.anchor_size(Pos2::new(x, y), galley.size());
         if !under_tag(tags, rect) {
-            labels.push(Shape::galley(rect.min, galley, colors.text));
+            labels.push(Shape::galley(rect.min, galley, text_color));
         }
 
         last_label_x = Some(x);
@@ -540,6 +546,39 @@ mod tests {
                 "{case:?}: {tags:?}"
             );
             assert_eq!(ticks, kept, "{case:?}: {tags:?}");
+        }
+    }
+
+    #[test]
+    fn time_ticks_use_secondary_text_and_keep_custom_colours() {
+        use crate::theme::{apply_to_egui, presets};
+        use egui::Color32;
+
+        for (name, theme) in presets() {
+            for custom in [None, Some(Color32::from_rgb(170, 40, 190))] {
+                let ctx = Context::default();
+                apply_to_egui(&ctx, &theme);
+                let mut chart = chart(&[100.0], &[200.0]);
+                chart.config = theme.apply_to_config(chart.config.clone());
+                if let Some(custom) = custom {
+                    chart.config.text_color = custom;
+                }
+                let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+                let plot = chart.get_rendered_price_rect();
+                let ticks: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text) if text.pos.y >= plot.bottom() => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!ticks.is_empty(), "{name}: no time ticks");
+                let expected = custom.unwrap_or(theme.chart.axis_text_secondary);
+                assert!(
+                    ticks.iter().all(|text| text.fallback_color == expected),
+                    "{name}: {custom:?}"
+                );
+            }
         }
     }
 
