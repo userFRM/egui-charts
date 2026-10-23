@@ -1124,14 +1124,21 @@ impl DemoApp {
 
     fn build_data_window(&self) -> DataWindowInfo {
         let bars = self.chart.bars(SeriesId::MAIN);
-        let last = self.chart.get_hover_bar_idx()
-            .and_then(|index| bars.get(index.round() as usize))
-            .or_else(|| bars.last());
+        let index = self
+            .chart
+            .get_hover_bar_idx()
+            .map(|index| index.round() as usize)
+            .filter(|index| *index < bars.len())
+            .unwrap_or_else(|| bars.len().saturating_sub(1));
+        let last = bars.get(index);
         let mut info = DataWindowInfo::new(self.state.symbol.clone())
             .with_timeframe(self.state.timeframe.as_str().to_string());
         if let Some(b) = last {
             info = info.with_ohlcv(b.open, b.high, b.low, b.close, b.volume);
             info = info.with_timestamp(b.time.to_rfc3339());
+            if let Some(previous) = index.checked_sub(1).and_then(|index| bars.get(index)) {
+                info = info.with_prev_close(previous.close);
+            }
         }
         info
     }
