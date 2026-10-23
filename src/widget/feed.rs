@@ -50,7 +50,7 @@ pub(crate) struct FeedLink {
     pub(super) bubbles: Option<VolumeBubbles>,
     order_book: Option<OrderBook>,
     /// A history or resolve request failed: no automatic request until the next reload.
-    paging_stopped: bool,
+    pub(super) paging_stopped: bool,
 }
 
 enum Request {
@@ -125,6 +125,9 @@ impl Chart {
         {
             link.reload_pending = true;
         }
+        if symbol != self.symbol {
+            self.pending_scroll_time = None;
+        }
         self.symbol = symbol;
     }
 
@@ -137,6 +140,9 @@ impl Chart {
             && let Some(link) = &mut self.feed_link
         {
             link.reload_pending = true;
+        }
+        if self.timeframe != Some(timeframe) {
+            self.pending_scroll_time = None;
         }
         self.timeframe = Some(timeframe);
         self.drawings.curr_timeframe = timeframe.as_str().into_owned();
@@ -535,6 +541,146 @@ mod tests {
         match symbol {
             Some(symbol) => builder.with_symbol(symbol).build(),
             None => builder.build(),
+        }
+    }
+
+    #[test]
+    fn scroll_to_time_shows_the_nearest_bar_and_loads_older_history() {
+        let all = bars(3000);
+        // Exact match, nearer right/left neighbour, tie (earlier wins), and both ends.
+        for (seconds, expected) in [
+            (30000, 500),
+            (30040, 501),
+            (30020, 500),
+            (30030, 500),
+            (-60, 0),
+            (180000, 2999),
+        ] {
+            let mut chart = Chart::new(BarData::from_bars(all.clone()));
+            let mut frames = Frames::new();
+            chart.set_visible_bars(100);
+            frames.run(&mut chart);
+            let spacing = chart.state.time_scale().bar_spacing();
+            chart.enable_tracking_mode();
+            chart.scroll_to_time(all[0].time + TimeDelta::seconds(seconds));
+            frames.run(&mut chart);
+            let range = chart.state.time_scale().visible_logical_range();
+            assert!(
+                ((range.left + range.right) / 2.0 - expected as f32).abs() < 0.01,
+                "{seconds}: {range:?}"
+            );
+            assert_eq!(chart.state.time_scale().bar_spacing(), spacing);
+            assert!(!chart.is_tracking_mode_active());
+        }
+        let mut empty = Chart::new(BarData::new());
+        empty.scroll_to_time(all[0].time);
+        Frames::new().run(&mut empty);
+
+        for (target, expected, exhaust) in [
+            (all[300].time, 300, false),
+            (all[0].time - TimeDelta::days(1), 0, true),
+        ] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            let mut frames = Frames::new();
+            // Navigation requested even before the first page remains pending.
+            chart.scroll_to_time(target);
+            frames.run(&mut chart);
+            feed.calls();
+            feed.page().send(page(all[2000..].to_vec(), false));
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            assert_eq!(
+                feed.calls(),
+                [history("A", Timeframe::Min1, Some(all[2000].time))]
+            );
+            feed.page().send(page(all[1000..2000].to_vec(), false));
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            assert_eq!(
+                feed.calls(),
+                [history("A", Timeframe::Min1, Some(all[1000].time))]
+            );
+            feed.page().send(page(all[..1000].to_vec(), exhaust));
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            let range = chart.state.time_scale().visible_logical_range();
+            assert!(
+                ((range.left + range.right) / 2.0 - expected as f32).abs() < 0.01,
+                "{range:?}"
+            );
+            assert!(feed.calls().is_empty());
+        }
+
+        // Moving the view while an older page is outstanding cancels the target.
+        fn play(chart: &mut Chart, frames: &mut Frames, events: Vec<egui::Event>) {
+            for event in events {
+                frames.time += 1.0 / 60.0;
+                frame(&frames.ctx, chart, frames.time, vec![event]);
+            }
+        }
+        fn button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }
+        }
+        let drag = |chart: &mut Chart, frames: &mut Frames| {
+            let start = chart.last_rendered_price_rect.center();
+            let mut events = vec![egui::Event::PointerMoved(start), button(start, true)];
+            events.extend(
+                (1..=10)
+                    .map(|i| egui::Event::PointerMoved(start - egui::vec2(40.0 * i as f32, 0.0))),
+            );
+            events.push(button(start - egui::vec2(400.0, 0.0), false));
+            play(chart, frames, events);
+        };
+        let home_key = |chart: &mut Chart, frames: &mut Frames| {
+            let centre = chart.last_rendered_price_rect.center();
+            let home = egui::Event::Key {
+                key: egui::Key::Home,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let click = [egui::Event::PointerMoved(centre), button(centre, true)];
+            play(
+                chart,
+                frames,
+                [&click[..], &[button(centre, false), home]].concat(),
+            );
+        };
+        let box_zoom = |chart: &mut Chart, _: &mut Frames| {
+            let rect = chart.last_rendered_price_rect;
+            let start = rect.right_top() + egui::vec2(-100.0, 10.0);
+            let end = rect.right_bottom() - egui::vec2(10.0, 10.0);
+            assert!(chart.execute_box_zoom(start, end, rect, rect.width()));
+        };
+        let moves: [fn(&mut Chart, &mut Frames); 4] = [
+            |chart, _| chart.set_start_idx(600),
+            drag,
+            home_key,
+            box_zoom,
+        ];
+        for (row, user_move) in moves.into_iter().enumerate() {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            feed.page().send(page(all[2000..].to_vec(), false));
+            frames.run(&mut chart);
+            chart.scroll_to_time(all[300].time);
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            user_move(&mut chart, &mut frames);
+            for _ in 0..5 {
+                frames.run(&mut chart);
+            }
+            let range = chart.state.time_scale().visible_logical_range();
+            assert!((range.left + range.right) / 2.0 > 25.0, "{row}: {range:?}");
         }
     }
 

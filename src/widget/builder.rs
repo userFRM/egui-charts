@@ -93,6 +93,7 @@ impl Chart {
             apply_visible_bars_once: false,
             price_axis_drag: None,
             pending_start_idx: None,
+            pending_scroll_time: None,
             chart_type: ChartType::Candles,
             chart_type_params: ChartTypeParams::default(),
             tracking_mode_active: false,
@@ -250,7 +251,20 @@ impl Chart {
         if index != self.start_idx {
             self.start_idx = index;
             self.pending_start_idx = Some(index);
+            self.pending_scroll_time = None;
         }
+    }
+
+    /// Scrolls the bar nearest `time` to the centre of the chart, keeping the zoom.
+    ///
+    /// Applied on the next frame. A time outside the data shows the nearest end; with a feed,
+    /// older history is requested until the time is reached or history ends. Panning, zooming,
+    /// [`Chart::set_start_idx`] or tracking cancel it.
+    pub fn scroll_to_time(&mut self, time: chrono::DateTime<chrono::Utc>) {
+        self.pending_scroll_time = Some(time);
+        self.pending_start_idx = None;
+        self.disable_tracking_mode();
+        self.kinetic_scroll = KineticScrollState::new();
     }
 
     /// Sets the chart type (Candles, Bars, Line, Area, Renko, Kagi).
@@ -267,6 +281,7 @@ impl Chart {
     /// there as new data arrives. Disable with [`Chart::disable_tracking_mode`].
     pub fn enable_tracking_mode(&mut self) {
         self.tracking_mode_active = true;
+        self.pending_scroll_time = None;
         // Immediately scroll to latest when enabling
         self.state.time_scale_mut().scroll_to_realtime();
     }

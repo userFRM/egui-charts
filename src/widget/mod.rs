@@ -219,6 +219,8 @@ pub struct Chart {
     pub(crate) price_axis_drag: Option<(f32, f32)>,
     /// Apply external start-index once to time scale (UI state only)
     pub(crate) pending_start_idx: Option<usize>,
+    /// Timestamp to centre, retained while older history is loading.
+    pub(crate) pending_scroll_time: Option<DateTime<Utc>>,
     /// Chart type (candlestick, line, area, bar, Renko, Kagi)
     pub(crate) chart_type: ChartType,
     /// Parameters of the price-based chart types and the baseline

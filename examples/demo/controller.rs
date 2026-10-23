@@ -531,14 +531,8 @@ impl DemoApp {
     }
 
     fn go_to_date(&mut self, date: chrono::NaiveDate) {
-        // The sample series starts 2024-01-01 at one bar per timeframe step.
-        let base = chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
-        let days = (date - base).num_days().max(0) as usize;
-        let approx_bar = days.min(self.bars.len().saturating_sub(1));
-        // Re-center the visible window around the chosen date.
-        let window = 120usize.min(self.bars.len());
-        let visible = window.min(self.bars.len().saturating_sub(approx_bar).max(10));
-        self.chart.set_visible_bars(visible);
+        self.chart
+            .scroll_to_time(date.and_hms_opt(0, 0, 0).unwrap().and_utc());
     }
 
     fn run_export(

@@ -21,6 +21,14 @@ impl Chart {
         let was_in_chart = self.mouse_in_chart;
         self.mouse_in_chart = response.hovered();
 
+        // Manual interaction (scroll, zoom, drag) cancels a pending `scroll_to_time`
+        let manual_interaction = response.dragged()
+            || raw_wheel_delta(ui).length_sq() > 0.0
+            || ui.input(|i| i.smooth_scroll_delta.length_sq() > 0.0);
+        if manual_interaction {
+            self.pending_scroll_time = None;
+        }
+
         // Handle tracking mode exit conditions
         use crate::config::TrackingModeExitMode;
         if self.tracking_mode_active {
@@ -46,10 +54,7 @@ impl Chart {
             }
 
             // Exit tracking mode on any manual interaction (scroll, zoom, drag)
-            if response.dragged()
-                || raw_wheel_delta(ui).length_sq() > 0.0
-                || ui.input(|i| i.smooth_scroll_delta.length_sq() > 0.0)
-            {
+            if manual_interaction {
                 self.tracking_mode_active = false;
             }
         }
@@ -85,6 +90,22 @@ impl Chart {
 
         ui.input(|i| {
             use egui::Key;
+
+            // Every shortcut below moves the view, which cancels a pending `scroll_to_time`
+            let view_keys = [
+                Key::ArrowLeft,
+                Key::ArrowRight,
+                Key::Plus,
+                Key::Equals,
+                Key::Minus,
+                Key::Home,
+                Key::F,
+                Key::PageUp,
+                Key::PageDown,
+            ];
+            if view_keys.into_iter().any(|key| i.key_pressed(key)) {
+                self.pending_scroll_time = None;
+            }
 
             // Pan left (Left arrow)
             if i.key_pressed(Key::ArrowLeft) {

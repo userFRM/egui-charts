@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file. The format is b
 ### Added
 
 - `Chart::set_price_lines(series, lines)` draws horizontal lines at prices on a series, such as an entry, a stop or a target. A `model::PriceLine` has a price, a colour, a width, a line style, an optional title and a price axis label that can be turned off. The lines follow the series' price scale in every mode, are hidden while their price is off the scale or not finite, and label the axis in the scale's units. Only `SeriesId::MAIN` has price lines; another id is ignored with a warning. `model::LineStyle` is the line style of drawings and price lines; `drawings::LineStyle` remains a re-export of the same type.
+- `Chart::scroll_to_time` scrolls the bar nearest a time to the centre of the chart without changing the zoom. A time outside the data shows the nearest end, and with a feed, an older time loads history until it is reached. The demo's go-to-date dialog uses it.
 - `IndicatorDialog::open_tab` opens the indicator dialog on a given tab; `open` opens it on the Indicators tab.
 - `IndicatorDialogConfig` implements `Debug` and `Clone`.
 - `ui_kit::modal::Modal::height` fixes a modal's outer height for content that fills it, such as a list in a scroll area. The modal keeps 24 px free above and below it in the window and follows the window when it shrinks; `min_height` sets only a floor, so filling content keeps a modal at its largest size.

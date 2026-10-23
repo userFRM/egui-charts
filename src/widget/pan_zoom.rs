@@ -187,6 +187,7 @@ impl Chart {
                 // zoom_delta > 1.0 means fingers spreading (zoom in)
                 // zoom_delta < 1.0 means fingers pinching (zoom out)
                 let zoom_scale = (zoom_delta - 1.0) * 2.0;
+                self.pending_scroll_time = None;
 
                 // Use hover position or center of chart as zoom anchor
                 let zoom_point_x = hover_pos
@@ -213,6 +214,7 @@ impl Chart {
 
             // Handle two-finger pan (translation during pinch)
             if translation_delta.x.abs() > 0.5 {
+                self.pending_scroll_time = None;
                 self.state
                     .time_scale_mut()
                     .scroll_pixels(translation_delta.x);
@@ -426,6 +428,7 @@ impl Chart {
                     .time_scale_mut()
                     .set_bar_spacing(self.chart_options.time_scale.bar_spacing);
                 self.state.time_scale_mut().jump_to_latest();
+                self.pending_scroll_time = None;
             }
             if self
                 .chart_options
@@ -540,6 +543,7 @@ impl Chart {
         // Widened around its middle to the span zooming stops at.
         let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
         scale.set_range(a.min(b) - pad, a.max(b) + pad);
+        self.pending_scroll_time = None;
 
         true // Zoom successfully applied
     }
@@ -599,6 +603,33 @@ impl Chart {
                 }
             }
             self.prev_width = Some(chart_width);
+        }
+
+        if let Some(time) = self.pending_scroll_time
+            && let Some(first) = self.state.data().bars.first()
+        {
+            let bars = &self.state.data().bars;
+            let next = bars.partition_point(|bar| bar.time < time);
+            let index = if next == 0 {
+                0
+            } else if next == bars.len() || time - bars[next - 1].time <= bars[next].time - time {
+                next - 1
+            } else {
+                next
+            };
+            let needs_history = time < first.time
+                && !self.symbol.is_empty()
+                && !self.feed.history_complete
+                && self
+                    .feed_link
+                    .as_ref()
+                    .is_some_and(|link| !link.paging_stopped);
+            let scale = self.state.time_scale_mut();
+            let half_window = (chart_width / scale.bar_spacing() - 1.0) / 2.0;
+            scale.set_right_offset(index as f32 + half_window - scale.base_idx() as f32);
+            if !needs_history {
+                self.pending_scroll_time = None;
+            }
         }
 
         // Apply pending start index
