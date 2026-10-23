@@ -65,6 +65,8 @@ pub struct Instrument {
     pub symbol_type: Option<SymbolType>,
     /// Smallest price increment: positive and finite. Consumers ignore any other value.
     pub tick_size: Option<f64>,
+    /// Price represented by one pip: positive and finite. Unknown for instruments without pips.
+    pub pip_size: Option<f64>,
     /// Decimals of price labels.
     pub price_decimals: Option<u8>,
     /// Currency of prices, such as "USD".
@@ -84,6 +86,7 @@ impl Instrument {
             exchange: None,
             symbol_type: None,
             tick_size: None,
+            pip_size: None,
             price_decimals: None,
             currency: None,
             time_zone: None,
@@ -112,6 +115,12 @@ impl Instrument {
     /// Sets [`tick_size`](Self::tick_size).
     pub fn with_tick_size(mut self, tick_size: f64) -> Self {
         self.tick_size = Some(tick_size);
+        self
+    }
+
+    /// Sets [`pip_size`](Self::pip_size).
+    pub fn with_pip_size(mut self, pip_size: f64) -> Self {
+        self.pip_size = Some(pip_size);
         self
     }
 

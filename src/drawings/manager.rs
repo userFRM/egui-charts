@@ -138,7 +138,7 @@ impl Default for DrawingManagerOptions {
 /// // ... (start_drawing_with_coords, add_point_with_coords, etc.)
 ///
 /// // 4. Render against the chart's bars and coordinate mapping
-/// let view = ChartView { bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
+/// let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
 /// manager.render_all(painter, price_rect, &view);
 /// # }
 /// ```

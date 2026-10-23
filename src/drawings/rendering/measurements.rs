@@ -141,7 +141,9 @@ impl Drawing {
                 line_stroke,
             );
 
-            let info = self.measurement_label(view.bars).unwrap_or_default();
+            let info = self
+                .measurement_label(view.bars, view.instrument)
+                .unwrap_or_default();
 
             // Draw info box at the top-left corner of rect
             let font = egui::FontId::proportional(typography::SM);
@@ -169,7 +171,12 @@ impl Drawing {
         }
     }
 
-    pub(crate) fn render_price_range(&self, painter: &egui::Painter, chart_rect: Rect) {
+    pub(crate) fn render_price_range(
+        &self,
+        painter: &egui::Painter,
+        chart_rect: Rect,
+        view: &ChartView,
+    ) {
         if self.points.len() < 2 {
             if !self.points.is_empty() {
                 painter.circle_filled(
@@ -215,7 +222,9 @@ impl Drawing {
             Stroke::new(stroke::HAIRLINE, color),
         );
 
-        let info = self.measurement_label(&[]).unwrap_or_default();
+        let info = self
+            .measurement_label(&[], view.instrument)
+            .unwrap_or_default();
 
         painter.text(
             Pos2::new(mid_x + 10.0, (p1.y + p2.y) / 2.0),
@@ -280,7 +289,9 @@ impl Drawing {
             Stroke::new(stroke::HAIRLINE, color),
         );
 
-        let info = self.measurement_label(view.bars).unwrap_or_default();
+        let info = self
+            .measurement_label(view.bars, view.instrument)
+            .unwrap_or_default();
 
         painter.text(
             Pos2::new((p1.x + p2.x) / 2.0, mid_y - 10.0),
@@ -327,7 +338,9 @@ impl Drawing {
             StrokeKind::Outside,
         );
 
-        let info = self.measurement_label(view.bars).unwrap_or_default();
+        let info = self
+            .measurement_label(view.bars, view.instrument)
+            .unwrap_or_default();
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -357,7 +370,7 @@ impl Drawing {
         painter.circle_filled(start, DESIGN_TOKENS.rounding.md, color);
         painter.circle_filled(end, DESIGN_TOKENS.rounding.md, color);
 
-        let Some(info_text) = self.measurement_label(view.bars) else {
+        let Some(info_text) = self.measurement_label(view.bars, view.instrument) else {
             return;
         };
         let is_positive = self.chart_points[1].price >= self.chart_points[0].price;
@@ -421,14 +434,32 @@ impl Drawing {
     /// and for the info line the angle of the line on screen. Each anchor counts at its nearest
     /// bar: anchors N bars apart span N bars of time and the volume of the N + 1 bars from one to
     /// the other, both included.
-    pub(crate) fn measurement_label(&self, bars: &[Bar]) -> Option<String> {
+    pub(crate) fn measurement_label(
+        &self,
+        bars: &[Bar],
+        instrument: Option<&crate::model::Instrument>,
+    ) -> Option<String> {
         let [a, b, ..] = &self.chart_points[..] else {
             return None;
         };
         let change = b.price - a.price;
         let pct = percent_change(a.price, b.price);
         let decimals = price_decimals(a.price);
-        let change = format!("{change:+.decimals$} ({pct:+.2}%)");
+        let mut change_label = format!("{change:+.decimals$} ({pct:+.2}%)");
+        if let Some(instrument) = instrument {
+            for (size, unit) in [
+                (instrument.tick_size, "ticks"),
+                (instrument.pip_size, "pips"),
+            ] {
+                if let Some(size) = size.filter(|s| s.is_finite() && *s > 0.0) {
+                    let count = change / size;
+                    if count.is_finite() {
+                        change_label.push_str(&format!("  {count:+.2} {unit}"));
+                    }
+                }
+            }
+        }
+        let change = change_label;
         let (from, to) = (a.bar_idx.round(), b.bar_idx.round());
         let mut span = format!("{} bars", (to - from).abs() as i64);
         if let Some(ms) = elapsed_ms(bars, from, to) {
@@ -668,12 +699,48 @@ mod tests {
             let mut drawing = Drawing::new(1, tool);
             drawing.chart_points = vec![ChartPoint::new(b1, p1), ChartPoint::new(b2, p2)];
             drawing.update_screen_coords(|bar| bar * 10.0, |price| 500.0 - price as f32);
-            let got = drawing.measurement_label(&bars);
+            let got = drawing.measurement_label(&bars, None);
             if got.as_deref() != Some(want) {
                 wrong.push(format!("{tool:?}: got {got:?}, want {want:?}"));
             }
         }
+        let mut drawing = Drawing::new(0, DrawingToolType::Measure);
+        drawing.chart_points = vec![ChartPoint::new(1.0, 1.1000), ChartPoint::new(4.0, 1.0995)];
+        for (tick, pip, want) in [
+            (Some(0.00001), Some(0.0001), "-50.00 ticks  -5.00 pips"),
+            (Some(0.0), Some(f64::NAN), ""),
+            (Some(-1.0), Some(f64::INFINITY), ""),
+            (None, None, ""),
+        ] {
+            let mut instrument = crate::model::Instrument::new("PAIR");
+            instrument.tick_size = tick;
+            instrument.pip_size = pip;
+            let label = drawing.measurement_label(&bars, Some(&instrument)).unwrap();
+            if want.is_empty() {
+                assert!(!label.contains("ticks") && !label.contains("pips"));
+            } else {
+                assert!(label.contains(want), "{label}");
+            }
+        }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    #[test]
+    fn measurements_receive_the_chart_instrument() {
+        use crate::widget::test_frames::{chart, shapes};
+        let mut chart = chart(&[90.0], &[110.0]);
+        let ctx = egui::Context::default();
+        let mut drawing = Drawing::new(1, DrawingToolType::Measure);
+        drawing.chart_points = vec![ChartPoint::new(30.0, 100.0), ChartPoint::new(40.0, 95.0)];
+        drawing.completed = true;
+        chart.drawings_mut().drawings.push(drawing);
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("TEST").with_tick_size(0.25),
+        ));
+        let output = shapes(&ctx, &mut chart, 0.0, vec![]);
+        assert!(output.iter().any(
+            |s| matches!(s,egui::Shape::Text(t) if t.galley.job.text.contains("-20.00 ticks"))
+        ));
     }
 
     /// Flat top/bottom: trend line 100 at bar 0 to 104 at bar 10, flat line at 110; at bar 5 the

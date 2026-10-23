@@ -46,7 +46,7 @@
 //! # ) {
 //! let drawing = Drawing::new(1, DrawingToolType::TrendLine);
 //! // After setting up points and calling update_screen_coords:
-//! let view = ChartView { bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
+//! let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
 //! drawing.render(painter, price_rect, &view);
 //! # }
 //! ```
@@ -83,6 +83,8 @@ use std::rc::Rc;
 /// the regression trend, the position and forecast results and the bars
 /// pattern are computed from these bars.
 pub struct ChartView<'a> {
+    /// Instrument metadata supplied by the host or feed, for tick and pip measurements.
+    pub instrument: Option<&'a crate::model::Instrument>,
     /// The series that drawing anchors index into.
     pub bars: &'a [Bar],
     /// [`ChartState::revision`](crate::model::ChartState::revision) of `bars`.
@@ -356,9 +358,7 @@ impl Drawing {
             }
             DrawingToolType::VerticalLine => self.render_vertical_line(painter, rect, stroke),
             DrawingToolType::CrossLine => self.render_cross_line(painter, rect, color, stroke),
-            DrawingToolType::TrendAngle => {
-                self.render_trend_angle(painter, color, stroke, view.bars)
-            }
+            DrawingToolType::TrendAngle => self.render_trend_angle(painter, color, stroke, view),
             DrawingToolType::InfoLine => self.render_info_line(painter, view),
 
             // Shapes (8 tools)
@@ -442,7 +442,7 @@ impl Drawing {
 
             // Measurers (4 tools)
             DrawingToolType::Measure => self.render_measure(painter, view),
-            DrawingToolType::PriceRange => self.render_price_range(painter, rect),
+            DrawingToolType::PriceRange => self.render_price_range(painter, rect, view),
             DrawingToolType::DateRange => self.render_date_range(painter, rect, view),
             DrawingToolType::DateAndPriceRange => self.render_date_and_price_range(painter, view),
 

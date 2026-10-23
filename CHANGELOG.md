@@ -93,6 +93,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Measuring tools count signed ticks and pips from `Instrument::tick_size` and the new optional `pip_size` (`with_pip_size`). Unknown, non-positive and non-finite sizes are omitted. `Chart` passes its host or feed instrument to drawings. Migration: `ChartView` literals set `instrument` (`None` when unknown).
+
 - Gann fans follow the signed anchor direction and retain their steep rays when they leave through the pane's top or bottom. Fixed Gann squares keep their anchor-defined price-per-bar ratio through zoom. `Drawing::gann` (`GannConfig`) sets independent price and time grid fractions on boxes and squares; levels count from the first anchor. Migration: `Drawing` struct literals set `gann`, or use `Drawing::new`. Saved grid and pitchfork settings reject non-finite values.
 
 - Inside pitchforks use the first leg midpoint and second anchor as their tines, with the first tine passing through the third anchor and the median halfway between the tines. All fork rays follow their direction, including leftward and vertical forks.
