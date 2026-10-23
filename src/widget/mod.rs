@@ -114,6 +114,7 @@ use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 pub mod indicator_pane;
+pub use crate::chart::renderers::{Legend, LegendStatus, QuoteSide};
 pub use crate::chart::selection::{ChartElementId, SeriesId};
 pub use builder::ChartBuilder;
 use egui::{Pos2, Rect, Vec2};

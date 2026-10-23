@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `widget::Legend` composes an in-pane instrument title, host badge and status marks, current outlined sell/buy quotes with spread, and collapsible volume and visible overlay study rows. Its bar and previous close are supplied independently of current quotes; quote clicks return `QuoteSide` for the host to handle.
 - `Chart::set_price_lines(series, lines)` draws horizontal lines at prices on a series, such as an entry, a stop or a target. A `model::PriceLine` has a price, a colour, a width, a line style, an optional title and a price axis label that can be turned off. The lines follow the series' price scale in every mode, are hidden while their price is off the scale or not finite, and label the axis in the scale's units. Only `SeriesId::MAIN` has price lines; another id is ignored with a warning. `model::LineStyle` is the line style of drawings and price lines; `drawings::LineStyle` remains a re-export of the same type.
 - `Chart::scroll_to_time` scrolls the bar nearest a time to the centre of the chart without changing the zoom. A time outside the data shows the nearest end, and with a feed, an older time loads history until it is reached. The demo's go-to-date dialog uses it.
 - The chart draws navigation buttons in a row at the bottom of the main pane: zoom out, zoom in, scroll left, scroll right, reset, and auto-scale, logarithmic and percent toggles that show the price scale's current state. Zoom moves by `KeyboardOptions::zoom_step` around the right edge, scrolling by the visible bar count. `ChartConfig::navigation_buttons` (`NavigationButtons::Always`, `OnHover` or `Never`, `OnHover` by default) sets when they show, and the chart settings dialog's Navigation row edits it. Migration: `ChartConfig` struct literals must set `navigation_buttons` or use `..ChartConfig::default()`.
@@ -70,6 +71,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The series legend wraps between whole OHLC fields within its supplied plot bounds, truncates long titles and paints the chart background behind text. The title uses 16 px text and the readout 13 px, with financial colours and 8 px field gaps; wide readouts stay inline.
 - The export dialog stays open to show success with the file path or an error, and prevents duplicate requests while an export is pending. The demo reports file write results and offers PNG and CSV downloads in the browser. Image exports capture a frame after closing the dialog and report the result in a notice.
 - The drawing bar uses a 28 px icon grid and a 38 px button pitch, with 33 by 1 px #4a4a4a separators inset 9 px left and 10 px right. Resting icons use the theme's primary text colour, now #dbdbdb in the dark preset. Hover and selected fills stay 34 by 34 px.
 - `UiExt::error_label`, `warning_label`, `success_label` and `info_label` use the active theme's error, warning, success and info colours instead of fixed colours, so the export dialog's error message reads at 4.5:1 or better in every preset.
