@@ -246,53 +246,100 @@ pub fn handle_keyboard_shortcuts(
     state: &mut ObjectTreeState,
     _source_ids: &[usize],
 ) -> ObjectTreeAction {
-    let mut action = ObjectTreeAction::None;
+    if ui.memory(|m| m.focused().is_some()) || egui::Popup::is_any_open(ui.ctx()) {
+        return ObjectTreeAction::None;
+    }
 
-    ui.input(|i| {
-        // Delete key
-        if (i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace))
-            && state.selection_count() > 0
+    ui.input_mut(|i| {
+        let modifiers = i.modifiers;
+        if state.selection_count() > 0
+            && (i.consume_key(modifiers, Key::Delete) || i.consume_key(modifiers, Key::Backspace))
         {
-            action = ObjectTreeAction::DeleteSelected;
+            return ObjectTreeAction::DeleteSelected;
         }
-
-        // Ctrl+A - Select all
-        if i.modifiers.command && i.key_pressed(Key::A) {
-            action = ObjectTreeAction::SelectAll;
+        if modifiers.command && i.consume_key(modifiers, Key::A) {
+            return ObjectTreeAction::SelectAll;
         }
-
-        // Ctrl+D - Duplicate
-        if i.modifiers.command && i.key_pressed(Key::D) && state.selection_count() > 0 {
-            action = ObjectTreeAction::DuplicateSelected;
+        if modifiers.command && state.selection_count() > 0 && i.consume_key(modifiers, Key::D) {
+            return ObjectTreeAction::DuplicateSelected;
         }
-
-        // Escape - Clear selection / close menu
-        if i.key_pressed(Key::Escape) {
+        if (state.context_menu_open || state.renaming_id.is_some() || state.selection_count() > 0)
+            && i.consume_key(modifiers, Key::Escape)
+        {
             if state.context_menu_open {
                 state.close_context_menu();
             } else if state.renaming_id.is_some() {
                 state.cancel_rename();
-            } else if state.selection_count() > 0 {
-                action = ObjectTreeAction::ClearSelection;
+            } else {
+                return ObjectTreeAction::ClearSelection;
             }
         }
-
-        // Enter - Confirm rename
-        if i.key_pressed(Key::Enter)
+        if state.renaming_id.is_some()
+            && i.consume_key(modifiers, Key::Enter)
             && let Some((id, name)) = state.finish_rename()
         {
-            action = ObjectTreeAction::Rename(id, name);
+            return ObjectTreeAction::Rename(id, name);
         }
-
-        // F2 - Start rename
-        if i.key_pressed(Key::F2)
-            && let Some(&id) = state.selected_ids.iter().next()
+        if let Some(&id) = state.selected_ids.iter().next()
+            && i.consume_key(modifiers, Key::F2)
         {
-            // Would need to get current name from sources
-            // For now, just set renaming_id
             state.renaming_id = Some(id);
         }
-    });
+        ObjectTreeAction::None
+    })
+}
 
-    action
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortcuts_respect_focus_and_consume_only_the_keys_they_handle() {
+        for focused in [true, false] {
+            for key in [
+                Key::Delete,
+                Key::Backspace,
+                Key::A,
+                Key::D,
+                Key::Escape,
+                Key::Enter,
+            ] {
+                let ctx = egui::Context::default();
+                let command = matches!(key, Key::A | Key::D);
+                let modifiers = egui::Modifiers {
+                    command,
+                    ctrl: command,
+                    ..Default::default()
+                };
+                let input = egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                };
+                let output = ctx.run_ui(input, |ui| {
+                    let mut state = ObjectTreeState::new();
+                    state.select(1);
+                    if key == Key::Enter {
+                        state.start_rename(1, "Name");
+                    }
+                    if focused {
+                        ui.memory_mut(|m| m.request_focus(egui::Id::unique("other field")));
+                    }
+                    let action = handle_keyboard_shortcuts(ui, &mut state, &[1]);
+                    assert_eq!(action.is_none(), focused, "{key:?}, focused={focused}");
+                    assert_eq!(
+                        ui.input(|i| i.key_pressed(key)),
+                        focused,
+                        "{key:?} consumption"
+                    );
+                });
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
 }
