@@ -1308,6 +1308,9 @@ impl DemoApp {
         let last = bars.get(index);
         let mut info = DataWindowInfo::new(self.state.symbol.clone())
             .with_timeframe(self.state.timeframe.as_str().to_string());
+        if let Some(instrument) = self.chart.instrument() {
+            info = info.with_instrument(instrument);
+        }
         if let Some(b) = last {
             info = info.with_ohlcv(b.open, b.high, b.low, b.close, b.volume);
             info = info.with_timestamp(self.chart.format_time(b.time));

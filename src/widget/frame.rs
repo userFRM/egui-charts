@@ -1004,6 +1004,8 @@ impl Chart {
                 )),
                 axis_edge,
                 countdown.as_deref(),
+                self.instrument()
+                    .and_then(|instrument| instrument.volume_decimals),
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
             quote_tags[0]
@@ -1262,6 +1264,7 @@ impl Chart {
                         visible_data,
                         formatter.as_ref(),
                         bar_seconds,
+                        self.instrument(),
                     );
                 }
             }

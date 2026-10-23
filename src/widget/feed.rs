@@ -128,6 +128,7 @@ impl Chart {
         if symbol != self.symbol {
             self.pending_scroll_time = None;
             self.legend_instrument = None;
+            self.currency_choice = None;
             self.legend_badge = None;
             self.legend_statuses.clear();
             self.quote = None;
@@ -355,7 +356,7 @@ impl Chart {
     fn subscribe(&mut self, link: &mut FeedLink, instrument: Instrument) {
         self.state
             .price_scale_mut()
-            .set_price_precision(instrument.price_decimals);
+            .set_price_precision(crate::scales::instrument_price_precision(&instrument));
         link.instrument = Some(instrument);
         link.rebuild_bubbles();
         let sink = link

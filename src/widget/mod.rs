@@ -428,7 +428,7 @@ impl Chart {
         self.legend_instrument = instrument;
         let precision = self
             .instrument()
-            .and_then(|instrument| instrument.price_decimals);
+            .and_then(crate::scales::instrument_price_precision);
         self.state.price_scale_mut().set_price_precision(precision);
     }
 

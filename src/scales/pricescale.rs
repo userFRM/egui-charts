@@ -198,8 +198,15 @@ impl PriceTransform {
     pub(crate) fn label(&self, value: f64, decimals: usize) -> String {
         match self.mode {
             PriceScaleMode::Percentage => format!("{value:+.decimals$}%"),
-            PriceScaleMode::Logarithmic => format!("{:.decimals$}", self.to_price(value)),
-            _ => format!("{value:.decimals$}"),
+            mode => {
+                use super::{DefaultPriceFormatter, PriceFormatter};
+                let price = if mode == PriceScaleMode::Logarithmic {
+                    self.to_price(value)
+                } else {
+                    value
+                };
+                DefaultPriceFormatter::with_precision(decimals).format(price)
+            }
         }
     }
 }

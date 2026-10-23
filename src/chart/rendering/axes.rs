@@ -226,7 +226,7 @@ pub fn render_quote_tags(
     axis_right: f32,
 ) -> [Option<Rect>; 3] {
     render_quote_tags_with_countdown(
-        painter, price_rect, price_map, close, session, volume, axis_right, None,
+        painter, price_rect, price_map, close, session, volume, axis_right, None, None,
     )
 }
 
@@ -240,6 +240,7 @@ pub(crate) fn render_quote_tags_with_countdown(
     volume: Option<(f64, Color32)>,
     axis_right: f32,
     countdown: Option<&str>,
+    volume_precision: Option<u8>,
 ) -> [Option<Rect>; 3] {
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
@@ -306,7 +307,10 @@ pub(crate) fn render_quote_tags_with_countdown(
         rows.push((
             2,
             price_rect.bottom() - height / 2.0,
-            VolumeFormatter::default().format(value),
+            VolumeFormatter {
+                precision: usize::from(volume_precision.unwrap_or(2).min(16)),
+            }
+            .format(value),
             color,
         ));
     }
@@ -627,6 +631,7 @@ mod tests {
                         Some((1_590_000.0, Color32::RED)),
                         pane.right() + width,
                         countdown,
+                        None,
                     );
                 });
                 let labels: Vec<_> = output

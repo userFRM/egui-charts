@@ -5,6 +5,7 @@
 
 use egui::{RichText, Ui};
 
+use crate::scales::{DefaultPriceFormatter, PriceFormatter, VolumeFormatter};
 use crate::theme::ThemeExt;
 
 use super::types::DataWindowInfo;
@@ -75,6 +76,21 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
         ui.active_theme().chart.candle_down
     };
 
+    let price = |value| {
+        data.price_precision.map_or_else(
+            || format_price(value),
+            |decimals| DefaultPriceFormatter::with_precision(usize::from(decimals)).format(value),
+        )
+    };
+    let volume = data.volume_precision.map_or_else(
+        || format_volume(data.volume),
+        |decimals| {
+            VolumeFormatter {
+                precision: usize::from(decimals),
+            }
+            .format(data.volume)
+        },
+    );
     egui::Grid::new("ohlcv_grid")
         .num_columns(4)
         .spacing([DESIGN_TOKENS.spacing.md, DESIGN_TOKENS.spacing.xs])
@@ -82,26 +98,30 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
         .show(ui, |ui| {
             // Row 1: Open, High
             ui.hint_label("O");
-            ui.label(format_price(data.open));
+            ui.label(price(data.open));
             ui.hint_label("H");
-            ui.label(format_price(data.high));
+            ui.label(price(data.high));
             ui.end_row();
 
             // Row 2: Low, Close
             ui.hint_label("L");
-            ui.label(format_price(data.low));
+            ui.label(price(data.low));
             ui.hint_label("C");
-            ui.label(RichText::new(format_price(data.close)).color(change_color));
+            ui.label(RichText::new(price(data.close)).color(change_color));
             ui.end_row();
 
             // Row 3: Volume, Change
             ui.hint_label("Vol");
-            ui.label(format_volume(data.volume));
+            ui.label(volume);
             ui.hint_label("Chg");
             ui.label(
                 RichText::new(format!(
-                    "{:+.2} ({:+.2}%)",
-                    data.change, data.change_percent
+                    "{} ({:+.2}%)",
+                    data.price_precision.map_or_else(
+                        || format!("{:+.2}", data.change),
+                        |decimals| format!("{:+.*}", usize::from(decimals), data.change)
+                    ),
+                    data.change_percent
                 ))
                 .color(change_color)
                 .small(),
@@ -113,10 +133,6 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
 /// Format price with decimals chosen by its magnitude, so a negative price
 /// keeps the decimals of the positive price of the same size
 fn format_price(price: f64) -> String {
-    if price == 0.0 {
-        return "\u{2014}".to_string();
-    }
-
     let magnitude = price.abs();
     if magnitude >= 10000.0 {
         format!("{price:.0}")
@@ -156,6 +172,7 @@ mod tests {
 
     #[test]
     fn test_format_price() {
+        assert_eq!(format_price(0.0), "0.00000000");
         assert_eq!(format_price(50000.0), "50000");
         assert_eq!(format_price(1234.5), "1234.5");
         assert_eq!(format_price(99.99), "99.99");

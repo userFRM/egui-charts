@@ -24,6 +24,7 @@ mod timescale_marks;
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
+    instrument_price_precision,
 };
 #[cfg(feature = "widget")]
 pub(crate) use pricescale::auto_scale_span;

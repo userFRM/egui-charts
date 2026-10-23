@@ -380,6 +380,7 @@ mod tests {
             *chart.config_mut() = theme.apply_to_config(chart.config().clone());
             chart.config_mut().show_symbol_last_val = false;
             chart.config_mut().show_volume = false;
+            chart.config_mut().show_indicator_last_val = false;
             chart.add_indicator(Box::new(crate::studies::RSI::default()));
             frame(&ctx, &mut chart, 0.0, vec![]);
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
@@ -489,6 +490,58 @@ mod tests {
                     frame(&ctx, &mut chart, 0.2, events);
                     let popup = shapes(&ctx, &mut chart, 0.3, vec![]);
                     assert_eq!(popup.iter().filter(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "USD")).count(), 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tick_metadata_controls_axis_and_legend_decimals() {
+        use crate::model::Instrument;
+        for (tick, price, decimals, explicit) in [
+            (0.25, 125.25, 2, None),
+            (0.00001, 1.23456, 5, None),
+            (1.0, 100.0, 0, None),
+            (0.01, 0.0, 2, None),
+            (0.25, 125.25, 4, Some(4)),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[price], &[price]);
+            chart.config_mut().show_volume = false;
+            let mut instrument = Instrument::new("SAMPLE").with_tick_size(tick);
+            instrument.price_decimals = explicit;
+            chart.set_instrument(Some(instrument));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let text: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            let expected = format!("{price:.decimals$}");
+            assert!(
+                text.contains(&expected.as_str()),
+                "last price {expected}: {text:?}"
+            );
+            assert!(
+                text.contains(&format!("C {expected}").as_str()),
+                "legend {expected}: {text:?}"
+            );
+            let plot = chart.get_rendered_price_rect();
+            for shape in &painted {
+                if let Shape::Text(text) = shape
+                    && text.pos.x > plot.right()
+                    && text.galley.text().parse::<f64>().is_ok()
+                {
+                    assert_eq!(
+                        text.galley
+                            .text()
+                            .split_once('.')
+                            .map_or(0, |(_, fraction)| fraction.len()),
+                        decimals
+                    );
                 }
             }
         }

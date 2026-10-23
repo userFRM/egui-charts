@@ -283,7 +283,19 @@ impl<'a> Legend<'a> {
             if self.show_volume {
                 layout.field(
                     "Vol ",
-                    format_volume(self.bar.volume),
+                    self.instrument
+                        .and_then(|instrument| instrument.volume_decimals)
+                        .map_or_else(
+                            || format_volume(self.bar.volume),
+                            |decimals| {
+                                crate::scales::PriceFormatter::format(
+                                    &crate::scales::VolumeFormatter {
+                                        precision: usize::from(decimals.min(16)),
+                                    },
+                                    self.bar.volume,
+                                )
+                            },
+                        ),
                     layout.bar_color(self.bar),
                 );
                 layout.new_row();
@@ -407,9 +419,9 @@ impl<'a> Legend<'a> {
 
     fn price_precision(&self, price: f64) -> usize {
         self.instrument
-            .and_then(|i| i.price_decimals)
+            .and_then(crate::scales::instrument_price_precision)
             .map_or_else(|| price_decimals(price), usize::from)
-            .min(8)
+            .min(16)
     }
 }
 
