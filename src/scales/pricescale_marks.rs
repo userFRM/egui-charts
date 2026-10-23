@@ -131,7 +131,11 @@ impl PriceMarkGenerator {
         let raw_step = price_range / target_marks as f64;
 
         // Get "nice" step value
-        let nice_step = self.calculate_nice_step(raw_step);
+        let mut nice_step = self.calculate_nice_step(raw_step);
+        if let Some(decimals) = map.price_precision() {
+            let unit = 10f64.powi(-(decimals as i32));
+            nice_step = (nice_step / unit).ceil().max(1.0) * unit;
+        }
 
         // Guard against zero or invalid step (prevents infinite loop)
         if nice_step <= 0.0 || !nice_step.is_finite() {
@@ -228,7 +232,10 @@ impl PriceMarkGenerator {
 
         // For log scale, we want prices at nice round numbers
         // Find the order of magnitude range
-        let min_order = min_price.log10().floor() as i32;
+        let mut min_order = min_price.log10().floor() as i32;
+        if let Some(decimals) = map.price_precision() {
+            min_order = min_order.max(-(decimals as i32));
+        }
         let max_order = max_price.log10().ceil() as i32;
 
         let mut marks = Vec::new();
@@ -495,6 +502,21 @@ mod tests {
             assert!(
                 marks.iter().any(|mark| mark.label == expected),
                 "{mode:?}: {marks:?}"
+            );
+        }
+        for (mode, min, max, decimals) in [
+            (PriceScaleMode::Normal, 700.0, 700.04, 2),
+            (PriceScaleMode::Normal, 0.0, 30.0, 0),
+            (PriceScaleMode::Logarithmic, 0.001_f64.ln(), 0.1_f64.ln(), 2),
+        ] {
+            let marks =
+                generator.generate_marks(&map(mode, min, max).with_price_precision(Some(decimals)));
+            assert!(!marks.is_empty());
+            assert!(marks.windows(2).all(|pair| pair[0].label != pair[1].label));
+            assert!(
+                marks
+                    .iter()
+                    .all(|mark| (mark.label.parse::<f64>().unwrap() - mark.price).abs() < 1e-8)
             );
         }
         let marks = generator.generate_marks(&map(PriceScaleMode::Normal, 0.0, 70.0));

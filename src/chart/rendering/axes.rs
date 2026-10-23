@@ -23,14 +23,12 @@ pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
 /// Paints `text` on a `fill` tag in the axis font and returns the tag's rect.
 ///
 /// The text sits where an axis label placed at `anchor` with `align` would, and the tag pads it.
-/// A tag that would end past `max_x` moves left to end there, and one that overlaps `covered`, a
-/// tag painted before it, widens to hide it across its width.
+/// A tag that would end past `max_x` moves left to end there.
 pub(crate) fn paint_axis_tag(
     painter: &Painter,
     anchor: Pos2,
     align: Align2,
     max_x: f32,
-    covered: Option<Rect>,
     text: String,
     text_color: Color32,
     fill: Color32,
@@ -43,10 +41,6 @@ pub(crate) fn paint_axis_tag(
         .expand2(TAG_PADDING);
     tag = tag.translate(Vec2::new((max_x - tag.max.x).min(0.0), 0.0));
     let text_pos = tag.min + TAG_PADDING;
-    if let Some(covered) = covered.filter(|covered| covered.intersects(tag)) {
-        tag.min.x = tag.min.x.min(covered.min.x);
-        tag.max.x = tag.max.x.max(covered.max.x);
-    }
     painter.rect_filled(
         tag,
         CornerRadius {
@@ -121,7 +115,6 @@ pub fn render_price_line(
         Pos2::new(price_rect.max.x + 5.0 + TAG_PADDING.x, y),
         Align2::LEFT_CENTER,
         axis_right,
-        None,
         label,
         text_color,
         line.color,
@@ -150,14 +143,15 @@ pub(crate) fn paint_crosshair_tag(
     covered: Option<Rect>,
 ) -> Rect {
     let (text_color, fill) = colors;
-    let galley = painter.layout_no_wrap(text, axis_font(painter.ctx()), text_color);
+    let padding = if action_width > 0.0 { 16.0 } else { 32.0 };
+    let available = (bounds.end() - bounds.start()).max(0.0);
+    let mut job =
+        egui::text::LayoutJob::simple_singleline(text, axis_font(painter.ctx()), text_color);
+    job.wrap =
+        egui::text::TextWrapping::truncate_at_width((available - action_width - padding).max(0.0));
+    let galley = painter.layout_job(job);
     let size = Vec2::new(
-        galley.size().x
-            + if action_width > 0.0 {
-                16.0 + action_width
-            } else {
-                32.0
-            },
+        (galley.size().x + padding + action_width).min(available),
         height.max(galley.size().y),
     );
     let mut tag = align.anchor_size(anchor, size);
@@ -167,6 +161,9 @@ pub(crate) fn paint_crosshair_tag(
         tag.min.x = tag.min.x.min(covered.min.x);
         tag.max.x = tag.max.x.max(covered.max.x);
     }
+    tag.min.x = tag.min.x.max(*bounds.start());
+    tag.max.x = tag.max.x.min(*bounds.end());
+    let painter = painter.with_clip_rect(tag.intersect(painter.clip_rect()));
     painter.rect_filled(tag, 1.0, fill);
     let text_pos = Pos2::new(
         tag.left() + action_width + if action_width > 0.0 { 10.0 } else { 16.0 },
@@ -177,14 +174,16 @@ pub(crate) fn paint_crosshair_tag(
 }
 
 /// Width of the current price labels and tags, including their plot gap and right clearance.
-/// Hosts use this when allocating a price axis instead of a fixed oversized column.
-pub fn price_axis_width(painter: &Painter, price_map: &PriceMap) -> f32 {
+/// Include formatted session and volume labels in `tag_labels` when allocating their column.
+pub fn price_axis_width(painter: &Painter, price_map: &PriceMap, tag_labels: &[&str]) -> f32 {
     crate::scales::PriceMarkGenerator::new()
         .generate_marks(price_map)
         .into_iter()
-        .map(|mark| {
+        .map(|mark| mark.label)
+        .chain(tag_labels.iter().map(|label| (*label).to_owned()))
+        .map(|label| {
             painter
-                .layout_no_wrap(mark.label, axis_font(painter.ctx()), Color32::WHITE)
+                .layout_no_wrap(label, axis_font(painter.ctx()), Color32::WHITE)
                 .size()
                 .x
         })
@@ -200,6 +199,7 @@ pub fn price_axis_width(painter: &Painter, price_map: &PriceMap) -> f32 {
 /// Session lines stay at their data price. Tags move apart only to keep the rows readable;
 /// volume is a value readout above the price rows, never a price coordinate. The caller supplies
 /// the current values and colours independently of the historical bar under the pointer.
+/// Off-scale prices do not hide other rows. A short pane keeps close, session, then volume.
 pub fn render_quote_tags(
     painter: &Painter,
     price_rect: Rect,
@@ -211,49 +211,16 @@ pub fn render_quote_tags(
 ) -> [Option<Rect>; 3] {
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
-    if !price_map
-        .range()
-        .contains(price_map.transform().to_scale(close.price))
-    {
-        return tags;
-    }
-    let height = 17.0;
-    let close_y = price_map.price_to_y(close.price);
-    let session = session.filter(|(quote, _)| {
-        price_map
-            .range()
-            .contains(price_map.transform().to_scale(quote.price))
-    });
-    let session_y = session.map(|(quote, _)| {
-        let y = price_map.price_to_y(quote.price);
-        if (y - close_y).abs() < height {
-            close_y - height
-        } else {
-            y
-        }
-    });
-    let volume = volume.filter(|(value, _)| value.is_finite() && *value >= 0.0);
-    let volume_y = close_y.min(session_y.unwrap_or(close_y)) - height;
-    let top = volume
-        .filter(|_| volume_y.is_finite())
-        .map_or(session_y.unwrap_or(close_y).min(close_y), |_| volume_y)
-        - height / 2.0;
-    let bottom = close_y.max(session_y.unwrap_or(close_y)) + height / 2.0;
-    let shift = (price_rect.top() - top).max(0.0) - (bottom - price_rect.bottom()).max(0.0);
     let transform = price_map.transform();
     let decimals = price_map.price_precision().unwrap_or(2);
-    let mut draw = |slot: usize, y: f32, text: String, fill: Color32| {
-        tags[slot] = Some(paint_axis_tag(
-            painter,
-            Pos2::new(price_rect.right() + 5.0 + TAG_PADDING.x, y + shift),
-            Align2::LEFT_CENTER,
-            axis_right,
-            None,
-            text,
-            tag_text_color(fill),
-            fill,
-        ));
-    };
+    let height = painter
+        .layout_no_wrap("0".into(), axis_font(painter.ctx()), Color32::WHITE)
+        .size()
+        .y
+        + TAG_PADDING.y * 2.0;
+    let visible = |price| price_map.range().contains(transform.to_scale(price));
+    let close_y = price_map.price_to_y(close.price);
+    let mut rows = Vec::with_capacity(3);
     let mut line = close.clone();
     line.axis_label = false;
     render_price_line(
@@ -265,13 +232,15 @@ pub fn render_quote_tags(
         false,
         axis_right,
     );
-    draw(
-        0,
-        close_y,
-        transform.label(transform.to_scale(close.price), decimals),
-        close.color,
-    );
-    if let Some(((quote, color), y)) = session.zip(session_y) {
+    if visible(close.price) && close.axis_label {
+        rows.push((
+            0,
+            close_y,
+            transform.label(transform.to_scale(close.price), decimals),
+            close.color,
+        ));
+    }
+    if let Some((quote, color)) = session.filter(|(quote, _)| visible(quote.price)) {
         let line = PriceLine::new(quote.price, color)
             .with_style(crate::model::LineStyle::Dotted)
             .with_axis_label(false)
@@ -285,11 +254,46 @@ pub fn render_quote_tags(
             false,
             axis_right,
         );
+        let mut y = price_map.price_to_y(quote.price);
+        if !rows.is_empty() && (y - close_y).abs() < height {
+            y = close_y - height;
+        }
         let label = transform.label(transform.to_scale(quote.price), decimals);
-        draw(1, y, format!("{} {label}", quote.qualifier), color);
+        rows.push((1, y, format!("{} {label}", quote.qualifier), color));
     }
-    if let Some((value, color)) = volume {
-        draw(2, volume_y, VolumeFormatter::default().format(value), color);
+    if let Some((value, color)) = volume.filter(|(value, _)| value.is_finite() && *value >= 0.0) {
+        let y = rows
+            .iter()
+            .map(|row| row.1)
+            .fold(price_rect.bottom(), f32::min)
+            - height;
+        rows.push((2, y, VolumeFormatter::default().format(value), color));
+    }
+    // If the pane cannot hold every row, keep the close, then session, then volume.
+    rows.truncate((price_rect.height() / height).max(0.0) as usize);
+    rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let mut next = price_rect.top() + height / 2.0;
+    for row in &mut rows {
+        row.1 = row.1.max(next);
+        next = row.1 + height;
+    }
+    next = price_rect.bottom() - height / 2.0;
+    for row in rows.iter_mut().rev() {
+        row.1 = row.1.min(next);
+        next = row.1 - height;
+    }
+    // Keep paint order stable even when the price coordinates reverse the row order.
+    rows.sort_by_key(|row| row.0);
+    for (slot, y, text, fill) in rows {
+        tags[slot] = Some(paint_axis_tag(
+            painter,
+            Pos2::new(price_rect.right() + 5.0 + TAG_PADDING.x, y),
+            Align2::LEFT_CENTER,
+            axis_right,
+            text,
+            tag_text_color(fill),
+            fill,
+        ));
     }
     tags
 }
@@ -298,7 +302,7 @@ pub fn render_quote_tags(
 /// for the host's alert, order or price-line menu. Call before handling price-axis drags.
 #[cfg(feature = "icons")]
 pub fn crosshair_price_action(ui: &mut egui::Ui, tag: Rect, price: f64) -> Option<f64> {
-    let cell = Rect::from_min_size(tag.min, Vec2::new(21.0, tag.height()));
+    let cell = Rect::from_min_size(tag.min, Vec2::new(21.0, tag.height())).intersect(tag);
     let response = ui.interact(
         cell,
         ui.scope_id().with("crosshair_price_action"),
@@ -503,67 +507,88 @@ mod tests {
     #[test]
     fn quote_tags_separate_colliding_prices_and_volume() {
         use crate::model::quote::SessionQuote;
-        use chrono::{TimeZone, Utc};
-        for (close, session_price) in [(704.61, 704.64), (709.99, 709.99), (700.01, 700.01)] {
-            let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0));
-            let map = PriceMap::new(
-                PriceTransform::default(),
-                PriceRange::new(700.0, 710.0),
-                0.0,
-                100.0,
-                false,
-            )
-            .with_price_precision(Some(2));
-            let session = SessionQuote::new(
-                Utc.with_ymd_and_hms(2024, 10, 1, 0, 0, 0).unwrap(),
-                session_price,
-                "EXT",
-            );
-            let ctx = Context::default();
-            let mut tags = [None; 3];
-            let output = ctx.run_ui(RawInput::default(), |ui| {
-                tags = render_quote_tags(
-                    ui.painter(),
-                    pane,
-                    &map,
-                    &PriceLine::new(close, Color32::RED),
-                    Some((&session, Color32::from_rgb(251, 142, 1))),
-                    Some((1_590_000.0, Color32::RED)),
-                    200.0,
-                );
-                if let Some(tag) = tags[0] {
-                    assert!(price_axis_width(ui.painter(), &map) >= tag.width() + 5.0);
-                }
-            });
-            let rects: Vec<_> = tags.into_iter().flatten().collect();
-            assert_eq!(rects.len(), 3);
-
-            assert!(
-                rects
-                    .iter()
-                    .all(|rect| rect.top() >= 0.0 && rect.bottom() <= 100.0)
-            );
-            assert!(
-                rects[2].bottom() <= rects[1].top() && rects[1].bottom() <= rects[0].top(),
-                "{rects:?}"
-            );
-            let labels: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    Shape::Text(text) => Some(text.galley.text().to_owned()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                labels,
-                [
+        for (close, session_price, font_size, pane_height, show_close, slots) in [
+            (704.61, 704.64, 12.0, 100.0, true, [true, true, true]),
+            (709.99, 709.99, 12.0, 100.0, true, [true, true, true]),
+            (700.01, 700.01, 12.0, 100.0, true, [true, true, true]),
+            (704.61, 704.64, 24.0, 100.0, true, [true, true, true]),
+            (709.99, 700.01, 12.0, 100.0, true, [true, true, true]),
+            (720.0, 704.64, 12.0, 100.0, true, [false, true, true]),
+            (704.61, 704.64, 12.0, 100.0, false, [false, true, true]),
+            (704.61, 704.64, 12.0, 25.0, true, [true, false, false]),
+        ] {
+            for mut theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+                let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, pane_height));
+                let map = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(700.0, 710.0),
+                    0.0,
+                    pane_height,
+                    false,
+                )
+                .with_price_precision(Some(2));
+                let session = SessionQuote::new(session_price, "EXT");
+                let ctx = Context::default();
+                theme.text.label = font_size;
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut tags = [None; 3];
+                let mut width = 0.0;
+                let text = [
                     format!("{close:.2}"),
                     format!("EXT {session_price:.2}"),
-                    "1.59M".into()
-                ]
-            );
-            output.drop_without_applying_deltas();
+                    "1.59M".into(),
+                ];
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    width = price_axis_width(
+                        ui.painter(),
+                        &map,
+                        &text.iter().map(String::as_str).collect::<Vec<_>>(),
+                    );
+                    tags = render_quote_tags(
+                        ui.painter(),
+                        pane,
+                        &map,
+                        &PriceLine::new(close, Color32::RED).with_axis_label(show_close),
+                        Some((&session, Color32::from_rgb(251, 142, 1))),
+                        Some((1_590_000.0, Color32::RED)),
+                        pane.right() + width,
+                    );
+                });
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                assert_eq!(tags.map(|tag| tag.is_some()), slots);
+                let rects: Vec<_> = tags.into_iter().flatten().collect();
+                assert!(
+                    rects
+                        .iter()
+                        .all(|rect| rect.top() >= 0.0 && rect.bottom() <= pane_height)
+                );
+                assert!(
+                    rects
+                        .iter()
+                        .all(|rect| rect.left() >= pane.right() && rect.width() + 5.0 <= width)
+                );
+                assert!(
+                    rects.iter().enumerate().all(|(i, a)| rects
+                        .iter()
+                        .skip(i + 1)
+                        .all(|b| a.bottom() <= b.top() || b.bottom() <= a.top())),
+                    "{rects:?}"
+                );
+                let expected: Vec<_> = text
+                    .into_iter()
+                    .zip(slots)
+                    .filter_map(|(text, shown)| shown.then_some(text))
+                    .collect();
+                assert_eq!(labels, expected);
+            }
         }
     }
 

@@ -6,7 +6,6 @@ use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairStyle};
 use crate::model::Bar;
 use crate::scales::{PriceMap, PriceScaleMode, TimeFormatter};
 use crate::tokens::DESIGN_TOKENS;
-use chrono::{DateTime, Utc};
 use egui::{Align2, Color32, Pos2, Rect, Stroke};
 
 /// Renders crosshair with full customization: style, mode, color, line width, line style
@@ -166,7 +165,7 @@ pub fn render_crosshair_full(
             Pos2::new(actual_pos.x, chart_bottom + 1.5),
             Align2::CENTER_TOP,
             context.rect.left()..=axis_right,
-            time_label(candle.time, bar_seconds, formatter),
+            formatter.format_crosshair(candle.time, bar_seconds),
             (label_text, label_bg),
             25.0,
             0.0,
@@ -175,11 +174,6 @@ pub fn render_crosshair_full(
     });
 
     [Some(price_tag), time_tag]
-}
-
-/// Formats the hovered bar with the same timezone as the time axis.
-fn time_label(time: DateTime<Utc>, bar_seconds: i64, formatter: &dyn TimeFormatter) -> String {
-    formatter.format_crosshair(time, bar_seconds)
 }
 
 /// Snap to nearest OHLC price (for Magnet mode)
@@ -216,14 +210,13 @@ fn snap_to_nearest_ohlc(hover_y: f32, price_scale: &PriceMap, candle: &Bar) -> f
 mod tests {
     use super::*;
     use crate::scales::{PriceRange, PriceTransform, TimeFormatterBuilder, TimezoneMode};
-    use chrono::{Duration, TimeZone};
+    use chrono::{Duration, TimeZone, Utc};
     use egui::{Context, RawInput, Shape};
 
     /// Edge tags remain inside the pane, use supplied precision, and name the nearest bar
     /// in the selected timezone, including when the pointer is below the price area.
     #[test]
     fn hover_tags_keep_the_bar_time_and_fit_both_edges() {
-        let rect = Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(400.0, 200.0));
         let time = Utc.with_ymd_and_hms(2024, 10, 1, 0, 30, 0).unwrap();
         let bars: Vec<_> = (0..30)
             .map(|i| Bar::new(time + Duration::hours(i), 704.0, 706.0, 703.0, 705.0, 10.0))
@@ -233,7 +226,15 @@ mod tests {
             (TimezoneMode::nyse(), "Mon 30 Sep '24 20:30"),
         ] {
             let formatter = TimeFormatterBuilder::new().with_timezone(zone).build();
-            for (index, hover_y) in [(0, 100.0), (29, 100.0), (0, 250.0)] {
+            for (index, hover_y, width) in [
+                (0, 100.0, 300.0),
+                (29, 100.0, 300.0),
+                (0, 250.0, 300.0),
+                (0, 100.0, 60.0),
+            ] {
+                let rect =
+                    Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(100.0 + width, 200.0));
+                let axis_right = rect.right() + 60.0;
                 let map = PriceMap::new(
                     PriceTransform::default(),
                     PriceRange::new(700.0, 710.0),
@@ -260,35 +261,38 @@ mod tests {
                         Color32::BLACK,
                         Color32::WHITE,
                         300.0,
-                        460.0,
+                        axis_right,
                         None,
                         formatter.as_ref(),
                         3600,
                     );
                 });
-                let date = tags[1].unwrap();
-                assert!(
-                    date.left() >= rect.left() && date.right() <= 460.0,
-                    "{date:?}"
-                );
-                assert_eq!(date.height(), 25.0);
-                assert_eq!(tags[0].unwrap().height(), 21.0);
                 let labels: Vec<_> = output
                     .shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
-                        Shape::Text(text) => Some(text.galley.text()),
+                        Shape::Text(text) => Some(text.galley.text().to_owned()),
                         _ => None,
                     })
                     .collect();
+                output.drop_without_applying_deltas();
+                let date = tags[1].unwrap();
+                assert!(
+                    date.left() >= rect.left() && date.right() <= axis_right,
+                    "{date:?}"
+                );
+                assert_eq!(date.height(), 25.0);
+                assert_eq!(tags[0].unwrap().height(), 21.0);
                 if index == 0 {
-                    assert!(labels.contains(&first_label), "{labels:?}");
+                    assert!(
+                        labels.iter().any(|label| label == first_label),
+                        "{labels:?}"
+                    );
                 }
                 assert!(
-                    labels.contains(&format!("{:.3}", map.y_to_price(hover_y)).as_str()),
+                    labels.contains(&format!("{:.3}", map.y_to_price(hover_y))),
                     "{labels:?}"
                 );
-                output.drop_without_applying_deltas();
             }
         }
     }

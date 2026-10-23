@@ -184,16 +184,17 @@ impl TickMarkGenerator {
 
         let time_span = end_time - start_time;
 
-        // Calculate optimal mark interval based on time span and display width
-        let interval = self.calculate_optimal_interval(time_span, width_pixels);
-
-        // Determine mark type and weight threshold
+        let intraday = bars.windows(2).any(|pair| {
+            let delta = pair[1].0 - pair[0].0;
+            delta > Duration::zero() && delta < Duration::days(1)
+        });
+        let mut interval = self.calculate_optimal_interval(time_span, width_pixels);
+        // Daily charts at a multi-month zoom show calendar months, not alternating weeks.
+        if !intraday && interval >= Duration::days(7) {
+            interval = interval.max(Duration::days(30));
+        }
         let (mark_type, weight_threshold) = self.determine_mark_type_and_weight(interval);
 
-        let intraday = bars.windows(2).any(|pair| {
-            let seconds = (pair[1].0 - pair[0].0).num_seconds();
-            (1..86_400).contains(&seconds)
-        });
         // Session gaps take no horizontal space; use the supplied bar boundaries.
         let mut marks = if intraday && interval < Duration::days(30) {
             self.generate_bar_marks(bars, interval, mark_type)
@@ -259,11 +260,15 @@ impl TickMarkGenerator {
                 self.classify_time_boundary(local, primary_type)
             };
             let day = boundary.is_some() || local.time().num_seconds_from_midnight() == 0;
+            let millis = interval.num_milliseconds().max(1);
+            let clock_bucket = |time: DateTime<Utc>| {
+                (i64::from(time.time().num_seconds_from_midnight()) * 1000
+                    + i64::from(time.timestamp_subsec_millis()))
+                    / millis
+            };
             let clock_mark = interval < Duration::days(1)
-                && (i64::from(local.time().num_seconds_from_midnight()) * 1000
-                    + i64::from(local.timestamp_subsec_millis()))
-                .rem_euclid(interval.num_milliseconds().max(1))
-                    == 0;
+                && (previous.is_some_and(|previous| clock_bucket(previous) != clock_bucket(local))
+                    || local.timestamp_millis().rem_euclid(millis) == 0);
             let day_mark = day
                 && (interval < Duration::days(1)
                     || i64::from(local.num_days_from_ce()).rem_euclid(interval.num_days().max(1))
@@ -271,6 +276,14 @@ impl TickMarkGenerator {
             if kind == TickMarkType::Year || kind == TickMarkType::Month || day_mark || clock_mark {
                 let (mark_type, weight) = if day && weight < TickMarkWeight::DAY {
                     (TickMarkType::DayOfMonth, TickMarkWeight::DAY)
+                } else if clock_mark && weight < TickMarkWeight::DAY {
+                    let boundary = local
+                        - Duration::milliseconds(
+                            (i64::from(local.time().num_seconds_from_midnight()) * 1000
+                                + i64::from(local.timestamp_subsec_millis()))
+                            .rem_euclid(millis),
+                        );
+                    self.classify_time_boundary(boundary, primary_type)
                 } else {
                     (kind, weight)
                 };
@@ -426,6 +439,28 @@ impl TickMarkGenerator {
                     });
                 }
                 current = time.checked_add_months(Months::new(12 * years as u32));
+            }
+            return marks;
+        }
+        if interval >= Duration::days(30) {
+            let months = (interval.num_days() / 30).max(1) as u32;
+            let month = start_time.month0() / months * months + 1;
+            let mut current = Utc
+                .with_ymd_and_hms(start_time.year(), month, 1, 0, 0, 0)
+                .single();
+            while let Some(time) = current.filter(|time| *time <= end_time) {
+                if time >= start_time {
+                    let (mark_type, weight) =
+                        self.classify_time_boundary(time, TickMarkType::Month);
+                    marks.push(TickMark {
+                        time,
+                        mark_type,
+                        weight,
+                        label: String::new(),
+                        index: 0,
+                    });
+                }
+                current = time.checked_add_months(Months::new(months));
             }
             return marks;
         }
@@ -863,6 +898,53 @@ mod tests {
                 assert_eq!(formatter.wall_time(mark.time).hour(), 0, "{mark:?}");
             }
         }
+        let start = Utc.with_ymd_and_hms(2024, 9, 1, 0, 0, 0).unwrap();
+        let daily: Vec<_> = (0..303)
+            .map(|i| (start + Duration::days(i), i as usize))
+            .collect();
+        let marks =
+            TickMarkGenerator::new().generate_marks(daily[0].0, daily[302].0, 1100.0, &daily);
+        let panned =
+            TickMarkGenerator::new().generate_marks(daily[1].0, daily[302].0, 1100.0, &daily[1..]);
+        assert_eq!(
+            marks
+                .iter()
+                .skip(1)
+                .map(|mark| mark.time)
+                .collect::<Vec<_>>(),
+            panned.iter().map(|mark| mark.time).collect::<Vec<_>>()
+        );
+        let yearly = TickMarkGenerator::new().generate_candidate_marks(
+            start,
+            start + Duration::days(365 * 3),
+            Duration::days(365),
+            TickMarkType::Year,
+        );
+        assert!(
+            yearly.len() >= 2
+                && yearly
+                    .iter()
+                    .all(|mark| mark.mark_type == TickMarkType::Year)
+        );
+        assert_eq!(
+            marks
+                .iter()
+                .map(|mark| mark.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Sep", "Oct", "Nov", "Dec", "2025", "Feb", "Mar", "Apr", "May", "Jun"
+            ]
+        );
+        assert_eq!(marks[4].weight, TickMarkWeight::YEAR);
+        // Hour bars may start at half past the hour and still need clock marks.
+        let start = Utc.with_ymd_and_hms(2024, 3, 20, 9, 30, 0).unwrap();
+        let session: Vec<_> = (0..7)
+            .map(|i| (start + Duration::hours(i), i as usize))
+            .collect();
+        let marks =
+            TickMarkGenerator::new().generate_marks(session[0].0, session[6].0, 300.0, &session);
+        assert!(marks.len() >= 3, "half-hour session: {marks:?}");
+        assert!(marks.iter().all(|mark| mark.time == session[mark.index].0));
         // Missing weekends and closed hours consume no slots; marks use actual session bars.
         let start = Utc.with_ymd_and_hms(2024, 3, 20, 13, 30, 0).unwrap();
         let bars: Vec<_> = (0..30)
@@ -891,6 +973,23 @@ mod tests {
             marks
                 .iter()
                 .all(|mark| bars[mark.index].0 == mark.time && mark.time.hour() == 13)
+        );
+        let month_start = bars
+            .windows(2)
+            .position(|pair| pair[0].0.month() != pair[1].0.month())
+            .unwrap()
+            + 1;
+        let around_month = &bars[month_start - 7..month_start + 7];
+        let close_marks = TickMarkGenerator::new().generate_marks(
+            around_month[0].0,
+            around_month[13].0,
+            800.0,
+            around_month,
+        );
+        assert!(
+            close_marks
+                .iter()
+                .any(|mark| mark.mark_type == TickMarkType::Month && mark.label == "Apr")
         );
         let min_bars = 50.0 * (bars.len() - 1) as f32 / 1100.0;
         assert!(
@@ -946,7 +1045,7 @@ mod tests {
             generator.format_time_label(time, TickMarkType::Month),
             "Jun"
         );
-        // Shows "Jun 15" for day boundaries
+        // Shows the day number for day boundaries
         assert_eq!(
             generator.format_time_label(time, TickMarkType::DayOfMonth),
             "15"

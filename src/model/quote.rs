@@ -78,8 +78,6 @@ pub enum TradeSide {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct SessionQuote {
-    /// Timestamp of the quote.
-    pub time: DateTime<Utc>,
     /// Session price. Renderers ignore non-finite values.
     pub price: f64,
     /// Short host-supplied qualifier shown beside the price.
@@ -88,9 +86,8 @@ pub struct SessionQuote {
 
 impl SessionQuote {
     /// Creates a session quote without deriving it from historical bars.
-    pub fn new(time: DateTime<Utc>, price: f64, qualifier: impl Into<String>) -> Self {
+    pub fn new(price: f64, qualifier: impl Into<String>) -> Self {
         Self {
-            time,
             price,
             qualifier: qualifier.into(),
         }
