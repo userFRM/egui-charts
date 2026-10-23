@@ -243,6 +243,7 @@ pub struct Chart {
     pub(crate) study_ids: Vec<SeriesId>,
     /// Whether each study in `studies` contributes to the main price auto-scale.
     pub(crate) study_autoscale: Vec<bool>,
+    pub(crate) study_inputs: Vec<String>,
     /// For each study in `studies`, the first bar it must be updated from on the next frame.
     pub(crate) pending_from: Vec<Option<usize>>,
     /// For each study in `studies`, the input time in seconds from which it may be recomputed

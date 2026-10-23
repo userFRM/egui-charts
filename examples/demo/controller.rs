@@ -3,8 +3,8 @@
 //!
 //! The chart engine is pure: widgets return `Action` enums and never touch the
 //! chart themselves. This controller is the host half that consumes those
-//! actions. Controls that need a trading account or template storage show a
-//! notice instead, and the context menu entries it does not model do nothing.
+//! actions. Indicator templates live in host memory. Controls that need a trading
+//! account show a notice, and the context menu entries it does not model do nothing.
 
 use eframe::egui;
 use egui_charts::Chart;
@@ -30,7 +30,7 @@ use egui_charts::ui::timeframe_toolbar::{
 };
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
-    IndicatorDialog, IndicatorDialogAction, IndicatorTab,
+    IndicatorDialog, IndicatorDialogAction,
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
@@ -45,6 +45,12 @@ use crate::sampledata::{
     DemoSymbol, bar_count_for_timeframe, chart_type_from_name, generate_sample_bars, session_bars,
     visible_bars_for_range,
 };
+
+struct SavedIndicators {
+    name: String,
+    studies: Vec<Box<dyn egui_charts::studies::Indicator>>,
+    inputs: Vec<String>,
+}
 
 /// Object-tree ids for indicators are offset into a high range so a single
 /// `usize` id space cleanly distinguishes indicators from drawings (which use
@@ -135,6 +141,8 @@ pub struct DemoApp {
     settings_dialog: SettingsDialog,
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
+    indicator_templates: Vec<SavedIndicators>,
+    quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
     series_settings: SeriesSettingsDialog,
     drawing_props: DrawingPropertiesDialog,
@@ -247,6 +255,18 @@ impl DemoApp {
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
+            indicator_templates: Vec::new(),
+            quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
+                [
+                    ("symbols", "Symbol search"),
+                    ("indicators", "Indicators"),
+                    ("settings", "Chart settings"),
+                    ("export", "Export chart"),
+                ]
+                .into_iter()
+                .map(|(id, label)| egui_charts::ui_kit::command_palette::Command::new(id, label))
+                .collect(),
+            ),
             alert_dialog: AlertDialog::new(),
             series_settings: SeriesSettingsDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
@@ -500,6 +520,51 @@ impl DemoApp {
 
     // --- selection / context helpers --------------------------------------
 
+    fn open_chart_settings_dialog(&mut self) {
+        let config = self.chart.config();
+        let settings = &mut self.settings_state;
+        settings.candle_colors.body_up = config.bullish_color;
+        settings.candle_colors.body_down = config.bearish_color;
+        settings.candle_colors.border_up =
+            config.bullish_border_color.unwrap_or(config.bullish_color);
+        settings.candle_colors.border_down =
+            config.bearish_border_color.unwrap_or(config.bearish_color);
+        settings.candle_colors.wick_up = config
+            .bullish_wick_color
+            .unwrap_or(settings.candle_colors.border_up);
+        settings.candle_colors.wick_down = config
+            .bearish_wick_color
+            .unwrap_or(settings.candle_colors.border_down);
+        settings.chart_basic_styles.background_color = config.background_color;
+        settings.grid_lines.horizontal_color = config.grid_color;
+        settings.grid_lines.vertical_color = config.grid_color;
+        settings.status_line.show_symbol = config.show_symbol_labels;
+        settings.status_line.title_as_description = config.title_as_description;
+        settings.status_line.show_quote_boxes = config.show_quote_boxes;
+        settings.status_line.show_ohlc = config.show_ohlc_info;
+        settings.status_line.show_change = config.show_ohlc_change;
+        settings.status_line.show_change_percent = config.show_ohlc_change_percent;
+        settings.status_line.show_volume = config.show_legend_volume;
+        settings.status_line.show_indicator_titles = config.show_indicator_labels;
+        settings.status_line.show_indicator_inputs = config.show_indicator_inputs;
+        settings.status_line.show_indicator_values = config.show_indicator_last_val;
+        settings.scales_and_lines.price_scale_left =
+            !config.show_right_axis && config.show_left_axis;
+        settings.scales_and_lines.show_last_price_label = config.show_symbol_last_val;
+        settings.scales_and_lines.show_price_line = config.show_price_line;
+        settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
+        settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
+        settings.scales_and_lines.show_countdown = config.show_countdown;
+        let scale = self.chart.state().price_scale();
+        settings.scales_and_lines.auto_scale = !scale.is_manual();
+        settings.scales_and_lines.log_scale =
+            scale.options().mode == egui_charts::scales::PriceScaleMode::Logarithmic;
+        settings.scales_and_lines.percentage_scale =
+            scale.options().mode == egui_charts::scales::PriceScaleMode::Percentage;
+        settings.scales_and_lines.invert_scale = scale.options().invert_scale;
+        self.settings_dialog.open(settings.clone());
+    }
+
     fn open_series_settings_dialog(&mut self) {
         self.series_settings
             .open(SeriesId::MAIN, SeriesSettings::default());
@@ -523,11 +588,23 @@ impl DemoApp {
     // --- dialog wiring -----------------------------------------------------
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.quick_search.update(ctx) {
+            let action = match id.as_str() {
+                "symbols" => TopToolbarAction::OpenSymbolSearch,
+                "indicators" => TopToolbarAction::OpenIndicators,
+                "settings" => TopToolbarAction::OpenSettings,
+                "export" => TopToolbarAction::Save,
+                _ => TopToolbarAction::None,
+            };
+            self.handle_top_toolbar(ctx, action);
+        }
         // Indicators: add the study the dialog created.
         if let IndicatorDialogAction::AddIndicator(study) =
             self.indicator_dialog.show(ctx, &self.theme)
         {
-            self.chart.add_indicator(study);
+            let inputs = self.indicator_dialog.input_summary(study.name());
+            let id = self.chart.add_indicator(study);
+            self.chart.set_indicator_inputs(id, inputs);
         }
 
         // Chart settings.
@@ -535,6 +612,22 @@ impl DemoApp {
             SettingsAction::Apply(state) => {
                 self.settings_state = state.clone();
                 apply_settings_state(&state, self.chart.config_mut());
+                let scale = self.chart.price_scale_mut();
+                let mode = if state.scales_and_lines.log_scale {
+                    egui_charts::scales::PriceScaleMode::Logarithmic
+                } else if state.scales_and_lines.percentage_scale {
+                    egui_charts::scales::PriceScaleMode::Percentage
+                } else {
+                    egui_charts::scales::PriceScaleMode::Normal
+                };
+                scale.options_mut().mode = mode;
+                scale.options_mut().invert_scale = state.scales_and_lines.invert_scale;
+                if state.scales_and_lines.auto_scale {
+                    scale.reset();
+                } else {
+                    let range = scale.range();
+                    scale.set_range(range.min, range.max);
+                }
             }
             SettingsAction::Cancel => {}
             _ => {}
@@ -542,6 +635,8 @@ impl DemoApp {
 
         // Symbol search (used by the pill, quick search, and compare entry).
         let symbols = DemoSymbol::symbols();
+        self.symbol_search
+            .set_recent_symbols(vec![self.state.symbol.clone()]);
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
             self.switch_symbol(&picked.name);
         }
@@ -808,8 +903,8 @@ impl DemoApp {
                     |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         ui.add_space(8.0);
-                        publish = ui
-                            .add(
+                        publish = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
+                            ui.add(
                                 egui::Button::new(
                                     egui::RichText::new("Publish")
                                         .size(14.0)
@@ -818,22 +913,34 @@ impl DemoApp {
                                 .fill(self.theme.ui.text)
                                 .min_size(egui::vec2(72.0, 28.0))
                                 .corner_radius(16),
-                            )
-                            .clicked();
-                        trade = ui
-                            .add(
+                            ),
+                            "Export chart",
+                            None,
+                        )
+                        .clicked();
+                        trade = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
+                            ui.add(
                                 egui::Button::new(egui::RichText::new("Trade").size(14.0))
                                     .fill(bg)
                                     .stroke(egui::Stroke::new(1.0, self.theme.ui.border))
                                     .min_size(egui::vec2(60.0, 28.0))
                                     .corner_radius(16),
-                            )
-                            .clicked();
-                        search = IconButton::new(&icons::QUICK_SEARCH)
-                            .icon_scale(24.0 / 28.0)
-                            .tooltip("Quick search")
-                            .show(ui)
-                            .clicked();
+                            ),
+                            "Trading account",
+                            None,
+                        )
+                        .clicked();
+                        search = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
+                            IconButton::new(&icons::QUICK_SEARCH)
+                                .icon_scale(24.0 / 28.0)
+                                .show(ui),
+                            "Quick search",
+                            Some(egui::KeyboardShortcut::new(
+                                egui::Modifiers::COMMAND,
+                                egui::Key::K,
+                            )),
+                        )
+                        .clicked();
                     },
                 );
                 if footprint_enabled != self.footprint.is_some() {
@@ -853,7 +960,7 @@ impl DemoApp {
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
                 if search {
-                    self.symbol_search.open();
+                    self.quick_search.open();
                 }
                 if trade {
                     self.notify(
@@ -883,7 +990,7 @@ impl DemoApp {
             TopToolbarAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
             TopToolbarAction::ToggleReplay => self.toggle_replay(),
             TopToolbarAction::OpenSettings => {
-                self.settings_dialog.open(self.settings_state.clone());
+                self.open_chart_settings_dialog();
             }
             TopToolbarAction::TakeScreenshot => {
                 self.export_dialog.close();
@@ -901,9 +1008,46 @@ impl DemoApp {
             TopToolbarAction::Redo => {
                 self.chart.drawings_mut().redo();
             }
-            // Indicator templates live in the indicator dialog's Profiles tab.
-            TopToolbarAction::OpenIndicatorTemplates => {
-                self.indicator_dialog.open_tab(IndicatorTab::Profiles)
+            TopToolbarAction::SaveIndicatorTemplate => {
+                let name = format!("Study set {}", self.indicator_templates.len() + 1);
+                let studies = self
+                    .chart
+                    .indicators()
+                    .map(|(_, study)| study.clone_box())
+                    .collect();
+                let inputs = self
+                    .chart
+                    .indicators()
+                    .map(|(id, _)| {
+                        self.chart
+                            .indicator_inputs(id)
+                            .unwrap_or_default()
+                            .to_owned()
+                    })
+                    .collect();
+                self.indicator_templates.push(SavedIndicators {
+                    name: name.clone(),
+                    studies,
+                    inputs,
+                });
+                self.top_toolbar
+                    .indicator_templates
+                    .push((name.clone(), name));
+            }
+            TopToolbarAction::ApplyIndicatorTemplate(id) => {
+                if let Some(saved) = self
+                    .indicator_templates
+                    .iter()
+                    .find(|saved| saved.name == id)
+                {
+                    let studies = saved.studies.clone();
+                    let inputs = saved.inputs.clone();
+                    self.remove_all_indicators();
+                    for (study, inputs) in studies.into_iter().zip(inputs) {
+                        let id = self.chart.add_indicator(study);
+                        self.chart.set_indicator_inputs(id, inputs);
+                    }
+                }
             }
             // Save routes through the export dialog (PNG / CSV of the view).
             TopToolbarAction::Save => self.export_dialog.open(),
@@ -1474,7 +1618,7 @@ impl DemoApp {
     fn handle_chart_context(&mut self, action: ContextMenuAction) {
         match action {
             ContextMenuAction::OpenSettings => {
-                self.settings_dialog.open(self.settings_state.clone());
+                self.open_chart_settings_dialog();
             }
             ContextMenuAction::OpenSeriesSettings => self.open_series_settings_dialog(),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
@@ -1775,13 +1919,78 @@ fn apply_settings_state(state: &ChartSettingsState, config: &mut egui_charts::co
         ButtonVisibility::Hidden => NavigationButtons::Never,
     };
     config.show_ohlc_info = state.status_line.show_ohlc;
-    config.show_volume = state.status_line.show_volume;
+    config.show_symbol_labels = state.status_line.show_symbol;
+    config.title_as_description = state.status_line.title_as_description;
+    config.show_quote_boxes = state.status_line.show_quote_boxes;
+    config.show_ohlc_change = state.status_line.show_change;
+    config.show_ohlc_change_percent = state.status_line.show_change_percent;
+    config.show_legend_volume = state.status_line.show_volume;
+    config.show_indicator_labels = state.status_line.show_indicator_titles;
+    config.show_indicator_inputs = state.status_line.show_indicator_inputs;
+    config.show_indicator_last_val = state.status_line.show_indicator_values;
+    config.show_right_axis = !state.scales_and_lines.price_scale_left;
+    config.show_left_axis = state.scales_and_lines.price_scale_left;
+    config.show_symbol_last_val = state.scales_and_lines.show_last_price_label;
+    config.show_price_line = state.scales_and_lines.show_price_line;
+    config.show_symbol_prev_close = state.scales_and_lines.show_prev_close_label;
+    config.show_prev_close_line = state.scales_and_lines.show_prev_close;
+    config.show_countdown = state.scales_and_lines.show_countdown;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn opening_settings_keeps_the_charts_current_display() {
+        for (_, theme) in egui_charts::theme::presets() {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            let mut config = theme.apply_to_config(app.chart.config().clone());
+            config.show_quote_boxes = false;
+            config.show_left_axis = true;
+            config.show_right_axis = false;
+            config.show_countdown = false;
+            app.chart.price_scale_mut().options_mut().mode =
+                egui_charts::scales::PriceScaleMode::Percentage;
+            app.chart.price_scale_mut().set_range(-5.0, 5.0);
+            *app.chart.config_mut() = config.clone();
+            app.handle_top_toolbar(&ctx, TopToolbarAction::OpenSettings);
+            let state = app.settings_state.clone();
+            apply_settings_state(&state, app.chart.config_mut());
+            let applied = app.chart.config();
+            assert!(!applied.show_quote_boxes);
+            assert!(applied.show_left_axis && !applied.show_right_axis);
+            assert!(!applied.show_countdown);
+            assert!(state.scales_and_lines.percentage_scale);
+            assert!(!state.scales_and_lines.auto_scale);
+            assert_eq!(applied.grid_color, config.grid_color);
+            assert_eq!(applied.background_color, config.background_color);
+            assert_eq!(applied.bullish_color, config.bullish_color);
+            assert_eq!(applied.bearish_color, config.bearish_color);
+            assert_eq!(
+                applied
+                    .bullish_border_color
+                    .unwrap_or(applied.bullish_color),
+                config.bullish_border_color.unwrap_or(config.bullish_color)
+            );
+            assert_eq!(
+                applied
+                    .bearish_border_color
+                    .unwrap_or(applied.bearish_color),
+                config.bearish_border_color.unwrap_or(config.bearish_color)
+            );
+            assert_eq!(
+                applied.bullish_wick_color.unwrap_or(applied.bullish_color),
+                config.bullish_wick_color.unwrap_or(config.bullish_color)
+            );
+            assert_eq!(
+                applied.bearish_wick_color.unwrap_or(applied.bearish_color),
+                config.bearish_wick_color.unwrap_or(config.bearish_color)
+            );
+        }
+    }
 
     #[test]
     fn data_window_reads_the_hovered_rendered_element() {

@@ -19,14 +19,18 @@
 
 mod coordinates;
 mod drawing;
+mod gann;
 mod options;
+mod pitchfork;
 // tool_type is now a subdirectory with multiple modules
 mod tool_type;
 
 pub use coordinates::ChartPoint;
 pub use drawing::Drawing;
+pub use gann::GannConfig;
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos, LineStyle,
     PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
+pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use tool_type::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};

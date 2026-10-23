@@ -126,8 +126,9 @@ pub mod services;
 // Re-export domain types at module root for convenience
 pub use domain::{
     ArrowStyle, ChartPoint, Drawing, DrawingInteractionMode, DrawingOptions, DrawingToolType,
-    FibonacciConfig, FibonacciLevel, FontWeight, HandlePos, LineStyle, ParseToolTypeError,
-    PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
+    FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, HandlePos, LineStyle,
+    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
+    TimeframeVisibility, VolumeProfileConfig,
 };
 
 // Re-export manager types

@@ -44,16 +44,47 @@
 //! ```
 
 use crate::ext::UiExt;
-use crate::model::Symbol;
+use crate::icons::icons;
+use crate::model::{Symbol, SymbolType};
 use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
-use crate::ui_kit::dialog::{centred_title, titled_window_size};
-use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2, Window};
+use crate::ui_kit::buttons::IconButton;
+use crate::ui_kit::modal::Modal;
+use crate::ui_kit::tab_bar::{TabBar, TabLabel};
+use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2};
 
 // =============================================================================
 // Symbol Search Dialog
 // =============================================================================
+
+#[derive(Clone, Copy, PartialEq)]
+struct Category(Option<SymbolType>);
+
+impl TabLabel for Category {
+    fn tab_label(&self) -> &str {
+        match self.0 {
+            None => "All",
+            Some(SymbolType::Stock) => "Stocks",
+            Some(SymbolType::Index) => "Indices",
+            Some(SymbolType::Forex) => "Forex",
+            Some(SymbolType::Futures) => "Futures",
+            Some(SymbolType::Crypto) => "Crypto",
+            Some(SymbolType::Cfd) => "CFDs",
+            Some(SymbolType::Bond) => "Bonds",
+            Some(SymbolType::Fund) => "Funds",
+            Some(SymbolType::Option) => "Options",
+            Some(SymbolType::Commodity) => "Commodities",
+            Some(SymbolType::Economic) => "Economy",
+            Some(SymbolType::Dr) => "Depositary receipts",
+            Some(SymbolType::Right) => "Rights",
+            Some(SymbolType::Warrant) => "Warrants",
+            Some(SymbolType::Expression) => "Expressions",
+            Some(SymbolType::Spread) => "Spreads",
+        }
+    }
+}
 
 /// Configuration for symbol search dialog
 ///
@@ -79,7 +110,7 @@ pub struct SymbolSearchConfig {
     pub show_description: bool,
     /// Max number of results to display
     pub max_results: usize,
-    /// Min characters required before showing results
+    /// Min characters for a nonempty query; an empty query lists the catalog
     pub min_search_len: usize,
 }
 
@@ -131,6 +162,8 @@ pub struct SymbolSearchDialog {
     search_query: String,
     sel_idx: usize,
     filtered_symbols: Vec<Symbol>,
+    category: Category,
+    recent_symbols: Vec<String>,
     config: SymbolSearchConfig,
 }
 
@@ -148,6 +181,8 @@ impl SymbolSearchDialog {
             search_query: String::new(),
             sel_idx: 0,
             filtered_symbols: Vec::new(),
+            category: Category(None),
+            recent_symbols: Vec::new(),
             config: SymbolSearchConfig::default(),
         }
     }
@@ -171,6 +206,11 @@ impl SymbolSearchDialog {
         self
     }
 
+    /// Supply recent symbol names, newest first. Unknown names are ignored.
+    pub fn set_recent_symbols(&mut self, symbols: Vec<String>) {
+        self.recent_symbols = symbols;
+    }
+
     /// Opens the symbol search dialog
     ///
     /// Clears any previous search state and shows the dialog.
@@ -178,6 +218,7 @@ impl SymbolSearchDialog {
         self.is_open = true;
         self.search_query.clear();
         self.sel_idx = 0;
+        self.category = Category(None);
         self.filtered_symbols.clear();
     }
 
@@ -233,52 +274,103 @@ impl SymbolSearchDialog {
             return None;
         }
 
+        self.update_filtered_symbols(all_symbols);
         let mut sel_symbol = None;
         let mut should_close = false;
+        let (up, down) = ctx.input(|input| {
+            (
+                input.key_pressed(egui::Key::ArrowUp),
+                input.key_pressed(egui::Key::ArrowDown),
+            )
+        });
+        let keyboard_move = up || down;
+        if !self.filtered_symbols.is_empty() {
+            if down {
+                self.sel_idx = (self.sel_idx + 1) % self.filtered_symbols.len();
+            }
+            if up {
+                self.sel_idx =
+                    (self.sel_idx + self.filtered_symbols.len() - 1) % self.filtered_symbols.len();
+            }
+        }
 
-        let frame = egui::Frame::window(&ctx.global_style());
-        // Centred horizontally like the crate's other dialogs, but movable. The top edge is the
-        // pivot, so the window grows downwards as its content changes instead of around its centre.
-        let r = ctx.content_rect();
-        egui::Window::new("Symbol Search")
-            .collapsible(false)
-            .resizable(false)
-            // The content size it had before egui 0.35: 400 px wide and egui's default height.
-            .default_size(titled_window_size(ctx, &frame, Vec2::new(400.0, 420.0)))
-            .pivot(egui::Align2::CENTER_TOP)
-            .default_pos(egui::pos2(r.center().x, r.top() + r.height() * 0.2))
-            .show(ctx, |ui| {
-                // Search input
+        let mut open = true;
+        Modal::new("symbol_search", "")
+            .width(840.0)
+            .height(680.0)
+            .rounding(20.0)
+            .dim_background(false)
+            .show(ctx, &mut open, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Search:");
-                    let response = ui.text_edit_singleline(&mut self.search_query);
-
-                    // Auto-focus on open
-                    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    let theme = ui.active_theme();
+                    ui.add(
+                        icons::QUICK_SEARCH
+                            .as_image_tinted(Vec2::splat(24.0), theme.ui.text_secondary),
+                    );
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut self.search_query)
+                            .font(egui::FontId::proportional(16.0))
+                            .hint_text(RichText::new("Search symbols").size(16.0))
+                            .frame(egui::Frame::NONE)
+                            .desired_width((ui.available_width() - 40.0).max(0.0)),
+                    );
+                    if IconButton::new(&icons::CLOSE)
+                        .tooltip("Close")
+                        .show(ui)
+                        .clicked()
+                    {
                         should_close = true;
                     }
-
-                    if response.changed() || self.filtered_symbols.is_empty() {
+                    if response.changed() {
+                        self.sel_idx = 0;
                         self.update_filtered_symbols(all_symbols);
                     }
-
-                    // Request focus on first frame
                     if self.search_query.is_empty() && !response.has_focus() {
                         response.request_focus();
                     }
                 });
-
-                ui.separator();
+                ui.add_space(16.0);
+                let mut categories = vec![Category(None)];
+                for symbol in all_symbols {
+                    let category = Category(symbol.symbol_type);
+                    if !categories.contains(&category) {
+                        categories.push(category);
+                    }
+                }
+                if !categories.contains(&self.category) {
+                    self.category = Category(None);
+                }
+                egui::ScrollArea::horizontal()
+                    .id_salt("symbol_categories")
+                    .show(ui, |ui| {
+                        if TabBar::new(&categories, &mut self.category)
+                            .pills()
+                            .show(ui)
+                        {
+                            self.sel_idx = 0;
+                            self.update_filtered_symbols(all_symbols);
+                        }
+                    });
+                ui.add_space(4.0);
 
                 // Results list
                 egui::ScrollArea::vertical()
-                    .max_height(400.0)
+                    .id_salt("symbol_results")
+                    .max_height(ui.available_height())
                     .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
                         if self.filtered_symbols.is_empty() {
-                            if self.search_query.len() < self.config.min_search_len {
+                            if !self.search_query.is_empty()
+                                && self.search_query.len() < self.config.min_search_len
+                            {
                                 ui.label(format!(
-                                    "Type at least {} characters to search",
-                                    self.config.min_search_len
+                                    "Type at least {} {} to search",
+                                    self.config.min_search_len,
+                                    if self.config.min_search_len == 1 {
+                                        "character"
+                                    } else {
+                                        "characters"
+                                    }
                                 ));
                             } else {
                                 ui.label("No symbols found");
@@ -293,7 +385,13 @@ impl SymbolSearchDialog {
                                     should_close = true;
                                 }
 
-                                if response.hovered() {
+                                if keyboard_move && is_sel {
+                                    response.scroll_to_me(Some(egui::Align::Center));
+                                }
+                                if !keyboard_move
+                                    && response.hovered()
+                                    && ui.input(|input| input.pointer.delta() != Vec2::ZERO)
+                                {
                                     self.sel_idx = idx;
                                 }
                             }
@@ -302,34 +400,14 @@ impl SymbolSearchDialog {
 
                 // Keyboard navigation
                 ui.input(|i| {
-                    if i.key_pressed(egui::Key::ArrowDown) && !self.filtered_symbols.is_empty() {
-                        self.sel_idx = (self.sel_idx + 1) % self.filtered_symbols.len();
-                    }
-                    if i.key_pressed(egui::Key::ArrowUp) && !self.filtered_symbols.is_empty() {
-                        self.sel_idx = if self.sel_idx == 0 {
-                            self.filtered_symbols.len() - 1
-                        } else {
-                            self.sel_idx - 1
-                        };
-                    }
                     if i.key_pressed(egui::Key::Enter) && !self.filtered_symbols.is_empty() {
                         sel_symbol = Some(self.filtered_symbols[self.sel_idx].clone());
                         should_close = true;
                     }
                 });
-
-                // Footer with hint
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Up/Down Navigate");
-                    ui.separator();
-                    ui.label("Enter Select");
-                    ui.separator();
-                    ui.label("Esc Close");
-                });
             });
 
-        if should_close {
+        if should_close || !open {
             self.close();
         }
 
@@ -337,65 +415,123 @@ impl SymbolSearchDialog {
     }
 
     fn update_filtered_symbols(&mut self, all_symbols: &[Symbol]) {
-        if self.search_query.len() < self.config.min_search_len {
+        if !self.search_query.is_empty() && self.search_query.len() < self.config.min_search_len {
             self.filtered_symbols.clear();
             return;
         }
 
         let query_lower = self.search_query.to_lowercase();
 
-        self.filtered_symbols = all_symbols
+        let mut filtered: Vec<_> = all_symbols
             .iter()
             .filter(|symbol| {
-                symbol.name.to_lowercase().contains(&query_lower)
-                    || symbol.display_name.to_lowercase().contains(&query_lower)
+                (self.category.0.is_none() || symbol.symbol_type == self.category.0)
+                    && (symbol.name.to_lowercase().contains(&query_lower)
+                        || symbol.display_name.to_lowercase().contains(&query_lower))
             })
+            .collect();
+
+        if self.search_query.is_empty() {
+            filtered.sort_by_key(|symbol| {
+                self.recent_symbols
+                    .iter()
+                    .position(|name| name == &symbol.name)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        self.filtered_symbols = filtered
+            .into_iter()
             .take(self.config.max_results)
             .cloned()
             .collect();
-
-        self.sel_idx = 0;
+        self.sel_idx = self
+            .sel_idx
+            .min(self.filtered_symbols.len().saturating_sub(1));
     }
 
     fn render_symbol_item(&self, ui: &mut Ui, symbol: &Symbol, is_sel: bool) -> Response {
-        let frame = if is_sel {
-            egui::Frame::default()
-                .fill(ui.visuals().selection.bg_fill)
-                .inner_margin(DESIGN_TOKENS.spacing.sm)
+        let theme = ui.active_theme();
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 56.0), Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_sel, &symbol.name)
+        });
+        if is_sel || response.hovered() {
+            ui.painter().rect_filled(rect, 4.0, theme.ui.btn_bg_hover);
+        }
+        let center = Pos2::new(rect.left() + 22.0, rect.center().y);
+        ui.painter()
+            .circle_filled(center, 18.0, theme.ui.btn_bg_hover);
+        ui.painter().text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            symbol.name.chars().next().unwrap_or('?'),
+            egui::FontId::proportional(16.0),
+            theme.ui.text,
+        );
+        ui.painter().text(
+            Pos2::new(rect.left() + 48.0, rect.center().y - 10.0),
+            egui::Align2::LEFT_CENTER,
+            &symbol.name,
+            egui::FontId::proportional(16.0),
+            theme.ui.text,
+        );
+        let exchange = if self.config.show_exchange {
+            &symbol.exchange
         } else {
-            egui::Frame::default().inner_margin(DESIGN_TOKENS.spacing.sm)
+            ""
         };
+        let exchange_galley = ui.painter().layout_no_wrap(
+            exchange.to_owned(),
+            egui::FontId::proportional(12.0),
+            theme.ui.text_secondary,
+        );
+        let right = rect.right() - exchange_galley.size().x - 12.0;
+        ui.painter().galley(
+            Pos2::new(right, rect.center().y - exchange_galley.size().y / 2.0),
+            exchange_galley,
+            theme.ui.text_secondary,
+        );
+        let kind = symbol
+            .symbol_type
+            .map(|kind| kind.to_string().to_uppercase())
+            .unwrap_or_default();
+        let badge =
+            ui.painter()
+                .layout_no_wrap(kind, egui::FontId::proportional(9.0), theme.ui.text);
+        let x = rect.left() + 48.0;
+        let desc = if self.config.show_description {
+            &symbol.display_name
+        } else {
+            ""
+        };
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            desc.to_owned(),
+            egui::FontId::proportional(12.0),
+            theme.ui.text_secondary,
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(
+            (right - x - badge.size().x - 24.0).max(0.0),
+        );
+        let desc = ui.painter().layout_job(job);
+        let badge_x = x + desc.size().x + 8.0;
+        ui.painter().galley(
+            Pos2::new(x, rect.center().y + 4.0),
+            desc,
+            theme.ui.text_secondary,
+        );
+        if symbol.symbol_type.is_some() {
+            let badge_rect = egui::Rect::from_min_size(
+                Pos2::new(badge_x, rect.center().y + 5.0),
+                badge.size() + Vec2::new(8.0, 2.0),
+            );
+            ui.painter()
+                .rect_filled(badge_rect, 2.0, theme.ui.btn_bg_hover);
+            ui.painter()
+                .galley(badge_rect.min + Vec2::new(4.0, 1.0), badge, theme.ui.text);
+        }
 
-        frame
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                // Strong and weak text ignore `override_text_color`, so a selected row sets both colours.
-                let (name_color, desc_color) = if is_sel {
-                    let on_selected = ui.visuals().selection.stroke.color;
-                    (on_selected, on_selected)
-                } else {
-                    (
-                        ui.visuals().strong_text_color(),
-                        ui.visuals().weak_text_color(),
-                    )
-                };
-
-                ui.horizontal(|ui| {
-                    // Symbol name (bold)
-                    ui.label(egui::RichText::new(&symbol.name).strong().color(name_color));
-                });
-
-                // Description
-                if self.config.show_description && !symbol.display_name.is_empty() {
-                    ui.label(
-                        egui::RichText::new(&symbol.display_name)
-                            .small()
-                            .color(desc_color),
-                    );
-                }
-            })
-            .response
-            .interact(egui::Sense::click())
+        response
     }
 }
 
@@ -458,8 +594,8 @@ impl Default for CompareSymbolsConfig {
         // Colors are TRANSPARENT to signal that colors should be fetched from
         // ui.style().visuals at render time for proper theme support.
         Self {
-            width: 500.0,
-            height: 400.0,
+            width: 840.0,
+            height: 560.0,
             bg_color: Color32::TRANSPARENT,
             text_color: Color32::TRANSPARENT,
             muted_color: Color32::TRANSPARENT,
@@ -479,7 +615,7 @@ impl CompareSymbolsConfig {
             }
         };
         Self {
-            bg_color: or(self.bg_color, visuals.window_fill),
+            bg_color: or(self.bg_color, visuals.panel_fill),
             text_color: or(self.text_color, visuals.text_color()),
             muted_color: or(self.muted_color, visuals.weak_text_color()),
             hover_color: or(self.hover_color, visuals.widgets.hovered.weak_bg_fill),
@@ -610,25 +746,18 @@ impl CompareSymbolsDialog {
 
         let mut is_open = self.is_open;
         let config = self.config.resolved(&ctx.global_style().visuals);
-        let frame = egui::Frame::window(&ctx.global_style()).fill(config.bg_color);
-
-        Window::new(centred_title(ctx, "Compare symbol"))
-            .open(&mut is_open)
-            .resizable(false)
-            .collapsible(false)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(titled_window_size(
-                ctx,
-                &frame,
-                Vec2::new(config.width, config.height),
-            ))
-            .frame(frame)
-            .show(ctx, |ui| {
+        Modal::new("compare_symbols", "")
+            .width(config.width)
+            .height(config.height)
+            .rounding(20.0)
+            .fill(config.bg_color)
+            .dim_background(false)
+            .show(ctx, &mut is_open, |ui| {
                 action = self.draw_content(ui, symbols, &config);
             });
 
-        self.is_open = is_open;
-        if !is_open {
+        self.is_open = is_open && action != CompareAction::Close;
+        if !self.is_open {
             action = CompareAction::Close;
         }
 
@@ -643,18 +772,24 @@ impl CompareSymbolsDialog {
     ) -> CompareAction {
         let mut action = CompareAction::None;
 
-        // Search bar
         ui.horizontal(|ui| {
-            ui.space_lg();
-            ui.label("Search:");
+            ui.add(icons::QUICK_SEARCH.as_image_tinted(Vec2::splat(24.0), config.muted_color));
             ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("Symbol")
-                    .desired_width(config.width - 50.0),
+                    .hint_text(RichText::new("Search symbols").size(16.0))
+                    .font(egui::FontId::proportional(16.0))
+                    .frame(egui::Frame::NONE)
+                    .desired_width((ui.available_width() - 40.0).max(0.0)),
             );
+            if IconButton::new(&icons::CLOSE)
+                .tooltip("Close")
+                .show(ui)
+                .clicked()
+            {
+                action = CompareAction::Close;
+            }
         });
-
-        ui.space_lg();
+        ui.add_space(24.0);
 
         // Currently compared symbols
         if !self.compared_symbols.is_empty() {
@@ -701,20 +836,19 @@ impl CompareSymbolsDialog {
             EmptyState::new("No symbols to compare").show(ui);
         }
 
-        // Two-column layout
-        let (left, right) = symbols.split_at(symbols.len().div_ceil(2));
-        ui.horizontal(|ui| {
-            for column in [left, right] {
-                ui.vertical(|ui| {
-                    ui.set_width(config.width / 2.0 - 16.0);
-                    for symbol in column {
-                        if let Some(a) = self.draw_symbol_item(ui, symbol, config) {
-                            action = a;
-                        }
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height())
+            .show(ui, |ui| {
+                let query = self.search_query.to_lowercase();
+                for symbol in symbols.iter().filter(|symbol| {
+                    symbol.name.to_lowercase().contains(&query)
+                        || symbol.display_name.to_lowercase().contains(&query)
+                }) {
+                    if let Some(a) = self.draw_symbol_item(ui, symbol, config) {
+                        action = a;
                     }
-                });
-            }
-        });
+                }
+            });
 
         // Handle add action
         if let CompareAction::AddSymbol(ref sym) = action
@@ -755,7 +889,7 @@ impl CompareSymbolsDialog {
             .iter()
             .any(|s| s.symbol == symbol.name);
 
-        let desired_size = Vec2::new(ui.available_width(), 32.0);
+        let desired_size = Vec2::new(ui.available_width(), 56.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
 
         // Background on hover
@@ -780,19 +914,19 @@ impl CompareSymbolsDialog {
 
         // Symbol
         ui.painter().text(
-            Pos2::new(rect.min.x + 28.0, rect.center().y),
+            Pos2::new(rect.min.x + 40.0, rect.center().y - 10.0),
             egui::Align2::LEFT_CENTER,
             &symbol.name,
-            egui::FontId::proportional(typography::MD),
+            egui::FontId::proportional(16.0),
             config.text_color,
         );
 
         // Description
         ui.painter().text(
-            Pos2::new(rect.right() - 8.0, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
+            Pos2::new(rect.min.x + 40.0, rect.center().y + 10.0),
+            egui::Align2::LEFT_CENTER,
             &symbol.display_name,
-            egui::FontId::proportional(typography::XS),
+            egui::FontId::proportional(12.0),
             config.muted_color,
         );
 
@@ -830,26 +964,181 @@ mod tests {
 
     #[test]
     fn test_symbol_search_open_close() {
-        let mut dialog = SymbolSearchDialog::new();
-        assert!(!dialog.is_open());
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut dialog = SymbolSearchDialog::new();
+            assert!(!dialog.is_open());
+            dialog.open();
+            let mut frame = |events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let _ = dialog.show(ui.ctx(), &create_test_symbols());
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            frame(vec![]);
+            frame(vec![]);
+            let pos = egui::pos2(10.0, 850.0);
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+            }
+            assert!(!dialog.is_open(), "a backdrop click closes symbol search");
+            dialog.open();
+            assert!(dialog.is_open());
+            dialog.close();
+            assert!(!dialog.is_open());
+        }
+    }
 
-        dialog.open();
-        assert!(dialog.is_open());
-
-        dialog.close();
-        assert!(!dialog.is_open());
+    #[test]
+    fn keyboard_selection_survives_a_stationary_pointer_and_scrolls() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let symbols: Vec<_> = (0..20)
+                .map(|i| Symbol::new(format!("S{i}"), "Sample"))
+                .collect();
+            let mut dialog = SymbolSearchDialog::new();
+            dialog.open();
+            let mut frame = |events| {
+                let mut picked = None;
+                let mut visible = Vec::new();
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(600.0, 400.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        picked = dialog.show(ui.ctx(), &symbols);
+                    },
+                );
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                        if shape.clip_rect.contains_rect(rect) {
+                            visible.push((text.galley.text().to_owned(), rect.center()));
+                        }
+                    }
+                }
+                output.drop_without_applying_deltas();
+                (picked, visible, dialog.sel_idx)
+            };
+            frame(vec![]);
+            let (_, visible, _) = frame(vec![]);
+            let pos = visible.iter().find(|(text, _)| text == "S0").unwrap().1;
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            let key = |key, pressed| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Default::default(),
+            };
+            for _ in 0..18 {
+                frame(vec![key(egui::Key::ArrowDown, true)]);
+                frame(vec![key(egui::Key::ArrowDown, false)]);
+            }
+            for _ in 0..30 {
+                frame(vec![]);
+            }
+            let visible = frame(vec![]);
+            assert!(
+                visible.1.iter().any(|(text, _)| text == "S18"),
+                "{visible:?}"
+            );
+            let picked = frame(vec![key(egui::Key::Enter, true)]).0.unwrap();
+            assert_eq!(picked.name, "S18");
+            dialog.open();
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![key(egui::Key::Escape, true)],
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = dialog.show(ui.ctx(), &symbols);
+                },
+            )
+            .drop_without_applying_deltas();
+            assert!(!dialog.is_open());
+        }
     }
 
     #[test]
     fn test_symbol_filtering() {
-        let mut dialog = SymbolSearchDialog::new();
-        let symbols = create_test_symbols();
-
-        dialog.search_query = "BTC".to_string();
-        dialog.update_filtered_symbols(&symbols);
-
-        assert_eq!(dialog.filtered_symbols.len(), 1);
-        assert_eq!(dialog.filtered_symbols[0].name, "BTCUSDT");
+        let symbols: Vec<_> = create_test_symbols()
+            .into_iter()
+            .map(|symbol| {
+                let kind = if symbol.name.ends_with("USDT") {
+                    SymbolType::Crypto
+                } else {
+                    SymbolType::Stock
+                };
+                symbol.with_market("Test", kind)
+            })
+            .collect();
+        for (query, category, recents, limit, expected) in [
+            ("BTC", None, vec![], 20, vec!["BTCUSDT"]),
+            (
+                "",
+                None,
+                vec![],
+                20,
+                vec!["BTCUSDT", "ETHUSDT", "AAPL", "TSLA"],
+            ),
+            (
+                "",
+                None,
+                vec!["TSLA", "missing", "ETHUSDT"],
+                2,
+                vec!["TSLA", "ETHUSDT"],
+            ),
+            (
+                "",
+                Some(SymbolType::Stock),
+                vec!["ETHUSDT", "TSLA"],
+                20,
+                vec!["TSLA", "AAPL"],
+            ),
+            ("bitcoin", Some(SymbolType::Stock), vec![], 20, vec![]),
+            ("a", None, vec![], 20, vec![]),
+        ] {
+            let mut dialog = SymbolSearchDialog::new();
+            dialog.config.min_search_len = 2;
+            dialog.config.max_results = limit;
+            dialog.category = Category(category);
+            dialog.set_recent_symbols(recents.into_iter().map(str::to_owned).collect());
+            dialog.search_query = query.to_owned();
+            dialog.update_filtered_symbols(&symbols);
+            assert_eq!(
+                dialog
+                    .filtered_symbols
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{query:?} / {category:?}"
+            );
+        }
     }
 
     #[test]
@@ -866,13 +1155,39 @@ mod tests {
 
     #[test]
     fn test_symbol_filtering_case_insensitive() {
-        let mut dialog = SymbolSearchDialog::new();
         let symbols = create_test_symbols();
+        for (query, expected) in [("btc", "BTCUSDT"), ("BTC", "BTCUSDT"), ("apple", "AAPL")] {
+            let mut dialog = SymbolSearchDialog::new();
+            dialog.search_query = query.to_string();
+            dialog.update_filtered_symbols(&symbols);
+            assert_eq!(dialog.filtered_symbols.len(), 1);
+            assert_eq!(dialog.filtered_symbols[0].name, expected);
 
-        dialog.search_query = "btc".to_string();
-        dialog.update_filtered_symbols(&symbols);
-
-        assert_eq!(dialog.filtered_symbols.len(), 1);
+            let ctx = Context::default();
+            let mut compare = CompareSymbolsDialog::new();
+            compare.search_query = query.to_string();
+            let config = compare.config.resolved(&ctx.global_style().visuals);
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                compare.draw_content(ui, &symbols, &config);
+            });
+            let names: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if symbols
+                            .iter()
+                            .any(|symbol| symbol.name == text.galley.text()) =>
+                    {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.textures_delta.clear();
+            assert_eq!(names, [expected], "compare query: {query}");
+            output.drop_without_applying_deltas();
+        }
     }
 
     #[test]

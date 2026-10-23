@@ -54,6 +54,22 @@ pub struct Legend<'a> {
     pub bar_index: usize,
     /// Whether this series has volume.
     pub show_volume: bool,
+    /// Display the instrument title and its host status marks.
+    pub show_title: bool,
+    /// Prefer the host description over the ticker.
+    pub title_as_description: bool,
+    /// Display OHLC fields.
+    pub show_ohlc: bool,
+    /// Display absolute bar change.
+    pub show_change: bool,
+    /// Display percentage bar change.
+    pub show_change_percent: bool,
+    /// Display study names.
+    pub show_indicator_titles: bool,
+    /// Display supplied study inputs.
+    pub show_indicator_inputs: bool,
+    /// Display study outputs.
+    pub show_indicator_values: bool,
 }
 
 impl<'a> Legend<'a> {
@@ -72,6 +88,14 @@ impl<'a> Legend<'a> {
             study_inputs: &[],
             bar_index: 0,
             show_volume: true,
+            show_title: true,
+            title_as_description: true,
+            show_ohlc: true,
+            show_change: true,
+            show_change_percent: true,
+            show_indicator_titles: true,
+            show_indicator_inputs: true,
+            show_indicator_values: true,
         }
     }
 
@@ -107,111 +131,133 @@ impl<'a> Legend<'a> {
         ui.skip_ahead_auto_ids(1);
         let painter = ui.painter().with_clip_rect(bounds);
         let mut layout = Layout::new(&painter, bounds, colors);
-        if let Some(badge) = &self.badge {
-            let rect = layout.reserve(Vec2::splat(18.0));
-            let mut badge_ui = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
-            badge_ui.set_clip_rect(painter.clip_rect());
-            egui::Image::new(badge.clone()).paint_at(&badge_ui, rect);
-        }
-        let title = self.title();
-        let status_width = self
-            .statuses
-            .iter()
-            .map(|status| {
-                painter
-                    .layout_no_wrap(
-                        status.text.to_owned(),
-                        FontId::proportional(typography::SM),
-                        status.color,
-                    )
-                    .size()
-                    .x
-                    + 16.0
-            })
-            .sum::<f32>();
-        let title_start = layout.pos;
-        let title_width = (bounds.right() - layout.pos.x - status_width - 48.0).max(0.0);
-        layout.text(title, typography::XXL, colors.text, title_width);
-        for status in self.statuses {
-            let galley = painter.layout_no_wrap(
-                status.text.to_owned(),
-                FontId::proportional(typography::SM),
-                status.color,
-            );
-            let rect = layout.reserve(Vec2::new(galley.size().x + 8.0, 18.0));
-            painter.rect_filled(rect, 4.0, status.background);
-            painter.galley(rect.center() - galley.size() / 2.0, galley, status.color);
-        }
-        #[cfg(feature = "icons")]
-        {
-            let title_rect = Rect::from_min_max(
-                title_start,
-                Pos2::new(
-                    (layout.pos.x + 48.0).min(bounds.right()),
-                    title_start.y + 24.0,
-                ),
-            );
-            let hovered = ui.rect_contains_pointer(title_rect);
-            let flagged = ui
-                .ctx()
-                .data(|data| data.get_temp::<bool>(id.with("flag")).unwrap_or(false));
-            if hovered
-                || flagged
-                || egui::Popup::is_id_open(ui.ctx(), id.with("more").with("popup"))
-            {
-                let flag = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
-                let more = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
-                painter.rect_stroke(
-                    title_rect,
-                    3,
-                    Stroke::new(1.0, theme.ui.border_control),
-                    egui::StrokeKind::Inside,
-                );
-                let flag_response = ui.interact(flag, id.with("flag"), Sense::click());
-                crate::icons::icons::FLAG_MARK
-                    .as_image_tinted(
-                        Vec2::splat(16.0),
-                        if flagged {
-                            theme.ui.accent
-                        } else {
-                            theme.ui.text
-                        },
-                    )
-                    .paint_at(ui, flag.shrink(2.0));
-                if flag_response.on_hover_text("Flag instrument").clicked() {
-                    ui.ctx()
-                        .data_mut(|data| data.insert_temp(id.with("flag"), !flagged));
-                }
-                let more_response = ui
-                    .interact(more, id.with("more"), Sense::click())
-                    .on_hover_text("Series actions");
-                crate::icons::icons::UI_MORE_HORIZONTAL
-                    .as_image_tinted(Vec2::splat(16.0), theme.ui.text)
-                    .paint_at(ui, more.shrink(2.0));
-                egui::Popup::menu(&more_response).show(|ui| {
-                    if ui.button("Copy symbol").clicked() {
-                        ui.ctx().copy_text(self.symbol.to_owned());
-                        ui.close();
-                    }
-                    if ui.button("Copy values").clicked() {
-                        ui.ctx().copy_text(format!(
-                            "Open {} High {} Low {} Close {} Vol {}",
-                            self.bar.open,
-                            self.bar.high,
-                            self.bar.low,
-                            self.bar.close,
-                            self.bar.volume
-                        ));
-                        ui.close();
-                    }
-                });
+        if self.show_title {
+            if let Some(badge) = &self.badge {
+                let rect = layout.reserve(Vec2::splat(18.0));
+                let mut badge_ui = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
+                badge_ui.set_clip_rect(painter.clip_rect());
+                egui::Image::new(badge.clone()).paint_at(&badge_ui, rect);
             }
+            let title = self.title();
+            let status_width = self
+                .statuses
+                .iter()
+                .map(|status| {
+                    painter
+                        .layout_no_wrap(
+                            status.text.to_owned(),
+                            FontId::proportional(typography::SM),
+                            status.color,
+                        )
+                        .size()
+                        .x
+                        + 16.0
+                })
+                .sum::<f32>();
+            let title_start = layout.pos;
+            let title_width = (bounds.right() - layout.pos.x - status_width - 48.0).max(0.0);
+            layout.text(title, typography::XXL, colors.text, title_width);
+            for status in self.statuses {
+                let galley = painter.layout_no_wrap(
+                    status.text.to_owned(),
+                    FontId::proportional(typography::SM),
+                    status.color,
+                );
+                let rect = layout.reserve(Vec2::new(galley.size().x + 8.0, 18.0));
+                painter.rect_filled(rect, 4.0, status.background);
+                painter.galley(rect.center() - galley.size() / 2.0, galley, status.color);
+            }
+            #[cfg(feature = "icons")]
+            {
+                let title_rect = Rect::from_min_max(
+                    title_start,
+                    Pos2::new(
+                        (layout.pos.x + 48.0).min(bounds.right()),
+                        title_start.y + 24.0,
+                    ),
+                );
+                let hovered = ui.rect_contains_pointer(title_rect);
+                let flagged = ui
+                    .ctx()
+                    .data(|data| data.get_temp::<bool>(id.with("flag")).unwrap_or(false));
+                if hovered
+                    || flagged
+                    || egui::Popup::is_id_open(ui.ctx(), id.with("more").with("popup"))
+                {
+                    let flag = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
+                    let more = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
+                    painter.rect_stroke(
+                        title_rect,
+                        3,
+                        Stroke::new(1.0, theme.ui.border_control),
+                        egui::StrokeKind::Inside,
+                    );
+                    let flag_response = ui.interact(flag, id.with("flag"), Sense::click());
+                    crate::icons::icons::FLAG_MARK
+                        .as_image_tinted(
+                            Vec2::splat(16.0),
+                            if flagged {
+                                theme.ui.accent
+                            } else {
+                                theme.ui.text
+                            },
+                        )
+                        .paint_at(ui, flag.shrink(2.0));
+                    if flag_response.on_hover_text("Flag instrument").clicked() {
+                        ui.ctx()
+                            .data_mut(|data| data.insert_temp(id.with("flag"), !flagged));
+                    }
+                    let more_response = ui
+                        .interact(more, id.with("more"), Sense::click())
+                        .on_hover_text("Series actions");
+                    crate::icons::icons::UI_MORE_HORIZONTAL
+                        .as_image_tinted(Vec2::splat(16.0), theme.ui.text)
+                        .paint_at(ui, more.shrink(2.0));
+                    egui::Popup::menu(&more_response).show(|ui| {
+                        if ui.button("Copy symbol").clicked() {
+                            ui.ctx().copy_text(self.symbol.to_owned());
+                            ui.close();
+                        }
+                        if ui.button("Copy values").clicked() {
+                            ui.ctx().copy_text(format!(
+                                "Open {} High {} Low {} Close {} Vol {}",
+                                self.bar.open,
+                                self.bar.high,
+                                self.bar.low,
+                                self.bar.close,
+                                self.bar.volume
+                            ));
+                            ui.close();
+                        }
+                    });
+                }
+            }
+            #[cfg(not(feature = "icons"))]
+            let _ = title_start;
         }
-        #[cfg(not(feature = "icons"))]
-        let _ = title_start;
         let precision = self.price_precision(self.bar.close);
-        layout.ohlc(self.bar, self.previous_close, precision);
-        layout.new_row();
+        if self.show_ohlc {
+            layout.ohlc(self.bar, precision);
+        }
+        if self.show_change || self.show_change_percent {
+            let reference = self.previous_close.unwrap_or(self.bar.open);
+            let change = self.bar.close - reference;
+            let pct = percent_change(reference, self.bar.close);
+            let text = match (self.show_change, self.show_change_percent) {
+                (true, true) => format!("{change:+.precision$} ({pct:+.2}%)"),
+                (true, false) => format!("{change:+.precision$}"),
+                _ => format!("{pct:+.2}%"),
+            };
+            layout.text(
+                text,
+                typography::MD,
+                colors.bar_color(change >= 0.0),
+                bounds.width(),
+            );
+        }
+        if self.show_title || self.show_ohlc || self.show_change || self.show_change_percent {
+            layout.new_row();
+        }
 
         let action = self.quote.and_then(|quote| {
             let (bid, ask) = (quote.bid, quote.ask);
@@ -249,16 +295,19 @@ impl<'a> Legend<'a> {
                 .enumerate()
                 .filter(|(_, study)| study.is_overlay() && study.is_visible())
             {
-                layout.text(
-                    study.name().to_owned(),
-                    typography::MD,
-                    colors.text,
-                    bounds.width(),
-                );
-                if let Some(inputs) = self
-                    .study_inputs
-                    .get(index)
-                    .filter(|inputs| !inputs.is_empty())
+                if self.show_indicator_titles {
+                    layout.text(
+                        study.name().to_owned(),
+                        typography::MD,
+                        colors.text,
+                        bounds.width(),
+                    );
+                }
+                if self.show_indicator_inputs
+                    && let Some(inputs) = self
+                        .study_inputs
+                        .get(index)
+                        .filter(|inputs| !inputs.is_empty())
                 {
                     layout.text(
                         (*inputs).to_owned(),
@@ -273,7 +322,11 @@ impl<'a> Legend<'a> {
                     _ => &[],
                 };
                 let study_colors = study.colors();
-                for (index, value) in values.iter().enumerate() {
+                for (index, value) in values
+                    .iter()
+                    .enumerate()
+                    .filter(|_| self.show_indicator_values)
+                {
                     let text = if value.is_finite() {
                         format!("{value:.precision$}")
                     } else {
@@ -334,9 +387,13 @@ impl<'a> Legend<'a> {
     fn title(&self) -> String {
         let instrument = self.instrument;
         [
-            instrument
-                .and_then(|i| i.description.as_deref())
-                .unwrap_or(self.symbol),
+            if self.title_as_description {
+                instrument
+                    .and_then(|i| i.description.as_deref())
+                    .unwrap_or(self.symbol)
+            } else {
+                instrument.map_or(self.symbol, |i| i.symbol.as_str())
+            },
             self.timeframe,
             instrument
                 .and_then(|i| i.exchange.as_deref())
@@ -442,7 +499,7 @@ impl<'a> Layout<'a> {
         self.colors.bar_color(bar.close >= bar.open)
     }
 
-    fn ohlc(&mut self, bar: &Bar, previous_close: Option<f64>, precision: usize) {
+    fn ohlc(&mut self, bar: &Bar, precision: usize) {
         let color = self.bar_color(bar);
         for (label, value) in [
             ("O ", bar.open),
@@ -452,16 +509,6 @@ impl<'a> Layout<'a> {
         ] {
             self.field(label, format!("{value:.precision$}"), color);
         }
-        let reference = previous_close.unwrap_or(bar.open);
-        let change = bar.close - reference;
-        let pct = percent_change(reference, bar.close);
-        let color = self.colors.bar_color(change >= 0.0);
-        self.text(
-            format!("{change:+.precision$} ({pct:+.2}%)"),
-            typography::MD,
-            color,
-            self.bounds.width(),
-        );
     }
 }
 

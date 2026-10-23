@@ -94,7 +94,9 @@ impl Drawing {
         let galley = painter.layout_no_wrap(text.to_string(), font.clone(), color);
         let text_size = galley.size();
         let padding = egui::vec2(8.0, 4.0);
-        let box_rect = Rect::from_min_size(pos, text_size + padding * 2.0);
+        let label = self.points.get(1).copied().unwrap_or(pos);
+        painter.line_segment([pos, label], Stroke::new(stroke::HAIRLINE, color));
+        let box_rect = Rect::from_min_size(label, text_size + padding * 2.0);
 
         painter.rect_filled(
             box_rect,
@@ -107,7 +109,7 @@ impl Drawing {
             Stroke::new(stroke::HAIRLINE, color),
             StrokeKind::Outside,
         );
-        painter.text(pos + padding, egui::Align2::LEFT_TOP, text, font, color);
+        painter.text(label + padding, egui::Align2::LEFT_TOP, text, font, color);
 
         // Anchor circle
         painter.circle_filled(pos, DESIGN_TOKENS.rounding.md, color);

@@ -120,15 +120,11 @@ impl Slot {
             ),
             S::Compare => (
                 &embedded_icons::COMPARE_ADD,
-                "Compare or Add Symbol",
+                "Compare symbols",
                 A::OpenCompare,
             ),
             S::Indicators => (&embedded_icons::INDICATORS, "Indicators", A::OpenIndicators),
-            S::Templates => (
-                &embedded_icons::LAYOUT_GRID,
-                "Indicator templates",
-                A::OpenIndicatorTemplates,
-            ),
+            S::Templates => (&embedded_icons::LAYOUT_GRID, "Indicator templates", A::None),
             S::Alert => (&embedded_icons::BELL, "Alert", A::CreateAlert),
             S::Replay => (&embedded_icons::REPLAY, "Replay", A::ToggleReplay),
             S::Undo => (&embedded_icons::UNDO, "Undo", A::Undo),
@@ -140,10 +136,10 @@ impl Slot {
             ),
             S::Layouts => (
                 &embedded_icons::LAYOUT_SINGLE,
-                "Manage Layouts",
+                "Chart layout",
                 A::Layout(LayoutAction::OpenMenu),
             ),
-            S::Save => (&embedded_icons::DATABASE, "Save Chart", A::Save),
+            S::Save => (&embedded_icons::DATABASE, "Save chart", A::Save),
             S::QuickSearch => (
                 &embedded_icons::QUICK_SEARCH,
                 "Quick Search",
@@ -155,11 +151,7 @@ impl Slot {
                 "Fullscreen",
                 A::ToggleFullscreen,
             ),
-            S::Screenshot => (
-                &embedded_icons::CAMERA,
-                "Take Screenshot",
-                A::TakeScreenshot,
-            ),
+            S::Screenshot => (&embedded_icons::CAMERA, "Snapshot", A::TakeScreenshot),
             S::Interval | S::ChartType => return None,
         })
     }
@@ -194,6 +186,8 @@ pub struct TopToolbar {
     pub layout_menu: LayoutMenu,
     /// Controls the host hid.
     host_hidden: HashSet<Control>,
+    /// Host-supplied saved indicator sets as (id, name), in display order.
+    pub indicator_templates: Vec<(String, String)>,
 }
 
 impl Default for TopToolbar {
@@ -205,6 +199,7 @@ impl Default for TopToolbar {
             chart_type_selector: ChartTypeSelector::new(ChartType::Candles),
             layout_menu: LayoutMenu::new(),
             host_hidden: HashSet::new(),
+            indicator_templates: Vec::new(),
         }
     }
 }
@@ -352,7 +347,7 @@ impl TopToolbar {
         self.show_groups(ui, RIGHT, compact, hidden, symbol, &mut action);
         if !hidden.is_empty() {
             ui.add_space(gap());
-            Self::show_overflow(ui, hidden, &mut action);
+            self.show_overflow(ui, hidden, &mut action);
         }
 
         action
@@ -481,10 +476,73 @@ impl TopToolbar {
         };
         let response = match control {
             S::Symbol => Self::symbol_trigger(symbol).show(ui, false),
-            S::Compare | S::Templates | S::Layouts => {
-                ToolbarIconButton::new(icon, label, &self.config).show(ui)
+            S::Compare | S::Layouts => ToolbarIconButton::new(icon, label, &self.config).show(ui),
+            S::Templates => {
+                let response = ToolbarIconButton::new(icon, label, &self.config).show(ui);
+                egui::Popup::menu(&response)
+                    .align(egui::RectAlign::BOTTOM_START)
+                    .align_alternatives(&[])
+                    .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
+                    .show(|ui| self.show_indicator_templates(ui, action));
+                return;
             }
-            S::Save => Self::save_button(&self.config).show(ui),
+            S::Save => {
+                let response = Self::save_button(&self.config).show(ui);
+                let arrow = ui.interact(
+                    egui::Rect::from_min_max(
+                        egui::pos2(response.rect.right() - 16.0, response.rect.top()),
+                        response.rect.max,
+                    ),
+                    response.id.with("save_menu"),
+                    egui::Sense::click(),
+                );
+                egui::Popup::menu(&arrow)
+                    .align(egui::RectAlign::BOTTOM_START)
+                    .align_alternatives(&[])
+                    .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
+                    .show(|ui| {
+                        ui.set_width(200.0);
+                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
+                        if ListItem::new()
+                            .height(32.0)
+                            .show_with_icon(ui, "Export chart…", &embedded_icons::IMAGE)
+                            .clicked()
+                        {
+                            *action = TopToolbarAction::Save;
+                            ui.close();
+                        }
+                    });
+                if arrow.clicked() {
+                    return;
+                }
+                response
+            }
+
+            S::Screenshot => {
+                let response = ToolbarIconButton::new(icon, label, &self.config).show(ui);
+                egui::Popup::menu(&response)
+                    .align(egui::RectAlign::BOTTOM_START)
+                    .align_alternatives(&[])
+                    .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
+                    .show(|ui| {
+                        ui.set_width(240.0);
+                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
+                        ui.label(
+                            egui::RichText::new("SNAPSHOT")
+                                .size(11.0)
+                                .color(ui.active_theme().ui.text_secondary),
+                        );
+                        if ListItem::new()
+                            .height(32.0)
+                            .show_with_icon(ui, "Download image", &embedded_icons::IMAGE)
+                            .clicked()
+                        {
+                            *action = TopToolbarAction::TakeScreenshot;
+                            ui.close();
+                        }
+                    });
+                return;
+            }
             S::Undo | S::Redo => {
                 let enabled = if control == S::Undo {
                     self.state.can_undo
@@ -513,8 +571,38 @@ impl TopToolbar {
         }
     }
 
+    fn show_indicator_templates(&self, ui: &mut Ui, action: &mut TopToolbarAction) {
+        ui.set_width(296.0);
+        ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
+        if ListItem::new()
+            .height(40.0)
+            .show_with_icon(ui, "Save indicator template", &embedded_icons::PLUS)
+            .clicked()
+        {
+            *action = TopToolbarAction::SaveIndicatorTemplate;
+            ui.close();
+        }
+        if !self.indicator_templates.is_empty() {
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    for (id, name) in &self.indicator_templates {
+                        if ListItem::new()
+                            .height(32.0)
+                            .show(ui, crate::ui_kit::list_item::LabelContent::new(name))
+                            .clicked()
+                        {
+                            *action = TopToolbarAction::ApplyIndicatorTemplate(id.clone());
+                            ui.close();
+                        }
+                    }
+                });
+        }
+    }
+
     /// The overflow button and its menu of the controls that left the strip.
-    fn show_overflow(ui: &mut Ui, hidden: &[Slot], action: &mut TopToolbarAction) {
+    fn show_overflow(&self, ui: &mut Ui, hidden: &[Slot], action: &mut TopToolbarAction) {
         let response = IconButton::new(&embedded_icons::UI_MORE_HORIZONTAL)
             .tooltip("More")
             .show(ui);
@@ -522,7 +610,11 @@ impl TopToolbar {
             ui.set_width(DESIGN_TOKENS.sizing.dialog.submenu_width);
             let strip_order = LEFT.iter().chain(RIGHT).flat_map(|group| group.iter());
             for control in strip_order.filter(|&c| hidden.contains(c)) {
-                if let Some((icon, label, clicked_action)) = control.entry()
+                if *control == S::Templates {
+                    ui.menu_button("Indicator templates", |ui| {
+                        self.show_indicator_templates(ui, action)
+                    });
+                } else if let Some((icon, label, clicked_action)) = control.entry()
                     && ListItem::new().show_with_icon(ui, label, icon).clicked()
                 {
                     *action = clicked_action;
@@ -535,14 +627,14 @@ impl TopToolbar {
         Trigger {
             icon: Some(&embedded_icons::CHART_CANDLES),
             label: symbol.to_owned(),
-            name: format!("Symbol search: {symbol}"),
+            name: "Symbol search".to_owned(),
             min_width: 128.0,
             filled: true,
         }
     }
 
     fn save_button(config: &TopToolbarConfig) -> TextIconButton<'static> {
-        TextIconButton::new("Save", &embedded_icons::CHEVRON_DOWN, "Save Chart", config)
+        TextIconButton::new("Save", &embedded_icons::CHEVRON_DOWN, "Save chart", config)
     }
 }
 
@@ -683,18 +775,99 @@ mod tests {
     }
 
     #[test]
+    fn export_menus_require_a_choice() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            for (slot, label, expected) in [
+                (
+                    S::Screenshot,
+                    "Download image",
+                    TopToolbarAction::TakeScreenshot,
+                ),
+                (S::Save, "Export chart…", TopToolbarAction::Save),
+                (
+                    S::Templates,
+                    "Save indicator template",
+                    TopToolbarAction::SaveIndicatorTemplate,
+                ),
+                (
+                    S::Templates,
+                    "My studies",
+                    TopToolbarAction::ApplyIndicatorTemplate("custom-id".into()),
+                ),
+            ] {
+                let mut toolbar = TopToolbar::new();
+                toolbar
+                    .indicator_templates
+                    .push(("custom-id".into(), "My studies".into()));
+                let mut frame = |events| {
+                    let mut action = TopToolbarAction::None;
+                    let mut rect = Rect::NOTHING;
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            rect = ui
+                                .horizontal(|ui| {
+                                    toolbar.show_control(ui, slot, false, "SAMPLE", &mut action)
+                                })
+                                .response
+                                .rect;
+                        },
+                    );
+                    let download = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    });
+                    output.drop_without_applying_deltas();
+                    (action, rect, download)
+                };
+                let (_, rect, _) = frame(vec![]);
+                let pos = if slot == S::Save {
+                    pos2(rect.right() - 8.0, rect.center().y)
+                } else {
+                    rect.center()
+                };
+                frame(vec![Event::PointerMoved(pos)]);
+                let click = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                frame(vec![click(pos, true)]);
+                let (action, _, _) = frame(vec![click(pos, false)]);
+                assert_eq!(
+                    action,
+                    TopToolbarAction::None,
+                    "opening the menu must not capture an image"
+                );
+                frame(vec![]);
+                let (_, _, download) = frame(vec![]);
+                let pos = download.expect("download choice");
+                frame(vec![Event::PointerMoved(pos)]);
+                frame(vec![click(pos, true)]);
+                let (action, _, _) = frame(vec![click(pos, false)]);
+                assert_eq!(action, expected);
+            }
+        }
+    }
+
+    #[test]
     fn controls_that_are_off_emit_nothing() {
         type Off = fn(&mut TopToolbar);
-        let rows: [(Off, &[TopToolbarAction]); 7] = [
+        let rows: [(Off, &[TopToolbarAction]); 6] = [
             (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
             (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
             (
                 |t| t.set_control_visible(Control::Compare, false),
                 &[TopToolbarAction::OpenCompare],
-            ),
-            (
-                |t| t.set_control_visible(Control::Templates, false),
-                &[TopToolbarAction::OpenIndicatorTemplates],
             ),
             (
                 |t| t.set_control_visible(Control::Alerts, false),

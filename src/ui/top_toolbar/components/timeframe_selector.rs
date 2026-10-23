@@ -13,9 +13,9 @@ use egui::{Color32, Rect, RichText, Role, Ui, WidgetInfo, pos2, vec2};
 use std::collections::HashSet;
 
 /// Height of the interval menu's rows and section headers.
-const ROW_H: f32 = 28.0;
+const ROW_H: f32 = 32.0;
 
-/// Least width of the menu, so that the custom interval form fits a field, a unit button and "Add".
+/// Width reserved while the custom interval form is expanded.
 const CUSTOM_FORM_W: f32 = 232.0;
 
 /// Timeframe unit
@@ -155,7 +155,7 @@ impl Timeframe {
 pub struct TimeframeSelectorConfig {
     /// Minimum width of the button; it is otherwise sized to its label.
     pub btn_width: f32,
-    /// Minimum width of the menu; never below 232 px, the width the custom interval form needs.
+    /// Minimum menu content width; the expanded custom form reserves at least 232 px.
     pub dropdown_width: f32,
     /// Not read: rows are laid out by the menu.
     pub item_height: f32,
@@ -179,7 +179,7 @@ impl Default for TimeframeSelectorConfig {
         // ui.style().visuals at render time for proper theme support.
         Self {
             btn_width: 0.0,
-            dropdown_width: 180.0,
+            dropdown_width: 184.0,
             item_height: DESIGN_TOKENS.sizing.button_md,
             bg_color: Color32::TRANSPARENT,
             hover_color: Color32::TRANSPARENT,
@@ -381,6 +381,7 @@ impl TimeframeSelector {
             .id(id)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .align_alternatives(&[])
+            .frame(egui::Frame::popup(ui.style()).fill(theme.ui.panel_bg))
             .gap(theme.spacing.xs)
             .show(|ui| self.menu_ui(ui, &theme, max_height))
             .map_or(TimeframeAction::None, |menu| menu.inner);
@@ -393,16 +394,16 @@ impl TimeframeSelector {
         let label = self.current.display();
         Trigger {
             icon: None,
-            name: format!("Interval: {label}"),
+            name: self.current.display_long(),
             label,
             min_width: self.config.btn_width.max(44.0),
             filled: false,
         }
     }
 
-    /// Widths of the widest interval code and the widest description in the menu.
-    fn column_widths(&self, ui: &Ui, theme: &Theme) -> (f32, f32) {
-        let font = egui::FontId::proportional(theme.text.body);
+    /// Width of the widest interval label in the menu.
+    fn label_width(&self, ui: &Ui) -> f32 {
+        let font = egui::FontId::proportional(14.0);
         let width = |text: String| {
             ui.painter()
                 .layout_no_wrap(text, font.clone(), Color32::PLACEHOLDER)
@@ -412,13 +413,8 @@ impl TimeframeSelector {
         Timeframe::all_presets()
             .iter()
             .chain(&self.custom_timeframes)
-            .chain(&self.favorites)
-            .fold((0.0, 0.0), |(code, description), tf| {
-                (
-                    f32::max(code, width(tf.display())),
-                    f32::max(description, width(tf.display_long())),
-                )
-            })
+            .map(|tf| width(tf.display_long()))
+            .fold(0.0, f32::max)
     }
 
     fn menu_ui(&mut self, ui: &mut Ui, theme: &Theme, max_height: f32) -> TimeframeAction {
@@ -427,31 +423,27 @@ impl TimeframeSelector {
         let spacing = ui.spacing_mut();
         spacing.item_spacing.y = 0.0;
         spacing.scroll.floating = false;
+        spacing.scroll.bar_width = 3.0;
         spacing.scroll.fade.strength = 0.0;
         let bar = spacing.scroll.allocated_width();
 
-        let (code_w, desc_w) = self.column_widths(ui, theme);
-        let row_w = theme.spacing.lg * 2.0
-            + icon_sizes::SM
-            + theme.spacing.lg
-            + code_w
-            + theme.spacing.xl
-            + desc_w;
-        ui.set_width(
-            (row_w + bar)
-                .max(self.config.dropdown_width)
-                .max(CUSTOM_FORM_W),
-        );
+        let desc_w = self.label_width(ui);
+        ui.set_width((desc_w + 64.0 + bar).max(self.config.dropdown_width).max(
+            if self.show_custom_input {
+                CUSTOM_FORM_W
+            } else {
+                0.0
+            },
+        ));
+        ui.visuals_mut().selection.bg_fill = theme.ui.text;
+        ui.visuals_mut().selection.stroke.color = theme.ui.panel_bg;
         // A popup is first measured inside a 400 px high area; this lets the list use the room below.
         ui.set_max_height(max_height);
 
-        let mut favorites: Vec<_> = self.favorites.iter().copied().collect();
-        favorites.sort_by_key(|tf| (tf.unit as u8, tf.value));
         let row = |ui: &mut Ui, tf: Timeframe, favorite: bool, current: Timeframe| {
             let content = TimeframeRow {
                 tf,
                 favorite,
-                code_w,
                 theme,
             };
             ListItem::new()
@@ -466,14 +458,6 @@ impl TimeframeSelector {
             .max_height(max_height)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                if !favorites.is_empty() {
-                    section_header(ui, theme, "Favorites");
-                    for tf in &favorites {
-                        if row(ui, *tf, true, current) {
-                            action = TimeframeAction::Select(*tf);
-                        }
-                    }
-                }
                 for (unit, header) in [
                     (TimeframeUnit::Second, "Seconds"),
                     (TimeframeUnit::Minute, "Minutes"),
@@ -551,7 +535,11 @@ pub(super) fn menu_row_focus(ui: &Ui, response: &egui::Response) {
 
 /// A section title on the menu's row grid, with its text on the bottom of the row.
 fn section_header(ui: &mut Ui, theme: &Theme, text: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), egui::Sense::hover());
+    if ui.cursor().top() > ui.max_rect().top() + 1.0 {
+        ui.add_space(12.0);
+        ui.separator();
+    }
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), egui::Sense::hover());
     // A child Ui, so that the row keeps its full height in the parent's layout.
     let mut title = ui.new_child(
         egui::UiBuilder::new()
@@ -568,11 +556,10 @@ fn section_header(ui: &mut Ui, theme: &Theme, text: &str) {
     );
 }
 
-/// One interval row: favourite star, code, description.
+/// One interval row with a trailing favourite star.
 struct TimeframeRow<'a> {
     tf: Timeframe,
     favorite: bool,
-    code_w: f32,
     theme: &'a Theme,
 }
 
@@ -580,11 +567,10 @@ impl ListItemContent for TimeframeRow<'_> {
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> egui::Response {
         let theme = self.theme;
         let rect = context.rect;
-        let (code, description, star) = if context.selected {
-            let on_selection = theme.ui.selection_text;
-            (on_selection, on_selection, on_selection)
+        let text = if context.selected {
+            theme.ui.panel_bg
         } else {
-            (theme.ui.text, theme.ui.text_secondary, theme.ui.warning)
+            theme.ui.text
         };
         context.response.widget_info(|| {
             WidgetInfo::selected(
@@ -597,28 +583,22 @@ impl ListItemContent for TimeframeRow<'_> {
 
         if self.favorite {
             let star_rect = Rect::from_min_size(
-                pos2(rect.min.x, rect.center().y - icon_sizes::SM / 2.0),
+                pos2(
+                    rect.max.x - icon_sizes::SM,
+                    rect.center().y - icon_sizes::SM / 2.0,
+                ),
                 vec2(icon_sizes::SM, icon_sizes::SM),
             );
             embedded_icons::STAR_FILLED
-                .as_image_tinted(star_rect.size(), star)
+                .as_image_tinted(star_rect.size(), text)
                 .paint_at(ui, star_rect);
         }
-        let font = egui::FontId::proportional(theme.text.body);
-        let code_x = rect.min.x + icon_sizes::SM + theme.spacing.lg;
         ui.painter().text(
-            pos2(code_x, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            self.tf.display(),
-            font.clone(),
-            code,
-        );
-        ui.painter().text(
-            pos2(code_x + self.code_w + theme.spacing.xl, rect.center().y),
+            pos2(rect.min.x, rect.center().y),
             egui::Align2::LEFT_CENTER,
             self.tf.display_long(),
-            font,
-            description,
+            egui::FontId::proportional(14.0),
+            text,
         );
         menu_row_focus(ui, context.response);
         context.response.clone()
@@ -655,7 +635,9 @@ mod tests {
                         .shapes
                         .iter()
                         .find_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text) if text.galley.text() == selected.display() => {
+                            egui::Shape::Text(text)
+                                if text.galley.text() == selected.display_long() =>
+                            {
                                 Some(text.pos + text.galley.size() / 2.0)
                             }
                             _ => None,

@@ -26,7 +26,7 @@ use std::cell::Cell;
 use std::collections::HashSet;
 
 /// Width of the category sidebar.
-const SIDEBAR_WIDTH: f32 = 140.0;
+const SIDEBAR_WIDTH: f32 = 228.0;
 
 /// Indicator Dialog
 ///
@@ -156,6 +156,8 @@ impl IndicatorDialog {
         let action = Modal::new("indicator_dialog", "Indicators")
             .width(config.width)
             .height(config.height)
+            .rounding(16.0)
+            .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
                 self.draw_content(ui, &config, theme)
             })
@@ -174,17 +176,24 @@ impl IndicatorDialog {
         config: &IndicatorDialogConfig,
         theme: &Theme,
     ) -> IndicatorDialogAction {
-        let search = self.search.show(ui).response;
+        let search = ui
+            .scope(|ui| {
+                ui.spacing_mut().interact_size.y = 40.0;
+                ui.style_mut().override_font_id = Some(FontId::proportional(16.0));
+                self.search.show(ui).response
+            })
+            .inner;
         if std::mem::take(&mut self.focus_search) {
             search.request_focus();
         }
         self.focus_first_row = search.has_focus() && ui.input(|i| i.key_pressed(Key::ArrowDown));
         ui.add_space(theme.spacing.lg);
 
-        TabBar::new(IndicatorTab::all(), &mut self.active_tab).show(ui);
-
         // Profiles and patterns have no categories.
         if self.active_tab != IndicatorTab::Indicators {
+            TabBar::new(IndicatorTab::all(), &mut self.active_tab)
+                .pills()
+                .show(ui);
             self.draw_empty_state(ui);
             return IndicatorDialogAction::None;
         }
@@ -195,17 +204,34 @@ impl IndicatorDialog {
         SidebarLayout::new(SIDEBAR_WIDTH).show(
             ui,
             |ui| {
-                for item in IndicatorCategory::all() {
-                    if SidebarTab::new(item.name(), category.get() == *item)
+                ui.visuals_mut().selection.bg_fill = theme.ui.btn_bg_hover;
+                ui.visuals_mut().selection.stroke.color = theme.ui.text;
+                for item in [IndicatorCategory::Favorites, IndicatorCategory::BuiltIns] {
+                    ui.add_space(16.0);
+                    ui.label(
+                        RichText::new(if item == IndicatorCategory::Favorites {
+                            "PERSONAL"
+                        } else {
+                            "BUILT-IN"
+                        })
+                        .size(11.0)
+                        .color(theme.ui.text_secondary),
+                    );
+                    ui.add_space(8.0);
+                    if SidebarTab::new(item.name(), category.get() == item)
                         .icon(item.icon())
                         .show(ui)
                     {
-                        category.set(*item);
+                        category.set(item);
                     }
                 }
             },
             |ui| {
                 self.sel_category = category.get();
+                TabBar::new(IndicatorTab::all(), &mut self.active_tab)
+                    .pills()
+                    .show(ui);
+                ui.add_space(12.0);
                 action = self.draw_results(ui, config, theme);
             },
         );
@@ -287,6 +313,7 @@ impl IndicatorDialog {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 // Room above the first row and below the last for the focus ring.
                 let ring = DESIGN_TOKENS.spacing.xs;
                 ui.add_space(ring);
@@ -328,7 +355,7 @@ impl IndicatorDialog {
         indicator: &IndicatorInfo,
         is_first: bool,
     ) -> Option<IndicatorDialogAction> {
-        let desired_size = Vec2::new(ui.available_width(), DESIGN_TOKENS.sizing.button_lg);
+        let desired_size = Vec2::new(ui.available_width(), 32.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
 
         let is_favorite = self.favorites.contains(&indicator.id);
@@ -364,7 +391,7 @@ impl IndicatorDialog {
         };
         let star_res = Self::draw_favorite_star(ui, config, rect, is_favorite);
         let text_right = Self::draw_item_badges(ui, theme, rect, indicator, secondary);
-        Self::draw_item_text(ui, theme, rect, text_right, indicator, text, secondary);
+        Self::draw_item_text(ui, rect, text_right, indicator, text);
         draw_focus_ring(ui, &response);
 
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
@@ -408,31 +435,15 @@ impl IndicatorDialog {
         star_res.on_hover_text(tooltip)
     }
 
-    /// The name over the description, centred as a block on the row and cut off before `right`.
-    fn draw_item_text(
-        ui: &Ui,
-        theme: &Theme,
-        rect: Rect,
-        right: f32,
-        indicator: &IndicatorInfo,
-        text: Color32,
-        secondary: Color32,
-    ) {
-        let painter = ui.painter();
+    /// The name centred on the row and cut off before `right`.
+    fn draw_item_text(ui: &Ui, rect: Rect, right: f32, indicator: &IndicatorInfo, text: Color32) {
         let x = rect.min.x + DESIGN_TOKENS.sizing.button_md;
-        let line = |s: &str, size: f32, color: Color32| {
-            let mut job =
-                LayoutJob::simple_singleline(s.to_owned(), FontId::proportional(size), color);
-            job.wrap = TextWrapping::truncate_at_width(right - x);
-            painter.layout_job(job)
-        };
-        let name = line(&indicator.name, theme.text.body, text);
-        let desc = line(&indicator.desc, theme.text.small, secondary);
-        let gap = theme.spacing.xs;
-        let top = rect.center().y - (name.size().y + gap + desc.size().y) / 2.0;
-        let desc_top = top + name.size().y + gap;
-        painter.galley(Pos2::new(x, top), name, text);
-        painter.galley(Pos2::new(x, desc_top), desc, secondary);
+        let mut job =
+            LayoutJob::simple_singleline(indicator.name.clone(), FontId::proportional(14.0), text);
+        job.wrap = TextWrapping::truncate_at_width(right - x);
+        let name = ui.painter().layout_job(job);
+        let top = rect.center().y - name.size().y / 2.0;
+        ui.painter().galley(Pos2::new(x, top), name, text);
     }
 
     /// Outlined badges, right-aligned inside the row padding. Returns where the row text must end.
@@ -515,6 +526,25 @@ impl IndicatorDialog {
         self.params = Self::defaults(self.edited(&indicator.id));
         self.sel_indicator = Some(indicator.clone());
         self.show_config = true;
+    }
+
+    /// Input caption for a study just created by this dialog; unknown host schemas stay empty.
+    pub fn input_summary(&self, name: &str) -> String {
+        let p = &self.params;
+        match self.edited(name) {
+            "SMA" | "EMA" | "WMA" | "VWMA" | "Donchian" | "Aroon" | "RSI" | "CCI" | "ATR"
+            | "ADX" | "MFI" | "Williams %R" | "ROC" | "Momentum" | "CMF" => p.period.to_string(),
+            "BB" => format!("{} {}", p.period, p.bb_std_dev),
+            "Keltner" => format!("{} {} {}", p.period, p.keltner_atr, p.keltner_multiplier),
+            "MACD" => format!("{} {} {}", p.macd_fast, p.macd_slow, p.macd_signal),
+            "Stochastic" => format!("{} {} {}", p.stoch_k, p.stoch_smooth, p.stoch_d),
+            "SuperTrend" => format!("{} {}", p.period, p.supertrend_multiplier),
+            "Ichimoku" => format!(
+                "{} {} {}",
+                p.ichimoku_tenkan, p.ichimoku_kijun, p.ichimoku_senkou
+            ),
+            _ => String::new(),
+        }
     }
 
     /// Add the selected indicator with its parameters and close the dialog.
@@ -819,9 +849,9 @@ mod tests {
         let theme = Theme::dark();
         let mut dialog = IndicatorDialog::new();
         dialog.open();
-        let mut frame = |height: f32| {
+        let mut frame = |size: Vec2| {
             let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, height))),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                 ..Default::default()
             };
             ctx.run_ui(input, |ui| {
@@ -832,14 +862,14 @@ mod tests {
                 .expect("the dialog is shown")
         };
         for _ in 0..3 {
-            frame(900.0);
+            frame(Vec2::new(1440.0, 900.0));
         }
-        let mut shown = frame(500.0);
+        let mut shown = frame(Vec2::new(600.0, 500.0));
         for _ in 0..3 {
-            shown = frame(500.0);
+            shown = frame(Vec2::new(600.0, 500.0));
         }
         assert!(
-            shown.top() >= 0.0 && shown.bottom() <= 500.0,
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 500.0)).contains_rect(shown),
             "the dialog spans {shown:?} in a 500 px window"
         );
     }

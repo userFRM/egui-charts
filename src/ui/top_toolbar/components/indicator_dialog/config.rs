@@ -66,8 +66,8 @@ impl IndicatorDialogConfig {
 impl Default for IndicatorDialogConfig {
     fn default() -> Self {
         Self {
-            width: 750.0,
-            height: 600.0,
+            width: 840.0,
+            height: 640.0,
             text_color: Color32::TRANSPARENT,
             muted_color: Color32::TRANSPARENT,
             hover_color: Color32::TRANSPARENT,

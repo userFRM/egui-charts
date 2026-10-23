@@ -16,10 +16,13 @@ pub struct Modal {
     min_height: Option<f32>,
     closable: bool,
     dim_background: bool,
+    rounding: Option<f32>,
+    fill: Option<Color32>,
+    top: Option<f32>,
 }
 
 impl Modal {
-    /// Create a new modal with the given title
+    /// Create a new modal with the given title. An empty title leaves the header to the content.
     pub fn new(id: impl std::hash::Hash + std::fmt::Debug, title: impl Into<String>) -> Self {
         Self {
             id: Id::unique(id),
@@ -29,6 +32,9 @@ impl Modal {
             min_height: None,
             closable: true,
             dim_background: true,
+            rounding: None,
+            fill: None,
+            top: None,
         }
     }
 
@@ -58,6 +64,24 @@ impl Modal {
         self
     }
 
+    /// Override the surface fill, leaving the theme's panel fill as the default.
+    pub fn fill(mut self, fill: Color32) -> Self {
+        self.fill = Some(fill);
+        self
+    }
+
+    /// Override the corner radius, leaving the theme's radius as the default.
+    pub fn rounding(mut self, rounding: f32) -> Self {
+        self.rounding = Some(rounding);
+        self
+    }
+
+    /// Keep a fixed top edge while content height changes; clamp it inside the window.
+    pub fn top(mut self, top: f32) -> Self {
+        self.top = Some(top);
+        self
+    }
+
     /// Set whether to dim the background
     pub fn dim_background(mut self, dim: bool) -> Self {
         self.dim_background = dim;
@@ -79,12 +103,19 @@ impl Modal {
             return None;
         }
 
-        let frame = dialog_frame(&ctx.global_style());
+        let mut frame = dialog_frame(&ctx.global_style());
+        if let Some(fill) = self.fill {
+            frame = frame.fill(fill);
+        }
+        if let Some(rounding) = self.rounding {
+            frame = frame.corner_radius(rounding);
+        }
         let screen_height = ctx.content_rect().height() - 2.0 * DESIGN_TOKENS.spacing.xxxl;
         let height = self.height.map(|height| height.min(screen_height));
         let size = egui::vec2(
             self.width
-                .unwrap_or(DESIGN_TOKENS.sizing.dialog.default_width),
+                .unwrap_or(DESIGN_TOKENS.sizing.dialog.default_width)
+                .min((ctx.content_rect().width() - 48.0).max(0.0)),
             height
                 .or(self.min_height)
                 .unwrap_or(DESIGN_TOKENS.sizing.dialog.default_min_height),
@@ -96,19 +127,32 @@ impl Modal {
         };
 
         let mut close_clicked = false;
-        let response = egui::Modal::new(self.id)
-            .frame(frame)
-            .backdrop_color(backdrop)
-            .show(ctx, |ui| {
-                ui.set_width(size.x);
-                ui.set_min_height(size.y);
-                if height.is_some() {
-                    // The area offers its last size, which filling content would otherwise keep.
-                    ui.set_max_height(size.y);
-                }
+        let mut modal = egui::Modal::new(self.id);
+        if let Some(top) = self.top {
+            let screen = ctx.content_rect();
+            let top = top.clamp(
+                screen.top() + 24.0,
+                (screen.bottom() - height.unwrap_or(0.0) - 24.0).max(screen.top() + 24.0),
+            );
+            modal = modal.area(
+                egui::Area::new(self.id)
+                    .order(egui::Order::Foreground)
+                    .pivot(egui::Align2::CENTER_TOP)
+                    .fixed_pos(egui::pos2(screen.center().x, top)),
+            );
+        }
+        let response = modal.frame(frame).backdrop_color(backdrop).show(ctx, |ui| {
+            ui.set_width(size.x);
+            ui.set_min_height(size.y);
+            if height.is_some() {
+                // The area offers its last size, which filling content would otherwise keep.
+                ui.set_max_height(size.y);
+            }
+            if !self.title.is_empty() {
                 close_clicked = title_row(ui, &self.title, self.closable);
-                add_contents(ui)
-            });
+            }
+            add_contents(ui)
+        });
 
         // `should_close` covers Escape and a click on the backdrop.
         let close_requested = self.closable && (close_clicked || response.should_close());

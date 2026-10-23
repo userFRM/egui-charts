@@ -46,7 +46,7 @@
 //! # ) {
 //! let drawing = Drawing::new(1, DrawingToolType::TrendLine);
 //! // After setting up points and calling update_screen_coords:
-//! let view = ChartView { bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
+//! let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
 //! drawing.render(painter, price_rect, &view);
 //! # }
 //! ```
@@ -83,6 +83,8 @@ use std::rc::Rc;
 /// the regression trend, the position and forecast results and the bars
 /// pattern are computed from these bars.
 pub struct ChartView<'a> {
+    /// Instrument metadata supplied by the host or feed, for tick and pip measurements.
+    pub instrument: Option<&'a crate::model::Instrument>,
     /// The series that drawing anchors index into.
     pub bars: &'a [Bar],
     /// [`ChartState::revision`](crate::model::ChartState::revision) of `bars`.
@@ -199,6 +201,7 @@ impl Drawing {
             T::TrendAngle
             | T::InfoLine
             | T::Arrow
+            | T::ArrowMarker
             | T::Polyline
             | T::Path
             | T::Brush
@@ -230,12 +233,17 @@ impl Drawing {
             T::Measure | T::DateAndPriceRange | T::GannBox => {
                 boxed(&mut outline, Rect::from_two_pos(first, second));
             }
-            T::GannSquare | T::GannFixed => {
+            T::GannFixed => boxed(&mut outline, Rect::from_two_pos(first, second)),
+            T::GannSquare => {
                 let corner = gann::gann_square_corner(first, second);
                 boxed(&mut outline, Rect::from_two_pos(first, corner));
             }
             T::RotatedRect => {
-                outline.lines = edges(&corners(Rect::from_two_pos(first, second)));
+                let corners = self.rotated_rect_corners()?;
+                outline.lines = edges(&corners);
+                if filled {
+                    outline.areas.push(corners.to_vec());
+                }
             }
             T::Ray => outline.lines = vec![[first, lines::ray_end(first, second, rect)]],
             T::ExtendedLine => outline.lines = vec![lines::extended_line(first, second, rect)],
@@ -278,10 +286,7 @@ impl Drawing {
                 }
             }
             T::Arc => {
-                outline.lines = lines::arc_points(first, second)
-                    .windows(2)
-                    .map(|w| [w[0], w[1]])
-                    .collect();
+                outline.lines = self.arc_path().windows(2).map(|w| [w[0], w[1]]).collect();
             }
             T::Curve => {
                 let [p0, p1, p2] = self.curve_controls()?;
@@ -291,15 +296,19 @@ impl Drawing {
                     .collect();
             }
             T::DoubleCurve => {
-                outline.lines = shapes::double_curve_points(first, second)
+                outline.lines = self
+                    .double_curve_points()?
                     .windows(2)
                     .map(|w| [w[0], w[1]])
                     .collect();
             }
             T::Pitchfork | T::SchiffPitchfork | T::ModifiedSchiffPitchfork | T::InsidePitchfork => {
                 outline.lines = self.pitchfork_lines(rect)?;
+                outline.areas = self.pitchfork_bands(rect);
             }
-            T::Pitchfan => outline.lines = pitchfork::pitchfan_lines(first, second, rect),
+            T::Pitchfan => {
+                outline.lines = pitchfork::pitchfan_lines(first, second, *p.get(2)?, rect)
+            }
             T::GannFan => outline.lines = gann::gann_fan_lines(first, second, rect),
             T::FlatTopBottom => {
                 let &third = p.get(2)?;
@@ -308,6 +317,7 @@ impl Drawing {
                     .areas
                     .push(channels::flat_top_bottom_fill(first, second, third));
             }
+            T::ParallelChannel => return self.parallel_channel_outline(rect),
             T::DisjointChannel => {
                 let &third = p.get(2)?;
                 let [_, fourth] = channels::disjoint_second_line(first, second, third);
@@ -317,6 +327,7 @@ impl Drawing {
             T::FibonacciTimeZones => {
                 outline.lines = fibonacci::time_zone_lines(first, second, rect)
             }
+            T::FibonacciWedge => return self.fibonacci_wedge_outline(),
             T::FibonacciSpeedFan => outline.lines = fibonacci::speed_fan_lines(first, second, rect),
             _ => return None,
         }
@@ -353,9 +364,7 @@ impl Drawing {
             }
             DrawingToolType::VerticalLine => self.render_vertical_line(painter, rect, stroke),
             DrawingToolType::CrossLine => self.render_cross_line(painter, rect, color, stroke),
-            DrawingToolType::TrendAngle => {
-                self.render_trend_angle(painter, color, stroke, view.bars)
-            }
+            DrawingToolType::TrendAngle => self.render_trend_angle(painter, color, stroke, view),
             DrawingToolType::InfoLine => self.render_info_line(painter, view),
 
             // Shapes (8 tools)
@@ -395,7 +404,7 @@ impl Drawing {
             DrawingToolType::InsidePitchfork => self.render_inside_pitchfork(painter, rect),
 
             // Channels (4 tools)
-            DrawingToolType::ParallelChannel => self.render_parallel_channel(painter),
+            DrawingToolType::ParallelChannel => self.render_parallel_channel(painter, rect),
             DrawingToolType::RegressionTrend => self.render_regression_trend(painter, view),
             DrawingToolType::FlatTopBottom => self.render_flat_top_bottom(painter, view),
             DrawingToolType::DisjointChannel => self.render_disjoint_channel(painter, view),
@@ -426,7 +435,7 @@ impl Drawing {
             DrawingToolType::Forecast => self.render_forecast(painter, view),
             DrawingToolType::BarsPattern => self.render_bars_pattern(painter, view),
             DrawingToolType::GhostFeed => self.render_ghost_feed(painter),
-            DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect),
+            DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect, view),
 
             // Volume (3 tools)
             DrawingToolType::AnchoredVWAP => self.render_anchored_vwap(painter, view),
@@ -439,7 +448,7 @@ impl Drawing {
 
             // Measurers (4 tools)
             DrawingToolType::Measure => self.render_measure(painter, view),
-            DrawingToolType::PriceRange => self.render_price_range(painter, rect),
+            DrawingToolType::PriceRange => self.render_price_range(painter, rect, view),
             DrawingToolType::DateRange => self.render_date_range(painter, rect, view),
             DrawingToolType::DateAndPriceRange => self.render_date_and_price_range(painter, view),
 

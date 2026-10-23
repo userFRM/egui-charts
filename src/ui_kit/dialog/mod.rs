@@ -7,54 +7,22 @@
 //! The kit `Modal`, `ConfirmDialog` and `PromptDialog` use the same frame, header and footer
 //! over a scrim.
 
-use egui::emath::GuiRounding as _;
 use egui::{
     Align, Align2, Context, Frame, Layout, RichText, Style, Ui, UiBuilder, UiStackInfo, Vec2,
 };
 
 use crate::icons::icons;
-use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 
 /// Marks the content Ui of a fixed-height [`DialogFrame`].
 const FIXED_HEIGHT_TAG: &str = "egui_charts::dialog_frame::fixed_height";
 
-/// The dialog surface: the theme's window fill, border, radius and shadow, padded 16 px.
+/// The dialog surface: the theme's panel fill, window border, radius and shadow, padded 16 px.
 pub(crate) fn dialog_frame(style: &Style) -> Frame {
-    Frame::window(style).inner_margin(DESIGN_TOKENS.spacing.xxl)
-}
-
-/// The height of the heading row, which egui gives a window's title and its buttons.
-fn heading_row_height(ctx: &Context) -> f32 {
-    // Resolve the font first: `fonts_mut` holds the context's lock, which `global_style` takes too.
-    let font = egui::TextStyle::Heading.resolve(&ctx.global_style());
-    ctx.fonts_mut(|f| f.row_height(&font))
-}
-
-/// The size to give an `egui::Window` that has a title bar and `frame` so that its content gets
-/// `content`.
-///
-/// egui sizes a window from outside, frame and title bar included. The title bar is a heading row
-/// inside the frame's inner margin, above a line as wide as the frame's stroke; the title text's
-/// row is rounded to whole pixels and the buttons beside it are not.
-pub(crate) fn titled_window_size(ctx: &Context, frame: &Frame, content: Vec2) -> Vec2 {
-    let row = heading_row_height(ctx);
-    let row = row.max(row.round_to_pixels(ctx.pixels_per_point()));
-    let title_bar = row + frame.inner_margin.sum().y + frame.stroke.width;
-    content + frame.total_margin().sum() + Vec2::new(0.0, title_bar)
-}
-
-/// The title of an `egui::Window` with a close button, centred over the whole title bar.
-///
-/// egui centres a title in the space left of the close button, which it sizes to the heading
-/// row height; a blank atom of that size on the left balances it.
-pub(crate) fn centred_title<'a>(ctx: &Context, title: &'a str) -> egui::Atoms<'a> {
-    let blank = egui::Atom {
-        size: Some(Vec2::splat(heading_row_height(ctx))),
-        ..Default::default()
-    };
-    egui::Atoms::new((blank, title))
+    Frame::window(style)
+        .fill(style.visuals.panel_fill)
+        .inner_margin(DESIGN_TOKENS.spacing.xxl)
 }
 
 /// A centered dialog window with standard styling.
@@ -163,7 +131,7 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
     let row = Vec2::new(ui.available_width(), ButtonSize::MD.pixels());
     let close = ui
         .allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
-            ui.label(RichText::new(title).strong().size(typography::LG));
+            ui.label(RichText::new(title).strong().size(20.0));
             closable
                 && ui
                     .with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -325,35 +293,5 @@ mod tests {
         );
         let inner_bottom = second.0.bottom() - DESIGN_TOKENS.spacing.xxl;
         assert!((second.1.top() + ButtonSize::MD.pixels() - inner_bottom).abs() <= 1.5);
-    }
-
-    #[test]
-    fn a_titled_window_gives_its_content_the_requested_size() {
-        let ctx = Context::default();
-        crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::default());
-        let content = Vec2::new(300.0, 200.0);
-        let mut available = Vec2::ZERO;
-        for _ in 0..2 {
-            let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    Vec2::new(1000.0, 800.0),
-                )),
-                ..Default::default()
-            };
-            ctx.run_ui(input, |ui| {
-                let ctx = ui.ctx();
-                let frame = Frame::window(&ctx.global_style());
-                egui::Window::new(centred_title(ctx, "Titled"))
-                    .open(&mut true)
-                    .collapsible(false)
-                    .resizable(false)
-                    .fixed_size(titled_window_size(ctx, &frame, content))
-                    .frame(frame)
-                    .show(ctx, |ui| available = ui.available_size());
-            })
-            .drop_without_applying_deltas();
-        }
-        assert_eq!(available, content);
     }
 }

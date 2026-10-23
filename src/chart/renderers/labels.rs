@@ -508,6 +508,7 @@ mod tests {
         let ctx = Context::default();
         // The last bar closes at 197, a few pixels below the 200 tick.
         let mut chart = chart(&[100.0], &[200.0, 197.0]);
+        chart.config.show_volume = false;
         chart.config_mut().show_symbol_last_val = false;
         price_axis(&ctx, &mut chart, None);
         let (reference, tags) = price_axis(&ctx, &mut chart, None);

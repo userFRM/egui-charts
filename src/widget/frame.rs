@@ -314,11 +314,25 @@ impl Chart {
         // own response goes back to the caller; the gesture handlers see a hover-only one.
         let shown = response.clone();
         let axis_corner = Rect::from_min_max(
-            Pos2::new(chart_rect.right(), time_axis_top),
-            Pos2::new(rect.right(), time_axis_top + 28.0),
+            Pos2::new(
+                if self.config.show_right_axis {
+                    chart_rect.right()
+                } else {
+                    rect.left()
+                },
+                time_axis_top,
+            ),
+            Pos2::new(
+                if self.config.show_right_axis {
+                    rect.right()
+                } else {
+                    chart_rect.left()
+                },
+                time_axis_top + 28.0,
+            ),
         );
         let axis_interaction = cfg!(feature = "icons")
-            && self.config.show_right_axis
+            && (self.config.show_right_axis || self.config.show_left_axis)
             && ui.input(|input| {
                 (input.pointer.any_down() || input.pointer.any_released())
                     && input
@@ -361,8 +375,8 @@ impl Chart {
 
         // Define axis rects
         let price_axis_rect = Rect::from_min_max(
-            Pos2::new(chart_rect.max.x, chart_rect.min.y),
-            Pos2::new(rect.max.x, chart_rect.max.y),
+            Pos2::new(axis_corner.left(), chart_rect.top()),
+            Pos2::new(axis_corner.right(), chart_rect.bottom()),
         );
         let time_axis_rect = shared_time_axis.unwrap_or_else(|| {
             Rect::from_min_max(
@@ -830,6 +844,12 @@ impl Chart {
         // The axis labels go at these depths, painted once the crosshair's tags are placed
         let price_labels = painter.add(egui::Shape::Noop);
 
+        let axis_edge = if self.config.show_right_axis {
+            rect.max.x
+        } else {
+            price_rect.left()
+        };
+        let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
         let mut tags: Vec<_> = self
             .price_lines
             .iter()
@@ -840,33 +860,68 @@ impl Chart {
                     &price_map,
                     line,
                     price_rect.min.x,
-                    self.config.show_right_axis,
-                    rect.max.x,
+                    show_price_axis,
+                    axis_edge,
                 )
             })
             .collect();
 
-        // Last price line & label, from the newest bar even when it is scrolled out of view
-        let last_price_tag = if self.config.show_symbol_last_val
+        if (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
             && let Some(last) = self.state.data().bars.last()
+            && let Some(index) = self
+                .state
+                .data()
+                .bars
+                .partition_point(|bar| bar.time.date_naive() < last.time.date_naive())
+                .checked_sub(1)
+            && let Some(previous) = self.state.data().bars.get(index)
         {
+            let line = PriceLine::new(previous.close, ui.active_theme().ui.text_secondary)
+                .with_style(crate::model::LineStyle::Dotted)
+                .with_axis_label(self.config.show_symbol_prev_close)
+                .with_width(if self.config.show_prev_close_line {
+                    1.0
+                } else {
+                    0.0
+                });
+            tags.push(rendering::render_price_line(
+                &painter,
+                price_rect,
+                &price_map,
+                &line,
+                price_rect.left(),
+                show_price_axis,
+                axis_edge,
+            ));
+        }
+
+        // Last price line & label, from the newest bar even when it is scrolled out of view
+        let last_price_tag = if let Some(last) = self.state.data().bars.last() {
             let color = if last.close >= last.open {
                 self.config.bullish_color
             } else {
                 self.config.bearish_color
             };
             let line = PriceLine::new(last.close, color)
-                .with_width(DESIGN_TOKENS.stroke.hairline)
-                .with_style(crate::model::LineStyle::Dotted)
-                .with_axis_label(self.config.show_right_axis);
-            let countdown = self.quote.as_ref().and_then(|quote| {
-                let duration = self.timeframe?.duration_ms() / 1000;
-                let elapsed = quote.ts.signed_duration_since(last.time).num_seconds();
-                (elapsed >= 0 && elapsed < duration).then(|| {
-                    let remaining = duration - elapsed;
-                    format!("{:02}:{:02}", remaining / 60, remaining % 60)
+                .with_width(if self.config.show_price_line {
+                    DESIGN_TOKENS.stroke.hairline
+                } else {
+                    0.0
                 })
-            });
+                .with_style(crate::model::LineStyle::Dotted)
+                .with_axis_label(show_price_axis && self.config.show_symbol_last_val);
+            let countdown = self
+                .quote
+                .as_ref()
+                .filter(|_| self.config.show_countdown)
+                .and_then(|quote| {
+                    let duration = self.timeframe?.duration_ms() / 1000;
+                    let elapsed = quote.ts.signed_duration_since(last.time).num_seconds();
+                    (elapsed >= 0 && elapsed < duration).then(|| {
+                        let remaining = duration - elapsed;
+                        format!("{:02}:{:02}", remaining / 60, remaining % 60)
+                    })
+                });
             let quote_tags = rendering::axes::render_quote_tags_with_countdown(
                 &painter,
                 price_rect,
@@ -874,9 +929,9 @@ impl Chart {
                 &line,
                 self.session_quote
                     .as_ref()
-                    .filter(|_| self.config.show_right_axis)
+                    .filter(|_| show_price_axis)
                     .map(|quote| (quote, egui::Color32::from_rgb(251, 142, 1))),
-                (show_volume && self.config.show_right_axis).then_some((
+                (show_volume && show_price_axis).then_some((
                     last.volume,
                     if last.is_bullish() {
                         ui.active_theme().chart.volume_up().to_opaque()
@@ -884,7 +939,7 @@ impl Chart {
                         ui.active_theme().chart.volume_down().to_opaque()
                     },
                 )),
-                rect.max.x,
+                axis_edge,
                 countdown.as_deref(),
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
@@ -1039,7 +1094,7 @@ impl Chart {
                     &coords,
                     &crosshair_options,
                     time_axis_top,
-                    rect.max.x,
+                    axis_edge,
                     last_price_tag,
                     formatter.as_ref(),
                     bar_seconds,
@@ -1124,7 +1179,7 @@ impl Chart {
                             &coords,
                             &self.chart_options.crosshair,
                             time_axis_top,
-                            rect.max.x,
+                            axis_edge,
                             last_price_tag,
                             formatter.as_ref(),
                             bar_seconds,
@@ -1136,7 +1191,7 @@ impl Chart {
 
         self.axis_hover = hover_pos.zip(crosshair_tags[0]);
         #[cfg(feature = "icons")]
-        if self.config.show_right_axis {
+        if show_price_axis {
             if let Some((pos, tag)) = self.axis_hover {
                 let price = if self.chart_options.crosshair.mode
                     == crate::config::CrosshairMode::Magnet
@@ -1169,7 +1224,7 @@ impl Chart {
             self.event_click = Some(id);
         }
 
-        if self.config.show_ohlc_info {
+        {
             let visible_data = self.state.visible_data();
             let selected = hover_pos
                 .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
@@ -1190,7 +1245,17 @@ impl Chart {
                 legend.instrument = self.instrument();
                 legend.badge = self.legend_badge.clone();
                 legend.statuses = &statuses;
-                legend.quote = self.quote.as_ref();
+                legend.quote = self.quote.as_ref().filter(|_| self.config.show_quote_boxes);
+                legend.show_title = self.config.show_symbol_labels;
+                legend.title_as_description = self.config.title_as_description;
+                legend.show_ohlc = self.config.show_ohlc_info;
+                legend.show_change = self.config.show_ohlc_change;
+                legend.show_change_percent = self.config.show_ohlc_change_percent;
+                legend.show_indicator_titles = self.config.show_indicator_labels;
+                legend.show_indicator_inputs = self.config.show_indicator_inputs;
+                legend.show_indicator_values = self.config.show_indicator_last_val;
+                let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
+                legend.study_inputs = &inputs;
                 legend.previous_close = selected
                     .checked_sub(1)
                     .and_then(|index| self.state.shown().get(index))
@@ -1201,7 +1266,8 @@ impl Chart {
                 } else {
                     &[]
                 };
-                legend.show_volume = show_volume;
+                legend.show_volume =
+                    self.chart_type.supports_volume() && self.config.show_legend_volume;
                 if let Some(action) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(ui, price_rect, &colors)
@@ -1217,6 +1283,15 @@ impl Chart {
         tags.extend([last_price_tag, crosshair_tags[0], crosshair_tags[1]]);
         if self.config.show_right_axis {
             rendering::render_price_labels(&price_ctx, &price_map, &colors, &tags, price_labels);
+        } else if self.config.show_left_axis {
+            renderers::render_price_labels_at_pos(
+                &price_ctx,
+                &price_map,
+                &colors,
+                crate::scales::PriceScaleId::Left,
+                &tags,
+                price_labels,
+            );
         }
         if self.config.show_time_labels {
             let axis_context_rect =
@@ -1329,6 +1404,232 @@ mod tests {
                     cells < legend,
                     "width {width}, pane {pane}: cells cover legend"
                 );
+            }
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn status_visibility_reaches_the_chart_legend() {
+        use crate::model::{Instrument, Level1Quote};
+        for (description, hidden) in [
+            (true, 0),
+            (false, 0),
+            (true, 1),
+            (true, 2),
+            (true, 3),
+            (true, 4),
+            (true, 5),
+            (true, 6),
+            (true, 7),
+            (true, 8),
+            (true, 9),
+            (true, 10),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.set_instrument(Some(
+                Instrument::new("TICKER").with_description("Instrument description"),
+            ));
+            let bar = chart.state.data().bars.last().unwrap();
+            chart.set_quote(Some(Level1Quote {
+                symbol: "TICKER".into(),
+                ts: bar.time,
+                bid: 109.0,
+                ask: 111.0,
+                bid_size: 1.0,
+                ask_size: 1.0,
+            }));
+            let study = chart.add_indicator(Box::new(crate::studies::SMA::new(1)));
+            chart.set_indicator_inputs(study, "1 close");
+            let oscillator = chart.add_indicator(Box::new(crate::studies::RSI::new(2)));
+            chart.set_indicator_inputs(oscillator, "2 close");
+            let config = chart.config_mut();
+            config.title_as_description = description;
+            config.show_volume = hidden != 10;
+            config.show_symbol_labels = hidden != 1;
+            config.show_quote_boxes = hidden != 2;
+            config.show_ohlc_info = hidden != 3;
+            config.show_ohlc_change = hidden != 4;
+            config.show_ohlc_change_percent = hidden != 9;
+            config.show_legend_volume = hidden != 5;
+            config.show_indicator_labels = hidden != 6;
+            config.show_indicator_inputs = hidden != 7;
+            config.show_indicator_last_val = hidden != 8;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let texts: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) if text.pos.x < chart.last_rendered_price_rect.right() => {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            for (text, flag) in [
+                ("SELL", 2),
+                ("BUY", 2),
+                ("SMA", 6),
+                ("1 close", 7),
+                ("110.00", 8),
+                ("O 100.00", 3),
+                ("Vol 1", 5),
+            ] {
+                assert_eq!(
+                    texts.contains(&text),
+                    hidden != flag,
+                    "{text}: hidden={hidden} {texts:?}"
+                );
+            }
+            assert_eq!(
+                texts.iter().any(|text| text.contains("RSI")),
+                hidden != 6,
+                "{texts:?}"
+            );
+            assert_eq!(
+                texts.iter().any(|text| text.contains("2 close")),
+                hidden != 7,
+                "{texts:?}"
+            );
+            let title = if description {
+                "Instrument description"
+            } else {
+                "TICKER"
+            };
+            assert_eq!(
+                texts.iter().any(|text| text.starts_with(title)),
+                hidden != 1,
+                "{texts:?}"
+            );
+            assert_eq!(
+                chart.last_rendered_volume_rect.is_positive(),
+                hidden != 10,
+                "legend visibility and histogram visibility are independent"
+            );
+        }
+    }
+
+    #[test]
+    fn price_labels_and_lines_are_independent_on_either_axis() {
+        use crate::model::{Level1Quote, Timeframe};
+        for left in [false, true] {
+            for (label, line, countdown) in [
+                (true, true, true),
+                (true, false, false),
+                (false, true, false),
+                (false, false, false),
+            ] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[100.0], &[110.0, 120.0]);
+                chart.set_timeframe(Timeframe::Min1);
+                chart.config.show_right_axis = !left;
+                chart.config.show_left_axis = left;
+                chart.config.show_volume = false;
+                chart.config.show_symbol_labels = false;
+                chart.config.show_ohlc_info = false;
+                chart.config.show_ohlc_change = false;
+                chart.config.show_ohlc_change_percent = false;
+                chart.config.show_symbol_last_val = label;
+                chart.config.show_price_line = line;
+                chart.config.show_symbol_prev_close = label;
+                chart.config.show_prev_close_line = line;
+                chart.config.show_countdown = countdown;
+                let bar = chart.state.data().bars.last().unwrap();
+                chart.set_quote(Some(Level1Quote {
+                    symbol: "TEST".into(),
+                    ts: bar.time + chrono::Duration::seconds(30),
+                    bid: 119.0,
+                    ask: 121.0,
+                    bid_size: 1.0,
+                    ask_size: 1.0,
+                }));
+                chart.config.show_quote_boxes = false;
+                chart.set_session_quote(Some(crate::model::quote::SessionQuote::new(
+                    115.0, "EXTENDED",
+                )));
+                chart.set_price_lines(
+                    crate::chart::series::SeriesId::MAIN,
+                    vec![crate::model::PriceLine::new(115.0, egui::Color32::GOLD)],
+                );
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let plot = chart.last_rendered_price_rect;
+                let custom_tag = painted
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Rect(tag) if tag.fill == egui::Color32::GOLD => Some(tag.rect),
+                        _ => None,
+                    })
+                    .expect("custom price line retains its axis label");
+                assert!(if left {
+                    custom_tag.right() <= plot.left()
+                } else {
+                    custom_tag.left() >= plot.right()
+                });
+                let session_text = painted
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text().starts_with("EXTENDED") => {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .expect("session tag");
+                assert!(
+                    session_text.pos.x >= plot.left() - chart.config.left_axis_width,
+                    "session label is clipped on the left"
+                );
+                let close_y = chart.last_price_map.price_to_y(120.0);
+                let prev_y = chart.last_price_map.price_to_y(110.0);
+                let price_tags: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Rect(rect)
+                            if rect.fill == chart.config.bullish_color
+                                && (rect.rect.center().y - close_y).abs() < 1.0
+                                && rect.rect.width() > 20.0 =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(!price_tags.is_empty(), label, "{left} {label} {line}");
+                for tag in price_tags {
+                    assert!(if left {
+                        tag.right() <= plot.left()
+                    } else {
+                        tag.left() >= plot.right()
+                    });
+                }
+                for (y, color) in [
+                    (close_y, chart.config.bullish_color),
+                    (
+                        prev_y,
+                        crate::theme::ThemeExt::active_theme(&ctx).ui.text_secondary,
+                    ),
+                ] {
+                    let has_line = painted.iter().any(|shape| match shape {
+                        Shape::LineSegment { points, stroke } => {
+                            stroke.color == color
+                                && (points[0].y - y).abs() < 0.01
+                                && (points[1].y - y).abs() < 0.01
+                        }
+                        Shape::Mesh(mesh) => {
+                            mesh.vertices.len() > 8
+                                && mesh.vertices.iter().all(|vertex| {
+                                    vertex.color == color && (vertex.pos.y - y).abs() <= 1.5
+                                })
+                        }
+                        _ => false,
+                    });
+                    assert_eq!(
+                        has_line, line,
+                        "line at {y}: left={left} label={label} line={line}"
+                    );
+                }
+                assert_eq!(painted.iter().any(|shape| matches!(shape, Shape::Text(text) if text.galley.text().contains("00:30"))), countdown);
             }
         }
     }

@@ -5,7 +5,7 @@ use super::fuzzy::{FuzzyMatch, fuzzy_match};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Context, Key, Order, Rect, RichText, ScrollArea, Sense, TextEdit, Vec2};
+use egui::{Color32, Context, Key, Rect, RichText, ScrollArea, Sense, TextEdit, Vec2};
 
 /// Command palette widget for quick command access
 pub struct CommandPalette {
@@ -144,147 +144,55 @@ impl CommandPalette {
             return executed_command;
         }
 
-        // Render the modal
-        let screen_rect = ctx.content_rect();
-        let modal_width = DESIGN_TOKENS
-            .sizing
-            .command_palette
-            .width
-            .min(screen_rect.width() - DESIGN_TOKENS.sizing.command_palette.margin_x);
-        let modal_max_height = DESIGN_TOKENS
-            .sizing
-            .command_palette
-            .height
-            .min(screen_rect.height() - DESIGN_TOKENS.sizing.command_palette.margin_y);
-
-        // Modal window
-        egui::Area::new(egui::Id::unique("command_palette"))
-            .order(Order::Foreground)
-            .anchor(
-                egui::Align2::CENTER_TOP,
-                Vec2::new(0.0, DESIGN_TOKENS.sizing.command_palette.margin_y),
-            )
-            .show(ctx, |ui| {
-                // The scrim goes in the palette's own layer before its frame, so it dims only
-                // what lies below the palette.
-                ui.ctx().layer_painter(ui.layer_id()).rect_filled(
-                    screen_rect,
-                    0.0,
-                    DESIGN_TOKENS.semantic.modal.overlay_bg,
-                );
-                egui::Frame::new()
-                    .fill(ui.visuals().window_fill)
-                    .stroke(ui.visuals().window_stroke)
-                    .corner_radius(ui.visuals().window_corner_radius)
-                    .shadow(ui.visuals().window_shadow)
-                    .show(ui, |ui| {
-                        ui.set_width(modal_width);
-                        ui.set_max_height(modal_max_height);
-
-                        // Search input
-                        ui.add_space(DESIGN_TOKENS.spacing.md);
-                        ui.horizontal(|ui| {
-                            ui.add_space(DESIGN_TOKENS.spacing.md);
-
-                            // Search icon
-                            let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
-                            ui.add(
-                                icons::QUICK_SEARCH.as_image_tinted(
-                                    Vec2::splat(DESIGN_TOKENS.sizing.icon_md),
-                                    tint,
-                                ),
-                            );
-                            ui.add_space(DESIGN_TOKENS.spacing.sm);
-
-                            // Search input
-                            let response = ui.add(
-                                TextEdit::singleline(&mut self.search_query)
-                                    .hint_text("Search commands...")
-                                    // No background, with egui's default text margin.
-                                    .frame(
-                                        egui::Frame::new()
-                                            .inner_margin(egui::Margin::symmetric(4, 2)),
-                                    )
-                                    .desired_width(
-                                        modal_width
-                                            - DESIGN_TOKENS.sizing.command_palette.input_padding,
-                                    )
-                                    .font(egui::TextStyle::Body),
-                            );
-
-                            // Auto-focus the input
-                            response.request_focus();
-
-                            // Update filter when query changes
-                            if response.changed() {
-                                self.update_filter();
-                            }
-
-                            ui.add_space(DESIGN_TOKENS.spacing.md);
-                        });
-
-                        ui.add_space(DESIGN_TOKENS.spacing.sm);
-                        ui.separator();
-
-                        // Initial filter if empty
-                        if self.filtered.is_empty() && self.search_query.is_empty() {
-                            self.update_filter();
-                        }
-
-                        // Results list
-                        if self.filtered.is_empty() {
-                            ui.add_space(DESIGN_TOKENS.spacing.xl);
-                            ui.centered_and_justified(|ui| {
-                                ui.label(
-                                    RichText::new("No commands found")
-                                        .color(ui.visuals().weak_text_color()),
-                                );
-                            });
-                            ui.add_space(DESIGN_TOKENS.spacing.xl);
-                        } else {
-                            ScrollArea::vertical()
-                                .max_height(
-                                    modal_max_height
-                                        - DESIGN_TOKENS.sizing.command_palette.scroll_padding,
-                                )
-                                .show(ui, |ui| {
-                                    ui.add_space(DESIGN_TOKENS.spacing.xs);
-
-                                    for (list_idx, (cmd_idx, _)) in self.filtered.iter().enumerate()
-                                    {
-                                        let cmd = &self.commands[*cmd_idx];
-                                        if command_row(ui, cmd, list_idx == self.selected_index)
-                                            .clicked()
-                                        {
-                                            executed_command = Some(cmd.id.clone());
-                                        }
-                                    }
-
-                                    ui.add_space(DESIGN_TOKENS.spacing.xs);
-                                });
-                        }
+        crate::ui_kit::modal::Modal::new("command_palette", "Search actions")
+            .width(480.0)
+            .height(680.0)
+            .rounding(8.0)
+            .dim_background(false)
+            .show(ctx, open, |ui| {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.add(
+                        icons::QUICK_SEARCH
+                            .as_image_tinted(Vec2::splat(20.0), ui.visuals().text_color()),
+                    );
+                    let response = ui.add(
+                        TextEdit::singleline(&mut self.search_query)
+                            .hint_text("Search actions")
+                            .frame(egui::Frame::NONE)
+                            .desired_width(ui.available_width())
+                            .font(egui::FontId::proportional(14.0)),
+                    );
+                    response.request_focus();
+                    if response.changed() {
+                        self.update_filter();
+                    }
+                });
+                ui.separator();
+                ui.add_space(12.0);
+                if self.filtered.is_empty() && self.search_query.is_empty() {
+                    self.update_filter();
+                }
+                if self.filtered.is_empty() {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(RichText::new("No matching actions").size(14.0));
                     });
+                } else {
+                    ScrollArea::vertical()
+                        .max_height(ui.available_height())
+                        .show(ui, |ui| {
+                            for (list_idx, (cmd_idx, _)) in self.filtered.iter().enumerate() {
+                                let cmd = &self.commands[*cmd_idx];
+                                if command_row(ui, cmd, list_idx == self.selected_index).clicked() {
+                                    executed_command = Some(cmd.id.clone());
+                                }
+                            }
+                        });
+                }
             });
 
-        // Close on click outside
-        if ctx.input(|i| i.pointer.any_pressed()) {
-            let pointer_pos = ctx.input(|i| i.pointer.interact_pos());
-            if let Some(pos) = pointer_pos {
-                let modal_rect = Rect::from_center_size(
-                    egui::pos2(
-                        screen_rect.center().x,
-                        DESIGN_TOKENS.sizing.command_palette.margin_y + modal_max_height / 2.0,
-                    ),
-                    Vec2::new(modal_width, modal_max_height),
-                );
-                if !modal_rect.contains(pos) {
-                    *open = false;
-                    self.clear();
-                }
-            }
-        }
-
-        if executed_command.is_some() {
+        if executed_command.is_some() || !*open {
             *open = false;
             self.clear();
         }
@@ -351,7 +259,7 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
         egui::Align2::LEFT_CENTER
     };
     let text_pos = egui::pos2(text_x, rect.center().y);
-    let body = egui::FontId::proportional(theme.text.body);
+    let body = egui::FontId::proportional(14.0);
     painter.text(text_pos, label_align, &cmd.label, body, text);
     if let Some(description) = &cmd.description {
         painter.text(

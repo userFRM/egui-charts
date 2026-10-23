@@ -29,6 +29,10 @@ pub struct Symbol {
     pub display_name: String,
     /// Whether this symbol is actively subscribed to a data feed.
     pub active: bool,
+    /// Exchange or venue supplied by the host; empty when unknown.
+    pub exchange: String,
+    /// Instrument category supplied by the host.
+    pub symbol_type: Option<super::SymbolType>,
 }
 
 impl Symbol {
@@ -38,6 +42,15 @@ impl Symbol {
             name: name.into(),
             display_name: display_name.into(),
             active: true,
+            exchange: String::new(),
+            symbol_type: None,
         }
+    }
+
+    /// Set the exchange and category used in symbol chooser rows.
+    pub fn with_market(mut self, exchange: impl Into<String>, kind: super::SymbolType) -> Self {
+        self.exchange = exchange.into();
+        self.symbol_type = Some(kind);
+        self
     }
 }

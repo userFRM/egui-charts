@@ -634,6 +634,7 @@ mod tests {
             ("inverted", &inverted),
         ] {
             let view = ChartView {
+                instrument: None,
                 bars: &bars,
                 revision: 0,
                 bar_to_x: &|x| x,
@@ -720,6 +721,7 @@ mod tests {
     fn span_profile_follows_the_forming_bar() {
         let check = |bars: &[Bar], case: &str| {
             let view = ChartView {
+                instrument: None,
                 bars,
                 revision: 0,
                 bar_to_x: &|x| x,

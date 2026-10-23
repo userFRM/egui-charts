@@ -681,11 +681,17 @@ mod tests {
     }
 
     /// Drags the price axis down by 100 points in `steps` frames and returns the resulting range.
-    fn drag_price_axis(steps: usize) -> (f64, f64) {
+    fn drag_price_axis(steps: usize, left: bool) -> (f64, f64) {
         let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+        chart.config.show_left_axis = left;
+        chart.config.show_right_axis = !left;
         drag_down(
             &mut chart,
-            |rect| Pos2::new(rect.max.x + 10.0, rect.center().y),
+            if left {
+                |rect| Pos2::new(rect.left() - 10.0, rect.center().y)
+            } else {
+                |rect| Pos2::new(rect.right() + 10.0, rect.center().y)
+            },
             steps,
         );
         let range = chart.state.price_scale().range();
@@ -770,14 +776,16 @@ mod tests {
     /// Zoom speed must not depend on how many frames a drag spans.
     #[test]
     fn price_axis_drag_zoom_is_frame_independent() {
-        let (one, ten) = (drag_price_axis(1), drag_price_axis(10));
-        let span = one.1 - one.0;
-        // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
-        assert!(span > 18.0, "1 frame: {one:?}");
-        assert!(
-            (one.0 - ten.0).abs() < span * 1e-9 && (one.1 - ten.1).abs() < span * 1e-9,
-            "1 frame: {one:?}, 10 frames: {ten:?}"
-        );
+        for left in [false, true] {
+            let (one, ten) = (drag_price_axis(1, left), drag_price_axis(10, left));
+            let span = one.1 - one.0;
+            // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
+            assert!(span > 18.0, "1 frame: {one:?}");
+            assert!(
+                (one.0 - ten.0).abs() < span * 1e-9 && (one.1 - ten.1).abs() < span * 1e-9,
+                "1 frame: {one:?}, 10 frames: {ten:?}"
+            );
+        }
     }
 
     /// With auto-scale off, the prices follow a drag on the chart: 100 points down moves the

@@ -36,6 +36,16 @@ impl Default for CandleColorConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatusLineOptions {
     pub show_symbol: bool,
+    /// Display the description instead of the ticker.
+    pub title_as_description: bool,
+    /// Display current bid and ask controls.
+    pub show_quote_boxes: bool,
+    /// Display study names.
+    pub show_indicator_titles: bool,
+    /// Display host-supplied study inputs.
+    pub show_indicator_inputs: bool,
+    /// Display historical study output values.
+    pub show_indicator_values: bool,
     pub show_ohlc: bool,
     pub show_change: bool,
     pub show_change_percent: bool,
@@ -46,6 +56,11 @@ impl Default for StatusLineOptions {
     fn default() -> Self {
         Self {
             show_symbol: true,
+            title_as_description: true,
+            show_quote_boxes: true,
+            show_indicator_titles: true,
+            show_indicator_inputs: true,
+            show_indicator_values: true,
             show_ohlc: true,
             show_change: true,
             show_change_percent: true,
@@ -212,6 +227,12 @@ pub struct ScalesAndLinesSettings {
     pub log_scale: bool,
     pub percentage_scale: bool,
     pub invert_scale: bool,
+    /// Show the price scale on the left instead of the right.
+    pub price_scale_left: bool,
+    /// Display the current close tag independently of its line.
+    pub show_last_price_label: bool,
+    /// Display the previous session close tag independently of its line.
+    pub show_prev_close_label: bool,
     pub show_price_line: bool,
     pub show_countdown: bool,
     pub show_bid_ask: bool,
@@ -226,8 +247,11 @@ impl Default for ScalesAndLinesSettings {
             log_scale: false,
             percentage_scale: false,
             invert_scale: false,
+            price_scale_left: false,
+            show_last_price_label: true,
+            show_prev_close_label: false,
             show_price_line: true,
-            show_countdown: false,
+            show_countdown: true,
             show_bid_ask: false,
             show_high_low: false,
             show_prev_close: false,

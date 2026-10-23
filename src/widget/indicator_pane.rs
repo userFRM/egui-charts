@@ -78,6 +78,12 @@ pub struct IndicatorPaneConfig {
     pub zones: Vec<(f64, Color32, &'static str)>,
     /// Show legend
     pub show_legend: bool,
+    /// Show the study name in its legend.
+    pub show_name: bool,
+    /// Host-supplied input caption; empty omits it.
+    pub inputs: String,
+    /// Show the study output values in its legend.
+    pub show_values: bool,
     /// Show grid
     pub show_grid: bool,
 }
@@ -90,6 +96,9 @@ impl Default for IndicatorPaneConfig {
             show_zones: false,
             zones: Vec::new(),
             show_legend: true,
+            show_name: true,
+            inputs: String::new(),
+            show_values: true,
             show_grid: true,
         }
     }
@@ -108,6 +117,9 @@ impl IndicatorPaneConfig {
                 (30.0, DESIGN_TOKENS.semantic.extended.bullish, "Oversold"),
             ],
             show_legend: true,
+            show_name: true,
+            inputs: String::new(),
+            show_values: true,
             show_grid: true,
         }
     }
@@ -120,6 +132,9 @@ impl IndicatorPaneConfig {
             show_zones: true,
             zones: vec![(0.0, DESIGN_TOKENS.semantic.extended.chart_text, "Zero Line")],
             show_legend: true,
+            show_name: true,
+            inputs: String::new(),
+            show_values: true,
             show_grid: true,
         }
     }
@@ -135,6 +150,9 @@ impl IndicatorPaneConfig {
                 (20.0, DESIGN_TOKENS.semantic.extended.bullish, "Oversold"),
             ],
             show_legend: true,
+            show_name: true,
+            inputs: String::new(),
+            show_values: true,
             show_grid: true,
         }
     }
@@ -926,9 +944,16 @@ impl IndicatorPane {
     /// the pane's top-left.
     fn legend_text(&self, indicator: &dyn Indicator) -> String {
         let values = indicator.values();
-        let mut legend_parts = vec![indicator.name().to_string()];
-
-        if let Some(last_value) = values.last() {
+        let mut legend_parts = Vec::new();
+        if self.config.show_name {
+            legend_parts.push(indicator.name().to_string());
+        }
+        if !self.config.inputs.is_empty() {
+            legend_parts.push(self.config.inputs.clone());
+        }
+        if self.config.show_values
+            && let Some(last_value) = values.last()
+        {
             match last_value {
                 IndicatorValue::Single(v) => {
                     legend_parts.push(format!("{v:.2}"));

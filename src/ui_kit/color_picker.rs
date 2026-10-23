@@ -236,7 +236,12 @@ impl<'a> ColorPicker<'a> {
         let visuals = ui.style().visuals.clone();
         let bg_color = visuals.faint_bg_color;
 
-        let btn_size = Vec2::splat(DESIGN_TOKENS.sizing.button_md);
+        let btn_size = Vec2::splat(
+            ui.spacing()
+                .interact_size
+                .y
+                .max(DESIGN_TOKENS.sizing.button_md),
+        );
         let (btn_rect, btn_res) = ui.allocate_exact_size(btn_size, Sense::click());
         btn_res.widget_info(|| {
             WidgetInfo::labeled(Role::ColorWell, ui.is_enabled(), hex(self.state.sel_color))
@@ -247,17 +252,17 @@ impl<'a> ColorPicker<'a> {
         ui.painter()
             .rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, bg_color);
 
-        // Draw the color on top - alpha will blend naturally over dark bg
+        // Keep the surface border separate from the colour, including white and black.
         ui.painter()
-            .rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, self.state.sel_color);
+            .rect_filled(btn_rect.shrink(4.0), 2.0, self.state.sel_color);
 
-        // The border uses text colours so it stays visible whatever the swatch colour.
+        // The inset leaves the control border visible beside any swatch colour.
         let border_color = if self.state.is_open {
             ui.active_theme().ui.accent
         } else if btn_res.hovered() {
             visuals.widgets.hovered.fg_stroke.color
         } else {
-            visuals.widgets.noninteractive.fg_stroke.color
+            ui.active_theme().ui.border_control
         };
         ui.painter().rect_stroke(
             btn_rect,

@@ -203,6 +203,18 @@ pub struct ChartConfig {
     pub show_time_labels: bool,
     /// Whether to show OHLC info header
     pub show_ohlc_info: bool,
+    /// Use the host description rather than the ticker in the legend title.
+    pub title_as_description: bool,
+    /// Show the current bid and ask controls in the legend.
+    pub show_quote_boxes: bool,
+    /// Show absolute bar change in the legend.
+    pub show_ohlc_change: bool,
+    /// Show percentage bar change in the legend.
+    pub show_ohlc_change_percent: bool,
+    /// Show volume in the legend independently of the histogram.
+    pub show_legend_volume: bool,
+    /// Show host-supplied study inputs in the legend.
+    pub show_indicator_inputs: bool,
     /// Whether to show right price axis
     pub show_right_axis: bool,
     /// Whether to show left price axis
@@ -219,6 +231,10 @@ pub struct ChartConfig {
     pub show_symbol_labels: bool,
     /// Whether to show last price value
     pub show_symbol_last_val: bool,
+    /// Draw a line at the latest close independently of its tag.
+    pub show_price_line: bool,
+    /// Draw a line at the preceding session close independently of its tag.
+    pub show_prev_close_line: bool,
     /// Whether to show previous close value line
     pub show_symbol_prev_close: bool,
     /// Whether to show indicator name labels
@@ -336,6 +352,12 @@ impl Default for ChartConfig {
             padding: 0.0,
             show_time_labels: true,
             show_ohlc_info: true,
+            title_as_description: true,
+            show_quote_boxes: true,
+            show_ohlc_change: true,
+            show_ohlc_change_percent: true,
+            show_legend_volume: true,
+            show_indicator_inputs: true,
             show_right_axis: true,
             show_left_axis: false,
             right_axis_width: 70.0,
@@ -344,10 +366,12 @@ impl Default for ChartConfig {
             left_axis_scale_mode: PriceScaleMode::Normal,
             show_symbol_labels: true,
             show_symbol_last_val: true,
+            show_price_line: true,
+            show_prev_close_line: false,
             show_symbol_prev_close: false,
             show_indicator_labels: true,
             show_indicator_last_val: true,
-            show_countdown: false,
+            show_countdown: true,
             show_realtime_btn: true,
             realtime_button_pos: RealtimeButtonPos::TopCenter,
             realtime_button_text: None,

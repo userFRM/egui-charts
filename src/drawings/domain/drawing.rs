@@ -9,8 +9,8 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, LineStyle, PositionSize,
-    RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
+    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig, LineStyle,
+    PitchforkConfig, PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -106,6 +106,16 @@ pub struct Drawing {
     /// Band width of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
 
+    /// Price and time divisions of Gann boxes and squares.
+    #[serde(default)]
+    pub gann: Option<GannConfig>,
+    /// Whether a parallel channel draws its dashed halfway line.
+    #[serde(default)]
+    pub channel_midline: bool,
+    /// Level lines and band fill of the pitchfork tools.
+    #[serde(default)]
+    pub pitchfork: Option<PitchforkConfig>,
+
     // === Z-Order (rendering layer) ===
     /// Z-order for rendering priority (higher = drawn on top)
     pub z_order: i32,
@@ -143,6 +153,9 @@ impl Drawing {
             fib_config: None,
             volume_profile: None,
             regression_trend: None,
+            pitchfork: None,
+            channel_midline: false,
+            gann: None,
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
@@ -185,7 +198,7 @@ impl Drawing {
     }
 
     /// The Fibonacci config in use and the price of each of its visible levels, for a retracement
-    /// or an extension with both anchors placed.
+    /// or an extension projected from its third anchor (the first anchor for legacy two-point drawings).
     pub(crate) fn fib_levels(&self) -> Option<(FibonacciConfig, Vec<f64>)> {
         let extension = match self.tool_type {
             DrawingToolType::FibonacciRetracement => false,
@@ -202,8 +215,16 @@ impl Drawing {
                 FibonacciConfig::default()
             }
         });
+        let offset = if extension {
+            self.chart_points
+                .get(2)
+                .map_or(0.0, |origin| origin.price - start.price)
+        } else {
+            0.0
+        };
         let prices = config
             .level_prices(start.price, end.price, extension)
+            .map(|price| price + offset)
             .collect();
         Some((config, prices))
     }
