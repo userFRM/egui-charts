@@ -14,8 +14,8 @@ pub mod overlays;
 pub use super::renderers::{render_price_labels, render_time_labels, render_tooltip_with_options};
 pub use axes::render_last_price_line;
 pub use candles::{
-    BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, JapaneseChartSettings,
-    TradingColors, VolumeSettings, render_chart_type,
+    BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
+    render_chart_type,
 };
 pub(crate) use dashed_line::{draw_dashed_line, finite_clip};
 pub use grid::{render_grid, render_vertical_grid};

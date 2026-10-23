@@ -39,8 +39,8 @@ use crate::chart::selection::SelectionState;
 use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::{Datafeed, FeedState};
 use crate::drawings::DrawingManager;
-use crate::model::ChartType;
 use crate::model::{BarClock, BarData, ChartState, Timeframe};
+use crate::model::{ChartType, ChartTypeParams};
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::IndicatorRegistry;
 use crate::theme::Theme;
@@ -94,8 +94,7 @@ impl Chart {
             price_axis_drag: None,
             pending_start_idx: None,
             chart_type: ChartType::Candles,
-            renko_brick_size: 1.0,
-            kagi_reversal_amount: 1.0,
+            chart_type_params: ChartTypeParams::default(),
             tracking_mode_active: false,
             mouse_in_chart: false,
             feed: FeedState {
@@ -254,9 +253,8 @@ impl Chart {
 
     /// Sets the chart type (Candles, Bars, Line, Area, Renko, Kagi).
     ///
-    /// Takes effect on the next rendered frame. For Renko/Kagi charts, also
-    /// set the brick/reversal size with [`Chart::set_renko_brick_size`] or
-    /// [`Chart::set_kagi_reversal_amount`].
+    /// Takes effect on the next rendered frame. Price-based chart types take their
+    /// sizes from [`Chart::set_chart_type_params`].
     pub fn set_chart_type(&mut self, chart_type: ChartType) {
         self.chart_type = chart_type;
     }
@@ -295,30 +293,19 @@ impl Chart {
         self.chart_type
     }
 
-    /// Sets the Renko brick size in price units.
+    /// Sets the parameters of the price-based chart types (Renko, Kagi, Range, Point and Figure,
+    /// Line Break) and of the baseline.
     ///
-    /// Each Renko brick represents a fixed price movement of this size.
-    /// Only affects rendering when the chart type is [`ChartType::Renko`].
-    pub fn set_renko_brick_size(&mut self, brick_size: f64) {
-        self.renko_brick_size = brick_size;
+    /// Sizes are in price units and are used as given;
+    /// `RenkoConfig::from_atr(chart.bars(SeriesId::MAIN), 14, 1.0).brick_size` gives an ATR-based
+    /// brick. A size the chart cannot use is reported on the chart.
+    pub fn set_chart_type_params(&mut self, params: ChartTypeParams) {
+        self.chart_type_params = params;
     }
 
-    /// Returns the current Renko brick size in price units.
-    pub fn renko_brick_size(&self) -> f64 {
-        self.renko_brick_size
-    }
-
-    /// Sets the Kagi reversal amount in price units.
-    ///
-    /// A new Kagi line segment is drawn when price reverses by at least this
-    /// amount. Only affects rendering when the chart type is [`ChartType::Kagi`].
-    pub fn set_kagi_reversal_amount(&mut self, reversal_amount: f64) {
-        self.kagi_reversal_amount = reversal_amount;
-    }
-
-    /// Returns the current Kagi reversal amount in price units.
-    pub fn kagi_reversal_amount(&self) -> f64 {
-        self.kagi_reversal_amount
+    /// Returns the parameters of the price-based chart types and of the baseline.
+    pub fn chart_type_params(&self) -> &ChartTypeParams {
+        &self.chart_type_params
     }
 
     /// Calculates how many bars fit in the given pixel width at the current bar spacing.

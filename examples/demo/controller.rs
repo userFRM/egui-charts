@@ -10,7 +10,7 @@ use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
 use egui_charts::chart::series::SeriesSettings;
-use egui_charts::model::{Bar, ChartType, Timeframe};
+use egui_charts::model::{Bar, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
@@ -278,7 +278,22 @@ impl DemoApp {
     fn regenerate_bars(&mut self, count: usize, tf: Timeframe) {
         self.bars = generate_sample_bars(&self.state.symbol, count, tf);
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
+        self.size_price_based_charts();
         self.update_symbol_header();
+    }
+
+    /// The sizes of the price-based charts are in price units: take them from the bars on show.
+    fn size_price_based_charts(&mut self) {
+        let chart = &mut self.chart;
+        let size = RenkoConfig::from_atr(chart.bars(SeriesId::MAIN), 14, 0.5).brick_size;
+        if size > 0.0 && size.is_finite() {
+            let mut params = chart.chart_type_params().clone();
+            params.renko_brick_size = size;
+            params.kagi_reversal = size;
+            params.range_size = size;
+            params.pnf_box_size = size;
+            chart.set_chart_type_params(params);
+        }
     }
 
     fn update_symbol_header(&mut self) {
@@ -651,6 +666,7 @@ impl DemoApp {
                 if let Some(ct) = chart_type_from_name(&name) {
                     self.state.chart_type = ct;
                     self.chart.set_chart_type(ct);
+                    self.size_price_based_charts();
                 }
             }
             TopToolbarAction::IntervalSelected(display) => {

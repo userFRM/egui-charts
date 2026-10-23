@@ -324,35 +324,46 @@ impl fmt::Display for ChartType {
     }
 }
 
-/// Configuration parameters for chart types that require them
-#[derive(Debug, Clone)]
+/// Where the Baseline chart draws its base line.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BaselineLevel {
+    /// A price.
+    Price(f64),
+    /// A share of the price pane height from its bottom, 0 to 100.
+    PercentOfPane(f32),
+}
+
+/// The parameters of the chart types that need them. Sizes are in price units and are used as
+/// given; a size the chart cannot use is reported on the chart instead of being replaced.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChartTypeParams {
-    /// Renko brick size (price units)
+    /// Renko: size of a brick.
     pub renko_brick_size: f64,
-    /// Kagi reversal amount (price units or percentage)
+    /// Kagi: the move against the line that starts a new line.
     pub kagi_reversal: f64,
-    /// Range bar size (price units)
+    /// Range bars: the range of a bar from its low to its high.
     pub range_size: f64,
-    /// Point & Figure box size
+    /// Point and Figure: the size of a box.
     pub pnf_box_size: f64,
-    /// Point & Figure reversal count
+    /// Point and Figure: the number of boxes a move against the column must cover to start a
+    /// new one.
     pub pnf_reversal: u32,
-    /// Line break line count (typically 3)
+    /// Line Break: the number of lines a close must break through to reverse, 1 to 10.
     pub line_break_count: usize,
-    /// Baseline price level
-    pub baseline_price: f64,
+    /// Baseline: where the base line is drawn.
+    pub baseline: BaselineLevel,
 }
 
 impl Default for ChartTypeParams {
     fn default() -> Self {
         Self {
             renko_brick_size: 1.0,
-            kagi_reversal: 4.0,
-            range_size: 10.0,
+            kagi_reversal: 1.0,
+            range_size: 1.0,
             pnf_box_size: 1.0,
             pnf_reversal: 3,
             line_break_count: 3,
-            baseline_price: 0.0, // Will be calculated from data
+            baseline: BaselineLevel::PercentOfPane(50.0),
         }
     }
 }
@@ -363,6 +374,32 @@ impl ChartTypeParams {
         Self {
             renko_brick_size: atr * multiplier,
             ..Default::default()
+        }
+    }
+
+    /// Why `chart_type` cannot be drawn with these parameters, if it cannot.
+    #[cfg(feature = "widget")]
+    pub(crate) fn invalid(&self, chart_type: ChartType) -> Option<&'static str> {
+        let usable = |size: f64| size > 0.0 && size.is_finite();
+        match chart_type {
+            ChartType::Renko if !usable(self.renko_brick_size) => {
+                Some("Renko brick size must be a positive number")
+            }
+            ChartType::Kagi if !usable(self.kagi_reversal) => {
+                Some("Kagi reversal amount must be a positive number")
+            }
+            ChartType::Range if !usable(self.range_size) => {
+                Some("Range size must be a positive number")
+            }
+            ChartType::PointAndFigure if !usable(self.pnf_box_size) || self.pnf_reversal == 0 => {
+                Some(
+                    "Point and Figure box size must be a positive number and the reversal at least 1 box",
+                )
+            }
+            ChartType::LineBreak if !(1..=10).contains(&self.line_break_count) => {
+                Some("Line Break line count must be 1 to 10")
+            }
+            _ => None,
         }
     }
 }

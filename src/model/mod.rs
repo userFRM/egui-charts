@@ -56,7 +56,7 @@ pub use annotations::{Annotation, MarkerType};
 pub(crate) use bar::SpanCache;
 pub(crate) use bar::percent_change;
 pub use bar::{Bar, BarData};
-pub use chart_type::{ChartType, ChartTypeCategory, ChartTypeParams};
+pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
 pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;

@@ -107,8 +107,8 @@ use crate::config::{ChartConfig, ChartOptions};
 use crate::data::FeedState;
 use crate::drawings::DrawingManager;
 use crate::model::ChartState;
-use crate::model::ChartType;
 use crate::model::Timeframe;
+use crate::model::{ChartType, ChartTypeParams};
 use crate::scales::{PriceMap, PriceScale};
 use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
@@ -173,8 +173,8 @@ pub use state::{BoxZoomMode, BoxZoomState, ElasticBounceState, KineticScrollStat
 /// - **Bars** -- OHLC bar chart
 /// - **Line** -- Close-price line chart
 /// - **Area** -- Filled area under the close-price line
-/// - **Renko** -- Fixed-size brick chart (set brick size with [`Chart::set_renko_brick_size`])
-/// - **Kagi** -- Reversal-based chart (set reversal amount with [`Chart::set_kagi_reversal_amount`])
+/// - **Renko** -- Fixed-size brick chart (set brick size with [`Chart::set_chart_type_params`])
+/// - **Kagi** -- Reversal-based chart (set reversal amount with [`Chart::set_chart_type_params`])
 ///
 /// # Interaction Features
 ///
@@ -221,10 +221,8 @@ pub struct Chart {
     pub(crate) pending_start_idx: Option<usize>,
     /// Chart type (candlestick, line, area, bar, Renko, Kagi)
     pub(crate) chart_type: ChartType,
-    /// Renko brick size (for Renko charts)
-    pub(crate) renko_brick_size: f64,
-    /// Kagi reversal amount (for Kagi charts)
-    pub(crate) kagi_reversal_amount: f64,
+    /// Parameters of the price-based chart types and the baseline
+    pub(crate) chart_type_params: ChartTypeParams,
     /// Whether tracking mode is currently active
     pub(crate) tracking_mode_active: bool,
     /// Mouse entered chart area (for tracking mode exit detection)

@@ -555,7 +555,7 @@ impl Chart {
         let render_params = rendering::ChartTypeParams::new(
             rendering::BarDimensions::new(bar_width, self.config.wick_width),
             rendering::VolumeSettings::new(self.config.show_volume, max_volume),
-            rendering::JapaneseChartSettings::new(self.renko_brick_size, self.kagi_reversal_amount),
+            &self.chart_type_params,
             rendering::TradingColors::new(self.config.bullish_color, self.config.bearish_color),
             rendering::CoordMapping::new(chart_rect.min.x),
             self.config.price_source,

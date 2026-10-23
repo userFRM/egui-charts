@@ -22,11 +22,11 @@ pub mod tpo;
 mod volume;
 
 pub use params::{
-    BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, JapaneseChartSettings,
-    TradingColors, VolumeSettings,
+    BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
 };
 
 use crate::model::ChartType;
+use crate::styles::typography;
 
 /// Renders all chart types
 ///
@@ -38,11 +38,22 @@ use crate::model::ChartType;
 pub fn render_chart_type(
     chart_type: ChartType,
     ctx: &CandleDataContext,
-    params: &ChartTypeParams,
+    params: &ChartTypeParams<'_>,
     idx_to_coord: impl Fn(usize, f32) -> f32,
 ) {
     let price_rect = ctx.price_ctx.rect;
     let painter = ctx.price_ctx.painter;
+
+    if let Some(message) = params.type_params.invalid(chart_type) {
+        painter.text(
+            price_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            message,
+            egui::FontId::proportional(typography::LG),
+            ctx.colors.text,
+        );
+        return;
+    }
 
     match chart_type {
         // === Standard OHLC Types ===
@@ -286,7 +297,7 @@ pub fn render_chart_type(
                 ctx.visible_data,
                 ctx.start_idx,
                 params.bar_width(),
-                params.renko_brick_size(),
+                params.type_params.range_size,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
@@ -303,7 +314,7 @@ pub fn render_chart_type(
                 ctx.visible_data,
                 ctx.start_idx,
                 params.bar_width(),
-                params.renko_brick_size(),
+                params.type_params.renko_brick_size,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
@@ -317,7 +328,7 @@ pub fn render_chart_type(
                 price_rect,
                 ctx.visible_data,
                 ctx.start_idx,
-                params.kagi_reversal_amount(),
+                params.type_params.kagi_reversal,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
@@ -332,6 +343,7 @@ pub fn render_chart_type(
                 ctx.visible_data,
                 ctx.start_idx,
                 params.bar_width(),
+                params.type_params.line_break_count,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
@@ -346,7 +358,8 @@ pub fn render_chart_type(
                 ctx.visible_data,
                 ctx.start_idx,
                 params.bar_width(),
-                params.renko_brick_size(),
+                params.type_params.pnf_box_size,
+                params.type_params.pnf_reversal,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
