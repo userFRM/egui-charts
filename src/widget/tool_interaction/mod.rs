@@ -135,7 +135,8 @@ impl Chart {
 #[cfg(test)]
 mod tests {
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType, TimeframeVisibility};
-    use crate::model::Timeframe;
+    use crate::model::{ChartType, Timeframe};
+    use crate::widget::RightClickTarget;
     use crate::widget::test_frames::{chart, frame, shapes};
     use egui::{Color32, Context, Event, Key, Modifiers, PointerButton, Shape};
 
@@ -192,11 +193,15 @@ mod tests {
     }
 
     /// A drawing shown only on the daily interval is neither drawn nor hit once the chart is
-    /// set to another interval.
+    /// set to another interval or a price-based chart type.
     #[test]
-    fn a_drawing_hidden_on_the_chart_interval_is_neither_drawn_nor_hit() {
+    fn a_hidden_drawing_is_neither_drawn_nor_hit() {
         let color = Color32::from_rgb(1, 2, 3);
-        for (interval, shown) in [(Timeframe::Day1, true), (Timeframe::Hour1, false)] {
+        for (interval, kind, shown) in [
+            (Timeframe::Day1, ChartType::Candles, true),
+            (Timeframe::Hour1, ChartType::Candles, false),
+            (Timeframe::Day1, ChartType::Renko, false),
+        ] {
             let (ctx, mut chart) = (Context::default(), chart(&[10.0], &[20.0]));
             chart.set_timeframe(interval);
             let mut line =
@@ -205,12 +210,31 @@ mod tests {
             line.timeframe_visibility = TimeframeVisibility::specific(&["1D"]);
             chart.drawings_mut().drawings.push(line);
 
-            let painted = shapes(&ctx, &mut chart, 0.0, vec![])
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let on_line = chart.drawings().drawings[0].points[0];
+            chart.set_chart_type(kind);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![])
                 .iter()
                 .any(|s| matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color));
-            let on_line = chart.drawings().drawings[0].points[0];
-            let hit = chart.drawings().hit_test(on_line) == Some(1);
-            assert_eq!((painted, hit), (shown, shown), "{interval:?}");
+            frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(on_line)]);
+            for (time, pressed) in [(0.3, true), (0.4, false)] {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    time,
+                    vec![Event::PointerButton {
+                        pos: on_line,
+                        button: PointerButton::Secondary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+            }
+            let hit = matches!(
+                chart.take_right_click(),
+                Some(RightClickTarget::Drawing { drawing_id: 1, .. })
+            );
+            assert_eq!((painted, hit), (shown, shown), "{interval:?} {kind:?}");
         }
     }
 }

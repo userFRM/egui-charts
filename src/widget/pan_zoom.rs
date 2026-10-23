@@ -535,7 +535,7 @@ impl Chart {
                 .indicators()
                 .iter()
                 .zip(&self.study_autoscale)
-                .filter(|(_, autoscale)| **autoscale)
+                .filter(|(_, autoscale)| **autoscale && !self.chart_type.is_time_independent())
                 .map(|(study, _)| study.as_ref()),
         );
         let (a, b) = (transform.to_scale(p), transform.to_scale(q));

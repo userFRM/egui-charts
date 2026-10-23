@@ -292,7 +292,8 @@ impl ChartType {
         )
     }
 
-    /// Whether this chart type is time-independent
+    /// Whether this chart type is time-independent.
+    /// Studies, drawings and markers are kept but not drawn, hit or edited on these types.
     pub fn is_time_independent(&self) -> bool {
         matches!(
             self,

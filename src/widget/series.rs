@@ -333,6 +333,7 @@ mod tests {
     /// profile, the bars alone give 99..111. Relative modes use close 110.
     #[test]
     fn autoscale_includes_only_visible_overlay_values() {
+        use crate::model::ChartType;
         use crate::scales::PriceScaleMode;
         use crate::studies::{CustomIndicator, VolProfileVisible};
         use crate::widget::test_frames::chart;
@@ -351,10 +352,13 @@ mod tests {
             ),
         ] {
             for case in [
-                "single", "multiple", "excluded", "hidden", "pane", "short", "profile",
+                "single", "multiple", "excluded", "hidden", "pane", "short", "profile", "renko",
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
+                if case == "renko" {
+                    chart.set_chart_type(ChartType::Renko);
+                }
                 chart.price_scale_mut().options_mut().mode = mode;
                 frame(&ctx, &mut chart, 0.0, Vec::new());
                 chart.set_visible_bars(20);

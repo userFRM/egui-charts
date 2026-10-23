@@ -270,9 +270,13 @@ impl Chart {
     /// Sets the chart type (Candles, Bars, Line, Area, Renko, Kagi).
     ///
     /// Takes effect on the next rendered frame. Price-based chart types take their
-    /// sizes from [`Chart::set_chart_type_params`].
+    /// sizes from [`Chart::set_chart_type_params`]. A change clears the series and drawing selection.
     pub fn set_chart_type(&mut self, chart_type: ChartType) {
-        self.chart_type = chart_type;
+        if self.chart_type != chart_type {
+            self.selection.deselect();
+            self.drawings.deselect();
+            self.chart_type = chart_type;
+        }
     }
 
     /// Enables tracking mode, which automatically scrolls to keep the latest bar visible.

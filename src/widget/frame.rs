@@ -146,6 +146,9 @@ impl Chart {
     /// applies what it sent; studies are then brought up to date. While bars stream, a study
     /// that does not update incrementally is refreshed at most four times a second.
     ///
+    /// Price-based types keep studies, drawings and markers but do not draw, hit or edit them.
+    /// Studies continue to update and all three appear again on time-based types.
+    ///
     /// Returns an [`egui::Response`] for additional interaction handling.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
         self.pump(ui.ctx());
@@ -161,7 +164,7 @@ impl Chart {
             .indicators()
             .iter()
             .any(|study| !study.is_overlay() && study.is_visible());
-        if has_panes {
+        if has_panes && !self.chart_type.is_time_independent() {
             self.show_with_panes(ui)
         } else {
             self.show_internal(ui)
@@ -329,9 +332,12 @@ impl Chart {
 
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
-        let is_drawing_interaction = self.drawings.active_tool.is_some()
-            || self.drawings.dragging_handle.is_some()
-            || self.drawings.curr_drawing.is_some();
+        let time_based = !self.chart_type.is_time_independent();
+        let show_volume = self.config.show_volume && self.chart_type.supports_volume();
+        let is_drawing_interaction = time_based
+            && (self.drawings.active_tool.is_some()
+                || self.drawings.dragging_handle.is_some()
+                || self.drawings.curr_drawing.is_some());
         let pending_price_zoom = self.handle_mouse_wheel(
             ui,
             &response,
@@ -411,7 +417,7 @@ impl Chart {
         }
 
         // Split chart area into price and volume sections
-        let (price_rect, volume_rect) = if self.config.show_volume {
+        let (price_rect, volume_rect) = if show_volume {
             let split_y =
                 chart_rect.min.y + chart_rect.height() * (1.0 - self.config.volume_height_fraction);
             (
@@ -454,7 +460,7 @@ impl Chart {
                 .indicators()
                 .iter()
                 .zip(&self.study_autoscale)
-                .filter(|(_, autoscale)| **autoscale)
+                .filter(|(_, autoscale)| time_based && **autoscale)
                 .map(|(study, _)| study.as_ref()),
         );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
@@ -607,7 +613,7 @@ impl Chart {
             .feed_link
             .as_ref()
             .and_then(|link| link.bubbles.as_ref())
-            .filter(|_| !self.chart_type.is_time_independent())
+            .filter(|_| time_based)
         {
             let x = |i| idx_to_coord(start_idx + i, chart_rect.min.x);
             bubbles.render(&clipped_painter, visible_data, x, |p| {
@@ -615,10 +621,17 @@ impl Chart {
             });
         }
 
+        // Bar-indexed studies have no position on an element time scale.
+        let hidden_studies = crate::studies::IndicatorRegistry::new();
+        let studies = if time_based {
+            &self.studies
+        } else {
+            &hidden_studies
+        };
         // Draw indicators
         renderers::IndicatorRenderer::render(
             &price_ctx,
-            self.studies.indicators(),
+            studies.indicators(),
             visible_data,
             &price_map,
             &coords,
@@ -632,14 +645,14 @@ impl Chart {
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
         {
-            let volume_coords = if self.config.show_volume {
+            let volume_coords = if show_volume {
                 Some(coords.with_rect(volume_rect))
             } else {
                 None
             };
             let hit = hit_test_main_chart(
                 click_pos,
-                &self.studies,
+                studies,
                 &self.study_ids,
                 &coords,
                 volume_coords.as_ref(),
@@ -666,7 +679,7 @@ impl Chart {
             let price = coords.y_to_price(click_pos.y);
 
             // Drawings sit on top of the series, so they take priority.
-            let drawing_hit = self.drawings.hit_test(click_pos);
+            let drawing_hit = self.drawings.hit_test(click_pos).filter(|_| time_based);
 
             self.right_click = Some(if let Some(drawing_id) = drawing_hit {
                 // Right-clicking a drawing selects it and
@@ -679,14 +692,14 @@ impl Chart {
                     pos: click_pos,
                 }
             } else {
-                let volume_coords = if self.config.show_volume {
+                let volume_coords = if show_volume {
                     Some(coords.with_rect(volume_rect))
                 } else {
                     None
                 };
                 let element_hit = hit_test_main_chart(
                     click_pos,
-                    &self.studies,
+                    studies,
                     &self.study_ids,
                     &coords,
                     volume_coords.as_ref(),
@@ -720,7 +733,7 @@ impl Chart {
         self.render_main_chart_selection(&painter, &coords, visible_data, main_visible_range);
 
         // Render bar marks (Widget API annotations)
-        if !self.marks.is_empty() {
+        if time_based && !self.marks.is_empty() {
             renderers::render_markers(
                 &clipped_price_ctx,
                 &self.marks,
@@ -806,7 +819,7 @@ impl Chart {
         }
 
         // Handle drawing tools
-        {
+        if time_based {
             // Clone/extract values before mutable borrow of self
             let timescale = self.state.time_scale().clone();
 
@@ -831,6 +844,20 @@ impl Chart {
             // Put them back
             self.drawings = drawings;
             self.cursor_modes = cursor_modes;
+        }
+
+        if !time_based
+            && (!self.study_ids.is_empty()
+                || !self.drawings.drawings.is_empty()
+                || !self.marks.is_empty())
+        {
+            painter.text(
+                price_rect.left_bottom() + Vec2::new(8.0, -8.0),
+                egui::Align2::LEFT_BOTTOM,
+                "Studies, drawings and markers are not shown on this chart type",
+                egui::FontId::proportional(typography::SM),
+                self.config.text_color,
+            );
         }
 
         // Render "Jump to Latest" button
