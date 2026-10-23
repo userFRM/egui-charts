@@ -411,8 +411,17 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     visuals.widgets.hovered.bg_fill = ui.btn_bg_hover;
     visuals.widgets.active.bg_fill = ui.btn_bg_active;
     visuals.widgets.open.bg_fill = ui.btn_bg_active;
-    // egui fills the top window's title bar, an open combo box and an open submenu button with it.
-    visuals.widgets.open.weak_bg_fill = ui.btn_bg_hover;
+    // Buttons, combo boxes and headers paint weak fills rather than bg_fill.
+    let widgets = &mut visuals.widgets;
+    for state in [
+        &mut widgets.noninteractive,
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        state.weak_bg_fill = state.bg_fill;
+    }
 
     // Widget borders
     visuals.widgets.noninteractive.bg_stroke =
@@ -424,12 +433,17 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
         egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control);
     visuals.widgets.active.bg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.accent);
 
+    visuals.widgets.open.bg_stroke =
+        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control);
+
     // Text/foreground colors
     visuals.widgets.noninteractive.fg_stroke =
         egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
+
+    visuals.widgets.open.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
 
     // Selection: egui paints selected labels in `selection.stroke`, on top of `bg_fill`, and
     // outlines a focused text input with `selection.stroke`. Dark themes use white on the accent,
@@ -598,7 +612,6 @@ mod tests {
             ("separator", dark.ui.border, [42, 42, 42]),
             ("text", dark.ui.text, [219, 219, 219]),
             ("secondary text", dark.ui.text_secondary, [184, 184, 184]),
-            ("muted text", dark.ui.text_muted, [112, 112, 112]),
             ("disabled text", dark.ui.text_disabled, [87, 87, 87]),
             ("price text", dark.chart.axis_text, [255, 255, 255]),
             (
@@ -661,6 +674,23 @@ mod tests {
                 assert!(contrast(fg, theme.chart.bg) >= 4.5, "{name}: {role}");
             }
             assert_eq!(visuals.widgets.noninteractive.fg_stroke.color, ui.text);
+            for (state, fill) in [
+                (&visuals.widgets.noninteractive, ui.panel_bg),
+                (&visuals.widgets.inactive, ui.panel_bg),
+                (&visuals.widgets.hovered, ui.btn_bg_hover),
+                (&visuals.widgets.active, ui.btn_bg_active),
+                (&visuals.widgets.open, ui.btn_bg_active),
+            ] {
+                assert_eq!(state.weak_bg_fill, fill, "{name}: widget fill");
+            }
+            assert_eq!(visuals.widgets.open.fg_stroke.color, ui.text);
+            let settings = SettingsDialogStyle::from_theme(&theme);
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                crate::ui::timeframe_toolbar::TimeframeBarConfig::from_theme(&theme)
+                    .active_text_color,
+                ui.text
+            );
             let focus_ring = focus_ring_of(&ctx);
             // High contrast holds every text level to 7:1 and outlines to 4.5:1 (WCAG AAA).
             let (text_min, outline_min) = if name == "high-contrast" {
@@ -704,16 +734,54 @@ mod tests {
                 check("on-danger text", ui.danger_text, fill, bg, text_min);
             }
             // Hover must read on a panel, and pressed must sit further from it than hover.
-            let (panel, hovered) = (visuals.panel_fill, visuals.widgets.hovered.bg_fill);
+            let (panel, hovered) = (visuals.panel_fill, visuals.widgets.hovered.weak_bg_fill);
             check("hover fill", hovered, "panels", panel, 1.2);
             let pressed_min = contrast(hovered, panel) + 0.05;
             check(
                 "pressed fill",
-                visuals.widgets.active.bg_fill,
+                visuals.widgets.active.weak_bg_fill,
                 "panels",
                 panel,
                 pressed_min,
             );
+            check(
+                "pressed fill",
+                visuals.widgets.active.weak_bg_fill,
+                "hover fill",
+                hovered,
+                1.2,
+            );
+            check(
+                "pressed text",
+                ui.text,
+                "pressed fill",
+                ui.btn_bg_active,
+                text_min,
+            );
+            check(
+                "active settings text",
+                settings.tab_text_active,
+                "pressed fill",
+                settings.tab_bg_active,
+                text_min,
+            );
+            check(
+                "active settings icon",
+                settings.tab_icon_active,
+                "pressed fill",
+                settings.tab_bg_active,
+                outline_min,
+            );
+            for (role, stroke) in [
+                ("open outline", visuals.widgets.open.bg_stroke),
+                ("settings input", settings.input_border),
+                ("settings hovered input", settings.input_border_hover),
+                ("settings dropdown", settings.dropdown_border),
+                ("settings checkbox", settings.checkbox_border),
+                ("settings secondary button", settings.btn_secondary_border),
+            ] {
+                check(role, stroke.color, "panels", panel, outline_min);
+            }
             // egui outlines a focused text input with the selection stroke.
             check(
                 "focused input outline",
@@ -725,11 +793,12 @@ mod tests {
             for (surface, bg) in [
                 ("panels", visuals.panel_fill),
                 ("windows", visuals.window_fill),
+                ("secondary panels", ui.panel_bg_secondary),
+                ("hover fill", ui.btn_bg_hover),
             ] {
                 check("text", ui.text, surface, bg, text_min);
                 check("label text", visuals.text_color(), surface, bg, text_min);
-                // The dark preset reserves its specified #707070 for supplemental text.
-                if !name.starts_with("dark") {
+                {
                     check("muted text", ui.text_muted, surface, bg, text_min);
                     check(
                         "weak text",
@@ -739,6 +808,7 @@ mod tests {
                         text_min,
                     );
                 }
+                check("success text", ui.success, surface, bg, text_min);
                 check("error text", visuals.error_fg_color, surface, bg, text_min);
                 check("warning text", visuals.warn_fg_color, surface, bg, text_min);
                 check(
