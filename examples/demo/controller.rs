@@ -1443,6 +1443,7 @@ impl DemoApp {
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| {
+                self.timeframe_toolbar.state.date_picker_open = self.date_picker.is_open;
                 let action = self.timeframe_toolbar.show(ui);
                 self.handle_timeframe_toolbar(action);
                 self.show_timeframe_menus(ui.ctx());

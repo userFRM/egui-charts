@@ -50,15 +50,15 @@ impl DateRange {
     /// Get tooltip desc for the range
     pub fn tooltip(&self) -> &'static str {
         match self {
-            DateRange::Day1 => "1 day in 1 minute intervals",
-            DateRange::Day5 => "5 days in 5 minutes intervals",
-            DateRange::Month1 => "1 month in 30 minutes intervals",
-            DateRange::Month3 => "3 months in 1 hour intervals",
-            DateRange::Month6 => "6 months in 2 hours intervals",
-            DateRange::YTD => "Year to day in 1 day intervals",
-            DateRange::Year1 => "1 year in 1 day intervals",
-            DateRange::Year5 => "5 years in 1 week intervals",
-            DateRange::All => "All data in 1 month intervals",
+            DateRange::Day1 => "1 day in 1-minute intervals",
+            DateRange::Day5 => "5 days in 5-minute intervals",
+            DateRange::Month1 => "1 month in 30-minute intervals",
+            DateRange::Month3 => "3 months in 1-hour intervals",
+            DateRange::Month6 => "6 months in 2-hour intervals",
+            DateRange::YTD => "Year to date in 1-day intervals",
+            DateRange::Year1 => "1 year in 1-day intervals",
+            DateRange::Year5 => "5 years in 1-week intervals",
+            DateRange::All => "All data in 1-month intervals",
         }
     }
 
