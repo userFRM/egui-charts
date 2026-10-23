@@ -172,14 +172,14 @@ impl Default for ChartColors {
 }
 
 impl ChartColors {
-    /// Rising volume bars: #26c6da at `volume_alpha`.
+    /// Rising volume bars: #26a69a at `volume_alpha`.
     pub fn volume_up(&self) -> Color32 {
-        Color32::from_rgba_unmultiplied(38, 198, 218, self.volume_alpha)
+        Color32::from_rgba_unmultiplied(38, 166, 154, self.volume_alpha)
     }
 
-    /// Falling volume bars: #ec407a at `volume_alpha`.
+    /// Falling volume bars: #ef5350 at `volume_alpha`.
     pub fn volume_down(&self) -> Color32 {
-        Color32::from_rgba_unmultiplied(236, 64, 122, self.volume_alpha)
+        Color32::from_rgba_unmultiplied(239, 83, 80, self.volume_alpha)
     }
 }
 
@@ -592,10 +592,10 @@ mod tests {
     fn text_and_control_outlines_are_readable_in_every_preset() {
         let dark = Theme::dark();
         for (role, actual, expected) in [
-            ("panel", dark.ui.panel_bg, [15, 15, 15]),
-            ("plot", dark.chart.bg, [15, 15, 15]),
-            ("axis", dark.chart.bg_axis, [15, 15, 15]),
-            ("separator", dark.ui.border, [74, 74, 74]),
+            ("panel", dark.ui.panel_bg, [0, 0, 0]),
+            ("plot", dark.chart.bg, [0, 0, 0]),
+            ("axis", dark.chart.bg_axis, [0, 0, 0]),
+            ("separator", dark.ui.border, [42, 42, 42]),
             ("text", dark.ui.text, [219, 219, 219]),
             ("secondary text", dark.ui.text_secondary, [184, 184, 184]),
             ("muted text", dark.ui.text_muted, [112, 112, 112]),

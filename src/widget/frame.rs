@@ -1192,7 +1192,7 @@ mod tests {
         use crate::theme::{Theme, apply_to_egui};
         use egui::Color32;
 
-        // At 60% opacity the premultiplied colours are (23,119,131) and (142,38,73).
+        // Volume uses muted teal and salmon independently of candle colours.
         // A second opacity proves that painting reads the applied theme on every frame.
         for (mut theme, alpha, candle_width, kind, height_fraction, inset, expected) in [
             (
@@ -1202,7 +1202,7 @@ mod tests {
                 ChartType::Candles,
                 0.12,
                 12.0,
-                [[23, 119, 131, 153], [142, 38, 73, 153]],
+                [[23, 100, 92, 153], [143, 50, 48, 153]],
             ),
             (
                 Theme::dark(),
@@ -1211,7 +1211,7 @@ mod tests {
                 ChartType::Heikin,
                 0.12,
                 12.0,
-                [[8, 40, 44, 51], [47, 13, 24, 51]],
+                [[8, 33, 31, 51], [48, 17, 16, 51]],
             ),
             (
                 Theme::light(),
@@ -1220,7 +1220,7 @@ mod tests {
                 ChartType::Line,
                 0.25,
                 0.0,
-                [[19, 99, 109, 128], [118, 32, 61, 128]],
+                [[19, 83, 77, 128], [120, 42, 40, 128]],
             ),
             (
                 Theme::high_contrast(),
@@ -1229,7 +1229,7 @@ mod tests {
                 ChartType::Area,
                 0.4,
                 6.0,
-                [[19, 99, 109, 128], [118, 32, 61, 128]],
+                [[19, 83, 77, 128], [120, 42, 40, 128]],
             ),
         ] {
             let ctx = egui::Context::default();

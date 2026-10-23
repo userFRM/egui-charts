@@ -185,6 +185,8 @@ impl DemoApp {
             theme.apply_to_config(egui_charts::config::ChartConfig::default()),
         )
         .with_chart_options(options);
+        chart.config_mut().volume_baseline_inset = 0.0;
+        chart.config_mut().candle_width = 0.75;
         chart.set_symbol("SAMPLE (synthetic)");
         chart.set_timeframe(timeframe);
 

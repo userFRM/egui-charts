@@ -4,7 +4,6 @@
 use super::dashed_line::draw_dashed_line;
 use crate::chart::renderers::ChartMapping;
 use crate::scales::{PriceMap, PriceMarkGenerator};
-use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
@@ -87,14 +86,10 @@ pub fn render_vertical_grid(
     }
 }
 
-/// Paints a grid line at the caller's price or time mark, dotted in light themes.
+/// Paints a grid line at the caller's price or time mark, dotted in both themes.
 pub(crate) fn render_grid_line(painter: &Painter, start: Pos2, end: Pos2, mut stroke: Stroke) {
-    if painter.ctx().active_theme().dark {
-        painter.line_segment([start, end], stroke);
-    } else {
-        stroke.width = DESIGN_TOKENS.stroke.hairline;
-        draw_dashed_line(painter, start, end, stroke, 1.0, 3.0);
-    }
+    stroke.width = DESIGN_TOKENS.stroke.hairline;
+    draw_dashed_line(painter, start, end, stroke, 1.0, 3.0);
 }
 
 /// Round to a nice interval (1, 2, 5, 10, 20, 50, 100, etc.)
@@ -137,7 +132,7 @@ mod tests {
     use egui::{Context, LayerId, RawInput, Shape, vec2};
 
     #[test]
-    fn light_grid_is_dotted_in_both_directions_with_the_supplied_colour() {
+    fn grid_is_dotted_in_both_directions_with_the_supplied_colour() {
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 240.0));
         let price = PriceMap::new(
             PriceTransform::default(),
@@ -150,8 +145,8 @@ mod tests {
         for (theme, dotted, scale) in [
             (Theme::light(), true, 1.0),
             (Theme::light(), true, 2.0),
-            (Theme::dark(), false, 1.0),
-            (Theme::dark(), false, 2.0),
+            (Theme::dark(), true, 1.0),
+            (Theme::dark(), true, 2.0),
         ] {
             let ctx = Context::default();
             apply_to_egui(&ctx, &theme);

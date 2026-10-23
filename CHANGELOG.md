@@ -77,6 +77,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Volume uses muted teal and salmon at the theme opacity. Dark plot and panel surfaces are black, with dotted grids in both themes. The demo places volume flush above the time axis and opens with candle bodies at 75% of the bar pitch.
+
 - The synthetic demo history keeps neighbouring sessions near the preceding close and puts most volume in a low band with occasional spikes. Session timestamps and adjustment inputs are unchanged.
 
 - Price ticks stay on the supplied decimal precision when zoomed in. Intraday marks survive bars that start between clock boundaries, and daily charts at multi-month zoom use calendar month names and year boundaries. Hover tags remain within narrow viewports.
