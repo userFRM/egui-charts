@@ -559,16 +559,23 @@ mod tests {
             (ExportFormat::Csv, "bars.csv", "Export successful: bars.csv"),
             (ExportFormat::Clipboard, "", "Export successful!"),
         ] {
-            for error in [false, true] {
+            for (theme, width, error) in [
+                (crate::theme::Theme::light(), 800.0, false),
+                (crate::theme::Theme::dark(), 800.0, true),
+                (crate::theme::Theme::light(), 320.0, true),
+                (crate::theme::Theme::dark(), 320.0, false),
+            ] {
                 let ctx = Context::default();
-                let mut dialog = ExportDialog::new().with_formats(&[format]);
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut dialog = ExportDialog::new();
+                dialog.config.format = format;
                 dialog.save_path = format!("  {path}  ");
                 dialog.open();
                 let frame = |dialog: &mut ExportDialog, key: Option<Key>| {
                     let input = egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
-                            egui::vec2(800.0, 600.0),
+                            egui::vec2(width, 600.0),
                         )),
                         events: key
                             .map(|key| egui::Event::Key {
@@ -609,6 +616,7 @@ mod tests {
                 } else {
                     dialog.mark_success();
                 }
+                frame(&mut dialog, None).1.drop_without_applying_deltas();
                 let (response, output) = frame(&mut dialog, None);
                 assert!(matches!(response, ExportResponse::None));
                 let expected = if error {
@@ -619,6 +627,16 @@ mod tests {
                 assert!(output.shapes.iter().any(|shape| {
                     matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == expected)
                 }), "missing result: {expected}");
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        let rect = text.galley.rect.translate(text.pos.to_vec2());
+                        assert!(
+                            rect.left() >= 0.0 && rect.right() <= width,
+                            "text outside {width}px window: {} at {rect:?}",
+                            text.galley.text()
+                        );
+                    }
+                }
                 output.drop_without_applying_deltas();
                 let (response, output) = frame(&mut dialog, Some(Key::Escape));
                 output.drop_without_applying_deltas();

@@ -153,7 +153,7 @@ pub struct DemoApp {
     replay_control: FloatingReplayControl,
 
     // A pending screenshot request the egui backend fulfils next frame.
-    screenshot_requested: bool,
+    screenshot_requested: Option<ScreenshotTarget>,
     // egui's capture callback sends each screenshot here; the next frame delivers it.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
@@ -240,7 +240,7 @@ impl DemoApp {
             next_alert_id: 1,
             replay: None,
             replay_control: FloatingReplayControl::new(),
-            screenshot_requested: false,
+            screenshot_requested: None,
             screenshots: mpsc::channel(),
             notice: None,
         }
@@ -544,10 +544,15 @@ impl DemoApp {
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
         };
-        self.request_screenshot(ctx, target);
+        // Capture the next frame after the dialog and any previous notice are gone.
+        self.export_dialog.close();
+        self.notice = None;
+        self.screenshot_requested = Some(target);
+        ctx.request_repaint();
     }
 
     fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
+        let from_dialog = save_path.is_some();
         let mut out = String::from("time,open,high,low,close,volume\n");
         for b in &self.bars {
             out.push_str(&format!(
@@ -573,11 +578,15 @@ impl DemoApp {
         let result = browser_download(out.as_bytes(), &path);
         match result {
             Ok(()) => {
-                self.export_dialog.mark_success();
+                if from_dialog {
+                    self.export_dialog.mark_success();
+                }
                 self.notice = Some((format!("Export successful: {}", path.display()), 0.0));
             }
             Err(error) => {
-                self.export_dialog.mark_error(error.clone());
+                if from_dialog {
+                    self.export_dialog.mark_error(error.clone());
+                }
                 self.notice = Some((format!("Export failed: {error}"), 0.0));
             }
         }
@@ -594,6 +603,9 @@ impl eframe::App for DemoApp {
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ctx.global_style());
+
+        // Fulfil requests from the previous frame, before a dialog can submit another.
+        self.handle_screenshot(&ctx);
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
@@ -622,9 +634,6 @@ impl eframe::App for DemoApp {
 
         // Global keyboard shortcuts (e.g. the shortcuts help itself).
         self.handle_keyboard(&ctx);
-
-        // Fulfil a pending screenshot request.
-        self.handle_screenshot(&ctx);
 
         // Transient status notice.
         self.show_notice(&ctx);
@@ -685,7 +694,12 @@ impl DemoApp {
             TopToolbarAction::OpenSettings => {
                 self.settings_dialog.open(self.settings_state.clone());
             }
-            TopToolbarAction::TakeScreenshot => self.screenshot_requested = true,
+            TopToolbarAction::TakeScreenshot => {
+                self.export_dialog.close();
+                self.notice = None;
+                self.screenshot_requested = Some(ScreenshotTarget::File(None));
+                ctx.request_repaint();
+            }
             TopToolbarAction::ToggleFullscreen => {
                 let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
@@ -1211,9 +1225,8 @@ impl DemoApp {
     }
 
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
-        if self.screenshot_requested {
-            self.screenshot_requested = false;
-            self.request_screenshot(ctx, ScreenshotTarget::File(None));
+        if let Some(target) = self.screenshot_requested.take() {
+            self.request_screenshot(ctx, target);
         }
 
         // Deliver the screenshots captured since the last frame.
@@ -1221,7 +1234,7 @@ impl DemoApp {
             match target {
                 ScreenshotTarget::Clipboard => {
                     ctx.copy_image((*image).clone());
-                    self.export_dialog.mark_success();
+                    self.notice = Some(("Image sent to clipboard".into(), 0.0));
                 }
                 ScreenshotTarget::File(path) => self.save_screenshot(&image, path),
             }
@@ -1289,11 +1302,9 @@ impl DemoApp {
             });
         match result {
             Ok(()) => {
-                self.export_dialog.mark_success();
                 self.notice = Some((format!("Export successful: {}", path.display()), 0.0));
             }
             Err(error) => {
-                self.export_dialog.mark_error(error.clone());
                 self.notice = Some((format!("Export failed: {error}"), 0.0));
             }
         }
