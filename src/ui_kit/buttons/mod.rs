@@ -119,3 +119,21 @@ pub fn dialog_close_button(ui: &mut Ui) -> Response {
         .tooltip("Close")
         .show(ui)
 }
+
+/// The kit disclosure icon for egui combo boxes.
+pub(crate) fn combo_chevron(
+    ui: &Ui,
+    rect: egui::Rect,
+    visuals: &egui::style::WidgetVisuals,
+    _open: bool,
+) {
+    use egui::emath::GuiRounding;
+    let rect = egui::Rect::from_center_size(
+        rect.center(),
+        egui::Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
+    )
+    .round_to_pixels(ui.pixels_per_point());
+    crate::icons::icons::CHEVRON_DOWN
+        .as_image_tinted(rect.size(), visuals.fg_stroke.color)
+        .paint_at(ui, rect);
+}

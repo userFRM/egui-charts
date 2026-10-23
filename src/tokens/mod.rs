@@ -304,7 +304,7 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
         lg: 8.0,
         xl: 12.0,
         pill: 9999.0,
-        button: 6.0,
+        button: 4.0,
         panel: 6.0,
         dialog: 6.0,
     },

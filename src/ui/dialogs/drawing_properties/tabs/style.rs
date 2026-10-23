@@ -125,7 +125,7 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
                 Stroke::new(DESIGN_TOKENS.stroke.hairline, theme.ui.border_control),
                 StrokeKind::Inside,
             );
-            crate::styles::focus::draw_focus_ring(ui, &response);
+            crate::styles::focus::draw_focus_ring(ui, &response, radius);
             let line = if selected {
                 visuals.selection.stroke.color
             } else {
