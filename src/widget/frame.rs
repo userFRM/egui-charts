@@ -143,8 +143,8 @@ impl Chart {
     /// pane, any other visible study (RSI, MACD) in a pane below it with its
     /// x-axis aligned to the main pane; [`Chart::get_rendered_indicator_panes`]
     /// returns their layout. A chart built with a feed first asks it for what it needs and
-    /// applies what it sent; studies are then brought up to date. While bars stream, a study
-    /// that does not update incrementally is refreshed at most four times a second.
+    /// applies what it sent. Studies are then brought up to date: an incremental study at once,
+    /// and at most one study per frame in full, the one that has waited longest.
     ///
     /// On price-based types the time scale and reported indices count elements, one OHLC bar
     /// per brick, line, column or range bar. Each carries the last contributing bar's time.

@@ -8,6 +8,7 @@ use crate::model::{Bar, BarClock, BarData, Marker, PriceLine};
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
+use web_time::Instant;
 
 impl Chart {
     /// Replaces the bars of `series`, for history or a replay window. Invalid bars (a non-finite
@@ -36,8 +37,6 @@ impl Chart {
         self.drawings
             .shift_bar_indices(f32::NEG_INFINITY, prepended as f32);
         self.bars_changed(before, first_changed);
-        // A replaced series is shown at once, however recently the studies were refreshed.
-        self.last_refresh.fill(f64::NEG_INFINITY);
     }
 
     /// Merges `bar` into the bars of `series` as [`Sink::push_bar`](crate::data::Sink::push_bar)
@@ -145,7 +144,7 @@ impl Chart {
         self.study_ids.push(id);
         self.study_autoscale.push(true);
         self.pending_from.push(None);
-        self.last_refresh.push(f64::NEG_INFINITY);
+        self.next_refresh.push(f64::NEG_INFINITY);
         id
     }
 
@@ -159,7 +158,7 @@ impl Chart {
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
         self.pending_from.remove(at);
-        self.last_refresh.remove(at);
+        self.next_refresh.remove(at);
         if self.selection.selected_id() == Some(ChartElementId::Indicator(id)) {
             self.selection.deselect();
         }
@@ -189,8 +188,10 @@ impl Chart {
 
     /// The chart's studies with their ids, in the order they were added. Their values reflect the
     /// bars as of the last [`show`](Self::show), or of the call to
-    /// [`add_indicator`](Self::add_indicator). While bars stream, a study that does not update
-    /// incrementally can lag them by up to 0.25 s.
+    /// [`add_indicator`](Self::add_indicator). A study that is not updated incrementally can lag
+    /// the bars by its wait between full recomputes, at least 0.25 s; after the bars changed from
+    /// the first one on, as when `set_data` loads other bars or older bars are loaded in front, it
+    /// has no values until it is recomputed.
     pub fn indicators(&self) -> impl Iterator<Item = (SeriesId, &dyn Indicator)> {
         let studies = self.studies.indicators().iter().map(|study| study.as_ref());
         self.study_ids.iter().copied().zip(studies)
@@ -201,31 +202,57 @@ impl Chart {
     pub fn indicator_mut(&mut self, id: SeriesId) -> Option<&mut (dyn Indicator + 'static)> {
         let at = self.study_ids.iter().position(|study| *study == id)?;
         self.pending_from[at] = Some(0);
-        self.last_refresh[at] = f64::NEG_INFINITY;
+        self.next_refresh[at] = f64::NEG_INFINITY;
         Some(self.studies.indicators_mut()[at].as_mut())
     }
 
-    /// Updates every study with a pending change from the first bar it must be updated from, as
-    /// of `now` in seconds. A study that does not update incrementally waits until
-    /// [`REFRESH_INTERVAL`] has passed since its last refresh, unless the series was replaced.
-    /// Returns how long the first waiting study still waits.
+    /// Updates every study with a pending change, as of `now` in seconds. An incremental study
+    /// whose change starts at its last bar or later is updated at once. Any other change
+    /// recomputes the study in full, for at most one study per call: of the studies whose change
+    /// starts at the first bar or whose `next_refresh` has passed, the one whose `next_refresh`
+    /// is earliest. Its next full recompute then waits, from the end of this one,
+    /// the longer of [`REFRESH_INTERVAL`] and four times what this one took. Until its turn, a
+    /// study whose change starts at the first bar has no values, since its values belong to
+    /// other bars. Returns how long until the next waiting study is due, zero if one is due now.
     pub(super) fn refresh_studies(&mut self, now: f64) -> Option<f64> {
         let bars = &self.state.data().bars;
-        let studies = self.studies.indicators_mut().iter_mut();
-        let pending = self.pending_from.iter_mut().zip(&mut self.last_refresh);
-        let mut wait = None::<f64>;
-        for (study, (from, last)) in studies.zip(pending) {
-            let Some(start) = *from else {
+        let studies = self.studies.indicators_mut();
+        let mut due = None::<usize>;
+        for (at, study) in studies.iter_mut().enumerate() {
+            let Some(from) = self.pending_from[at] else {
                 continue;
             };
-            let due = *last + REFRESH_INTERVAL;
-            if study.is_incremental() || now >= due {
-                study.update(bars, start);
-                *from = None;
-                *last = now;
-            } else {
-                wait = Some(wait.map_or(due - now, |wait| wait.min(due - now)));
+            let len = study.values().len();
+            if study.is_incremental() && len > 0 && from + 1 >= len && bars.len() >= len {
+                study.update(bars, from);
+                self.pending_from[at] = None;
+            } else if (from == 0 || now >= self.next_refresh[at])
+                && due.is_none_or(|first| self.next_refresh[at] < self.next_refresh[first])
+            {
+                due = Some(at);
             }
+        }
+        if let Some(at) = due {
+            let started = Instant::now();
+            let from = self.pending_from[at].take().unwrap_or(0);
+            studies[at].update(bars, from);
+            let cost = started.elapsed().as_secs_f64();
+            self.next_refresh[at] = now + cost + REFRESH_INTERVAL.max(4.0 * cost);
+        }
+        let mut wait = None::<f64>;
+        for (at, study) in studies.iter_mut().enumerate() {
+            let Some(from) = self.pending_from[at] else {
+                continue;
+            };
+            let left = if from == 0 {
+                if !study.values().is_empty() {
+                    study.update(&[], 0);
+                }
+                0.0
+            } else {
+                (self.next_refresh[at] - now).max(0.0)
+            };
+            wait = Some(wait.map_or(left, |wait| wait.min(left)));
         }
         wait
     }
@@ -298,8 +325,8 @@ impl Chart {
     }
 }
 
-/// Seconds a study that does not update incrementally waits between two refreshes while bars
-/// stream, so a full recompute costs at most four frames a second.
+/// Least time in seconds between two full recomputes of a study while bars stream; a study
+/// whose recompute took longer than a quarter of it waits four times that instead.
 const REFRESH_INTERVAL: f64 = 0.25;
 
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
@@ -342,6 +369,7 @@ mod tests {
     use chrono::TimeDelta;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
 
     /// Bars span 100..110 and the overlay reaches 120: 10% margins give 98..122. Every line of a
     /// study counts and non-finite values do not; without eligible values, or with a volume
@@ -590,18 +618,24 @@ mod tests {
     }
 
     /// RSI, counting the calls that recompute it.
-    struct Counted(RSI, Arc<AtomicUsize>);
+    struct Counted(RSI, Arc<AtomicUsize>, Duration);
 
     impl Indicator for Counted {
         fn name(&self) -> &str {
             self.0.name()
         }
         fn calculate(&mut self, data: &[Bar]) {
-            self.1.fetch_add(1, Ordering::Relaxed);
+            if !data.is_empty() {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                std::thread::sleep(self.2);
+            }
             self.0.calculate(data);
         }
         fn update(&mut self, data: &[Bar], from: usize) {
-            self.1.fetch_add(1, Ordering::Relaxed);
+            if !data.is_empty() {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                std::thread::sleep(self.2);
+            }
             self.0.update(data, from);
         }
         fn values(&self) -> &[IndicatorValue] {
@@ -620,8 +654,113 @@ mod tests {
             self.0.set_visible(visible);
         }
         fn clone_box(&self) -> Box<dyn Indicator> {
-            Box::new(Counted(self.0.clone(), Arc::clone(&self.1)))
+            Box::new(Counted(self.0.clone(), Arc::clone(&self.1), self.2))
         }
+    }
+
+    /// A replaced series gets one full recompute per frame, even while every wait is still
+    /// running; waiting studies have no stale values and request another frame until the last
+    /// study is current.
+    #[test]
+    fn full_recomputes_run_one_per_frame() {
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..100).map(|i| bar(i * 60, i as f64)).collect(),
+        ));
+        let calls: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+        for counter in &calls {
+            chart.add_indicator(Box::new(Counted(
+                RSI::new(14),
+                counter.clone(),
+                Duration::ZERO,
+            )));
+            counter.store(0, Ordering::Relaxed);
+        }
+        // The second round replaces the bars while the waits of the first are still running.
+        for (round, close) in [(0, 200.0), (1, 300.0)] {
+            for counter in &calls {
+                counter.store(0, Ordering::Relaxed);
+            }
+            chart.set_data(
+                SeriesId::MAIN,
+                (0..100)
+                    .map(|i| bar(i * 60, close + (i * 7 % 13) as f64))
+                    .collect(),
+            );
+            for k in 1..=3 {
+                let now = if round == 0 { k as f64 } else { 3.0 } / 60.0;
+                let wait = chart.refresh_studies(now);
+                for (j, (_, study)) in chart.indicators().enumerate() {
+                    assert_eq!(
+                        calls[j].load(Ordering::Relaxed),
+                        usize::from(j < k),
+                        "round {round}, call {k}, study {j}"
+                    );
+                    assert_eq!(
+                        study.values().is_empty(),
+                        j >= k,
+                        "round {round}, call {k}, study {j}"
+                    );
+                }
+                assert_eq!(wait, if k < 3 { Some(0.0) } else { None });
+            }
+        }
+        let mut fresh = RSI::new(14);
+        fresh.calculate(chart.bars(SeriesId::MAIN));
+        for (_, study) in chart.indicators() {
+            assert_eq!(
+                format!("{:?}", study.values()),
+                format!("{:?}", fresh.values())
+            );
+        }
+    }
+
+    /// The real cost advances the frame clock: re-arming from the frame start would make
+    /// every frame due again when a recompute takes longer than the minimum wait.
+    #[test]
+    fn a_slow_full_recompute_does_not_take_every_frame() {
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..100).map(|i| bar(i * 60, i as f64)).collect(),
+        ));
+        let calls = Arc::new(AtomicUsize::new(0));
+        chart.add_indicator(Box::new(Counted(
+            RSI::new(14),
+            calls.clone(),
+            Duration::from_millis(300),
+        )));
+        calls.store(0, Ordering::Relaxed);
+        let mut time = 0.0;
+        for i in 0..10 {
+            chart.update(SeriesId::MAIN, bar(99 * 60, 50.0 + i as f64));
+            let started = Instant::now();
+            chart.refresh_studies(time);
+            time += 1.0 / 60.0 + started.elapsed().as_secs_f64();
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    /// Bars set every frame, as a replay does: each study is recomputed in turn every 0.25 s.
+    /// Resetting the waits on `set_data` gave the first study every frame and the others none.
+    #[test]
+    fn set_data_every_frame_recomputes_each_study_in_turn() {
+        let mut bars: Vec<Bar> = (0..100).map(|i| bar(i * 60, i as f64)).collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let calls: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+        for counter in &calls {
+            chart.add_indicator(Box::new(Counted(
+                RSI::new(14),
+                counter.clone(),
+                Duration::ZERO,
+            )));
+            counter.store(0, Ordering::Relaxed);
+        }
+        for k in 0..120 {
+            bars.push(bar((100 + k) * 60, 50.0 + k as f64));
+            chart.set_data(SeriesId::MAIN, bars.clone());
+            chart.refresh_studies(k as f64 / 60.0);
+        }
+        // Two seconds of frames at 60 Hz, a wait of 0.25 s: eight recomputes each.
+        let calls: Vec<_> = calls.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+        assert_eq!(calls, [8, 8, 8]);
     }
 
     /// Guards the cost and the freshness of studies while bars stream: a study that does not
@@ -637,7 +776,11 @@ mod tests {
         ));
         let sma = chart.add_indicator(Box::new(SMA::new(5)));
         let calls = Arc::new(AtomicUsize::new(0));
-        let rsi = chart.add_indicator(Box::new(Counted(RSI::new(14), Arc::clone(&calls))));
+        let rsi = chart.add_indicator(Box::new(Counted(
+            RSI::new(14),
+            Arc::clone(&calls),
+            Duration::ZERO,
+        )));
         let values = |chart: &Chart, id| {
             let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
             format!("{:?}", study.values())
