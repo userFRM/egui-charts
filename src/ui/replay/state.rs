@@ -229,6 +229,7 @@ impl ReplayState {
         self.curr_bar = 0;
         self.playback_state = PlaybackState::Paused;
         self.markers.clear();
+        self.sync_finished();
     }
 
     /// Set the bar duration (time between bars at 1x speed)
@@ -317,6 +318,7 @@ impl ReplayState {
         self.curr_bar = 0;
         self.curr_date = self.start_date;
         self.accumulated_time = 0.0;
+        self.sync_finished();
     }
 
     /// Enter replay mode
@@ -325,6 +327,7 @@ impl ReplayState {
             self.playback_state = PlaybackState::Paused;
             self.curr_bar = 0;
             self.curr_date = self.start_date;
+            self.sync_finished();
         }
     }
 
@@ -337,29 +340,33 @@ impl ReplayState {
 
     /// Step forward one bar
     pub fn step_forward(&mut self) {
-        if self.curr_bar < self.total_bars.saturating_sub(1) {
+        if !self.at_end() {
             self.curr_bar += 1;
-        } else {
-            self.playback_state = PlaybackState::Finished;
         }
+        self.sync_finished();
     }
 
     /// Step backward one bar
     pub fn step_backward(&mut self) {
-        if self.curr_bar > 0 {
-            self.curr_bar -= 1;
-            // If we were finished, go back to paused
-            if self.playback_state == PlaybackState::Finished {
-                self.playback_state = PlaybackState::Paused;
-            }
-        }
+        self.curr_bar = self.curr_bar.saturating_sub(1);
+        self.sync_finished();
     }
 
     /// Jump to specific bar
     pub fn jump_to_bar(&mut self, bar: usize) {
         self.curr_bar = bar.min(self.total_bars.saturating_sub(1));
-        if self.at_end() && self.playback_state == PlaybackState::Playing {
+        self.sync_finished();
+    }
+
+    /// Keep an active replay `Finished` exactly when it is on the last bar, however it got there.
+    fn sync_finished(&mut self) {
+        if !self.is_active() {
+            return;
+        }
+        if self.at_end() {
             self.playback_state = PlaybackState::Finished;
+        } else if self.playback_state == PlaybackState::Finished {
+            self.playback_state = PlaybackState::Paused;
         }
     }
 

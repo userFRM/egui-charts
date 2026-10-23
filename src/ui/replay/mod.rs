@@ -403,6 +403,59 @@ mod tests {
     }
 
     #[test]
+    fn playback_state_follows_seeks_and_steps() {
+        use ReplayAction::*;
+        type Setup = fn(&mut ReplayController);
+        let play_to_end: Setup = |c| {
+            c.state.set_bar_duration(0.001);
+            c.handle_action(SetSpeed(100.0));
+            c.handle_action(Play);
+            while c.state.is_playing() {
+                c.update();
+            }
+        };
+        let rows: [(Setup, Vec<ReplayAction>, (usize, PlaybackState)); 6] = [
+            (
+                play_to_end,
+                vec![JumpToPercent(0.3), TogglePlayPause],
+                (29, PlaybackState::Playing),
+            ),
+            (play_to_end, vec![Reset], (0, PlaybackState::Paused)),
+            (|_| {}, vec![JumpToEnd], (99, PlaybackState::Finished)),
+            (
+                |_| {},
+                vec![JumpToPercent(1.0)],
+                (99, PlaybackState::Finished),
+            ),
+            (
+                |_| {},
+                vec![StepForwardN(10)],
+                (99, PlaybackState::Finished),
+            ),
+            (
+                |_| {},
+                vec![JumpToBar(98), StepForward],
+                (99, PlaybackState::Finished),
+            ),
+        ];
+        for (index, (setup, actions, expected)) in rows.into_iter().enumerate() {
+            let (bars, ts) = create_test_bars(100);
+            let mut controller = ReplayController::new(bars, ts);
+            controller.handle_action(JumpToBar(95));
+            setup(&mut controller);
+            for action in actions {
+                controller.handle_action(action);
+            }
+            let state = &controller.state;
+            assert_eq!(
+                (state.curr_bar, state.playback_state),
+                expected,
+                "row {index}"
+            );
+        }
+    }
+
+    #[test]
     fn test_visible_bars() {
         let (bars, ts) = create_test_bars(100);
         let mut controller = ReplayController::new(bars, ts);
