@@ -4,13 +4,13 @@ use crate::model::Bar;
 /// Also known as pivot point
 /// Note: Same formula as [`HLC3`](super::HLC3) in average_price; kept for
 /// backwards compatibility under the "TP" indicator name.
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 #[derive(Clone)]
 pub struct TypicalPrice {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -18,7 +18,7 @@ pub struct TypicalPrice {
 impl TypicalPrice {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
         }
@@ -54,7 +54,7 @@ impl Indicator for TypicalPrice {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -92,7 +92,7 @@ impl Indicator for TypicalPrice {
 /// Weighted Close
 #[derive(Clone)]
 pub struct WeightedClose {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -100,7 +100,7 @@ pub struct WeightedClose {
 impl WeightedClose {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.info, // Blue
             visible: true,
         }
@@ -136,7 +136,7 @@ impl Indicator for WeightedClose {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -176,7 +176,7 @@ impl Indicator for WeightedClose {
 /// backwards compatibility under the "MP" indicator name.
 #[derive(Clone)]
 pub struct MedianPrice {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -184,7 +184,7 @@ pub struct MedianPrice {
 impl MedianPrice {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.purple, // Purple
             visible: true,
         }
@@ -220,7 +220,7 @@ impl Indicator for MedianPrice {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

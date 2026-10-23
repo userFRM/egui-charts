@@ -2,7 +2,7 @@ use crate::model::Bar;
 /// Chande Momentum Oscillator (CMO)
 /// Measures momentum on both up and down days
 /// Ranges from -100 to +100
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -10,7 +10,7 @@ use egui::Color32;
 pub struct ChandeMomentumOscillator {
     /// Period for calculation (typically 14 or 20)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -19,7 +19,7 @@ impl ChandeMomentumOscillator {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.purple,
             visible: true,
         }
@@ -38,6 +38,10 @@ impl Default for ChandeMomentumOscillator {
 }
 
 impl Indicator for ChandeMomentumOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "CMO"
     }
@@ -92,7 +96,7 @@ impl Indicator for ChandeMomentumOscillator {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

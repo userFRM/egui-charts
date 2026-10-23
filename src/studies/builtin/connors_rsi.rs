@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -20,7 +20,7 @@ pub struct ConnorsRSI {
     streak_period: usize,
     /// Percent Rank lookback (typically 100)
     rank_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -31,7 +31,7 @@ impl ConnorsRSI {
             rsi_period: 3,
             streak_period: 2,
             rank_period: 100,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.pink, // Pink
             visible: true,
         }
@@ -166,8 +166,8 @@ impl Default for ConnorsRSI {
 
 impl ConnorsRSI {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let required = self
             .rsi_period
             .max(self.streak_period)
@@ -207,6 +207,12 @@ impl ConnorsRSI {
 }
 
 impl Indicator for ConnorsRSI {
+    crate::studies::inputs::study_inputs!(self;
+        rsi_period: length("RSI period", 1, usize::MAX),
+        streak_period: length("Streak period", 1, usize::MAX),
+        rank_period: length("Rank period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Connors RSI"
     }
@@ -219,7 +225,7 @@ impl Indicator for ConnorsRSI {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -310,6 +316,7 @@ mod tests {
         // Should have valid values after warm-up period
         let valid_cnt = crsi
             .values
+            .to_rows()
             .iter()
             .filter(|v| matches!(v, IndicatorValue::Single(_)))
             .count();
@@ -327,7 +334,7 @@ mod tests {
 
         // CRSI should be bounded between 0 and 100
         let mut checked = 0;
-        for value in &crsi.values {
+        for value in &crsi.values.to_rows() {
             if let IndicatorValue::Single(v) = value {
                 assert!(*v >= 0.0 && *v <= 100.0, "CRSI {v} out of range");
                 checked += 1;

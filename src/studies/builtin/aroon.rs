@@ -24,7 +24,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -32,7 +32,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct Aroon {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     up_color: Color32,
     down_color: Color32,
     visible: bool,
@@ -46,7 +46,7 @@ impl Aroon {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             up_color: DESIGN_TOKENS.semantic.extended.success,
             down_color: DESIGN_TOKENS.semantic.extended.error,
             visible: true,
@@ -75,8 +75,8 @@ impl Default for Aroon {
 
 impl Aroon {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.is_empty() {
             return values;
         }
@@ -113,7 +113,7 @@ impl Aroon {
             let aroon_up = ((self.period - days_since_high) as f64 / self.period as f64) * 100.0;
             let aroon_down = ((self.period - days_since_low) as f64 / self.period as f64) * 100.0;
 
-            values.push(IndicatorValue::Multiple(vec![aroon_up, aroon_down]));
+            values.push_lines(&[aroon_up, aroon_down]);
         }
 
         values
@@ -121,6 +121,10 @@ impl Aroon {
 }
 
 impl Indicator for Aroon {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Aroon"
     }
@@ -137,7 +141,7 @@ impl Indicator for Aroon {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

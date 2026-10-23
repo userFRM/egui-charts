@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -17,7 +17,7 @@ pub struct TrueStrengthIndex {
     short_period: usize,
     /// Signal line period (typically 7)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [TSI, Signal]
     colors: Vec<Color32>,
     visible: bool,
@@ -29,7 +29,7 @@ impl TrueStrengthIndex {
             long_period: long_period.max(1),
             short_period: short_period.max(1),
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,        // Blue - TSI
                 DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange - Signal
@@ -61,8 +61,8 @@ impl TrueStrengthIndex {
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let min_period = self
             .long_period
@@ -106,10 +106,7 @@ impl TrueStrengthIndex {
             if i < min_period - 1 {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![
-                    tsi_values[i - 1],
-                    signal[i - 1],
-                ]));
+                values.push_lines(&[tsi_values[i - 1], signal[i - 1]]);
             }
         }
 
@@ -124,6 +121,12 @@ impl Default for TrueStrengthIndex {
 }
 
 impl Indicator for TrueStrengthIndex {
+    crate::studies::inputs::study_inputs!(self;
+        long_period: length("Long period", 1, usize::MAX),
+        short_period: length("Short period", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "TSI"
     }
@@ -136,7 +139,7 @@ impl Indicator for TrueStrengthIndex {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -247,13 +250,16 @@ mod tests {
 
         assert_eq!(tsi.values.len(), data.len());
         assert!(
-            tsi.values[..8]
+            tsi.values.to_rows()[..8]
                 .iter()
                 .all(|v| matches!(v, IndicatorValue::None))
         );
         for (bar, main, signal) in expected {
-            let IndicatorValue::Multiple(ref got) = tsi.values[bar] else {
-                panic!("bar {bar}: expected a value, got {:?}", tsi.values[bar]);
+            let IndicatorValue::Multiple(ref got) = tsi.values.to_rows()[bar] else {
+                panic!(
+                    "bar {bar}: expected a value, got {:?}",
+                    tsi.values.to_rows()[bar]
+                );
             };
             assert_eq!(got.len(), tsi.line_cnt());
             assert!(

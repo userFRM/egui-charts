@@ -216,6 +216,31 @@ impl SettingsDialog {
             return action;
         }
 
+        let basic = &self.settings.chart_basic_styles;
+        for (picker, color, themed) in [
+            (
+                &mut self.color_picker_states.background,
+                basic.background_color,
+                theme.chart.bg,
+            ),
+            (
+                &mut self.color_picker_states.background_gradient_top,
+                basic.background_gradient_top,
+                theme.chart.bg,
+            ),
+            (
+                &mut self.color_picker_states.background_gradient_bottom,
+                basic.background_gradient_bottom,
+                theme.chart.bg_axis,
+            ),
+        ] {
+            picker.sel_color = if color == Color32::PLACEHOLDER {
+                themed
+            } else {
+                color
+            };
+        }
+
         let mut is_open = self.is_open;
         let mut style = SettingsDialogStyle::from_theme(theme);
         style.sidebar_bg = theme.ui.panel_bg;
@@ -257,6 +282,20 @@ impl SettingsDialog {
             // Window was closed via egui's mechanism (outside click, etc)
             self.is_open = false;
             action = SettingsAction::Cancel;
+        }
+
+        if let SettingsAction::Apply(settings) = &mut action {
+            let basic = &mut settings.chart_basic_styles;
+            for (color, themed) in [
+                (&mut basic.background_color, theme.chart.bg),
+                (&mut basic.background_gradient_top, theme.chart.bg),
+                (&mut basic.background_gradient_bottom, theme.chart.bg_axis),
+            ] {
+                if *color == Color32::PLACEHOLDER {
+                    *color = themed;
+                }
+            }
+            settings.sync_legacy_fields();
         }
 
         action
@@ -734,42 +773,123 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_opens_on_symbol_and_escape_cancels() {
-        for theme in [Theme::light(), Theme::dark()] {
-            let ctx = Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            let mut dialog = SettingsDialog::new();
-            dialog.open(ChartSettingsState::default());
-            let mut frame = |events| {
-                let mut action = SettingsAction::None;
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(
-                            Pos2::ZERO,
-                            Vec2::new(1440.0, 900.0),
-                        )),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        action = dialog.show(ui.ctx(), &theme);
-                    },
-                );
-                let symbol = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Body"));
-                output.drop_without_applying_deltas();
-                (action, symbol)
-            };
-            frame(vec![]);
-            assert!(frame(vec![]).1, "settings starts with the symbol controls");
-            let (action, _) = frame(vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Default::default(),
-            }]);
-            assert!(matches!(action, SettingsAction::Cancel));
-            assert!(!dialog.is_open);
+    fn settings_tracks_theme_without_changing_defaults_until_apply() {
+        for (width, apply) in [
+            (1440.0, false),
+            (480.0, false),
+            (1440.0, true),
+            (480.0, true),
+        ] {
+            for configured in [Color32::PLACEHOLDER, Color32::from_rgb(80, 90, 100)] {
+                let ctx = Context::default();
+                let mut dialog = SettingsDialog::new();
+                let mut settings = ChartSettingsState::default();
+                settings.chart_basic_styles.background_color = configured;
+                settings.sync_legacy_fields();
+                dialog.open(settings.clone());
+                let mut frame = |theme: &Theme, events| {
+                    crate::theme::apply_to_egui(&ctx, theme);
+                    let mut action = SettingsAction::None;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(width, 900.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            action = dialog.show(ui.ctx(), theme);
+                        },
+                    );
+                    let symbol = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Body"));
+                    let ok = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Ok" => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    });
+                    output.drop_without_applying_deltas();
+                    assert_eq!(dialog.settings, settings);
+                    assert_eq!(dialog.original_settings, settings);
+                    assert_eq!(
+                        dialog.color_picker_states.background.sel_color,
+                        if configured == Color32::PLACEHOLDER {
+                            theme.chart.bg
+                        } else {
+                            configured
+                        }
+                    );
+                    assert_eq!(
+                        dialog.color_picker_states.background_gradient_top.sel_color,
+                        theme.chart.bg
+                    );
+                    assert_eq!(
+                        dialog
+                            .color_picker_states
+                            .background_gradient_bottom
+                            .sel_color,
+                        theme.chart.bg_axis
+                    );
+                    (action, symbol, ok)
+                };
+                for theme in [Theme::light(), Theme::dark(), Theme::light()] {
+                    frame(&theme, vec![]);
+                    assert!(
+                        frame(&theme, vec![]).1,
+                        "settings starts with the symbol controls"
+                    );
+                }
+                let action = if apply {
+                    let pos = frame(&Theme::light(), vec![]).2.unwrap();
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    };
+                    frame(&Theme::light(), vec![egui::Event::PointerMoved(pos)]);
+                    frame(&Theme::light(), vec![button(true)]);
+                    frame(&Theme::light(), vec![button(false)]).0
+                } else {
+                    frame(
+                        &Theme::light(),
+                        vec![egui::Event::Key {
+                            key: egui::Key::Escape,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Default::default(),
+                        }],
+                    )
+                    .0
+                };
+                if apply {
+                    let SettingsAction::Apply(saved) = action else {
+                        panic!("expected Apply");
+                    };
+                    let expected = if configured == Color32::PLACEHOLDER {
+                        Theme::light().chart.bg
+                    } else {
+                        configured
+                    };
+                    assert_eq!(saved.chart_basic_styles.background_color, expected);
+                    assert_eq!(saved.background_color, expected);
+                    assert_eq!(
+                        saved.chart_basic_styles.background_gradient_top,
+                        Theme::light().chart.bg
+                    );
+                    assert_eq!(
+                        saved.chart_basic_styles.background_gradient_bottom,
+                        Theme::light().chart.bg_axis
+                    );
+                } else {
+                    assert!(matches!(action, SettingsAction::Cancel));
+                }
+                assert!(!dialog.is_open);
+                assert_eq!(dialog.settings, settings);
+            }
         }
     }
     #[test]

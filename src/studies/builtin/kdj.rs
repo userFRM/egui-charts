@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -21,7 +21,7 @@ pub struct KDJ {
     k_smooth: usize,
     /// Smoothing period for %D (typically 3)
     d_smooth: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [K, D, J]
     colors: Vec<Color32>,
     visible: bool,
@@ -33,7 +33,7 @@ impl KDJ {
             period: period.max(1),
             k_smooth: k_smooth.max(1),
             d_smooth: d_smooth.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - K
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - D
@@ -57,8 +57,8 @@ impl Default for KDJ {
 
 impl KDJ {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let k_len = self.k_smooth as f64;
         let d_len = self.d_smooth as f64;
         let (mut k, mut d) = (50.0, 50.0);
@@ -88,7 +88,7 @@ impl KDJ {
 
             k = ((k_len - 1.0) * k + rsv) / k_len;
             d = ((d_len - 1.0) * d + k) / d_len;
-            values.push(IndicatorValue::Multiple(vec![k, d, 3.0 * k - 2.0 * d]));
+            values.push_lines(&[k, d, 3.0 * k - 2.0 * d]);
         }
 
         values
@@ -96,6 +96,12 @@ impl KDJ {
 }
 
 impl Indicator for KDJ {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        k_smooth: length("K smooth", 1, usize::MAX),
+        d_smooth: length("D smooth", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "KDJ"
     }
@@ -112,7 +118,7 @@ impl Indicator for KDJ {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -237,7 +243,7 @@ mod tests {
         ] {
             kdj.calculate(data);
             assert_eq!(kdj.values().len(), expected.len(), "{case}");
-            for (i, (value, want)) in kdj.values().iter().zip(expected).enumerate() {
+            for (i, (value, want)) in kdj.values().to_rows().iter().zip(expected).enumerate() {
                 match (value, want) {
                     (IndicatorValue::None, None) => {}
                     (IndicatorValue::Multiple(got), Some(want)) => {

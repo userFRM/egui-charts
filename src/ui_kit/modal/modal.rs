@@ -4,6 +4,7 @@
 
 use egui::{Color32, Context, Id, Ui};
 
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::{dialog_frame, title_row};
 
@@ -125,7 +126,7 @@ impl Modal {
         let size = size.max(egui::Vec2::ZERO);
         let max_height = (height.unwrap_or(screen_height) - frame.total_margin().sum().y).max(0.0);
         let backdrop = if self.dim_background {
-            DESIGN_TOKENS.semantic.modal.overlay_bg
+            ctx.active_theme().ui.modal_overlay
         } else {
             Color32::TRANSPARENT
         };

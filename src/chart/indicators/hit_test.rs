@@ -5,7 +5,7 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::hit_test::{HIT_TOLERANCE, point_to_segment_distance};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, PlotType};
 use egui::{Pos2, Rect};
 
 /// Describes which indicator was hit by a click, and at which bar.
@@ -41,91 +41,85 @@ where
         return None;
     }
 
-    let values = indicator.values();
     let line_cnt = indicator.line_cnt();
 
     // Test each line of the indicator
     for line_idx in 0..line_cnt {
-        if let Some(hit) = hit_test_indicator_line(
+        if !indicator.plot_style(line_idx).visible {
+            continue;
+        }
+        if let Some(bar_idx) = hit_test_indicator_line(
             click_pos,
-            values,
+            indicator,
             line_idx,
-            indicator_idx,
             &visible_range,
+            coords.rect,
             coords,
             &price_to_y,
         ) {
-            return Some(hit);
+            return Some(IndicatorHitResult {
+                indicator_idx,
+                bar_idx,
+            });
         }
     }
 
     None
 }
 
-/// Hit test a specific line of an indicator
+/// Test the geometry painted for one output line.
 fn hit_test_indicator_line<F>(
     click_pos: Pos2,
-    values: &[IndicatorValue],
+    indicator: &dyn Indicator,
     line_idx: usize,
-    indicator_idx: usize,
     visible_range: &std::ops::Range<usize>,
+    rect: Rect,
     coords: &ChartMapping,
-    price_to_y: F,
-) -> Option<IndicatorHitResult>
+    value_to_y: F,
+) -> Option<usize>
 where
     F: Fn(f64) -> f32,
 {
-    // Extract values for this line
-    let line_values: Vec<Option<f64>> = values
-        .iter()
-        .map(|v| match v {
-            IndicatorValue::Single(val) => Some(*val),
-            IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
-            IndicatorValue::None => None,
-        })
-        .collect();
-
-    // Check each segment
-    for i in visible_range.start..visible_range.end.saturating_sub(1) {
-        let v1 = line_values.get(i).and_then(|v| *v);
-        let v2 = line_values.get(i + 1).and_then(|v| *v);
-
-        let (Some(v1), Some(v2)) = (v1, v2) else {
+    let values = indicator.values();
+    let plot = indicator.plot_style(line_idx);
+    let end = visible_range.end.min(values.len());
+    for bar in visible_range.start..end {
+        let Some(value) = values.value(line_idx, bar) else {
             continue;
         };
-
-        let x1 = coords.idx_to_x(i);
-        let x2 = coords.idx_to_x(i + 1);
-
-        // Skip if outside visible area
-        if x1 > coords.rect.max.x && x2 > coords.rect.max.x {
+        let point = Pos2::new(coords.idx_to_x(bar), value_to_y(value));
+        if !point.is_finite() {
             continue;
         }
-        if x1 < coords.rect.min.x && x2 < coords.rect.min.x {
-            continue;
-        }
-
-        // Check if click x is within this segment (with tolerance)
-        let min_x = x1.min(x2) - HIT_TOLERANCE;
-        let max_x = x1.max(x2) + HIT_TOLERANCE;
-        if click_pos.x < min_x || click_pos.x > max_x {
-            continue;
-        }
-
-        let y1 = price_to_y(v1);
-        let y2 = price_to_y(v2);
-
-        // Calculate distance from point to line segment
-        let dist = point_to_segment_distance(click_pos, Pos2::new(x1, y1), Pos2::new(x2, y2));
-
-        if dist <= HIT_TOLERANCE {
-            return Some(IndicatorHitResult {
-                indicator_idx,
-                bar_idx: i,
-            });
+        let hit = match plot.plot_type {
+            PlotType::Histogram => {
+                let baseline = value_to_y(0.0);
+                let baseline = if baseline.is_finite() {
+                    baseline.clamp(rect.top(), rect.bottom())
+                } else {
+                    rect.bottom()
+                };
+                Rect::from_two_pos(
+                    Pos2::new(point.x - plot.width * 0.5, baseline),
+                    Pos2::new(point.x + plot.width * 0.5, point.y),
+                )
+                .expand(HIT_TOLERANCE)
+                .contains(click_pos)
+            }
+            PlotType::Circles => click_pos.distance(point) <= plot.width + HIT_TOLERANCE,
+            PlotType::Line => {
+                let next = (bar + 1 < end)
+                    .then(|| values.value(line_idx, bar + 1))
+                    .flatten();
+                let next = next.map(|v| Pos2::new(coords.idx_to_x(bar + 1), value_to_y(v)));
+                point_to_segment_distance(click_pos, point, next.unwrap_or(point))
+                    <= HIT_TOLERANCE + plot.width * 0.5
+            }
+        };
+        if hit {
+            return Some(bar);
         }
     }
-
     None
 }
 
@@ -153,7 +147,6 @@ pub fn hit_test_pane_indicator(
         return None;
     }
 
-    let values = indicator.values();
     let line_cnt = indicator.line_cnt();
 
     // Create value to y converter
@@ -168,87 +161,75 @@ pub fn hit_test_pane_indicator(
 
     // Test each line of the indicator
     for line_idx in 0..line_cnt {
-        if let Some(hit) = hit_test_pane_indicator_line(
+        if !indicator.plot_style(line_idx).visible {
+            continue;
+        }
+        if let Some(bar_idx) = hit_test_indicator_line(
             click_pos,
-            values,
+            indicator,
             line_idx,
-            indicator_idx,
             &visible_range,
             chart_rect,
             coords,
             value_to_y,
         ) {
-            return Some(hit);
+            return Some(IndicatorHitResult {
+                indicator_idx,
+                bar_idx,
+            });
         }
     }
 
     None
 }
 
-/// Hit test a specific line of a pane indicator
-fn hit_test_pane_indicator_line<F>(
-    click_pos: Pos2,
-    values: &[IndicatorValue],
-    line_idx: usize,
-    indicator_idx: usize,
-    visible_range: &std::ops::Range<usize>,
-    chart_rect: Rect,
-    coords: &ChartMapping,
-    value_to_y: F,
-) -> Option<IndicatorHitResult>
-where
-    F: Fn(f64) -> f32,
-{
-    // Extract values for this line
-    let line_values: Vec<Option<f64>> = values
-        .iter()
-        .map(|v| match v {
-            IndicatorValue::Single(val) => Some(*val),
-            IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
-            IndicatorValue::None => None,
-        })
-        .collect();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use crate::studies::{ConfiguredStudy, CustomIndicator, IndicatorValue, PlotType};
 
-    // Check each segment
-    for i in visible_range.start..visible_range.end.saturating_sub(1) {
-        let v1 = line_values.get(i).and_then(|v| *v);
-        let v2 = line_values.get(i + 1).and_then(|v| *v);
-
-        let (Some(v1), Some(v2)) = (v1, v2) else {
-            continue;
-        };
-
-        let x1 = coords.idx_to_x(i);
-        let x2 = coords.idx_to_x(i + 1);
-
-        // Skip if outside visible area
-        if x1 > chart_rect.max.x && x2 > chart_rect.max.x {
-            continue;
-        }
-        if x1 < chart_rect.min.x && x2 < chart_rect.min.x {
-            continue;
-        }
-
-        // Check if click x is within this segment (with tolerance)
-        let min_x = x1.min(x2) - HIT_TOLERANCE;
-        let max_x = x1.max(x2) + HIT_TOLERANCE;
-        if click_pos.x < min_x || click_pos.x > max_x {
-            continue;
-        }
-
-        let y1 = value_to_y(v1);
-        let y2 = value_to_y(v2);
-
-        // Calculate distance from point to line segment
-        let dist = point_to_segment_distance(click_pos, Pos2::new(x1, y1), Pos2::new(x2, y2));
-
-        if dist <= HIT_TOLERANCE {
-            return Some(IndicatorHitResult {
-                indicator_idx,
-                bar_idx: i,
-            });
+    #[test]
+    fn selection_follows_plot_geometry_in_overlays_and_panes() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(200.0, 100.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 100.0, 0, 1, 0.0, price);
+        for overlay in [true, false] {
+            for (kind, point, hit) in [
+                (PlotType::Histogram, Pos2::new(49.0, 60.0), true),
+                (PlotType::Histogram, Pos2::new(99.0, 20.0), false),
+                (PlotType::Circles, Pos2::new(99.0, 20.0), false),
+                (PlotType::Circles, Pos2::new(149.0, 20.0), true),
+                (PlotType::Line, Pos2::new(99.0, 20.0), true),
+            ] {
+                let mut study = ConfiguredStudy::new(Box::new(
+                    CustomIndicator::new("Plot", |_| vec![IndicatorValue::Single(80.0); 2])
+                        .with_overlay(overlay),
+                ));
+                study.calculate(&[]);
+                let mut settings = study.settings();
+                settings.plots[0].plot_type = kind;
+                study.apply_settings(&[], settings).unwrap();
+                let found = if overlay {
+                    hit_test_indicator(point, &study, 3, 0..2, &coords, |v| 100.0 - v as f32)
+                } else {
+                    hit_test_pane_indicator(point, &study, 3, 0..2, rect, 0.0, 100.0, &coords)
+                };
+                assert_eq!(
+                    found.is_some(),
+                    hit,
+                    "{kind:?}, overlay {overlay}, {point:?}"
+                );
+                if let Some(found) = found {
+                    assert_eq!(found.indicator_idx, 3);
+                }
+            }
         }
     }
-
-    None
 }

@@ -375,6 +375,7 @@ mod tests {
             study.calculate(&bars);
             let lines: Vec<Vec<String>> = study
                 .values()
+                .to_rows()
                 .iter()
                 .map(|v| {
                     let mut xs = match v {
@@ -662,8 +663,8 @@ mod tests {
                 let mut fresh = twin.clone_box();
                 fresh.calculate(&data);
                 assert_eq!(
-                    bits(study.values()),
-                    bits(fresh.values()),
+                    bits(&study.values().to_rows()),
+                    bits(&fresh.values().to_rows()),
                     "{} event {event}",
                     study.name()
                 );
@@ -804,7 +805,8 @@ mod tests {
                                     study.name(),
                                     study.line_names()
                                 ));
-                            } else if let Some(v) = study.values().iter().find(|v| !fits(v, lines))
+                            } else if let Some(v) =
+                                study.values().to_rows().iter().find(|v| !fits(v, lines))
                             {
                                 failures.push(format!(
                                     "{}{n:?} on {label}: {v:?} for {lines} lines",
@@ -825,7 +827,8 @@ mod tests {
                 one.calculate(&normal);
             }))
             .is_ok()
-                && format!("{:?}", zero.values()) != format!("{:?}", one.values())
+                && format!("{:?}", zero.values().to_rows())
+                    != format!("{:?}", one.values().to_rows())
             {
                 failures.push(format!("{}(0) differs from {}(1)", zero.name(), one.name()));
             }
@@ -850,7 +853,9 @@ mod tests {
             ("+inf", run(|_| f64::INFINITY), &run(|_| f64::MAX)),
         ] {
             for (study, clamped) in hostile.iter().zip(clamped) {
-                if format!("{:?}", study.values()) != format!("{:?}", clamped.values()) {
+                if format!("{:?}", study.values().to_rows())
+                    != format!("{:?}", clamped.values().to_rows())
+                {
                     failures.push(format!(
                         "{} with float parameters {label} not clamped",
                         study.name()
@@ -873,9 +878,10 @@ mod tests {
         {
             let lost = study
                 .values()
+                .to_rows()
                 .iter()
-                .zip(conventional.values())
-                .any(|(b, c)| finite(b) < finite(c));
+                .zip(conventional.values().to_rows())
+                .any(|(b, c)| finite(b) < finite(&c));
             if lost {
                 failures.push(format!(
                     "{} with float parameters at 0.0 loses values",
@@ -926,7 +932,7 @@ mod tests {
         ];
         let values = |study: &mut Box<dyn Indicator>, bars: &[Bar]| {
             catch_unwind(AssertUnwindSafe(|| study.calculate(bars))).ok()?;
-            Some(study.values().to_vec())
+            Some(study.values().to_rows())
         };
         let parts = |v: &IndicatorValue| match v {
             IndicatorValue::Single(x) => vec![*x],

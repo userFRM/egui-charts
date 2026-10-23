@@ -177,6 +177,9 @@ impl Chart {
             self.pending_scroll_time = None;
         }
         self.timeframe = Some(timeframe);
+        for study in self.studies.indicators_mut() {
+            study.set_timeframe(timeframe);
+        }
         self.drawings.curr_timeframe = timeframe.as_str().into_owned();
     }
 

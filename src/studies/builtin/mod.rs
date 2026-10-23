@@ -46,7 +46,6 @@
 //! [`RankCorrelationIndex`], [`MajorityRule`]
 
 use crate::model::Bar;
-use crate::studies::IndicatorValue;
 
 mod footprint_studies;
 pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studies};
@@ -384,17 +383,23 @@ fn clamp_param(value: f64, min: f64, max: f64) -> f64 {
 fn over_finite_bars(
     data: &[Bar],
     finite: impl Fn(&Bar) -> bool,
-    compute: impl FnOnce(&[Bar]) -> Vec<IndicatorValue>,
-) -> Vec<IndicatorValue> {
+    compute: impl FnOnce(&[Bar]) -> crate::studies::IndicatorValues,
+) -> crate::studies::IndicatorValues {
     if data.iter().all(&finite) {
         return compute(data);
     }
     let kept: Vec<_> = data.iter().filter(|b| finite(b)).cloned().collect();
-    let mut values = compute(&kept).into_iter();
-    data.iter()
-        .map(|b| if finite(b) { values.next() } else { None })
-        .map(|v| v.unwrap_or(IndicatorValue::None))
-        .collect()
+    let computed = compute(&kept);
+    let mut values = crate::studies::IndicatorValues::missing(data.len());
+    for (line, column) in computed.columns().iter().enumerate() {
+        let mut source = column.iter();
+        for (bar, input) in data.iter().enumerate() {
+            if finite(input) {
+                values.set_value(line, bar, *source.next().expect("one value per finite bar"));
+            }
+        }
+    }
+    values
 }
 
 /// Most price rows a volume profile computes.

@@ -3,13 +3,13 @@ use crate::model::Bar;
 /// Williams Accumulation/Distribution
 /// Developed by Larry Williams
 /// Measures buying and selling pressure
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 #[derive(Clone)]
 pub struct WilliamsAD {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -17,7 +17,7 @@ pub struct WilliamsAD {
 impl WilliamsAD {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
             visible: true,
         }
@@ -29,8 +29,8 @@ impl WilliamsAD {
     }
 
     /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < 2 {
             for _ in 0..data.len() {
@@ -89,7 +89,7 @@ impl Indicator for WilliamsAD {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

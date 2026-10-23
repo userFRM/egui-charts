@@ -5,6 +5,7 @@ use egui::{Color32, Response, Role, Ui, Vec2, WidgetInfo};
 use crate::icons::Icon;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::buttons::ButtonVariant;
 
 use super::content::{ContentContext, ListItemContent};
 
@@ -148,9 +149,9 @@ impl<'a> ButtonContent<'a> {
             }
             ButtonStyle::Primary | ButtonStyle::Danger => {
                 let variant = if self.style == ButtonStyle::Primary {
-                    crate::ui_kit::buttons::ButtonVariant::Primary
+                    ButtonVariant::Primary
                 } else {
-                    crate::ui_kit::buttons::ButtonVariant::Danger
+                    ButtonVariant::Danger
                 };
                 if active || hovered {
                     let text = variant.fg_color(ui);

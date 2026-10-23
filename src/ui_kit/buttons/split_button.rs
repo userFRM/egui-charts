@@ -104,10 +104,8 @@ impl SplitButton {
 
             let color = if show_active {
                 variant.fg_color(ui)
-            } else if hovered || pressed {
-                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
+                ui.style().interact(&response).fg_stroke.color
             };
             let icon_size = Vec2::splat(self.size.icon_pixels(None));
             self.icon

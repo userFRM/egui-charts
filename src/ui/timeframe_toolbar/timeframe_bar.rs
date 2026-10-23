@@ -69,7 +69,7 @@ impl TimeframeBarConfig {
             height: DESIGN_TOKENS.sizing.toolbar.bottom_height,
             bg_color: Color32::TRANSPARENT, // Let parent Frame show through
             text_color: ui.text_secondary,
-            active_text_color: ui.accent,
+            active_text_color: ui.text,
             active_bg: ui.btn_bg_active,
             hover_bg: ui.btn_bg_hover,
             border_color: ui.border,

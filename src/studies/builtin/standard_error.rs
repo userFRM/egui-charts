@@ -1,5 +1,5 @@
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -7,7 +7,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct StandardError {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -16,7 +16,7 @@ impl StandardError {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(2),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![DESIGN_TOKENS.semantic.extended.teal],
             visible: true,
         }
@@ -55,6 +55,10 @@ impl Default for StandardError {
 }
 
 impl Indicator for StandardError {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 2, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "StdErr"
     }
@@ -101,7 +105,7 @@ impl Indicator for StandardError {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
