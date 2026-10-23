@@ -38,7 +38,7 @@ impl Theme {
                 selection_bg: accent,
                 selection_text: Color32::WHITE,
                 focus: Color32::WHITE,
-                accent: rgb(49, 121, 245),
+                accent,
                 accent_hover: rgb(35, 88, 230),
                 accent_active: rgb(31, 78, 205),
                 accent_text: Color32::WHITE,

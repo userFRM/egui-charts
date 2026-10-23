@@ -3,8 +3,8 @@
 use egui::{Color32, Response, Role, Ui, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
-use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::buttons::ButtonVariant;
 
 use super::content::{ContentContext, ListItemContent};
 
@@ -159,27 +159,14 @@ impl<'a> ButtonContent<'a> {
                     )
                 }
             }
-            ButtonStyle::Primary => {
-                let colors = ui.active_theme().ui;
-                let (accent, text) = (colors.accent, colors.accent_text);
-                if active {
-                    (accent.gamma_multiply(0.8), text, text)
-                } else if hovered {
-                    (accent.gamma_multiply(0.9), text, text)
+            ButtonStyle::Primary | ButtonStyle::Danger => {
+                let variant = if self.style == ButtonStyle::Primary {
+                    ButtonVariant::Primary
                 } else {
-                    (accent, text, text)
-                }
-            }
-            ButtonStyle::Danger => {
-                let colors = ui.active_theme().ui;
-                let (danger, text) = (colors.danger_bg, colors.danger_text);
-                if active {
-                    (danger.gamma_multiply(0.8), text, text)
-                } else if hovered {
-                    (danger.gamma_multiply(0.9), text, text)
-                } else {
-                    (danger, text, text)
-                }
+                    ButtonVariant::Danger
+                };
+                let text = variant.fg_color(ui);
+                (variant.bg_color(ui, hovered, active), text, text)
             }
             ButtonStyle::Subtle => {
                 if active {

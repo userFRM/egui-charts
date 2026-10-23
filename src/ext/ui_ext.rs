@@ -456,36 +456,15 @@ impl UiExt for Ui {
     // ==========================================================================
 
     fn primary_button(&mut self, text: impl Into<String>) -> Response {
-        let tokens = &DESIGN_TOKENS.semantic.buttons;
-        let text = text.into();
-
-        let button = egui::Button::new(RichText::new(text).color(tokens.primary_fg))
-            .fill(tokens.primary_bg)
-            .corner_radius(DESIGN_TOKENS.rounding.button);
-
-        self.add(button)
+        self.add(crate::ui_kit::buttons::Button::new(text).primary())
     }
 
     fn secondary_button(&mut self, text: impl Into<String>) -> Response {
-        let tokens = &DESIGN_TOKENS.semantic.buttons;
-        let text = text.into();
-
-        let button = egui::Button::new(RichText::new(text).color(tokens.secondary_fg))
-            .fill(tokens.secondary_bg)
-            .corner_radius(DESIGN_TOKENS.rounding.button);
-
-        self.add(button)
+        self.add(crate::ui_kit::buttons::Button::new(text).secondary())
     }
 
     fn danger_button(&mut self, text: impl Into<String>) -> Response {
-        let tokens = &DESIGN_TOKENS.semantic.buttons;
-        let text = text.into();
-
-        let button = egui::Button::new(RichText::new(text).color(tokens.danger_fg))
-            .fill(tokens.danger_bg)
-            .corner_radius(DESIGN_TOKENS.rounding.button);
-
-        self.add(button)
+        self.add(crate::ui_kit::buttons::Button::new(text).danger())
     }
 
     #[cfg(feature = "icons")]
