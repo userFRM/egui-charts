@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use egui_charts::model::Timeframe;
+use egui_charts::ui_kit::dialog::DialogFooter;
 use egui_charts::ui_kit::modal::Modal;
 
 impl super::DemoApp {
@@ -19,8 +20,12 @@ impl super::DemoApp {
                 if std::mem::take(&mut self.interval_focus) {
                     ui.memory_mut(|memory| memory.request_focus(input_id));
                 }
-                ui.add(egui::TextEdit::singleline(&mut text).id(input_id));
-                apply = ui.button("Apply").clicked()
+                ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .id(input_id)
+                        .desired_width(ui.available_width()),
+                );
+                apply = DialogFooter::new("Apply").show(ui).0
                     || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             });
         if apply {

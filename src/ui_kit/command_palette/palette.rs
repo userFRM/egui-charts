@@ -156,14 +156,16 @@ impl CommandPalette {
                         icons::QUICK_SEARCH
                             .as_image_tinted(Vec2::splat(20.0), ui.visuals().text_color()),
                     );
+                    let search_id = egui::Id::unique("command_palette_search");
+                    ui.memory_mut(|memory| memory.request_focus(search_id));
                     let response = ui.add(
                         TextEdit::singleline(&mut self.search_query)
+                            .id(search_id)
                             .hint_text("Search actions")
                             .frame(egui::Frame::NONE)
                             .desired_width(ui.available_width())
                             .font(egui::FontId::proportional(14.0)),
                     );
-                    response.request_focus();
                     if response.changed() {
                         self.update_filter();
                     }

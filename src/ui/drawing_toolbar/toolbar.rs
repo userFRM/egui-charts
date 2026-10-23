@@ -193,6 +193,11 @@ impl DrawingToolbar {
 
         // A tool's shortcut selects it, unless the user is typing.
         if !crate::widget::keyboard::shortcuts_suppressed(ui.ctx())
+            && !ui.ctx().data(|data| {
+                data.get_temp::<crate::widget::ShortcutMap>(Id::NULL.with("chart_shortcuts"))
+                    .is_some()
+            })
+            && !Popup::is_any_open(ui.ctx())
             && !ui.ctx().text_edit_focused()
             && let Some(tool) = DrawingToolShortcuts::default().check(ui.ctx())
         {
@@ -280,7 +285,12 @@ impl DrawingToolbar {
 
         // "/" opens the tool search, unless a text field has the keyboard.
         if !self.state.search_open
+            && !ui.ctx().data(|data| {
+                data.get_temp::<crate::widget::ShortcutMap>(Id::NULL.with("chart_shortcuts"))
+                    .is_some()
+            })
             && !crate::widget::keyboard::shortcuts_suppressed(ui.ctx())
+            && !Popup::is_any_open(ui.ctx())
             && !ui.ctx().text_edit_focused()
             && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Slash))
         {
@@ -1260,5 +1270,39 @@ mod tests {
             press_alt_t(false, Modifiers::ALT.plus(Modifiers::SHIFT)),
             DrawingToolbarAction::None
         );
+        for enabled in [false, true] {
+            for key in [Key::T, Key::Slash] {
+                let ctx = Context::default();
+                let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+                chart.chart_options.keyboard.enabled = enabled;
+                if enabled {
+                    chart.shortcuts_mut().bindings.clear();
+                }
+                let mut toolbar = DrawingToolbar::new();
+                ctx.run_ui(
+                    RawInput {
+                        events: vec![Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: if key == Key::T {
+                                Modifiers::ALT
+                            } else {
+                                Modifiers::NONE
+                            },
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.dispatch_shortcuts(ui.ctx());
+                        assert_eq!(toolbar.show_with_action(ui), DrawingToolbarAction::None);
+                        assert!(!toolbar.state.search_open);
+                        assert!(ui.input(|input| input.key_pressed(key)));
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+        }
     }
 }

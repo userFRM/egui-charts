@@ -60,14 +60,14 @@ impl ShortcutMap {
                         Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
                         _ => return None,
                     };
-                    self.bindings.iter().find_map(|(shortcut, action)| {
+                    let (shortcut, action) = self.bindings.iter().find(|(shortcut, _)| {
                         let matches = modifiers.matches_exact(shortcut.modifiers)
                             || (matches!(key, egui::Key::Plus | egui::Key::Questionmark)
                                 && modifiers.matches_logically(shortcut.modifiers)
                                 && modifiers.alt == shortcut.modifiers.alt);
-                        (accepts(*action, *shortcut) && key == shortcut.logical_key && matches)
-                            .then_some((index, *action))
-                    })
+                        key == shortcut.logical_key && matches
+                    })?;
+                    accepts(*action, *shortcut).then_some((index, *action))
                 })?;
             let event = input.events.remove(index);
             if let Event::Key { key, .. } = &event {
@@ -76,7 +76,7 @@ impl ShortcutMap {
                     && input
                         .events
                         .get(index)
-                        .is_some_and(|next| matches!(next, Event::Text(_)))
+                        .is_some_and(|next| matches!(next, Event::Text(text) if text.eq_ignore_ascii_case(symbol)))
                 {
                     input.events.remove(index);
                 }
@@ -171,10 +171,7 @@ impl super::Chart {
     /// Text fields, other focused widgets and open popups keep their input.
     pub fn dispatch_shortcuts(&mut self, ctx: &Context) {
         let pass = ctx.cumulative_pass_nr();
-        if !self.chart_options.keyboard.enabled
-            || shortcuts_suppressed(ctx)
-            || self.keyboard.last_pass == Some(pass)
-        {
+        if self.keyboard.last_pass == Some(pass) {
             return;
         }
         self.keyboard.last_pass = Some(pass);
@@ -184,9 +181,12 @@ impl super::Chart {
                 self.keyboard.map.clone(),
             )
         });
+        if !self.chart_options.keyboard.enabled || shortcuts_suppressed(ctx) {
+            return;
+        }
         let focused = ctx.memory(|memory| memory.focused());
         let elsewhere = focused.is_some() && focused != self.keyboard.chart_id;
-        if elsewhere && self.chart_options.keyboard.enabled && !egui::Popup::is_any_open(ctx) {
+        if elsewhere && !egui::Popup::is_any_open(ctx) {
             let text_focused = ctx.text_edit_focused();
             while let Some((action, _)) =
                 self.keyboard.map.consume(ctx, false, |action, shortcut| {
@@ -394,10 +394,8 @@ mod tests {
     use crate::widget::test_frames::chart;
     use egui::{Key, Modifiers, RawInput};
 
-    /// Modified arrows must not fall through to plain panning. Rebinding and removing a
-    /// binding must change real widget input, and typed text must reach host entry dialogs.
     #[test]
-    fn configured_shortcuts_keep_modifiers_and_route_host_text() {
+    fn modified_arrows_pan_one_page_or_zoom_without_plain_panning() {
         for (key, modifiers, pans) in [
             (Key::ArrowLeft, Modifiers::NONE, true),
             (Key::ArrowLeft, Modifiers::ALT, false),
@@ -465,6 +463,10 @@ mod tests {
                 assert_eq!(chart.state.time_scale().right_offset(), before_offset);
             }
         }
+    }
+
+    #[test]
+    fn rebinding_changes_chart_input_and_bound_characters_do_not_start_entry() {
         let ctx = Context::default();
         let mut chart = chart(&[10.0], &[20.0]);
         chart
@@ -548,11 +550,23 @@ mod tests {
             chart.take_shortcut_requests().is_empty(),
             "a bound character must not also open symbol search"
         );
+    }
 
+    #[test]
+    fn help_preserves_question_marks_in_fields_but_command_search_still_opens() {
         let ctx = Context::default();
-        let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+        let mut chart = chart(&[10.0], &[20.0]);
         let mut text = "label".to_owned();
-        for pass in 0..4 {
+        for pass in 0..5 {
+            if pass == 4 {
+                chart.shortcuts_mut().bindings.insert(
+                    0,
+                    (
+                        KeyboardShortcut::new(Modifiers::COMMAND, Key::K),
+                        KeyboardAction::FitContent,
+                    ),
+                );
+            }
             let events = match pass {
                 2 => vec![
                     Event::Key {
@@ -564,7 +578,7 @@ mod tests {
                     },
                     Event::Text("?".into()),
                 ],
-                3 => vec![Event::Key {
+                3 | 4 => vec![Event::Key {
                     key: Key::K,
                     physical_key: None,
                     pressed: true,
@@ -600,6 +614,10 @@ mod tests {
             );
         }
         assert_eq!(text, "label?");
+    }
+
+    #[test]
+    fn typed_entry_keeps_following_edit_keys() {
         let ctx = Context::default();
         let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
         chart
@@ -648,9 +666,12 @@ mod tests {
             ctx.input(|input| input.key_pressed(Key::Backspace)),
             "the host entry field keeps the following edit key"
         );
+    }
 
+    #[test]
+    fn opening_search_keeps_following_text() {
         let ctx = Context::default();
-        let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+        let mut chart = chart(&[10.0], &[20.0]);
         ctx.run_ui(
             RawInput {
                 events: vec![
@@ -658,13 +679,6 @@ mod tests {
                         key: Key::K,
                         physical_key: None,
                         pressed: true,
-                        repeat: false,
-                        modifiers: Modifiers::COMMAND,
-                    },
-                    Event::Key {
-                        key: Key::K,
-                        physical_key: None,
-                        pressed: false,
                         repeat: false,
                         modifiers: Modifiers::COMMAND,
                     },

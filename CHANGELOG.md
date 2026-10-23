@@ -121,6 +121,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Shortcut dispatch preserves text queued after an opening command, and quick search focuses its input before processing that text. Drawing toolbars defer to the chart's bindings even when keys are disabled or removed. Binding precedence also applies while a field has focus. Shortcut help wraps within narrow windows, and interval entry uses the shared dialog footer. ([#113](https://github.com/userFRM/egui-charts/issues/113), [#120](https://github.com/userFRM/egui-charts/issues/120))
+
 - A bound character key also consumes its text event, so a restored F binding fits the chart without opening symbol search. Typing `?` in a text field edits the field; command search and F1 help remain available there. Opening a host dialog hands subsequent input to it, and typed symbol and interval entry focus their fields before processing queued editing keys. ([#113](https://github.com/userFRM/egui-charts/issues/113))
 
 - Drawing tool shortcuts use the shared exact-modifier matcher, including when the toolbar is used without a chart. An extra Shift no longer selects a tool bound only with Alt. ([#113](https://github.com/userFRM/egui-charts/issues/113))

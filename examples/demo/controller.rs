@@ -1826,6 +1826,10 @@ impl DemoApp {
                     A::ShowKeyboardHelp => self.keyboard_shortcuts.toggle(),
                     A::OpenIndicatorSearch => self.indicator_dialog.open(),
                     A::OpenSymbolSearch => self.symbol_search.open(),
+                    A::OpenIntervalSearch => {
+                        self.interval_entry = Some(String::new());
+                        self.interval_focus = true;
+                    }
                     A::GoToDate => self.date_picker.open(),
                     A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
                     A::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
@@ -2256,7 +2260,10 @@ mod tests {
     #[test]
     fn quick_search_executes_studies_tools_and_settings() {
         use egui::{Event, Key, Modifiers, RawInput};
-        for query in ["RSI", "Trend Line", "Chart settings"] {
+        for (query, same_frame) in ["RSI", "Trend Line", "Chart settings"]
+            .into_iter()
+            .flat_map(|query| [(query, false), (query, true)])
+        {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
@@ -2270,9 +2277,23 @@ mod tests {
             for (modifiers, events) in [
                 (
                     Modifiers::CTRL.plus(Modifiers::COMMAND),
-                    vec![key(Key::K, Modifiers::CTRL.plus(Modifiers::COMMAND))],
+                    if same_frame {
+                        vec![
+                            key(Key::K, Modifiers::CTRL.plus(Modifiers::COMMAND)),
+                            Event::Text(query.into()),
+                        ]
+                    } else {
+                        vec![key(Key::K, Modifiers::CTRL.plus(Modifiers::COMMAND))]
+                    },
                 ),
-                (Modifiers::NONE, vec![Event::Text(query.into())]),
+                (
+                    Modifiers::NONE,
+                    if same_frame {
+                        vec![]
+                    } else {
+                        vec![Event::Text(query.into())]
+                    },
+                ),
                 (Modifiers::NONE, vec![key(Key::Enter, Modifiers::NONE)]),
             ] {
                 ctx.run_ui(

@@ -128,7 +128,8 @@ impl KeyboardShortcutsDialog {
                 })
                 .fold(0.0, f32::max)
         });
-        let label_w = ((widest + theme.spacing.xxl) / 4.0).ceil() * 4.0;
+        let label_w = (((widest + theme.spacing.xxl) / 4.0).ceil() * 4.0)
+            .min((ui.available_width() - theme.spacing.sm) / 2.0);
 
         // The body scrolls once the dialog would pass the frame's screen cap.
         let cap = ui.ctx().content_rect().shrink(theme.spacing.xxxl).height()
@@ -156,10 +157,11 @@ impl KeyboardShortcutsDialog {
                         );
                         egui::Grid::new(("shortcuts", idx))
                             .num_columns(2)
-                            .spacing([0.0, theme.spacing.sm])
+                            .spacing([theme.spacing.sm, theme.spacing.sm])
                             // With the spacing, a 24 px row pitch.
                             .min_row_height(theme.spacing.xxl + theme.spacing.sm)
                             .min_col_width(label_w)
+                            .max_col_width(label_w)
                             .show(ui, |ui| {
                                 for action in actions {
                                     ui.label(RichText::new(action.label()).size(theme.text.body));
@@ -170,7 +172,7 @@ impl KeyboardShortcutsDialog {
                                             (bound == action).then_some(*key)
                                         })
                                         .collect();
-                                    ui.horizontal(|ui| key_badges(ui, &theme, &keys));
+                                    ui.horizontal_wrapped(|ui| key_badges(ui, &theme, &keys));
                                     ui.end_row();
                                 }
                             });
@@ -217,10 +219,13 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
                 theme.spacing.xs as i8,
             ))
             .show(ui, |ui| {
-                ui.label(
-                    RichText::new(text)
-                        .size(theme.text.small)
-                        .color(theme.ui.text),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(text)
+                            .size(theme.text.small)
+                            .color(theme.ui.text),
+                    )
+                    .wrap_mode(egui::TextWrapMode::Extend),
                 )
                 .widget_info(|| WidgetInfo::labeled(Role::Label, true, &name));
             });
