@@ -122,7 +122,9 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
             2026,
             1,
             5,
-            if timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
+            if (Timeframe::Min1.duration_ms()..Timeframe::Day1.duration_ms())
+                .contains(&timeframe.duration_ms())
+            {
                 8
             } else {
                 14
@@ -193,10 +195,13 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
             volume,
         });
         price = close;
+        let date = time.date_naive();
         time += chrono::Duration::milliseconds(step_ms);
         if session_fixture {
-            if step_ms < Timeframe::Day1.duration_ms() && time.hour() >= 21 {
-                time = (time.date_naive() + chrono::Duration::days(1))
+            if step_ms < Timeframe::Day1.duration_ms()
+                && (time.date_naive() != date || time.hour() >= 21)
+            {
+                time = (date + chrono::Duration::days(1))
                     .and_hms_opt(8, 30, 0)
                     .unwrap()
                     .and_utc();
@@ -328,8 +333,8 @@ mod tests {
     use chrono::{Datelike, Timelike, Weekday};
 
     #[test]
-    fn synthetic_fixture_has_session_gaps_and_equity_prices() {
-        for timeframe in [Timeframe::Hour1, Timeframe::Day1] {
+    fn synthetic_fixture_preserves_sessions_adjustments_and_ranges() {
+        for timeframe in Timeframe::all() {
             let bars = generate_sample_bars("SAMPLE", 600, timeframe);
             let repeated = generate_sample_bars("SAMPLE", 600, timeframe);
             assert_eq!(bars.len(), 600);
@@ -338,6 +343,18 @@ mod tests {
             assert!(
                 bars.iter()
                     .all(|b| !matches!(b.time.weekday(), Weekday::Sat | Weekday::Sun))
+            );
+            assert!(bars.windows(2).all(|b| b[0].time < b[1].time));
+            assert!(bars.iter().all(|b| (8..21).contains(&b.time.hour())));
+            assert!(
+                !session_bars(
+                    "SAMPLE",
+                    &bars,
+                    egui_charts::ui::timeframe_toolbar::SessionType::RTH,
+                    false,
+                )
+                .is_empty(),
+                "{timeframe}"
             );
             if timeframe == Timeframe::Hour1 {
                 assert!(bars.iter().all(|b| b.time.minute() == 30));
@@ -351,14 +368,12 @@ mod tests {
 
         use egui_charts::ui::timeframe_toolbar::{DateRange, SessionType};
         let source = generate_sample_bars("SAMPLE", 600, Timeframe::Hour1);
-        let unchanged = source.clone();
         let regular = session_bars("SAMPLE", &source, SessionType::RTH, false);
         assert!(regular.len() < source.len());
         assert!(regular.iter().all(|b| b.time.hour() >= 14));
         for (session, count) in [
             (SessionType::RTH, regular.len()),
             (SessionType::ETH, source.len()),
-            (SessionType::Full24x7, source.len()),
         ] {
             let raw = session_bars("SAMPLE", &source, session, false);
             let adjusted = session_bars("SAMPLE", &source, session, true);
@@ -372,7 +387,6 @@ mod tests {
                 assert!(adjusted.high >= adjusted.open.max(adjusted.close));
             }
         }
-        assert_eq!(source, unchanged);
         for (range, count) in [
             (DateRange::Day1, 7),
             (DateRange::Day5, 22),

@@ -173,6 +173,8 @@ impl DemoApp {
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
         options.time_scale.bar_spacing = 6.1;
+        // A full-history range must also fit in a narrow window.
+        options.time_scale.min_bar_spacing = 0.01;
         // The scale reserves half a slot and one pixel after the last centre.
         options.time_scale.right_offset_pixels = Some(65.0 - 6.1 * 0.5 - 1.0);
         options.time_scale.time_visible = true;
@@ -265,6 +267,7 @@ impl DemoApp {
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
         let spec = DemoSymbol::find(symbol);
+        self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
         self.chart
             .set_symbol(format!("{} (synthetic) · {}", spec.symbol, spec.exchange));
@@ -1093,7 +1096,7 @@ impl DemoApp {
     fn handle_timeframe_toolbar(&mut self, action: TimeframeToolbarAction) {
         match action {
             TimeframeToolbarAction::DateRangeChanged(range) => {
-                let visible = visible_bars_for_range(range, &self.bars);
+                let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
                 let width = self.chart.get_rendered_price_rect().width();
                 // Include the latest slot in the scale's exclusive data range.
                 let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
@@ -1124,7 +1127,7 @@ impl DemoApp {
                 .resizable(false)
                 .open(&mut open)
                 .show(ctx, |ui| {
-                    for session in [SessionType::RTH, SessionType::ETH, SessionType::Full24x7] {
+                    for session in [SessionType::RTH, SessionType::ETH] {
                         if ui
                             .selectable_label(
                                 self.timeframe_toolbar.state.session_type == session,
@@ -1506,4 +1509,65 @@ fn apply_settings_state(state: &ChartSettingsState, config: &mut egui_charts::co
     };
     config.show_ohlc_info = state.status_line.show_ohlc;
     config.show_volume = state.status_line.show_volume;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn ranges_fit_displayed_history_in_both_themes_and_window_sizes() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for size in [egui::vec2(1316.0, 871.0), egui::vec2(640.0, 450.0)] {
+                for (interval, replay) in [(Timeframe::Hour1, true), (Timeframe::Min1, false)] {
+                    let ctx = egui::Context::default();
+                    let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                    app.theme = theme.clone();
+                    egui_charts::theme::apply_to_egui(&ctx, &theme);
+                    let config = app.chart.config_mut();
+                    *config = theme.apply_to_config(config.clone());
+                    app.switch_timeframe(interval);
+                    app.timeframe_toolbar.set_session(SessionType::ETH);
+                    app.apply_session();
+                    if replay {
+                        app.start_replay();
+                    }
+                    let frame = |app: &mut DemoApp| {
+                        ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    size,
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| app.show_chart(ui, theme.chart.bg),
+                        )
+                        .drop_without_applying_deltas();
+                    };
+                    frame(&mut app);
+                    for range in [DateRange::Day1, DateRange::Month1, DateRange::All] {
+                        let bars = app.chart.bars(SeriesId::MAIN);
+                        let end = bars.len();
+                        let start = if range == DateRange::Day1 {
+                            let cutoff = bars.last().unwrap().time - chrono::Duration::days(1);
+                            bars.iter().position(|b| b.time >= cutoff).unwrap()
+                        } else {
+                            0
+                        };
+                        app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(
+                            range,
+                        ));
+                        frame(&mut app);
+                        assert_eq!(app.chart.state().visible_range(), (start, end), "{range:?}");
+                        let expected = app.chart.get_rendered_price_rect().width()
+                            / ((end - start) as f32 + 0.5);
+                        assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);
+                        assert_eq!(app.replay.is_some(), replay);
+                    }
+                }
+            }
+        }
+    }
 }
