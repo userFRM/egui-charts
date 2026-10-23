@@ -482,7 +482,10 @@ pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
         ("CV", "Chaikin Volatility - Range rate of change"),
         ("CMO", "Chande Momentum Oscillator - Up/down momentum"),
         ("CSI", "Commodity Selection Index - Pos sizing"),
-        ("TDI", "Trend Detection Index - Net vs absolute movement"),
+        (
+            "TDI",
+            "Trend Detection Index - Positive when trending, negative when consolidating",
+        ),
         ("DS", "Double Stochastic - Double-smoothed oscillator"),
         ("Impulse", "Elder Impulse System - Trend with momentum"),
         ("MD", "McGinley Dynamic - Self-adjusting MA"),

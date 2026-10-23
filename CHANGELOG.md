@@ -175,6 +175,7 @@ All notable changes to this project are documented in this file. The format is b
 - `BarData::to_csv`, `to_csv_string` and `to_csv_with_indicators` write a bar's fraction of a second, and `BarData::from_csv` reads it, so bars less than a second apart keep their times through a CSV file. Whole-second times are written as before.
 - A replay speed that is not finite plays at 1x and a custom speed is clamped to 0.1x to 100x, so `ReplayAction::SetSpeed(f32::NAN)` or a negative speed no longer freezes a replay that still reports playing.
 - `to_range_bars_from_ticks` closes one bar per full range a tick crosses, up to 100, and always returns the bar holding the last trade, so a tick that closes a bar no longer loses the rest of its move and the series ends at the last traded price. It keeps the newest 5,000 bars, like `to_range_bars_from_ohlc`.
+- Trend Detection Index follows Pee's definition, the absolute n-bar sum of n-bar momentum minus the excess of the 2n-bar over the n-bar sum of absolute momentum, and starts on bar 3n - 1. It returned the net move minus the path length, which is never positive. Migration: levels tuned on the old values need resetting, and the first value now comes 2n - 1 bars later.
 
 ### Changed
 

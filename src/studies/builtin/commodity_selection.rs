@@ -185,8 +185,11 @@ impl Indicator for CommoditySelectionIndex {
     }
 }
 
-/// Trend Detection Index (TDI)
-/// Measures trend strength by comparing price movement to absolute movement
+/// Trend Detection Index (TDI), M. H. Pee, Technical Analysis of Stocks & Commodities, October 2001.
+///
+/// With `mom = close - close[n]`, `TDI = |sum(mom, n)| - (sum(|mom|, 2n) - sum(|mom|, n))`.
+/// Positive values mean the market is trending, negative values mean it is consolidating.
+/// The first value is on bar `3n - 1`; earlier bars are `None`.
 #[derive(Clone)]
 pub struct TrendDetectionIndex {
     period: usize,
@@ -223,40 +226,35 @@ impl Indicator for TrendDetectionIndex {
     }
 
     fn desc(&self) -> &str {
-        "Trend Detection Index - Net vs absolute movement"
+        "Trend Detection Index - Positive when trending, negative when consolidating"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < self.period.saturating_add(1) {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        for i in 0..data.len() {
-            if i < self.period {
-                self.values.push(IndicatorValue::None);
-            } else {
-                // Net movement over period
-                let net_move = data[i].close - data[i - self.period].close;
-
-                // Sum of absolute movements
-                let mut abs_move = 0.0;
-                for j in (i + 1 - self.period)..=i {
-                    abs_move += (data[j].close - data[j - 1].close).abs();
-                }
-
-                let tdi = if abs_move != 0.0 {
-                    net_move.abs() - abs_move
+        let n = self.period;
+        // mom[i] = close[i] - close[i - n], defined from bar n.
+        let mom: Vec<f64> = (0..data.len())
+            .map(|i| {
+                if i >= n {
+                    data[i].close - data[i - n].close
                 } else {
                     0.0
-                };
+                }
+            })
+            .collect();
+        // The 2n-bar window of momentum starts at bar n, so the first value is on bar 3n - 1.
+        let first = n.saturating_mul(3) - 1;
 
-                self.values.push(IndicatorValue::Single(tdi));
+        for i in 0..data.len() {
+            if i < first {
+                self.values.push(IndicatorValue::None);
+                continue;
             }
+            let net: f64 = mom[i + 1 - n..=i].iter().sum();
+            let older_abs: f64 = mom[i + 1 - 2 * n..=i - n].iter().map(|m| m.abs()).sum();
+            self.values
+                .push(IndicatorValue::Single(net.abs() - older_abs));
         }
     }
 
@@ -322,14 +320,43 @@ mod tests {
         assert_eq!(csi.values.len(), 30);
     }
 
+    /// Reference values from M. H. Pee, "Trend Detection Index", Technical Analysis of Stocks &
+    /// Commodities, October 2001: mom = close - close[n], TDI = |sum(mom, n)| - (sum(|mom|, 2n) - sum(|mom|, n)).
     #[test]
-    fn test_tdi() {
-        let mut tdi = TrendDetectionIndex::new(10);
-
-        let data: Vec<Bar> = (0..20).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        tdi.calculate(&data);
-
-        assert_eq!(tdi.values.len(), 20);
+    fn tdi_matches_published_definition() {
+        let flat_then_rising: Vec<f64> = (0..60)
+            .map(|i| 100.0 + (i as f64 - 39.0).max(0.0))
+            .collect();
+        let reversal = [
+            10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 14.0, 13.0, 12.0, 11.0, 12.0, 13.0,
+        ];
+        let cases: [(usize, &[f64], &[f64]); 2] = [
+            (20, &flat_then_rising, &[210.0]),
+            (3, &reversal, &[-6.0, 0.0, 2.0, -2.0]),
+        ];
+        for (period, closes, expected) in cases {
+            let data: Vec<Bar> = closes.iter().map(|&c| make_bar(c)).collect();
+            let mut tdi = TrendDetectionIndex::new(period);
+            tdi.calculate(&data);
+            let first = 3 * period - 1;
+            assert_eq!(tdi.values.len(), closes.len());
+            for (k, want) in expected.iter().enumerate() {
+                match tdi.values[first + k] {
+                    IndicatorValue::Single(got) => {
+                        assert!(
+                            (got - want).abs() < 1e-12,
+                            "period {period}, bar {}: {got} != {want}",
+                            first + k
+                        )
+                    }
+                    _ => panic!("period {period}, bar {}: no value", first + k),
+                }
+            }
+            assert!(
+                tdi.values[..first]
+                    .iter()
+                    .all(|v| matches!(v, IndicatorValue::None))
+            );
+        }
     }
 }
