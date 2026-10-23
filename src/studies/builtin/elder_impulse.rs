@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Elder Impulse System
 /// Combines EMA slope and MACD histogram for trend signals
@@ -79,27 +80,19 @@ impl Default for ElderImpulseSystem {
     }
 }
 
-impl Indicator for ElderImpulseSystem {
-    fn name(&self) -> &str {
-        "Impulse"
-    }
-
-    fn desc(&self) -> &str {
-        "Elder Impulse System - Trend direction with momentum"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ElderImpulseSystem {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         let min_period = self
             .macd_slow
             .max(self.ema_period)
             .saturating_add(self.macd_signal);
         if data.len() < min_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
@@ -125,7 +118,7 @@ impl Indicator for ElderImpulseSystem {
 
         for i in 0..data.len() {
             if i < min_period - 1 || i == 0 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let ema_rising = ema[i] > ema[i - 1];
                 let hist_rising = histogram[i] > histogram[i - 1];
@@ -139,9 +132,25 @@ impl Indicator for ElderImpulseSystem {
                     0.0 // Neutral
                 };
 
-                self.values.push(IndicatorValue::Single(signal_val));
+                values.push(IndicatorValue::Single(signal_val));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for ElderImpulseSystem {
+    fn name(&self) -> &str {
+        "Impulse"
+    }
+
+    fn desc(&self) -> &str {
+        "Elder Impulse System - Trend direction with momentum"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Know Sure Thing (KST) Oscillator
 /// Developed by Martin Pring
@@ -98,18 +99,10 @@ impl Default for KnowSureThing {
     }
 }
 
-impl Indicator for KnowSureThing {
-    fn name(&self) -> &str {
-        "KST"
-    }
-
-    fn desc(&self) -> &str {
-        "Know Sure Thing - Multi-timeframe momentum"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl KnowSureThing {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         let max_period = self
             .roc_periods
             .iter()
@@ -118,9 +111,9 @@ impl Indicator for KnowSureThing {
             .saturating_add(*self.sma_periods.iter().max().unwrap());
         if data.len() < max_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Get closes
@@ -155,14 +148,29 @@ impl Indicator for KnowSureThing {
         // Store results
         for i in 0..data.len() {
             if kst[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else if signal[i].is_nan() {
-                self.values.push(IndicatorValue::Single(kst[i]));
+                values.push(IndicatorValue::Single(kst[i]));
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![kst[i], signal[i]]));
+                values.push(IndicatorValue::Multiple(vec![kst[i], signal[i]]));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for KnowSureThing {
+    fn name(&self) -> &str {
+        "KST"
+    }
+
+    fn desc(&self) -> &str {
+        "Know Sure Thing - Multi-timeframe momentum"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Double Stochastic
 /// Applies the stochastic formula twice for smoother signals
@@ -55,24 +56,16 @@ impl Default for DoubleStochastic {
     }
 }
 
-impl Indicator for DoubleStochastic {
-    fn name(&self) -> &str {
-        "DS"
-    }
-
-    fn desc(&self) -> &str {
-        "Double Stochastic - Double-smoothed stochastic oscillator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl DoubleStochastic {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         let min_period = self.period.saturating_add(self.smooth.saturating_mul(2));
         if data.len() < min_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // First stochastic
@@ -142,11 +135,31 @@ impl Indicator for DoubleStochastic {
 
         for i in 0..data.len() {
             if i < min_period - 1 || ds[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push(IndicatorValue::Single(ds[i]));
+                values.push(IndicatorValue::Single(ds[i]));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for DoubleStochastic {
+    fn name(&self) -> &str {
+        "DS"
+    }
+
+    fn desc(&self) -> &str {
+        "Double Stochastic - Double-smoothed stochastic oscillator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

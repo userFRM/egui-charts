@@ -23,6 +23,7 @@
 //! uo.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -76,28 +77,20 @@ impl Default for UltimateOscillator {
     }
 }
 
-impl Indicator for UltimateOscillator {
-    fn name(&self) -> &str {
-        "UO"
-    }
-
-    fn desc(&self) -> &str {
-        "Ultimate Oscillator - Multi-timeframe momentum indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl UltimateOscillator {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         let max_period = self.period1.max(self.period2).max(self.period3);
         if data.len() < max_period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate BP (Buying Pressure) and TR (True Range) for each bar
@@ -116,7 +109,7 @@ impl Indicator for UltimateOscillator {
         // Calculate UO for each bar
         for i in 0..data.len() {
             if i < max_period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -137,8 +130,28 @@ impl Indicator for UltimateOscillator {
 
             // UO = 100 * ((4 * Avg1) + (2 * Avg2) + Avg3) / 7
             let uo = 100.0 * ((4.0 * avg1) + (2.0 * avg2) + avg3) / 7.0;
-            self.values.push(IndicatorValue::Single(uo));
+            values.push(IndicatorValue::Single(uo));
         }
+
+        values
+    }
+}
+
+impl Indicator for UltimateOscillator {
+    fn name(&self) -> &str {
+        "UO"
+    }
+
+    fn desc(&self) -> &str {
+        "Ultimate Oscillator - Multi-timeframe momentum indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

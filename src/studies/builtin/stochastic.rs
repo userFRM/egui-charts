@@ -21,6 +21,7 @@
 //! stoch.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue};
@@ -86,24 +87,16 @@ impl Default for Stochastic {
     }
 }
 
-impl Indicator for Stochastic {
-    fn name(&self) -> &str {
-        "Stochastic"
-    }
-
-    fn desc(&self) -> &str {
-        "Stochastic Oscillator - Momentum oscillator (0-100)"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl Stochastic {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         let min_period = self.k_period.saturating_add(self.k_smooth) - 1;
         if data.len() < min_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate raw %K (Fast Stochastic)
@@ -176,12 +169,31 @@ impl Indicator for Stochastic {
         // Build output values
         for i in 0..data.len() {
             if smooth_k[i].is_nan() || d_values[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![smooth_k[i], d_values[i]]));
+                values.push(IndicatorValue::Multiple(vec![smooth_k[i], d_values[i]]));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for Stochastic {
+    fn name(&self) -> &str {
+        "Stochastic"
+    }
+
+    fn desc(&self) -> &str {
+        "Stochastic Oscillator - Momentum oscillator (0-100)"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -39,16 +40,10 @@ impl Default for TrendIntensityIndex {
     }
 }
 
-impl Indicator for TrendIntensityIndex {
-    fn name(&self) -> &str {
-        "TII"
-    }
-
-    fn desc(&self) -> &str {
-        "Trend Intensity Index - Measures trend strength"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
+impl TrendIntensityIndex {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         let n = self.period;
         let ma_len = n.saturating_mul(2);
         let first = ma_len.saturating_add(n) - 2;
@@ -65,11 +60,9 @@ impl Indicator for TrendIntensityIndex {
                 window.iter().map(|b| bar.close - b.close).sum::<f64>() / ma_len as f64
             })
             .collect();
-
-        self.values.clear();
         for i in 0..data.len() {
             if i < first {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
             let (mut up, mut down) = (0.0, 0.0);
@@ -86,8 +79,24 @@ impl Indicator for TrendIntensityIndex {
             } else {
                 50.0
             };
-            self.values.push(IndicatorValue::Single(tii));
+            values.push(IndicatorValue::Single(tii));
         }
+
+        values
+    }
+}
+
+impl Indicator for TrendIntensityIndex {
+    fn name(&self) -> &str {
+        "TII"
+    }
+
+    fn desc(&self) -> &str {
+        "Trend Intensity Index - Measures trend strength"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

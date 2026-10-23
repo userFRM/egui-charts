@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -163,18 +164,10 @@ impl Default for ConnorsRSI {
     }
 }
 
-impl Indicator for ConnorsRSI {
-    fn name(&self) -> &str {
-        "Connors RSI"
-    }
-
-    fn desc(&self) -> &str {
-        "Connors RSI - Composite momentum indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ConnorsRSI {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         let required = self
             .rsi_period
             .max(self.streak_period)
@@ -182,9 +175,9 @@ impl Indicator for ConnorsRSI {
             .saturating_add(1);
         if data.len() < required {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // 1. Calculate standard RSI of close prices
@@ -202,12 +195,28 @@ impl Indicator for ConnorsRSI {
         // Combine: CRSI = (RSI + StreakRSI + PercentRank) / 3
         for i in 0..data.len() {
             if rsi[i].is_nan() || streak_rsi[i].is_nan() || percent_rank[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let crsi = (rsi[i] + streak_rsi[i] + percent_rank[i]) / 3.0;
-                self.values.push(IndicatorValue::Single(crsi));
+                values.push(IndicatorValue::Single(crsi));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for ConnorsRSI {
+    fn name(&self) -> &str {
+        "Connors RSI"
+    }
+
+    fn desc(&self) -> &str {
+        "Connors RSI - Composite momentum indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

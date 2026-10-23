@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Pretty Good Oscillator (PGO)
 /// Measures price distance from moving avg in ATR units
@@ -37,23 +38,15 @@ impl Default for PrettyGoodOscillator {
     }
 }
 
-impl Indicator for PrettyGoodOscillator {
-    fn name(&self) -> &str {
-        "PGO"
-    }
-
-    fn desc(&self) -> &str {
-        "Pretty Good Oscillator - Price distance in ATR units"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl PrettyGoodOscillator {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate True Range
@@ -70,7 +63,7 @@ impl Indicator for PrettyGoodOscillator {
         // Calculate SMA of closes and EMA of TR (ATR)
         for i in 0..data.len() {
             if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 // SMA of closes
                 let sma: f64 = data[i + 1 - self.period..=i]
@@ -83,14 +76,34 @@ impl Indicator for PrettyGoodOscillator {
                 let atr: f64 = tr[i + 1 - self.period..=i].iter().sum::<f64>() / self.period as f64;
 
                 if atr == 0.0 {
-                    self.values.push(IndicatorValue::None);
+                    values.push(IndicatorValue::None);
                 } else {
                     // PGO = (Close - SMA) / ATR
                     let pgo = (data[i].close - sma) / atr;
-                    self.values.push(IndicatorValue::Single(pgo));
+                    values.push(IndicatorValue::Single(pgo));
                 }
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for PrettyGoodOscillator {
+    fn name(&self) -> &str {
+        "PGO"
+    }
+
+    fn desc(&self) -> &str {
+        "Pretty Good Oscillator - Price distance in ATR units"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

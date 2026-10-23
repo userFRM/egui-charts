@@ -22,6 +22,7 @@
 //! mfi.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -70,23 +71,15 @@ impl Default for MoneyFlowIndex {
     }
 }
 
-impl Indicator for MoneyFlowIndex {
-    fn name(&self) -> &str {
-        "MFI"
-    }
-
-    fn desc(&self) -> &str {
-        "Money Flow Index - Volume-weighted RSI (0-100)"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl MoneyFlowIndex {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate typical prices and raw money flow
@@ -117,7 +110,7 @@ impl Indicator for MoneyFlowIndex {
         // Calculate MFI for each bar
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let start = i + 1 - self.period;
                 let pos_sum: f64 = positive_flows[start..=i].iter().sum();
@@ -132,10 +125,34 @@ impl Indicator for MoneyFlowIndex {
                     100.0 - (100.0 / (1.0 + ratio))
                 };
 
-                self.values
-                    .push(IndicatorValue::Single(mfi.clamp(0.0, 100.0)));
+                values.push(IndicatorValue::Single(mfi.clamp(0.0, 100.0)));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for MoneyFlowIndex {
+    fn name(&self) -> &str {
+        "MFI"
+    }
+
+    fn desc(&self) -> &str {
+        "Money Flow Index - Volume-weighted RSI (0-100)"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.high.is_finite()
+                    && b.low.is_finite()
+                    && b.close.is_finite()
+                    && b.volume.is_finite()
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

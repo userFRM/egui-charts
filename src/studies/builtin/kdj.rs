@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -10,7 +11,8 @@ use egui::Color32;
 /// both starting from 50: `K = ((k_smooth - 1) * K[-1] + RSV) / k_smooth` and
 /// `D = ((d_smooth - 1) * D[-1] + K) / d_smooth`, so the default lengths of 3 weight the new value by a
 /// third. `J = 3K - 2D`. The first value is on bar `period - 1`; earlier bars are `None`.
-/// A bar with a non-finite close or window range has no value, and K and D carry over it unchanged.
+/// A bar with a non-finite high, low or close has no value and is left out: the windows span usable
+/// bars only, so every other bar is that of the series without it.
 #[derive(Clone)]
 pub struct KDJ {
     /// Period for %K calculation (typically 9)
@@ -53,24 +55,17 @@ impl Default for KDJ {
     }
 }
 
-impl Indicator for KDJ {
-    fn name(&self) -> &str {
-        "KDJ"
-    }
-
-    fn desc(&self) -> &str {
-        "KDJ - Stochastic-derived indicator with K, D, J lines"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+impl KDJ {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         let k_len = self.k_smooth as f64;
         let d_len = self.d_smooth as f64;
         let (mut k, mut d) = (50.0, 50.0);
 
         for i in 0..data.len() {
             if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
             let window = &data[i + 1 - self.period..=i];
@@ -81,8 +76,8 @@ impl Indicator for KDJ {
             let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
             let range = highest - lowest;
             if !(range.is_finite() && data[i].close.is_finite()) {
-                // No value for a window with a non-finite price; K and D carry over it unchanged.
-                self.values.push(IndicatorValue::None);
+                // The range of finite prices overflowed; K and D carry over the bar unchanged.
+                values.push(IndicatorValue::None);
                 continue;
             }
             let rsv = if range == 0.0 {
@@ -93,9 +88,28 @@ impl Indicator for KDJ {
 
             k = ((k_len - 1.0) * k + rsv) / k_len;
             d = ((d_len - 1.0) * d + k) / d_len;
-            self.values
-                .push(IndicatorValue::Multiple(vec![k, d, 3.0 * k - 2.0 * d]));
+            values.push(IndicatorValue::Multiple(vec![k, d, 3.0 * k - 2.0 * d]));
         }
+
+        values
+    }
+}
+
+impl Indicator for KDJ {
+    fn name(&self) -> &str {
+        "KDJ"
+    }
+
+    fn desc(&self) -> &str {
+        "KDJ - Stochastic-derived indicator with K, D, J lines"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -202,18 +216,18 @@ mod tests {
             Some([59.41875463306817, 58.8984378530659, 60.459388193072705]),
         ];
 
-        // The same bars with a NaN close on bar 9 and an infinite high on bar 13: bar 9 and the windows
-        // holding bar 13 have no value, and K and D carry over them unchanged.
+        // The same bars with a NaN close on bar 9 and an infinite high on bar 13: those two bars have no
+        // value and the others are those of the series without them.
         let mut hostile = data.clone();
         hostile[9].close = f64::NAN;
         hostile[13].high = f64::INFINITY;
         let mut hostile_expected = expected;
         hostile_expected[9] = None;
-        hostile_expected[10] = Some([49.02366799486141, 48.74705077146885, 49.576902441646524]);
-        hostile_expected[11] = Some([46.01577866324094, 47.38141471735489, 43.28450655501303]);
-        hostile_expected[12] = Some([47.343852442160625, 47.36263357975776, 47.306290166966356]);
+        hostile_expected[10] = Some([47.17181614300956, 47.821124845542926, 45.87319873794282]);
+        hostile_expected[11] = Some([42.55898853978415, 45.19005669266354, 37.29685223402537]);
+        hostile_expected[12] = Some([45.03932569318943, 45.114691192926486, 44.888594693715326]);
         hostile_expected[13] = None;
-        hostile_expected[14] = None;
+        hostile_expected[14] = Some([48.54473564731148, 46.82971342011898, 51.97478010169646]);
 
         // Distinct K and D lengths so that swapping their weights fails.
         let mut kdj = KDJ::new(3, 3, 2);

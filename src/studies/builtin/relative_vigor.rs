@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Relative Vigor Index (RVI)
 /// Measures conviction of price movement
@@ -81,23 +82,15 @@ impl Default for RelativeVigorIndex {
     }
 }
 
-impl Indicator for RelativeVigorIndex {
-    fn name(&self) -> &str {
-        "RVI"
-    }
-
-    fn desc(&self) -> &str {
-        "Relative Vigor Index - Price movement conviction"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl RelativeVigorIndex {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.period.saturating_add(4) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate (Close - Open) for numerator
@@ -130,14 +123,35 @@ impl Indicator for RelativeVigorIndex {
         // Store results
         for i in 0..data.len() {
             if rvi[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else if signal[i].is_nan() {
-                self.values.push(IndicatorValue::Single(rvi[i]));
+                values.push(IndicatorValue::Single(rvi[i]));
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![rvi[i], signal[i]]));
+                values.push(IndicatorValue::Multiple(vec![rvi[i], signal[i]]));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for RelativeVigorIndex {
+    fn name(&self) -> &str {
+        "RVI"
+    }
+
+    fn desc(&self) -> &str {
+        "Relative Vigor Index - Price movement conviction"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.open.is_finite() && b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -19,6 +19,7 @@
 //! williams.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue};
@@ -62,6 +63,39 @@ impl Default for WilliamsR {
     }
 }
 
+impl WilliamsR {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
+        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let (highest, lowest) = (highest[i], lowest[i]);
+                let range = highest - lowest;
+
+                if range.abs() < 1e-10 {
+                    values.push(IndicatorValue::Single(-50.0)); // Middle value
+                } else {
+                    let r = (highest - data[i].close) / range * -100.0;
+                    values.push(IndicatorValue::Single(r.clamp(-100.0, 0.0)));
+                }
+            }
+        }
+
+        values
+    }
+}
+
 impl Indicator for WilliamsR {
     fn name(&self) -> &str {
         "Williams %R"
@@ -72,33 +106,11 @@ impl Indicator for WilliamsR {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
-        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let (highest, lowest) = (highest[i], lowest[i]);
-                let range = highest - lowest;
-
-                if range.abs() < 1e-10 {
-                    self.values.push(IndicatorValue::Single(-50.0)); // Middle value
-                } else {
-                    let r = (highest - data[i].close) / range * -100.0;
-                    self.values
-                        .push(IndicatorValue::Single(r.clamp(-100.0, 0.0)));
-                }
-            }
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

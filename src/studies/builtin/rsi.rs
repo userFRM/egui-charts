@@ -42,6 +42,7 @@
 //! assert!(matches!(rsi.values()[14], IndicatorValue::Single(_)));
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -87,21 +88,13 @@ impl Default for RSI {
     }
 }
 
-impl Indicator for RSI {
-    fn name(&self) -> &str {
-        "RSI"
-    }
-
-    fn desc(&self) -> &str {
-        "Relative Strength Index - Momentum oscillator (0-100)"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl RSI {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
         if data.len() < self.period.saturating_add(1) {
-            self.values.resize(data.len(), IndicatorValue::None);
-            return;
+            values.resize(data.len(), IndicatorValue::None);
+            return values;
         }
 
         let mut gains = Vec::new();
@@ -123,12 +116,12 @@ impl Indicator for RSI {
         // at bar `period`, so exactly `period` leading `None`s keep the output
         // one-to-one with the input bars (values.len() == data.len()).
         for _ in 0..self.period {
-            self.values.push(IndicatorValue::None);
+            values.push(IndicatorValue::None);
         }
 
         let rs = avg_gain / avg_loss.max(1e-10);
         let rsi = 100.0 - (100.0 / (1.0 + rs));
-        self.values.push(IndicatorValue::Single(rsi));
+        values.push(IndicatorValue::Single(rsi));
 
         // Calculate remaining RSI values using smoothing
         for i in self.period..gains.len() {
@@ -137,8 +130,24 @@ impl Indicator for RSI {
 
             let rs = avg_gain / avg_loss.max(1e-10);
             let rsi = 100.0 - (100.0 / (1.0 + rs));
-            self.values.push(IndicatorValue::Single(rsi));
+            values.push(IndicatorValue::Single(rsi));
         }
+
+        values
+    }
+}
+
+impl Indicator for RSI {
+    fn name(&self) -> &str {
+        "RSI"
+    }
+
+    fn desc(&self) -> &str {
+        "Relative Strength Index - Momentum oscillator (0-100)"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {
