@@ -2,7 +2,7 @@
 
 use super::{DemoApp, LiveFeed};
 use egui_charts::model::Timeframe;
-use egui_charts::ui::top_toolbar::components::layout_menu::{LayoutAction, LayoutInfo};
+use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
 use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SeriesId};
 use std::sync::Arc;
 
@@ -38,6 +38,30 @@ impl LayoutTab {
 }
 
 impl DemoApp {
+    pub(super) fn toggle_theme(&mut self) {
+        self.theme = if self.theme.dark {
+            egui_charts::theme::Theme::light()
+        } else {
+            egui_charts::theme::Theme::dark()
+        };
+        let saved = self
+            .layout_tabs
+            .iter_mut()
+            .filter_map(|tab| tab.workspace.as_mut());
+        for chart in std::iter::once(&mut self.chart)
+            .chain(self.extra_charts.iter_mut().map(|c| &mut c.chart))
+            .chain(saved.flat_map(|workspace| {
+                std::iter::once(&mut workspace.chart)
+                    .chain(workspace.extra.iter_mut().map(|c| &mut c.chart))
+            }))
+        {
+            let config = chart.config_mut();
+            config.background_color = self.theme.chart.bg;
+            config.text_color = self.theme.chart.axis_text;
+            config.grid_color = self.theme.chart.grid_line;
+        }
+    }
+
     pub(super) fn ensure_chart_slots(&mut self, mode: ChartLayoutMode) {
         let count = if mode == ChartLayoutMode::Tabs {
             (self.extra_charts.len() + 1).max(2)
@@ -45,8 +69,10 @@ impl DemoApp {
             mode.chart_count()
         };
         while self.extra_charts.len() + 1 < count {
-            self.extra_charts
-                .push(self.copy_chart(&self.chart, &self.live));
+            let mut copy = self.copy_chart(&self.chart, &self.live);
+            // New slots receive drawings through synchronization, which records their links.
+            copy.chart.drawings_mut().drawings.clear();
+            self.extra_charts.push(copy);
         }
         self.layout.mode = mode;
         if self.layout_slot >= count {
@@ -83,8 +109,10 @@ impl DemoApp {
                 chart.set_indicator_inputs(copy, inputs);
             }
         }
-        for drawing in &source.drawings().drawings {
-            chart.drawings_mut().add_synced_drawing(drawing.clone());
+        chart.drawings_mut().drawings = source.drawings().drawings.clone();
+        for drawing in &mut chart.drawings_mut().drawings {
+            drawing.stored_id = None;
+            drawing.created_at = None;
         }
         DemoChart { chart, live }
     }
@@ -126,17 +154,16 @@ impl DemoApp {
         self.state.chart_type = self.chart.chart_type();
         self.bars = self.chart.bars(SeriesId::MAIN).to_vec();
         self.timeframe_toolbar.state.timeframe = self.state.timeframe;
+        for control in [
+            egui_charts::ui::Control::Session,
+            egui_charts::ui::Control::DividendAdjustment,
+        ] {
+            self.timeframe_toolbar
+                .set_control_visible(control, self.state.symbol == "SAMPLE");
+        }
         let (session, adjusted) = self.live.view(self.chart.extended_hours());
         self.timeframe_toolbar.set_session(session);
         self.timeframe_toolbar.state.adjust_for_dividends = adjusted;
-        for chart in std::iter::once(&mut self.chart)
-            .chain(self.extra_charts.iter_mut().map(|c| &mut c.chart))
-        {
-            let config = chart.config_mut();
-            config.background_color = self.theme.chart.bg;
-            config.text_color = self.theme.chart.axis_text;
-            config.grid_color = self.theme.chart.grid_line;
-        }
         use egui_charts::ui::top_toolbar::components::timeframe_selector::{
             Timeframe as Interval, TimeframeUnit as Unit,
         };
@@ -260,19 +287,19 @@ impl DemoApp {
     fn new_layout(&mut self, name: Option<String>) {
         let copy = self.copy_chart(&self.chart, &self.live);
         let duplicate = name.is_some();
-        let mut layout = ChartLayout::default();
-        let mut extra = Vec::new();
-        if name.is_some() {
-            layout.mode = self.layout.mode;
-            layout.sync = self.layout.sync.clone();
-            layout.set_active(self.layout_slot);
-            for chart in &self.extra_charts {
-                extra.push(self.copy_chart(&chart.chart, &chart.live));
-            }
-            for index in 0..16 {
-                layout.set_sync_group(index, self.layout.sync_group(index).map(str::to_owned));
-            }
-        }
+        let layout = if duplicate {
+            self.layout.clone()
+        } else {
+            ChartLayout::default()
+        };
+        let extra = if duplicate {
+            self.extra_charts
+                .iter()
+                .map(|c| self.copy_chart(&c.chart, &c.live))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut name = name.unwrap_or_else(|| "Unnamed".into());
         let base = name.clone();
         let mut suffix = 2;
@@ -335,18 +362,15 @@ impl DemoApp {
                 self.notify("Layout kept for this session; persistent storage is host-owned")
             }
             LayoutAction::DownloadImage => self.export_dialog.open(),
-            LayoutAction::None | LayoutAction::OpenMenu | LayoutAction::SetDefault(_) => {}
+            LayoutAction::None => {}
         }
     }
 
     pub(super) fn refresh_layout_menu(&mut self) {
         self.top_toolbar.layout_menu.curr_layout =
             Some(self.layout_tabs[self.layout_tab].name.clone());
-        self.top_toolbar.layout_menu.layouts = self
-            .layout_tabs
-            .iter()
-            .map(|t| LayoutInfo::new(&t.name))
-            .collect();
+        self.top_toolbar.layout_menu.layouts =
+            self.layout_tabs.iter().map(|t| t.name.clone()).collect();
     }
 }
 
@@ -357,27 +381,61 @@ mod tests {
     #[test]
     fn chart_slots_and_layout_tabs_keep_independent_state() {
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut drawing = egui_charts::drawings::Drawing::new(
+            7,
+            egui_charts::drawings::DrawingToolType::HorizontalLine,
+        );
+        drawing.completed = true;
+        drawing
+            .chart_points
+            .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
+        let frame = |app: &mut DemoApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.show_chart(ui, app.theme.chart.bg)
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(app.chart.drawings().drawings.len(), 1);
+            assert!(
+                app.extra_charts
+                    .iter()
+                    .all(|c| c.chart.drawings().drawings.len() == 1)
+            );
+        };
+        frame(&mut app);
         for slot in [1, 3, 0, 2] {
             app.activate_chart_slot(slot);
             app.chart.config_mut().candle_width = 0.5 + slot as f32 * 0.1;
+            app.chart.config_mut().background_color = egui::Color32::from_gray(10 + slot as u8);
         }
         for slot in [3, 1, 2, 0] {
             app.activate_chart_slot(slot);
             assert_eq!(app.chart.config().candle_width, 0.5 + slot as f32 * 0.1);
             assert_eq!(app.state.symbol, app.chart.symbol());
+            assert_eq!(
+                app.chart.config().background_color,
+                egui::Color32::from_gray(10 + slot as u8)
+            );
         }
         let before = app.chart.get_time_scale_state();
         app.new_layout(Some("Saved".into()));
         assert_eq!(app.layout.mode, ChartLayoutMode::Four);
         assert_eq!(app.chart.get_time_scale_state(), before);
+        frame(&mut app);
         app.chart.set_symbol("copy-only");
         app.select_layout(0);
         assert_eq!(app.chart.symbol(), "SAMPLE");
         assert_eq!(app.chart.config().candle_width, 0.5);
         app.select_layout(1);
         assert_eq!(app.chart.symbol(), "copy-only");
+        app.toggle_theme();
+        let background = app.theme.chart.bg;
+        app.select_layout(0);
+        assert_eq!(app.chart.config().background_color, background);
+        app.select_layout(1);
         app.close_layout(1);
         assert_eq!(app.chart.symbol(), "SAMPLE");
         assert_eq!(app.chart.config().candle_width, 0.5);

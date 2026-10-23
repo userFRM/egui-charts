@@ -137,11 +137,7 @@ impl Slot {
                 "Toggle Theme",
                 A::ThemeToggle,
             ),
-            S::Layouts | S::LayoutName => (
-                &embedded_icons::LAYOUT_GRID,
-                "Chart layout",
-                A::Layout(LayoutAction::OpenMenu),
-            ),
+            S::Layouts | S::LayoutName => (&embedded_icons::LAYOUT_GRID, "Chart layout", A::None),
             S::Save => (&embedded_icons::DATABASE, "Save chart", A::Save),
             S::QuickSearch => (
                 &embedded_icons::QUICK_SEARCH,
@@ -631,18 +627,28 @@ impl TopToolbar {
             let strip_order = LEFT.iter().chain(RIGHT).flat_map(|group| group.iter());
             for control in strip_order.filter(|&c| hidden.contains(c)) {
                 if *control == S::Layouts {
-                    ui.menu_button("Chart layout", |ui| {
-                        if let Some(mode) = self.chart_grid_selector.show_menu(ui) {
-                            *action = TopToolbarAction::Layout(LayoutAction::SelectGrid(mode));
-                        }
-                    });
+                    egui::containers::menu::SubMenuButton::new("Chart layout")
+                        .config(
+                            egui::containers::menu::MenuConfig::new()
+                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                        )
+                        .ui(ui, |ui| {
+                            if let Some(mode) = self.chart_grid_selector.show_menu(ui) {
+                                *action = TopToolbarAction::Layout(LayoutAction::SelectGrid(mode));
+                            }
+                        });
                 } else if *control == S::LayoutName {
-                    ui.menu_button("Named layouts", |ui| {
-                        let a = self.layout_menu.show_menu(ui);
-                        if a != LayoutAction::None {
-                            *action = TopToolbarAction::Layout(a);
-                        }
-                    });
+                    egui::containers::menu::SubMenuButton::new("Named layouts")
+                        .config(
+                            egui::containers::menu::MenuConfig::new()
+                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                        )
+                        .ui(ui, |ui| {
+                            let a = self.layout_menu.show_menu(ui);
+                            if a != LayoutAction::None {
+                                *action = TopToolbarAction::Layout(a);
+                            }
+                        });
                 } else if *control == S::Templates {
                     ui.menu_button("Indicator templates", |ui| {
                         self.show_indicator_templates(ui, action)
@@ -812,94 +818,173 @@ mod tests {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
-            for (slot, label, expected) in [
-                (
-                    S::Screenshot,
-                    "Download image",
-                    TopToolbarAction::TakeScreenshot,
-                ),
-                (S::Save, "Export chart…", TopToolbarAction::Save),
-                (
-                    S::Layouts,
-                    "2x2 Grid",
-                    TopToolbarAction::Layout(LayoutAction::SelectGrid(
-                        crate::widget::ChartLayoutMode::Four,
-                    )),
-                ),
-                (
-                    S::LayoutName,
-                    "Save layout",
-                    TopToolbarAction::Layout(LayoutAction::Save),
-                ),
-                (
-                    S::Templates,
-                    "Save indicator template",
-                    TopToolbarAction::SaveIndicatorTemplate,
-                ),
-                (
-                    S::Templates,
-                    "My studies",
-                    TopToolbarAction::ApplyIndicatorTemplate("custom-id".into()),
-                ),
-            ] {
-                let mut toolbar = TopToolbar::new();
-                toolbar
-                    .indicator_templates
-                    .push(("custom-id".into(), "My studies".into()));
-                let mut frame = |events| {
-                    let mut action = TopToolbarAction::None;
-                    let mut rect = Rect::NOTHING;
-                    let output = ctx.run_ui(
-                        RawInput {
-                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
-                            events,
-                            ..Default::default()
-                        },
-                        |ui| {
-                            rect = ui
-                                .horizontal(|ui| {
-                                    toolbar.show_control(ui, slot, false, "SAMPLE", &mut action)
-                                })
-                                .response
-                                .rect;
-                        },
+            for overflow in [false, true] {
+                for (slot, label, expected) in [
+                    (
+                        S::Screenshot,
+                        "Download image",
+                        TopToolbarAction::TakeScreenshot,
+                    ),
+                    (S::Save, "Export chart…", TopToolbarAction::Save),
+                    (
+                        S::Layouts,
+                        "2x2 Grid",
+                        TopToolbarAction::Layout(LayoutAction::SelectGrid(
+                            crate::widget::ChartLayoutMode::Four,
+                        )),
+                    ),
+                    (
+                        S::LayoutName,
+                        "Save layout",
+                        TopToolbarAction::Layout(LayoutAction::Save),
+                    ),
+                    (
+                        S::LayoutName,
+                        "Rename layout…",
+                        TopToolbarAction::Layout(LayoutAction::Rename(
+                            "Unnamed".into(),
+                            "Desk".into(),
+                        )),
+                    ),
+                    (
+                        S::LayoutName,
+                        "Save layout as…",
+                        TopToolbarAction::Layout(LayoutAction::SaveAs("Desk".into())),
+                    ),
+                    (
+                        S::Templates,
+                        "Save indicator template",
+                        TopToolbarAction::SaveIndicatorTemplate,
+                    ),
+                    (
+                        S::Templates,
+                        "My studies",
+                        TopToolbarAction::ApplyIndicatorTemplate("custom-id".into()),
+                    ),
+                ] {
+                    if overflow && !matches!(slot, S::Layouts | S::LayoutName) {
+                        continue;
+                    }
+                    let mut toolbar = TopToolbar::new();
+                    toolbar
+                        .indicator_templates
+                        .push(("custom-id".into(), "My studies".into()));
+                    let mut frame = |events| {
+                        let mut action = TopToolbarAction::None;
+                        let mut rect = Rect::NOTHING;
+                        let output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    vec2(1440.0, 900.0),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                rect = ui
+                                    .horizontal(|ui| {
+                                        if overflow {
+                                            toolbar.show_overflow(ui, &[slot], &mut action);
+                                        } else {
+                                            toolbar.show_control(
+                                                ui,
+                                                slot,
+                                                false,
+                                                "SAMPLE",
+                                                &mut action,
+                                            );
+                                        }
+                                    })
+                                    .response
+                                    .rect;
+                            },
+                        );
+                        let labels: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) => Some((
+                                    text.galley.text().to_owned(),
+                                    text.pos + text.galley.size() / 2.0,
+                                )),
+                                _ => None,
+                            })
+                            .collect();
+                        output.drop_without_applying_deltas();
+                        (action, rect, labels)
+                    };
+                    let (_, rect, _) = frame(vec![]);
+                    let pos = if slot == S::Save && !overflow {
+                        pos2(rect.right() - 8.0, rect.center().y)
+                    } else {
+                        rect.center()
+                    };
+                    frame(vec![Event::PointerMoved(pos)]);
+                    let click = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    };
+                    frame(vec![click(pos, true)]);
+                    let (action, _, _) = frame(vec![click(pos, false)]);
+                    assert_eq!(
+                        action,
+                        TopToolbarAction::None,
+                        "opening the menu must not capture an image"
                     );
-                    let download = output.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == label => {
-                            Some(text.pos + text.galley.size() / 2.0)
-                        }
-                        _ => None,
-                    });
-                    output.drop_without_applying_deltas();
-                    (action, rect, download)
-                };
-                let (_, rect, _) = frame(vec![]);
-                let pos = if slot == S::Save {
-                    pos2(rect.right() - 8.0, rect.center().y)
-                } else {
-                    rect.center()
-                };
-                frame(vec![Event::PointerMoved(pos)]);
-                let click = |pos, pressed| Event::PointerButton {
-                    pos,
-                    button: PointerButton::Primary,
-                    pressed,
-                    modifiers: Default::default(),
-                };
-                frame(vec![click(pos, true)]);
-                let (action, _, _) = frame(vec![click(pos, false)]);
-                assert_eq!(
-                    action,
-                    TopToolbarAction::None,
-                    "opening the menu must not capture an image"
-                );
-                frame(vec![]);
-                let (_, _, download) = frame(vec![]);
-                let pos = download.expect("download choice");
-                frame(vec![Event::PointerMoved(pos)]);
-                frame(vec![click(pos, true)]);
-                let (action, _, _) = frame(vec![click(pos, false)]);
-                assert_eq!(action, expected);
+                    frame(vec![]);
+                    if overflow {
+                        let submenu = if slot == S::Layouts {
+                            "Chart layout"
+                        } else {
+                            "Named layouts"
+                        };
+                        let (_, _, labels) = frame(vec![]);
+                        let pos = labels
+                            .iter()
+                            .find(|(text, _)| text == submenu)
+                            .expect("layout submenu")
+                            .1;
+                        frame(vec![Event::PointerMoved(pos)]);
+                        frame(vec![click(pos, true)]);
+                        frame(vec![click(pos, false)]);
+                        frame(vec![]);
+                    }
+                    let (_, _, labels) = frame(vec![]);
+                    let pos = labels
+                        .iter()
+                        .find(|(text, _)| text == label)
+                        .expect("menu choice")
+                        .1;
+                    frame(vec![Event::PointerMoved(pos)]);
+                    frame(vec![click(pos, true)]);
+                    let (mut action, _, _) = frame(vec![click(pos, false)]);
+                    if matches!(
+                        expected,
+                        TopToolbarAction::Layout(
+                            LayoutAction::Rename(_, _) | LayoutAction::SaveAs(_)
+                        )
+                    ) {
+                        let (_, _, labels) = frame(vec![]);
+                        assert!(
+                            labels.iter().any(|(text, _)| text == "Apply"),
+                            "editing must keep the popup open"
+                        );
+                        let key = |key, modifiers| Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        };
+                        frame(vec![key(egui::Key::A, egui::Modifiers::COMMAND)]);
+                        frame(vec![Event::Text("Desk".into())]);
+                        action = frame(vec![key(egui::Key::Enter, egui::Modifiers::NONE)]).0;
+                    }
+                    assert_eq!(action, expected, "overflow {overflow}");
+                }
             }
         }
     }

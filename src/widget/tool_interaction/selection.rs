@@ -103,9 +103,10 @@ pub fn handle_selection<F1, F2>(
 }
 
 /// Handle Delete/Backspace to remove selected drawing, and Escape to deselect/cancel.
-pub fn handle_keyboard_shortcuts(ui: &Ui, drawing_manager: &mut DrawingManager) {
+pub fn handle_keyboard_shortcuts(ui: &Ui, drawing_manager: &mut DrawingManager, focused: bool) {
     ui.input(|i| {
-        if (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+        if focused
+            && (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
             && let Some(sel_id) = drawing_manager.sel_drawing()
         {
             drawing_manager.delete_drawing(sel_id);

@@ -39,9 +39,11 @@ impl ChartGridSelector {
             .tooltip("Chart layout")
             .show(ui);
         let mut selected = None;
-        egui::Popup::menu(&button).show(|ui| {
-            selected = self.show_menu(ui);
-        });
+        egui::Popup::menu(&button)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                selected = self.show_menu(ui);
+            });
         selected
     }
 

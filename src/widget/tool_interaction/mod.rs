@@ -155,7 +155,7 @@ impl Chart {
         }
 
         // Handle keyboard shortcuts for drawing manipulation
-        selection::handle_keyboard_shortcuts(ui, drawing_manager);
+        selection::handle_keyboard_shortcuts(ui, drawing_manager, response.has_focus());
 
         // Render existing drawings against the chart's bars
         let view = ChartView {

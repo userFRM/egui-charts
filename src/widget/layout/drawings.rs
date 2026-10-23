@@ -5,10 +5,11 @@ use crate::widget::{
     Chart, SeriesId,
     sync::{index_at, time_at},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 type Key = (usize, usize);
 
+#[derive(Clone)]
 struct Snapshot {
     style: String,
     points: Vec<ChartPoint>,
@@ -16,10 +17,11 @@ struct Snapshot {
     symbol: String,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct DrawingLinks {
     previous: HashMap<Key, Snapshot>,
     origins: HashMap<Key, Key>,
+    retry: HashSet<Key>,
 }
 
 impl DrawingLinks {
@@ -29,9 +31,10 @@ impl DrawingLinks {
         count: usize,
         groups: &[Option<String>; 16],
         pointer_down: bool,
-    ) {
+    ) -> bool {
+        let mut changed = false;
         let mut changes = Vec::new();
-        let mut current = HashMap::new();
+        let mut current = HashSet::new();
         for (slot, chart) in charts.iter().take(count).enumerate() {
             for drawing in &chart.drawings().drawings {
                 let Ok(style) = serde_json::to_string(drawing) else {
@@ -39,28 +42,21 @@ impl DrawingLinks {
                 };
                 let key = (slot, drawing.id);
                 let old = self.previous.get(&key);
-                if old.is_none_or(|old| {
+                let retry = self.retry.remove(&key);
+                if (old.is_none_or(|old| {
                     old.style != style
                         || old.points != drawing.chart_points
                         || old.notes != drawing.notes
-                }) && old.is_none_or(|old| old.symbol == chart.symbol())
+                }) || retry)
+                    && old.is_none_or(|old| old.symbol == chart.symbol())
                 {
                     changes.push((key, Some(drawing.clone())));
                 }
-                current.insert(
-                    key,
-                    Snapshot {
-                        style,
-                        points: drawing.chart_points.clone(),
-                        notes: drawing.notes.clone(),
-                        symbol: chart.symbol().to_owned(),
-                    },
-                );
+                current.insert(key);
             }
         }
         for (&key, old) in &self.previous {
-            if key.0 < count && !current.contains_key(&key) && old.symbol == charts[key.0].symbol()
-            {
+            if key.0 < count && !current.contains(&key) && old.symbol == charts[key.0].symbol() {
                 changes.push((key, None));
             }
         }
@@ -83,8 +79,10 @@ impl DrawingLinks {
                     });
                 if let Some(drawing) = &drawing {
                     let Some(mut copy) = map_drawing(drawing, charts[key.0], charts[slot]) else {
+                        self.retry.insert(key);
                         continue;
                     };
+                    changed = true;
                     if let Some(id) = linked {
                         charts[slot].drawings_mut().drag_edit_drawing(id, |target| {
                             copy.id = target.id;
@@ -101,6 +99,7 @@ impl DrawingLinks {
                         }
                     }
                 } else if let Some(id) = linked {
+                    changed = true;
                     charts[slot].drawings_mut().delete_drawing(id);
                 }
             }
@@ -129,6 +128,8 @@ impl DrawingLinks {
         }
         self.origins
             .retain(|key, _| self.previous.contains_key(key));
+        self.retry.retain(|key| self.previous.contains_key(key));
+        changed
     }
 }
 
@@ -275,5 +276,18 @@ mod tests {
                 .count(),
             1
         );
+        // A receiver may still be loading its history when a drawing is first shared.
+        let mut source = chart(60);
+        let mut target = Chart::new(BarData::new());
+        target.set_symbol("SAMPLE");
+        source
+            .drawings_mut()
+            .add_synced_drawing(refs[0].drawings().drawings[0].clone());
+        let mut pending = DrawingLinks::default();
+        pending.sync(&mut [&mut source, &mut target], 2, &groups, false);
+        assert!(target.drawings().drawings.is_empty());
+        target.set_data(SeriesId::MAIN, source.bars(SeriesId::MAIN).to_vec());
+        pending.sync(&mut [&mut source, &mut target], 2, &groups, false);
+        assert_eq!(target.drawings().drawings.len(), 1);
     }
 }

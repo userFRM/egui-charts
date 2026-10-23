@@ -655,7 +655,7 @@ impl DemoApp {
         // Date picker (opened from the bottom toolbar): jump the visible window.
         match self.date_picker.show(ctx) {
             DatePickerAction::GoToDate(date) => self.go_to_date(date),
-            DatePickerAction::SetRange(start, _end) => self.go_to_date(start),
+            DatePickerAction::SetRange(start, end) => self.set_date_range(start, end),
             DatePickerAction::Cancel | DatePickerAction::None => {}
         }
     }
@@ -703,6 +703,16 @@ impl DemoApp {
             }
             dm.add_synced_drawing(copy);
         }
+    }
+
+    fn set_date_range(&mut self, start: chrono::NaiveDate, end: chrono::NaiveDate) {
+        let range = egui_charts::widget::VisibleTimeRange {
+            from: start.and_hms_opt(0, 0, 0).unwrap().and_utc(),
+            to: end.and_hms_opt(23, 59, 59).unwrap().and_utc(),
+        };
+        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        charts.insert(self.layout_slot, &mut self.chart);
+        self.layout.apply_date_range(&mut charts, range);
     }
 
     fn go_to_date(&mut self, date: chrono::NaiveDate) {
@@ -1071,27 +1081,6 @@ impl DemoApp {
             TopToolbarAction::ThemeToggle => self.toggle_theme(),
             TopToolbarAction::Layout(action) => self.handle_layout_action(action),
             TopToolbarAction::None => {}
-        }
-    }
-
-    fn toggle_theme(&mut self) {
-        // Swap the demo theme; `apply_to_egui` repaints every panel, toolbar,
-        // and dialog from it next frame, and the chart background/grid follow
-        // the matching config colors.
-        self.theme = if self.theme.dark {
-            Theme::light()
-        } else {
-            Theme::dark()
-        };
-        let cfg = self.chart.config_mut();
-        cfg.background_color = self.theme.chart.bg;
-        cfg.text_color = self.theme.chart.axis_text;
-        cfg.grid_color = self.theme.chart.grid_line;
-        for extra in &mut self.extra_charts {
-            let cfg = extra.chart.config_mut();
-            cfg.background_color = self.theme.chart.bg;
-            cfg.text_color = self.theme.chart.axis_text;
-            cfg.grid_color = self.theme.chart.grid_line;
         }
     }
 
@@ -2153,6 +2142,42 @@ mod tests {
                             / ((end - start) as f32 + 0.5);
                         assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);
                         assert_eq!(app.replay.is_some(), replay);
+                    }
+                    if !replay {
+                        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+                        app.extra_charts[0].chart.set_feed_paused(true);
+                        app.layout.sync.sync_time_axis = false;
+                        frame(&mut app);
+                        let day = app.bars.last().unwrap().time.date_naive() - chrono::Days::new(2);
+                        for sync in [false, true] {
+                            app.layout.sync.sync_date_range = sync;
+                            let before = app.extra_charts[0].chart.get_time_scale_state();
+                            app.set_date_range(day, day);
+                            frame(&mut app);
+                            let range = app.chart.visible_time_range().unwrap();
+                            assert!(
+                                (range.from - day.and_hms_opt(0, 0, 0).unwrap().and_utc())
+                                    .num_seconds()
+                                    .abs()
+                                    <= 1
+                            );
+                            assert!(
+                                (range.to - day.and_hms_opt(23, 59, 59).unwrap().and_utc())
+                                    .num_seconds()
+                                    .abs()
+                                    <= 1
+                            );
+                            if sync {
+                                let other = app.extra_charts[0].chart.visible_time_range().unwrap();
+                                assert!((other.from - range.from).num_seconds().abs() <= 1);
+                                assert!((other.to - range.to).num_seconds().abs() <= 1);
+                            } else {
+                                assert_eq!(
+                                    app.extra_charts[0].chart.get_time_scale_state(),
+                                    before
+                                );
+                            }
+                        }
                     }
                 }
             }

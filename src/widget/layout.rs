@@ -177,7 +177,8 @@ impl Default for ChartSyncOptions {
 ///
 /// Each chart keeps its own feed, settings, scales, studies and drawings. An unnamed group
 /// synchronizes with other unnamed charts; named groups are isolated. Save this state and the
-/// charts through host storage as needed. The container does not acquire data or persist it.
+/// charts through host storage as needed. Synchronization includes supplied slots hidden by a
+/// grid preset. The container does not acquire data or persist it.
 ///
 /// ```
 /// # fn example(ui: &mut egui::Ui) {
@@ -189,7 +190,7 @@ impl Default for ChartSyncOptions {
 /// layout.show(ui, &mut [&mut a, &mut b]);
 /// # }
 /// ```
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ChartLayout {
     /// The selected grid or tab preset.
     pub mode: ChartLayoutMode,
@@ -262,7 +263,9 @@ impl ChartLayout {
     /// inside the chart; rows have a two-point gap and columns meet at their edge.
     /// Extra charts remain owned by the host and are not painted by a grid preset.
     pub fn show(&mut self, ui: &mut Ui, charts: &mut [&mut Chart]) -> Response {
-        let count = charts.len().min(self.mode.chart_count()).min(16);
+        let total = charts.len().min(16);
+        let charts = &mut charts[..total];
+        let count = total.min(self.mode.chart_count());
         if count == 0 {
             return ui.allocate_response(Vec2::ZERO, Sense::hover());
         }
@@ -297,11 +300,14 @@ impl ChartLayout {
         {
             self.active = index;
         }
-        self.sync_state(charts, count);
+        self.sync_state(charts, total);
+        for chart in charts.iter_mut() {
+            chart.last_hover_bar_idx = None;
+        }
+        let mut pointer_down = ui.input(|i| i.pointer.any_down());
         let before_range = charts[self.active].visible_time_range();
         let before_sync: Vec<_> = charts
             .iter()
-            .take(count)
             .map(|c| (c.synced_crosshair_bar_idx, c.get_time_scale_state()))
             .collect();
         for index in 0..count {
@@ -319,14 +325,17 @@ impl ChartLayout {
                         .with_title(chart.symbol())
                         .with_inner_size([900.0, 600.0]),
                     |ui, _| {
+                        pointer_down |= ui.input(|i| i.pointer.any_down());
                         close |= ui.input(|i| i.viewport().close_requested());
-                        activate |= ui.input(|i| i.pointer.any_pressed())
-                            || super::pan_zoom::raw_wheel_delta(ui) != Vec2::ZERO;
                         if ui.button("Return to layout").clicked() {
                             close = true;
                         }
                         egui::CentralPanel::default().show(ui, |ui| {
-                            chart.show(ui);
+                            let response = chart.show(ui);
+                            activate |= response.is_pointer_button_down_on()
+                                || response.clicked()
+                                || (response.hovered()
+                                    && super::pan_zoom::raw_wheel_delta(ui) != Vec2::ZERO);
                         });
                     },
                 );
@@ -334,11 +343,13 @@ impl ChartLayout {
                 if activate {
                     self.active = index;
                 }
-                ui.scope_builder(egui::UiBuilder::new().max_rect(rects[index]), |ui| {
-                    if ui.button("Return chart to layout").clicked() {
-                        self.detached[index] = false;
-                    }
-                });
+                if self.mode != ChartLayoutMode::Tabs || index == self.active {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(rects[index]), |ui| {
+                        if ui.button("Return chart to layout").clicked() {
+                            self.detached[index] = false;
+                        }
+                    });
+                }
                 continue;
             }
             let rect = rects[index];
@@ -359,17 +370,19 @@ impl ChartLayout {
                             ),
                             egui::Button::new("…").frame(false),
                         );
-                        egui::Popup::menu(&button).show(|ui| {
-                            if ui.button("Detach chart").clicked() {
-                                self.detached[index] = true;
-                                ui.close();
-                            }
-                            ui.label("Sync group");
-                            let mut group = self.groups[index].clone().unwrap_or_default();
-                            if ui.text_edit_singleline(&mut group).changed() {
-                                self.groups[index] = (!group.is_empty()).then_some(group);
-                            }
-                        });
+                        egui::Popup::menu(&button)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
+                                if ui.button("Detach chart").clicked() {
+                                    self.detached[index] = true;
+                                    ui.close();
+                                }
+                                ui.label("Sync group");
+                                let mut group = self.groups[index].clone().unwrap_or_default();
+                                if ui.text_edit_singleline(&mut group).changed() {
+                                    self.groups[index] = (!group.is_empty()).then_some(group);
+                                }
+                            });
                     }
                 },
             );
@@ -385,26 +398,27 @@ impl ChartLayout {
         // Apply gestures from the source after it has handled this frame's input.
         let sync_range = charts[self.active].visible_time_range() != before_range
             || self.previous_preset != Some((self.mode, count));
-        self.sync_view(charts, count, sync_range);
+        self.sync_view(charts, total, sync_range);
         self.previous_preset = Some((self.mode, count));
-        if charts.iter().take(count).zip(before_sync).any(
-            |(chart, (crosshair, (spacing, offset)))| {
+        if charts
+            .iter()
+            .zip(before_sync)
+            .any(|(chart, (crosshair, (spacing, offset)))| {
                 chart.synced_crosshair_bar_idx != crosshair
                     || (chart.get_time_scale_state().0 - spacing).abs() > 0.001
                     || (chart.get_time_scale_state().1 - offset).abs() > 0.001
-            },
-        ) {
+            })
+        {
             ui.ctx().request_repaint();
         }
-        if self.sync.sync_drawings {
-            self.drawings.sync(
-                charts,
-                count,
-                &self.groups,
-                ui.input(|i| i.pointer.any_down()),
-            );
+        if self.sync.sync_drawings
+            && self
+                .drawings
+                .sync(charts, total, &self.groups, pointer_down)
+        {
+            ui.ctx().request_repaint();
         }
-        for (index, chart) in charts.iter().take(count).enumerate() {
+        for (index, chart) in charts.iter().enumerate() {
             self.previous[index] = Some((chart.symbol().to_owned(), chart.timeframe()));
         }
         response
@@ -515,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn presets_fill_the_grid_and_tabs_keep_the_active_chart() {
+    fn presets_preserve_chart_state_and_route_input_to_visible_slots() {
         let rect = Rect::from_min_size(pos2(54.0, 70.0), vec2(1386.0, 716.0));
         for &mode in ChartLayoutMode::all() {
             let layout = ChartLayout {
@@ -631,6 +645,71 @@ mod tests {
                 modifiers: Default::default(),
             }],
         );
+        layout.sync.sync_time_axis = false;
+        for chart in &mut charts {
+            chart.apply_synced_time_scale(3.0, 0.0);
+        }
+        // Delete applies only to the chart that received the pointer focus.
+        for chart in &mut charts {
+            let mut drawing =
+                crate::drawings::Drawing::new(0, crate::drawings::DrawingToolType::HorizontalLine);
+            drawing.completed = true;
+            drawing
+                .chart_points
+                .push(crate::drawings::ChartPoint::new(10.0, 10.0));
+            chart.drawings_mut().add_synced_drawing(drawing);
+            let id = chart.drawings().drawings[0].id;
+            chart.drawings_mut().select(id);
+        }
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+        );
+        assert!(charts[0].drawings().drawings.is_empty());
+        assert_eq!(charts[1].drawings().drawings.len(), 1);
+        let id = charts[1].drawings().drawings[0].id;
+        charts[1].drawings_mut().delete_drawing(id);
+
+        // Hidden chart tabs must not remain crosshair sources.
+        charts[0].last_hover_bar_idx = Some(10.0);
+        layout.mode = ChartLayoutMode::Tabs;
+        layout.set_active(1);
+        frame(&mut layout, &mut charts, vec![Event::PointerGone]);
+        assert_eq!(charts[0].hover_time(), None);
+        assert_eq!(charts[1].synced_crosshair_bar_idx, None);
+
+        // Preset changes retain links, including edits and deletions while a slot is hidden.
+        layout.mode = ChartLayoutMode::TwoHorizontal;
+        layout.sync.sync_drawings = true;
+        let mut drawing =
+            crate::drawings::Drawing::new(0, crate::drawings::DrawingToolType::HorizontalLine);
+        drawing.completed = true;
+        drawing
+            .chart_points
+            .push(crate::drawings::ChartPoint::new(10.0, 10.0));
+        charts[0].drawings_mut().add_synced_drawing(drawing);
+        frame(&mut layout, &mut charts, vec![]);
+        assert_eq!(charts[1].drawings().drawings.len(), 1);
+        layout.mode = ChartLayoutMode::Single;
+        frame(&mut layout, &mut charts, vec![]);
+        layout.mode = ChartLayoutMode::TwoHorizontal;
+        frame(&mut layout, &mut charts, vec![]);
+        assert_eq!(charts[0].drawings().drawings.len(), 1);
+        assert_eq!(charts[1].drawings().drawings.len(), 1);
+        layout.mode = ChartLayoutMode::Single;
+        let id = charts[0].drawings().drawings[0].id;
+        charts[0].drawings_mut().delete_drawing(id);
+        frame(&mut layout, &mut charts, vec![]);
+        layout.mode = ChartLayoutMode::TwoHorizontal;
+        frame(&mut layout, &mut charts, vec![]);
+        assert!(charts[1].drawings().drawings.is_empty());
         layout.set_detached(1, true);
         frame(&mut layout, &mut charts, vec![]);
         assert_eq!(charts[1].bars(super::super::SeriesId::MAIN).len(), 100);
