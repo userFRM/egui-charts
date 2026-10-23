@@ -36,5 +36,5 @@ pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,
 };
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
-pub use tooltip::render_tooltip_with_options;
+pub use tooltip::{StudyValue, render_tooltip_with_options};
 pub use volume::render_volume_bar;

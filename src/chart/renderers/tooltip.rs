@@ -14,6 +14,40 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
 
+/// One visible study plot's value at the selected bar. Missing or warming-up values stay absent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StudyValue {
+    /// Study title.
+    pub study: String,
+    /// Plot title within the study.
+    pub plot: String,
+    /// Finite value at the selected index, or `None` for a gap.
+    pub value: Option<f64>,
+    /// Number of decimal places used by the study's legend.
+    pub precision: usize,
+    /// Plot colour.
+    pub color: egui::Color32,
+}
+
+impl StudyValue {
+    /// Study and plot caption, omitting a repeated single-plot title.
+    pub fn label(&self) -> String {
+        if self.plot.is_empty() || self.plot == self.study {
+            self.study.clone()
+        } else {
+            format!("{}: {}", self.study, self.plot)
+        }
+    }
+
+    /// Value at the study's precision, or the missing-value marker.
+    pub fn formatted_value(&self) -> String {
+        self.value.filter(|value| value.is_finite()).map_or_else(
+            || "∅".to_owned(),
+            |value| format!("{value:.precision$}", precision = self.precision),
+        )
+    }
+}
+
 /// Renders tooltip based on configured mode
 pub fn render_tooltip_with_options(
     context: &RenderContext,
@@ -27,6 +61,7 @@ pub fn render_tooltip_with_options(
     visible_data: &[Bar],
     formatter: &dyn TimeFormatter,
     bar_seconds: i64,
+    studies: &[StudyValue],
 ) {
     match options.mode {
         TooltipMode::Floating => {
@@ -40,6 +75,7 @@ pub fn render_tooltip_with_options(
                 colors.bar_color(candle.close >= candle.open),
                 formatter,
                 bar_seconds,
+                studies,
             );
         }
         TooltipMode::Tracking => {
@@ -50,6 +86,7 @@ pub fn render_tooltip_with_options(
                 options,
                 formatter,
                 bar_seconds,
+                studies,
             );
         }
         TooltipMode::Magnifier => {
@@ -78,6 +115,7 @@ pub fn render_floating_tooltip(
     value_color: egui::Color32,
     formatter: &dyn TimeFormatter,
     bar_seconds: i64,
+    studies: &[StudyValue],
 ) {
     let options = &options.resolved(painter.ctx());
     let price = |price: f64| {
@@ -114,6 +152,16 @@ pub fn render_floating_tooltip(
         rows.push(("Vol", volume));
     }
 
+    let mut rows: Vec<_> = rows
+        .into_iter()
+        .map(|(label, value)| (label.to_owned(), value, value_color))
+        .collect();
+    rows.extend(
+        studies
+            .iter()
+            .map(|study| (study.label(), study.formatted_value(), study.color)),
+    );
+
     if rows.is_empty() {
         return;
     }
@@ -122,10 +170,10 @@ pub fn render_floating_tooltip(
     let font_id = FontId::proportional(options.font_size);
     let rows: Vec<_> = rows
         .into_iter()
-        .map(|(label, value)| {
+        .map(|(label, value, color)| {
             (
-                painter.layout_no_wrap(label.to_owned(), font_id.clone(), options.text_color),
-                painter.layout_no_wrap(value, font_id.clone(), value_color),
+                painter.layout_no_wrap(label, font_id.clone(), options.text_color),
+                painter.layout_no_wrap(value, font_id.clone(), color),
             )
         })
         .collect();
@@ -233,6 +281,7 @@ pub fn render_tracking_tooltip(
     options: &TooltipOptions,
     formatter: &dyn TimeFormatter,
     bar_seconds: i64,
+    studies: &[StudyValue],
 ) {
     let options = &options.resolved(painter.ctx());
     let bar_height = options.tracking_bar_height;
@@ -259,6 +308,12 @@ pub fn render_tracking_tooltip(
     if options.show_volume {
         parts.push(format!("Vol: {:.0}", candle.volume));
     }
+
+    parts.extend(
+        studies
+            .iter()
+            .map(|study| format!("{}: {}", study.label(), study.formatted_value())),
+    );
 
     if options.show_change {
         let change_pct = percent_change(candle.open, candle.close);

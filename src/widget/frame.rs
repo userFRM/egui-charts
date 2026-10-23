@@ -1349,6 +1349,7 @@ impl Chart {
                         visible_data,
                         formatter.as_ref(),
                         bar_seconds,
+                        &self.study_values_at(start_idx + local_idx),
                     );
                 }
             }
@@ -2194,6 +2195,15 @@ mod tests {
                         })
                         .collect();
                     let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                    let study = chart.add_indicator(Box::new(
+                        crate::studies::CustomIndicator::new("Fixture", |bars| {
+                            vec![crate::studies::IndicatorValue::Single(0.12345); bars.len()]
+                        }),
+                    ));
+                    let study = chart.indicator_mut(study).unwrap();
+                    let mut settings = study.settings();
+                    settings.precision = Some(3);
+                    study.apply_settings(&[], settings).unwrap();
                     chart.set_timeframe(Timeframe::Sec1);
                     chart.chart_options.time_scale.timezone = TimezoneMode::nyse();
                     chart.set_instrument(Some(
@@ -2217,6 +2227,31 @@ mod tests {
                             _ => None,
                         })
                         .collect();
+                    let values: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Text(text) => Some(text.galley.text()),
+                            _ => None,
+                        })
+                        .collect();
+                    match mode {
+                        crate::config::TooltipMode::Floating => {
+                            assert_eq!(
+                                values.iter().filter(|text| **text == "Fixture").count(),
+                                2,
+                                "{values:?}"
+                            );
+                            assert_eq!(
+                                values.iter().filter(|text| **text == "0.123").count(),
+                                2,
+                                "{values:?}"
+                            );
+                        }
+                        _ => assert!(
+                            values.iter().any(|text| text.contains("Fixture: 0.123")),
+                            "{values:?}"
+                        ),
+                    }
                     assert_eq!(
                         times.len(),
                         2,

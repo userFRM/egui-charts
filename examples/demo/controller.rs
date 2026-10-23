@@ -1208,7 +1208,11 @@ impl DemoApp {
                 dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
                     != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
-                let mode = if dm.options.magnet_mode { egui_charts::config::CrosshairMode::Magnet } else { egui_charts::config::CrosshairMode::Normal };
+                let mode = if dm.options.magnet_mode {
+                    egui_charts::config::CrosshairMode::Magnet
+                } else {
+                    egui_charts::config::CrosshairMode::Normal
+                };
                 self.chart.set_crosshair_mode(mode);
             }
             DrawingToolbarAction::SetMagnetType(kind) => {
@@ -1216,7 +1220,8 @@ impl DemoApp {
                 dm.options.strong_magnet =
                     kind != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
-                self.chart.set_crosshair_mode(egui_charts::config::CrosshairMode::Magnet);
+                self.chart
+                    .set_crosshair_mode(egui_charts::config::CrosshairMode::Magnet);
             }
             DrawingToolbarAction::ToggleEraserMode => {
                 let on = !dm.eraser_mode;
@@ -1360,26 +1365,7 @@ impl DemoApp {
     }
 
     fn build_data_window(&self) -> DataWindowInfo {
-        let bars = self.chart.state().shown();
-        let index = self
-            .chart
-            .get_hover_bar_idx()
-            .filter(|index| index.is_finite() && index.round() >= 0.0)
-            .map(|index| index.round() as usize)
-            .filter(|index| *index < bars.len())
-            .unwrap_or_else(|| bars.len().saturating_sub(1));
-        let last = bars.get(index);
-        let mut info = DataWindowInfo::new(self.state.symbol.clone())
-            .with_price_decimals(self.chart.instrument().and_then(|i| i.price_decimals))
-            .with_timeframe(self.state.timeframe.as_str().to_string());
-        if let Some(b) = last {
-            info = info.with_ohlcv(b.open, b.high, b.low, b.close, b.volume);
-            info = info.with_timestamp(self.chart.format_time(b.time));
-            if let Some(previous) = index.checked_sub(1).and_then(|index| bars.get(index)) {
-                info = info.with_prev_close(previous.close);
-            }
-        }
-        info
+        DataWindowInfo::from_chart(&self.chart)
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
@@ -2220,6 +2206,30 @@ mod tests {
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.chart.set_feed_paused(true);
             app.chart.set_chart_type(kind);
+            use egui_charts::studies::{CustomIndicator, IndicatorValue, SMA};
+            let average = app.chart.add_indicator(Box::new(SMA::new(2)));
+            let study = app.chart.indicator_mut(average).unwrap();
+            let mut settings = study.settings();
+            settings.precision = Some(3);
+            study.apply_settings(&[], settings).unwrap();
+            let gap = app.chart.add_indicator(Box::new(
+                CustomIndicator::new("Gap", |bars| {
+                    vec![IndicatorValue::Multiple(vec![f64::NAN, 42.125]); bars.len()]
+                })
+                .with_overlay(false)
+                .with_line_cnt(2)
+                .with_line_names(vec!["Missing".into(), "Hidden plot".into()]),
+            ));
+            let study = app.chart.indicator_mut(gap).unwrap();
+            let mut settings = study.settings();
+            settings.plots[1].visible = false;
+            study.apply_settings(&[], settings).unwrap();
+            let hidden = app
+                .chart
+                .add_indicator(Box::new(CustomIndicator::new("Invisible", |bars| {
+                    vec![IndicatorValue::Single(123.0); bars.len()]
+                })));
+            app.chart.set_indicator_visible(hidden, false);
             let frame = |app: &mut DemoApp, events| {
                 ctx.run_ui(
                     egui::RawInput {
@@ -2258,6 +2268,45 @@ mod tests {
                 "{kind:?}"
             );
             assert_eq!(info.prev_close, bars[index - 1].close, "{kind:?}");
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                egui_charts::ui::widget_bar::panels::object_tree::show_data_window(ui, &info, true);
+            });
+            let text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let studies_visible = kind == ChartType::Candles;
+            assert_eq!(
+                text.iter().any(|text| text == "SMA"),
+                studies_visible,
+                "{text:?}"
+            );
+            if studies_visible {
+                // The two-bar average is the sum of these closes divided by two.
+                assert!(
+                    text.contains(&format!(
+                        "{:.3}",
+                        (bars[index - 1].close + bars[index].close) / 2.0
+                    )),
+                    "{text:?}"
+                );
+                assert!(text.iter().any(|text| text == "Gap: Missing"), "{text:?}");
+                assert!(text.iter().any(|text| text == "∅"), "{text:?}");
+            }
+            assert!(
+                !text
+                    .iter()
+                    .any(|text| text == "Invisible" || text.contains("Hidden plot")),
+                "{text:?}"
+            );
+            let latest = bars.last().unwrap().close;
+            frame(&mut app, vec![egui::Event::PointerGone]);
+            assert_eq!(app.build_data_window().close, latest);
             let mut settings = app.settings_state.clone();
             settings.timezone = "Europe/Paris".to_owned();
             let view = app.chart.get_time_scale_state();
