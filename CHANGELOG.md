@@ -115,6 +115,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Command palette highlights are inset from the row edges and use the kit small radius for selected and hovered rows. ([#591](https://github.com/userFRM/egui-charts/issues/591))
+
 - Subdued list text and property labels use the weak text colour while values retain the row text colour. Dark weak text reads at 4.5:1 or better on panels and floating windows. ([#589](https://github.com/userFRM/egui-charts/issues/589))
 
 - Action list rows are transparent at rest, including disabled rows, with disabled text and icons in the theme colour. Primary and danger rows use the shared opaque hover and pressed shades. ([#596](https://github.com/userFRM/egui-charts/issues/596))
