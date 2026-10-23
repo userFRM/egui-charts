@@ -64,7 +64,6 @@ pub enum IndicatorValue {
 /// state carries over it unchanged. A window study may also leave the windows that
 /// contain it without a value. The chart's datafeed drops such bars before they reach a
 /// study, so this matters to direct callers of [`calculate`](Indicator::calculate).
-/// Some built-in recursive and cumulative studies do not follow this yet.
 pub trait Indicator: Send {
     /// Return the short display name of this indicator (e.g. `"SMA"`, `"RSI"`, `"MACD"`).
     fn name(&self) -> &str;

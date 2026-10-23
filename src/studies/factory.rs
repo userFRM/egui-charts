@@ -657,41 +657,114 @@ mod tests {
             }
         }
 
-        // One non-finite bar must not blank the rest of the series: wherever the series without
-        // it has a finite last value, the series with it has one too, whether the bar has NaN
-        // prices, an infinite high, a NaN volume or a NaN open. 600 bars keep every window at
-        // the last bar clear of bar 100.
-        let long: Vec<Bar> = (0..600).map(bar).collect();
-        let mut without = long.clone();
-        without.remove(100);
-        let mut nan = long.clone();
-        (nan[100].high, nan[100].low, nan[100].close) = (f64::NAN, f64::NAN, f64::NAN);
-        let mut infinite = long.clone();
-        infinite[100].high = f64::INFINITY;
-        let mut no_volume = long.clone();
-        no_volume[100].volume = f64::NAN;
-        let mut no_open = long.clone();
-        no_open[100].open = f64::NAN;
-        let last = |study: &mut Box<dyn Indicator>, bars: &[Bar]| {
-            catch_unwind(AssertUnwindSafe(|| study.calculate(bars))).ok()?;
-            study.values().last().map(finite)
+        // The `Indicator` policy: after one non-finite bar every later value equals the value
+        // for the series without that bar, within 1e-9 relative, whichever field is bad and
+        // wherever the bar sits (inside a warm-up window or after it). The series has the close
+        // off the middle of the range, gaps between bars and a varying volume, which the range-midpoint series
+        // above hides from studies that weigh the close position or the volume. Lengths differ
+        // per slot so that fast, slow and signal lengths are not equal. 600 bars keep every
+        // window at the last bar clear of the bad bar.
+        let real = |i: i64| {
+            let x = i as f64;
+            let c = 100.0
+                + (x * 0.17).sin() * 6.0
+                + (x * 0.031).cos() * 9.0
+                + x * 0.02
+                + ((i * i * 31 + 7 * i) % 17) as f64 * 0.8;
+            let o = c - (x * 0.7).sin() * 1.3;
+            Bar {
+                time: Utc.timestamp_opt(i * 60, 0).unwrap(),
+                open: o,
+                high: c.max(o) + 1.0 + (x * 0.3).sin().abs(),
+                low: c.min(o) - 1.0 - (x * 0.5).cos().abs(),
+                close: c,
+                volume: 1000.0 + ((i * 37) % 211) as f64 * 9.0,
+            }
         };
-        for mut study in builtins_with(|_| 14, |v| v) {
-            let Some(clean) = last(&mut study, &without) else {
+        let long: Vec<Bar> = (0..600).map(real).collect();
+        type Edit = fn(&mut Bar);
+        let edits: [(&str, Edit); 10] = [
+            ("NaN prices", |b| {
+                (b.high, b.low, b.close) = (f64::NAN, f64::NAN, f64::NAN)
+            }),
+            ("NaN high", |b| b.high = f64::NAN),
+            ("NaN low", |b| b.low = f64::NAN),
+            ("NaN close", |b| b.close = f64::NAN),
+            ("infinite high", |b| b.high = f64::INFINITY),
+            ("negative infinite low", |b| b.low = f64::NEG_INFINITY),
+            ("infinite close", |b| b.close = f64::INFINITY),
+            ("NaN volume", |b| b.volume = f64::NAN),
+            ("infinite volume", |b| b.volume = f64::INFINITY),
+            ("NaN open", |b| b.open = f64::NAN),
+        ];
+        let values = |study: &mut Box<dyn Indicator>, bars: &[Bar]| {
+            catch_unwind(AssertUnwindSafe(|| study.calculate(bars))).ok()?;
+            Some(study.values().to_vec())
+        };
+        let parts = |v: &IndicatorValue| match v {
+            IndicatorValue::Single(x) => vec![*x],
+            IndicatorValue::Multiple(xs) => xs.clone(),
+            IndicatorValue::None => Vec::new(),
+        };
+        let blank = |v: &IndicatorValue| parts(v).iter().all(|x| !x.is_finite());
+        // A finite component must match the reference. A window study may leave the windows
+        // holding the bad bar without a value (`near`, no study looks back further than 250
+        // bars), but later every component the reference has must be there.
+        let agrees = |hostile: &IndicatorValue, reference: &IndicatorValue, near: bool| {
+            let (hostile, reference) = (parts(hostile), parts(reference));
+            let right = |h: f64, r: f64| h.is_finite() && (h - r).abs() <= 1e-9 * r.abs().max(1.0);
+            hostile
+                .iter()
+                .enumerate()
+                .all(|(k, &h)| !h.is_finite() || reference.get(k).is_some_and(|&r| right(h, r)))
+                && reference.iter().enumerate().all(|(k, &r)| {
+                    !r.is_finite() || near || hostile.get(k).is_some_and(|&h| right(h, r))
+                })
+        };
+        for mut study in builtins_with(|k| 12 + 3 * k, |v| v) {
+            let Some(full) = values(&mut study, &long) else {
                 continue;
             };
-            let carries = [&nan, &infinite, &no_volume, &no_open].iter().any(|bars| {
-                let hostile = last(&mut study, bars).unwrap_or_default();
-                clean
-                    .iter()
-                    .enumerate()
-                    .any(|(k, c)| *c && !hostile.get(k).copied().unwrap_or(false))
-            });
-            if carries {
-                failures.push(format!(
-                    "{} carries one non-finite bar to the end of the series",
-                    study.name()
-                ));
+            for at in [5, 100] {
+                let mut without = long.clone();
+                without.remove(at);
+                let Some(clean) = values(&mut study, &without) else {
+                    continue;
+                };
+                for (label, edit) in edits {
+                    let mut bars = long.clone();
+                    edit(&mut bars[at]);
+                    let hostile = values(&mut study, &bars).unwrap_or_default();
+                    // A study that reads the bad field skips the bar and matches the series
+                    // without it; one that does not read it sees an ordinary bar and matches
+                    // the full series.
+                    let first_wrong = |reference: &[IndicatorValue], shift: usize| {
+                        (at + 1..bars.len()).find(|&i| {
+                            !hostile
+                                .get(i)
+                                .is_some_and(|h| agrees(h, &reference[i - shift], i <= at + 250))
+                        })
+                    };
+                    let (skipped, seen) = (first_wrong(&clean, 1), first_wrong(&full, 0));
+                    if let (Some(i), Some(_)) = (skipped, seen) {
+                        failures.push(format!(
+                            "{} differs from the series without a bar with {label} at {at} \
+                             at bar {i}: {:?} against {:?}",
+                            study.name(),
+                            hostile.get(i),
+                            clean[i - 1]
+                        ));
+                    } else if skipped.is_none()
+                        && seen.is_some()
+                        && !hostile.get(at).is_some_and(blank)
+                    {
+                        failures.push(format!(
+                            "{} gives {:?} on its bad bar with {label} at {at}",
+                            study.name(),
+                            hostile.get(at)
+                        ));
+                    }
+                }
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
