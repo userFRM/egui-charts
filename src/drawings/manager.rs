@@ -14,7 +14,7 @@ use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType, HandlePos};
 use crate::drawings::rendering::ChartView;
 use crate::drawings::services::{
     DrawingInteraction, HandleConfig, HandleService, HistoryService, SelectionService, SnapOptions,
-    SnapService,
+    SnapService, ZOrderService, in_z_order,
 };
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect};
@@ -441,6 +441,7 @@ impl DrawingManager {
         G: Fn(f32) -> f64,
     {
         let mut drawing = Drawing::with_color(self.next_id, tool_type, self.options.default_color);
+        drawing.z_order = self.top_z_order();
         let drawing_id = self.next_id;
         self.next_id += 1;
         self.preview_point = false;
@@ -591,21 +592,23 @@ impl DrawingManager {
     }
 
     // === Layer ordering ===
+    //
+    // `Drawing::z_order` decides the layering: drawings are drawn in ascending z-order and hit
+    // from the highest down, in list order where it is the same.
 
-    /// Bring a drawing to the front (rendered last, on top)
+    /// Bring a drawing to the front (drawn last, on top), above the highest z-order
     pub fn bring_to_front(&mut self, id: usize) {
-        if let Some(idx) = self.drawings.iter().position(|d| d.id == id) {
-            let drawing = self.drawings.remove(idx);
-            self.drawings.push(drawing);
-        }
+        ZOrderService::bring_to_front(&mut self.drawings, id);
     }
 
-    /// Send a drawing to the back (rendered first, behind others)
+    /// Send a drawing to the back (drawn first, behind others), below the lowest z-order
     pub fn send_to_back(&mut self, id: usize) {
-        if let Some(idx) = self.drawings.iter().position(|d| d.id == id) {
-            let drawing = self.drawings.remove(idx);
-            self.drawings.insert(0, drawing);
-        }
+        ZOrderService::send_to_back(&mut self.drawings, id);
+    }
+
+    /// The z-order that puts a drawing added now on top of the others.
+    fn top_z_order(&self) -> i32 {
+        self.drawings.iter().map(|d| d.z_order).max().unwrap_or(0)
     }
 
     // === Coordinate updates ===
@@ -745,8 +748,8 @@ impl DrawingManager {
 
     /// Render all drawings against the chart's bars and coordinate mapping
     pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
-        // Render completed drawings
-        for drawing in &self.drawings {
+        // Render completed drawings, bottom layer first
+        for drawing in in_z_order(&self.drawings) {
             if drawing.visible {
                 drawing.render(painter, price_rect, view);
             }
@@ -861,6 +864,34 @@ mod tests {
             manager.drawings[0].chart_points[0],
             ChartPoint::new(10.0, 10.0)
         );
+    }
+
+    /// Of two overlapping drawings, the one with the higher `z_order` is hit, whichever was
+    /// added last, and the manager's layer operations set `z_order`, which is what is saved.
+    #[test]
+    fn z_order_decides_which_overlapping_drawing_is_hit() {
+        use crate::drawings::services::ZOrderService;
+        let mut manager = DrawingManager::new();
+        for id in [1, 2] {
+            let mut line = Drawing::new(id, DrawingToolType::HorizontalLine);
+            line.chart_points = vec![ChartPoint::new(10.0, 50.0)];
+            line.update_screen_coords(|bar| bar, |price| price as f32);
+            manager.drawings.push(line);
+        }
+        let on_both = Pos2::new(30.0, 50.0);
+        let z = |m: &DrawingManager, id| m.drawings.iter().find(|d| d.id == id).unwrap().z_order;
+        assert_eq!(manager.hit_test(on_both), Some(2));
+
+        ZOrderService::bring_to_front(&mut manager.drawings, 1);
+        assert_eq!(manager.hit_test(on_both), Some(1));
+
+        manager.send_to_back(1);
+        assert_eq!(manager.hit_test(on_both), Some(2));
+        assert!(z(&manager, 1) < z(&manager, 2));
+
+        manager.bring_to_front(1);
+        assert_eq!(manager.hit_test(on_both), Some(1));
+        assert!(z(&manager, 1) > z(&manager, 2));
     }
 
     #[test]

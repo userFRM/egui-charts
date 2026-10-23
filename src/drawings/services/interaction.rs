@@ -229,7 +229,8 @@ impl DrawingInteraction {
         }
     }
 
-    /// Hit-tests a screen point against all visible drawings (back-to-front order).
+    /// Hit-tests a screen point against all visible drawings, from the top layer down
+    /// (descending z-order, and the later drawing first where the z-order is the same).
     ///
     /// Returns the ID of the topmost drawing at `point`, or `None` if no drawing
     /// was hit. Respects visibility and per-timeframe visibility filtering.
@@ -238,7 +239,7 @@ impl DrawingInteraction {
     pub fn hit_test(&self, point: Pos2, drawings: &[Drawing], timeframe: &str) -> Option<usize> {
         let hit_distance = 5.0;
 
-        for drawing in drawings.iter().rev() {
+        for drawing in super::in_z_order(drawings).into_iter().rev() {
             // Skip hidden drawings
             if !drawing.visible {
                 continue;

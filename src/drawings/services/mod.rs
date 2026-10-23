@@ -65,3 +65,4 @@ pub use interaction::{DrawingInteraction, point_to_line_distance};
 pub use selection::SelectionService;
 pub use snap::{SnapOptions, SnapService, SnapTargets};
 pub use z_order::ZOrderService;
+pub(crate) use z_order::in_z_order;
