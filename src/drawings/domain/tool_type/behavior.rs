@@ -134,6 +134,39 @@ impl DrawingToolType {
         }
     }
 
+    /// Anchors a drawing of this tool needs to be drawn and selected: what its renderer reads, not
+    /// what the toolbar collects, so a drawing finished early or saved by an earlier release
+    /// still counts. The parallel channel draws nothing below three; the other multi-point
+    /// tools draw a mark and a segment per anchor they have.
+    pub(crate) fn anchors_needed(&self) -> usize {
+        match self {
+            Self::ParallelChannel => 3,
+            Self::Triangle
+            | Self::FlatTopBottom
+            | Self::DisjointChannel
+            | Self::Pitchfork
+            | Self::SchiffPitchfork
+            | Self::ModifiedSchiffPitchfork
+            | Self::InsidePitchfork
+            | Self::Polyline
+            | Self::Path
+            | Self::GhostFeed
+            | Self::XABCDPattern
+            | Self::CypherPattern
+            | Self::HeadAndShoulders
+            | Self::ABCDPattern
+            | Self::TrianglePattern
+            | Self::ThreeDrivesPattern
+            | Self::ElliottImpulse
+            | Self::ElliottCorrection
+            | Self::ElliottTriangle
+            | Self::ElliottDoubleCombo
+            | Self::ElliottTripleCombo => 1,
+            _ if self.interaction_mode() == DrawingInteractionMode::SingleClick => 1,
+            _ => 2,
+        }
+    }
+
     /// Returns the number of [`ChartPoint`](crate::drawings::ChartPoint)s
     /// required to complete a drawing of this type, or `None` for tools with
     /// no fixed point count (`Polyline`, `Brush`, cursors).

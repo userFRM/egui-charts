@@ -97,6 +97,12 @@ impl StoredDrawing {
         self.modified_at = chrono::Utc::now().timestamp_millis();
     }
 
+    /// The anchors the tool needs when this drawing has fewer, as `(needed, held)`.
+    fn missing_anchors(&self) -> Option<(usize, usize)> {
+        let needed = self.drawing.tool_type.anchors_needed();
+        (self.points.len() < needed).then_some((needed, self.points.len()))
+    }
+
     /// The first field holding NaN or an infinity, which JSON cannot store.
     fn non_finite_field(&self) -> Option<String> {
         let d = &self.drawing;
@@ -236,8 +242,8 @@ impl DrawingStorage {
 
     /// Serialize to JSON, refusing what would lose a drawing on the next load:
     /// a non-finite number, which JSON cannot store and which would otherwise be
-    /// written as `null`, and an id an earlier drawing already has, which
-    /// [`Self::from_json`] skips.
+    /// written as `null`, an id an earlier drawing already has and fewer anchors
+    /// than the tool draws with, which [`Self::from_json`] skips.
     pub fn to_json(&self) -> Result<String, SaveError> {
         let mut ids = HashSet::new();
         for stored in &self.drawings {
@@ -252,6 +258,14 @@ impl DrawingStorage {
                     field,
                 });
             }
+            if let Some((needed, anchors)) = stored.missing_anchors() {
+                return Err(SaveError::MissingAnchors {
+                    id: stored.id.clone(),
+                    tool: stored.drawing.tool_type,
+                    anchors,
+                    needed,
+                });
+            }
         }
         serde_json::to_string_pretty(self).map_err(SaveError::Json)
     }
@@ -262,13 +276,15 @@ impl DrawingStorage {
     /// know and on a missing or invalid symbol, timeframe or metadata. A
     /// drawing that cannot be read (a missing field, a `null` an earlier release
     /// wrote for a non-finite number, a number out of the range of its field, a
-    /// tool type from a newer release, a cursor or a setting out of bounds) is
+    /// tool type from a newer release, a cursor, fewer anchors than the tool
+    /// draws with or a setting out of bounds) is
     /// left out and returned as a [`SkippedDrawing`], so one bad drawing does
     /// not lose the others. A drawing whose id an
     /// earlier loaded drawing already has is skipped too, so the loaded ids are
     /// unique and the first one in the file wins. Saving the returned storage writes
     /// only the drawings that loaded; keep the original file if the skipped
-    /// ones must be recovered.
+    /// ones must be recovered. A drawing whose timeframe filter names no
+    /// timeframe loads as visible on every timeframe.
     pub fn from_json(json: &str) -> Result<(Self, Vec<SkippedDrawing>), serde_json::Error> {
         #[derive(Deserialize)]
         struct Version {
@@ -314,7 +330,7 @@ impl DrawingStorage {
             .filter_map(|(index, value)| {
                 let id = value.get("id").and_then(|id| id.as_str()).map(String::from);
                 load(value)
-                    .and_then(|drawing| {
+                    .and_then(|mut drawing| {
                         // Before the id check, so that a skipped drawing does not claim its id.
                         let tool = drawing.drawing.tool_type;
                         if tool.is_cursor() {
@@ -325,6 +341,14 @@ impl DrawingStorage {
                         if let Some(field) = drawing.non_finite_field() {
                             return Err(serde::de::Error::custom(format!("non-finite {field}")));
                         }
+                        if let Some((needed, anchors)) = drawing.missing_anchors() {
+                            return Err(serde::de::Error::custom(format!(
+                                "{tool} needs {needed} anchors, has {anchors}"
+                            )));
+                        }
+                        // A filter naming no timeframe would show the drawing on none.
+                        let visibility = &mut drawing.drawing.timeframe_visibility;
+                        visibility.show_on_all |= visibility.visible_timeframes.is_empty();
                         if ids.insert(drawing.id.clone()) {
                             Ok(drawing)
                         } else {
@@ -370,6 +394,17 @@ pub enum SaveError {
         /// The id of the drawing.
         id: String,
     },
+    /// A drawing has fewer anchors than its tool draws with, and loading skips it.
+    MissingAnchors {
+        /// The id of the drawing.
+        id: String,
+        /// The tool of the drawing.
+        tool: DrawingToolType,
+        /// The anchors the drawing has.
+        anchors: usize,
+        /// The anchors the tool needs.
+        needed: usize,
+    },
     /// Serialization failed.
     Json(serde_json::Error),
 }
@@ -381,6 +416,15 @@ impl fmt::Display for SaveError {
                 write!(f, "drawing {id:?} has a non-finite {field}")
             }
             Self::DuplicateId { id } => write!(f, "duplicate drawing id {id:?}"),
+            Self::MissingAnchors {
+                id,
+                tool,
+                anchors,
+                needed,
+            } => write!(
+                f,
+                "drawing {id:?} has {anchors} anchors, {tool} needs {needed}"
+            ),
             Self::Json(error) => error.fmt(f),
         }
     }
@@ -389,7 +433,7 @@ impl fmt::Display for SaveError {
 impl std::error::Error for SaveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::NonFinite { .. } | Self::DuplicateId { .. } => None,
+            Self::NonFinite { .. } | Self::DuplicateId { .. } | Self::MissingAnchors { .. } => None,
             Self::Json(error) => Some(error),
         }
     }
@@ -656,11 +700,21 @@ mod tests {
 
         let mut first = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
         first.volume_profile = VolumeProfileConfig::new(24, 0.7);
+        first.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 110.0)];
         let mut storage = DrawingStorage::new("AAPL");
         storage.add_drawing(drawing_to_stored(&first, bar_to_time));
-        let second = Drawing::new(2, DrawingToolType::TrendLine);
+        let mut second = Drawing::new(2, DrawingToolType::TrendLine);
+        second.chart_points = first.chart_points.clone();
         storage.add_drawing(drawing_to_stored(&second, bar_to_time));
         let current = storage.to_json().unwrap();
+        // The first drawing as `tool` with only `anchors` anchors, written as `to_json` would
+        // without its checks.
+        let short_of_anchors = |tool, anchors| {
+            let mut storage = storage.clone();
+            storage.drawings[0].drawing.tool_type = tool;
+            storage.drawings[0].points.truncate(anchors);
+            serde_json::to_string_pretty(&storage).unwrap()
+        };
         let unreadable = [
             (
                 current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": null", 1),
@@ -693,6 +747,18 @@ mod tests {
                 0,
             ),
             (
+                short_of_anchors(DrawingToolType::TrendLine, 0),
+                "Trend Line needs 2 anchors, has 0",
+                &["2"],
+                0,
+            ),
+            (
+                short_of_anchors(DrawingToolType::Rect, 1),
+                "Rectangle needs 2 anchors, has 1",
+                &["2"],
+                0,
+            ),
+            (
                 current.replacen("\"id\": \"2\"", "\"id\": \"1\"", 1),
                 "duplicate drawing id \"1\"",
                 &["1"],
@@ -721,6 +787,23 @@ mod tests {
             assert!(storage.to_json().is_ok(), "{error}");
         }
 
+        // A pitchfork finished after one click has two anchors and draws a mark and a segment each.
+        let (storage, skipped) =
+            DrawingStorage::from_json(&short_of_anchors(DrawingToolType::Pitchfork, 2)).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(storage.drawings().len(), 2);
+
+        // A filter naming no timeframe loads as visible on every timeframe.
+        let hidden = current.replacen("\"show_on_all\": true", "\"show_on_all\": false", 1);
+        let (storage, skipped) = DrawingStorage::from_json(&hidden).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert!(
+            storage.drawings()[0]
+                .drawing
+                .timeframe_visibility
+                .show_on_all
+        );
+
         let got = DrawingStorage::from_json(&current.replace("\"version\": 2", "\"version\": 3"))
             .unwrap_err()
             .to_string();
@@ -736,7 +819,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 6] = [
+        let cases: [(Spoil, &str); 7] = [
             (
                 |s| first(s).drawing.stroke_width = f32::NAN,
                 "non-finite stroke_width",
@@ -763,6 +846,7 @@ mod tests {
                 "non-finite fib_config.levels[0].value",
             ),
             (|s| s.drawings.push(s.drawings[0].clone()), "duplicate id"),
+            (|s| first(s).points.truncate(1), "Trend Line needs 2"),
         ];
         for (spoil, expected) in cases {
             let mut storage = DrawingStorage::new("AAPL");
@@ -774,6 +858,11 @@ mod tests {
             let got = match storage.to_json() {
                 Err(SaveError::NonFinite { id, field }) => format!("{id}: non-finite {field}"),
                 Err(SaveError::DuplicateId { id }) => format!("{id}: duplicate id"),
+                Err(SaveError::MissingAnchors {
+                    id, tool, needed, ..
+                }) => {
+                    format!("{id}: {tool} needs {needed}")
+                }
                 other => panic!("{expected}: {:?}", other.map(drop)),
             };
             assert_eq!(got, format!("7: {expected}"));
@@ -800,6 +889,7 @@ mod tests {
             ("1", DrawingToolType::HorizontalLine, 30),
         ] {
             let mut stored = StoredDrawing::new(id, Drawing::new(0, tool));
+            stored.points = vec![StoredCoord::new(T0, 100.0), StoredCoord::new(T0, 110.0)];
             stored.created_at = created_at;
             storage.add_drawing(stored);
         }
