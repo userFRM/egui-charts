@@ -1,14 +1,21 @@
+use super::over_finite_bars;
 use crate::model::Bar;
-/// Balance of Power (BoP)
-/// Measures the strength of buyers vs sellers
-/// BoP = (Close - Open) / (High - Low)
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Balance of Power (BoP): the strength of buyers against sellers,
+/// `(close - open) / (high - low)` per bar, smoothed with a simple average of
+/// `smooth_period` bars.
+///
+/// - A bar without range (`high == low`) counts as 0.
+/// - With smoothing of length `n`, bars 0 to `n - 2` have no value, and a series shorter
+///   than `n` has none on any bar. Length 1 (or 0) keeps the unsmoothed ratio on every bar.
+/// - A bar with a non-finite price has no value, and the average is taken as if it were not
+///   in the series.
 #[derive(Clone)]
 pub struct BalanceOfPower {
-    /// SMA smoothing period (0 = no smoothing)
+    /// Length of the simple average (0 or 1 = no smoothing)
     smooth_period: usize,
     values: Vec<IndicatorValue>,
     color: Color32,
@@ -30,23 +37,27 @@ impl BalanceOfPower {
         self
     }
 
-    fn calculate_sma(data: &[f64], period: usize) -> Vec<f64> {
-        if period == 0 || period > data.len() {
-            return data.to_vec();
-        }
-
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                result.push(data[i]); // Use raw value before enough data
-            } else {
-                let sum: f64 = data[i + 1 - period..=i].iter().sum();
-                result.push(sum / period as f64);
-            }
-        }
-
-        result
+    /// The values over `data`, every bar of which has finite prices.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let raw: Vec<f64> = data
+            .iter()
+            .map(|bar| {
+                let range = bar.high - bar.low;
+                if range == 0.0 {
+                    0.0
+                } else {
+                    (bar.close - bar.open) / range
+                }
+            })
+            .collect();
+        (0..raw.len())
+            .map(|i| match i + 1 {
+                n if n < self.smooth_period => IndicatorValue::None,
+                n => IndicatorValue::Single(
+                    raw[n - self.smooth_period..n].iter().sum::<f64>() / self.smooth_period as f64,
+                ),
+            })
+            .collect()
     }
 }
 
@@ -67,36 +78,15 @@ impl Indicator for BalanceOfPower {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // Calculate raw BoP values
-        let mut raw_bop = Vec::with_capacity(data.len());
-
-        for bar in data {
-            let range = bar.high - bar.low;
-            if range == 0.0 {
-                raw_bop.push(0.0);
-            } else {
-                let bop = (bar.close - bar.open) / range;
-                raw_bop.push(bop);
-            }
-        }
-
-        // Apply smoothing if configured
-        let smoothed = if self.smooth_period > 1 {
-            Self::calculate_sma(&raw_bop, self.smooth_period)
-        } else {
-            raw_bop
-        };
-
-        // Store results
-        for value in smoothed {
-            self.values.push(IndicatorValue::Single(value));
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                [b.open, b.high, b.low, b.close]
+                    .iter()
+                    .all(|p| p.is_finite())
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

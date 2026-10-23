@@ -214,6 +214,7 @@ All notable changes to this project are documented in this file. The format is b
 - The floating replay bar draws Go to start and Previous bar disabled on the first bar, and Next bar and Go to end disabled on the last. `FloatingReplayControl::sync_from` divides the zero-based bar index by the last index instead of the bar count, so the last bar reads 100% instead of 99.7% for 300 bars.
 - A bar with a non-finite close no longer blanks every later value of EMA, DEMA, TEMA, SMMA, GMMA, McGinley Dynamic, VIDYA, ZLEMA, EMA Cross, MACD, VW-MACD, PPO, TRIX and Stochastic RSI (VW-MACD also needs a finite volume): that bar has no value and the study continues past it.
 - A bar with a non-finite input no longer blanks every later value of Elder Ray, Force Index, Mass Index, TSI, SMI, STC, DMI, Keltner Channels, Chaikin Volatility, Volatility Index, VWAP, Anchored VWAP, A/D, CVD, VPT, PVT Enhanced, PVI, Williams AD, the Accumulation Swing Index, Volume Oscillator and both volume profiles (the high, low, close, open or volume the study reads): that bar has no value and the study continues past it.
+- Balance of Power with smoothing of length `n` has no value on its first `n - 1` bars, and none on any bar of a series shorter than `n`, instead of plotting the unsmoothed ratio there. A bar with a non-finite price has no value and the average is taken without it. Migration: the first 13 bars of the default Balance of Power are blank instead of raw ratios.
 
 ### Changed
 

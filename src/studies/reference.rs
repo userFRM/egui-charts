@@ -20,10 +20,11 @@
 
 use crate::model::Bar;
 use crate::studies::{
-    ADX, ATR, Aroon, BollingerBands, CCI, ChaikinMoneyFlow, CommoditySelectionIndex,
-    DirectionalMovement, DonchianChannels, EMA, HMA, IchimokuCloud, Indicator, IndicatorValue,
-    KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD, MoneyFlowIndex, ParabolicSAR,
-    RSI, RateOfChange, SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, WilliamsR,
+    ADX, ATR, Aroon, BalanceOfPower, BollingerBands, CCI, ChaikinMoneyFlow,
+    CommoditySelectionIndex, DirectionalMovement, DonchianChannels, EMA, HMA, IchimokuCloud,
+    Indicator, IndicatorValue, KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD,
+    MoneyFlowIndex, ParabolicSAR, RSI, RateOfChange, SMA, StandardDeviation, Stochastic,
+    SuperTrend, VWMA, WMA, WilliamsR,
 };
 use chrono::{TimeZone, Utc};
 
@@ -124,6 +125,7 @@ fn staple_studies_match_published_definitions() {
         ("Stoch(14,3,3)", Box::new(Stochastic::default())),
         ("Stoch(14,1,3)", Box::new(Stochastic::new(14, 1, 3))),
         ("WilliamsR(14)", Box::new(WilliamsR::default())),
+        ("BoP(14)", Box::new(BalanceOfPower::default())),
         ("Ichimoku(9,26,52)", Box::new(IchimokuCloud::default())),
         (
             "Ichimoku(9,26,52,22)",
