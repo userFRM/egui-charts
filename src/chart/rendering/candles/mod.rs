@@ -485,5 +485,28 @@ mod tests {
                 assert!(baseline_fills >= 2, "baseline fills were lost");
             }
         }
+        // Subpixel segments still carry a continuous 8-on, 4-off pattern: 22 points of ink
+        // over a 30-point path, independent of how densely its points are sampled.
+        let ctx = Context::default();
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            super::line::draw_styled_line(
+                ui.painter(),
+                (0..=60).map(|i| pos2(i as f32 / 2.0, 50.0)).collect(),
+                &settings.chart_type_params.styles.line,
+            );
+        });
+        let ink: f32 = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                if let Shape::LineSegment { points, stroke } = &s.shape {
+                    (stroke.color == color).then_some(points[1].x - points[0].x)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        output.drop_without_applying_deltas();
+        assert_eq!(ink, 22.0, "dash phase must survive short segments");
     }
 }

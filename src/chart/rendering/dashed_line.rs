@@ -67,7 +67,7 @@ fn draw_dashed_segment(
     let total_len = dx.hypot(dy);
     let period = f64::from(dash_len) + f64::from(gap_len);
     if !total_len.is_finite()
-        || total_len < 1.0
+        || total_len == 0.0
         || !period.is_finite()
         || dash_len <= 0.0
         || gap_len < 0.0

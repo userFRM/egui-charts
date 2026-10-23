@@ -119,6 +119,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Dashed and dotted series retain their pattern when zooming out makes individual segments shorter than one point.
+
 - The Area chart uses a blue 2 pt line and a vertical fill fading from 45% opacity at the highest visible point to transparent at the plot bottom, behind the volume overlay. Panning and zooming move the gradient with the visible range. ([#735](https://github.com/userFRM/egui-charts/issues/735))
 
 - KST and RVI use running means of complete windows, STC shares the linear rolling extrema, and RankCorr reuses its sorting buffers and computes Pearson correlation of average ranks for ties. Migration: KST first appears at `max(roc_period + sma_period - 1)`, with its signal `signal_period - 1` bars later; RVI starts at bar `period + 2`, its signal at `period + 5`. These indices are zero-based; at default lengths KST starts at 44 and its signal at 52, RVI at 12 and its signal at 15. Incomplete windows no longer produce averages. Callers must handle `IndicatorValue::None` before the main line and `NaN` for a pending signal, and load enough history before consuming either line. RankCorr values on tied prices follow the rank correlation definition; flat windows have no value. ([#179](https://github.com/userFRM/egui-charts/issues/179))
