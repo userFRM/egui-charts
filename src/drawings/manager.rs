@@ -792,15 +792,21 @@ impl DrawingManager {
 
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
     /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
-    /// saved. A locked drawing accepts only an edit that unlocks it.
+    /// saved. A locked drawing accepts only visibility and name changes, or an edit that unlocks it.
     /// Does nothing if there is no such drawing.
     pub fn edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
             let old = drawing.clone();
             edit(drawing);
             if old.locked && drawing.locked {
-                *drawing = old;
-                return;
+                let visible = drawing.visible;
+                let label = drawing.label.clone();
+                *drawing = old.clone();
+                if visible == old.visible && label == old.label {
+                    return;
+                }
+                drawing.visible = visible;
+                drawing.label = label;
             }
             self.history.push_modify(id, old);
             self.painted
@@ -1268,6 +1274,20 @@ mod tests {
         assert_eq!(manager.drawings[0].font_size, 12.0);
         assert!(!manager.can_undo());
         assert!(manager.pending_sync.lock().unwrap().is_empty());
+        // Tree metadata can change without unlocking geometry or style edits.
+        manager.edit_drawing(3, |d| {
+            d.visible = false;
+            d.label = Some("Support".into());
+            d.font_size = 30.0;
+        });
+        assert!(!manager.drawings[0].visible);
+        assert_eq!(manager.drawings[0].label.as_deref(), Some("Support"));
+        assert_eq!(manager.drawings[0].font_size, 12.0);
+        assert!(manager.drawings[0].locked);
+        assert!(manager.undo());
+        assert!(manager.drawings[0].visible);
+        assert_eq!(manager.drawings[0].label, None);
+        assert!(manager.drawings[0].locked);
         manager.edit_drawing(3, |d| d.locked = false);
         manager.edit_drawing(3, |d| d.font_size = 30.0);
         assert_eq!(manager.drawings[0].font_size, 30.0);

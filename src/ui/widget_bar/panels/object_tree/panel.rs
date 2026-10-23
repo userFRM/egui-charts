@@ -219,25 +219,25 @@ impl ObjectTreePanel {
                     .tooltip("Object actions")
                     .show(ui);
                 egui::Popup::menu(&more).show(|ui| {
-                    if ui.button("Show All").clicked() {
+                    if ui.button("Show all").clicked() {
                         *action = ObjectTreeAction::ShowAll;
                         ui.close();
                     }
-                    if ui.button("Hide All").clicked() {
+                    if ui.button("Hide all").clicked() {
                         *action = ObjectTreeAction::HideAll;
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Lock All").clicked() {
+                    if ui.button("Lock all").clicked() {
                         *action = ObjectTreeAction::LockAll;
                         ui.close();
                     }
-                    if ui.button("Unlock All").clicked() {
+                    if ui.button("Unlock all").clicked() {
                         *action = ObjectTreeAction::UnlockAll;
                         ui.close();
                     }
                     ui.separator();
-                    if self.state.selection_count() > 0 && ui.button("Delete Selected").clicked() {
+                    if self.state.selection_count() > 0 && ui.button("Delete selected").clicked() {
                         *action = ObjectTreeAction::DeleteSelected;
                         ui.close();
                     }

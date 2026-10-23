@@ -260,9 +260,15 @@ fn duplicate(chart: &mut Chart, source: &SourceItem) {
         let copy = chart
             .indicators()
             .find(|(id, _)| Some(*id) == source.series_id)
-            .map(|(_, i)| i.clone_box());
-        if let Some(copy) = copy {
-            chart.add_indicator(copy);
+            .map(|(id, i)| {
+                (
+                    i.clone_box(),
+                    chart.indicator_inputs(id).unwrap_or_default().to_owned(),
+                )
+            });
+        if let Some((copy, inputs)) = copy {
+            let id = chart.add_indicator(copy);
+            chart.set_indicator_inputs(id, inputs);
         }
     } else if source.is_drawing() {
         chart.drawings_mut().duplicate_drawing(source.id);
