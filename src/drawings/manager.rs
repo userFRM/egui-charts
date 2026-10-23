@@ -797,7 +797,8 @@ mod tests {
         let mut manager = DrawingManager::new();
         let mut fib = Drawing::new(7, DrawingToolType::FibonacciRetracement);
         // Control points: Start (100,100), End (300,200), Middle (200,150).
-        fib.points = vec![Pos2::new(100.0, 100.0), Pos2::new(300.0, 200.0)];
+        fib.chart_points = vec![ChartPoint::new(100.0, 100.0), ChartPoint::new(300.0, 200.0)];
+        fib.update_screen_coords(|bar| bar, |price| price as f32);
         fib.completed = true;
         manager.drawings.push(fib);
 

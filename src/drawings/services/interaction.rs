@@ -292,23 +292,39 @@ impl DrawingInteraction {
                             return Some(drawing.id);
                         }
 
-                        // Check the drawn levels, placed as the renderer places them
-                        let config = drawing.fib_config.clone().unwrap_or_default();
+                        // Check the drawn levels, at the y the renderer draws them at
                         let in_x_range = point.x >= p1.x.min(p2.x) && point.x <= p1.x.max(p2.x);
-                        let on_level = config.visible_levels().any(|level| {
-                            let y = config.retracement_position(
-                                f64::from(p1.y),
-                                f64::from(p2.y),
-                                f64::from(level.value),
-                            ) as f32;
-                            (point.y - y).abs() <= hit_distance
-                        });
+                        let on_level = drawing
+                            .level_ys
+                            .iter()
+                            .any(|y| (point.y - y).abs() <= hit_distance);
                         if in_x_range && on_level {
                             return Some(drawing.id);
                         }
                     }
                 }
-                DrawingToolType::FibonacciExtension | DrawingToolType::FibonacciChannel => {
+                DrawingToolType::FibonacciExtension => {
+                    if drawing.points.len() >= 2 {
+                        let p1 = drawing.points[0];
+                        let p2 = drawing.points[1];
+
+                        // Check main diagonal line
+                        if point_to_line_distance(point, p1, p2) <= hit_distance {
+                            return Some(drawing.id);
+                        }
+
+                        // Check the drawn levels, at the y the renderer draws them at
+                        let in_x_range = point.x >= p1.x.min(p2.x) && point.x <= p1.x.max(p2.x);
+                        let on_level = drawing
+                            .level_ys
+                            .iter()
+                            .any(|y| (point.y - y).abs() <= hit_distance);
+                        if in_x_range && on_level {
+                            return Some(drawing.id);
+                        }
+                    }
+                }
+                DrawingToolType::FibonacciChannel => {
                     if drawing.points.len() >= 2 {
                         let p1 = drawing.points[0];
                         let p2 = drawing.points[1];
@@ -438,6 +454,7 @@ pub fn point_to_line_distance(point: Pos2, line_start: Pos2, line_end: Pos2) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawings::ChartPoint;
 
     #[test]
     fn test_point_to_line_distance() {
@@ -464,18 +481,40 @@ mod tests {
     fn fib_retracement_hit_follows_level_orientation() {
         let interaction = DrawingInteraction::new();
         let mut fib = Drawing::new(7, DrawingToolType::FibonacciRetracement);
-        fib.points = vec![Pos2::new(0.0, 400.0), Pos2::new(300.0, 100.0)];
-        let hit = |fib: &Drawing, y| {
+        fib.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 400.0)];
+        let hit = |fib: &mut Drawing, y| {
+            fib.update_screen_coords(|bar| bar * 30.0, |price| 500.0 - price as f32);
             interaction.hit_test(Pos2::new(150.0, y), std::slice::from_ref(fib), "1D")
         };
 
-        assert_eq!(hit(&fib, 170.8), Some(7));
+        assert_eq!(hit(&mut fib, 170.8), Some(7));
         fib.fib_config = Some(crate::drawings::FibonacciConfig {
             reverse: true,
             ..Default::default()
         });
-        assert_eq!(hit(&fib, 170.8), None);
-        assert_eq!(hit(&fib, 329.2), Some(7));
+        assert_eq!(hit(&mut fib, 170.8), None);
+        assert_eq!(hit(&mut fib, 329.2), Some(7));
+    }
+
+    /// Prices 10 then 1000 on a logarithmic axis over 5 to 2000 and 500 px: a level is hit at the
+    /// y of its price, not at the interpolation of the anchors' y. The retracement's 0.5 level
+    /// is the price 505, at y 114.86; the extension's 0.618 level is 10 + 990 * 0.618 = 621.82,
+    /// at y 97.49. The anchors' interpolation puts the levels at 250 and 204.6.
+    #[test]
+    fn fib_level_hits_follow_the_price_scale() {
+        let interaction = DrawingInteraction::new();
+        let price_to_y =
+            |price: f64| (500.0 * (2000f64 / price).ln() / (2000f64 / 5.0).ln()) as f32;
+        for (tool, y) in [
+            (DrawingToolType::FibonacciRetracement, 114.86),
+            (DrawingToolType::FibonacciExtension, 97.49),
+        ] {
+            let mut fib = Drawing::new(7, tool);
+            fib.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(10.0, 1000.0)];
+            fib.update_screen_coords(|bar| bar * 30.0, price_to_y);
+            let hit = interaction.hit_test(Pos2::new(150.0, y), std::slice::from_ref(&fib), "1D");
+            assert_eq!(hit, Some(7), "{tool:?}");
+        }
     }
 
     #[test]

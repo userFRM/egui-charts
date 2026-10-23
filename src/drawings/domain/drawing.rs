@@ -47,6 +47,10 @@ pub struct Drawing {
     /// Persistent chart coordinates (bar_idx, price) - stable across pan/zoom
     #[serde(skip)]
     pub chart_points: Vec<ChartPoint>,
+    /// Screen y of each visible level of a Fibonacci retracement or extension, in config order
+    /// (empty for other tools); rebuilt with `points` by [`Self::update_screen_coords`]
+    #[serde(skip)]
+    pub level_ys: Vec<f32>,
     /// Drawing color as RGBA
     pub color: [u8; 4],
     /// Stroke width in pixels
@@ -104,6 +108,7 @@ impl Drawing {
             tool_type,
             points: Vec::new(),
             chart_points: Vec::new(),
+            level_ys: Vec::new(),
             color: [242, 54, 69, 255], // Default red (#F23645)
             stroke_width: 2.0,
             completed: false,
@@ -159,6 +164,34 @@ impl Drawing {
             let y = price_to_y(cp.price);
             self.points.push(egui::Pos2::new(x, y));
         }
+        self.level_ys = self
+            .fib_levels()
+            .map(|(_, prices)| prices.into_iter().map(price_to_y).collect())
+            .unwrap_or_default();
+    }
+
+    /// The Fibonacci config in use and the price of each of its visible levels, for a retracement
+    /// or an extension with both anchors placed.
+    pub(crate) fn fib_levels(&self) -> Option<(FibonacciConfig, Vec<f64>)> {
+        let extension = match self.tool_type {
+            DrawingToolType::FibonacciRetracement => false,
+            DrawingToolType::FibonacciExtension => true,
+            _ => return None,
+        };
+        let [start, end, ..] = &self.chart_points[..] else {
+            return None;
+        };
+        let config = self.fib_config.clone().unwrap_or_else(|| {
+            if extension {
+                FibonacciConfig::extension_default()
+            } else {
+                FibonacciConfig::default()
+            }
+        });
+        let prices = config
+            .level_prices(start.price, end.price, extension)
+            .collect();
+        Some((config, prices))
     }
 
     /// Add a point with both screen and chart coordinates

@@ -3,7 +3,6 @@
 //! Includes: retracement, extension, arc, time zones, channel, circles,
 //! speed fan, spiral, wedge, and trend-based fib time.
 
-use crate::drawings::FibonacciConfig;
 use crate::drawings::domain::Drawing;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -14,35 +13,26 @@ impl Drawing {
         if self.points.len() < 2 {
             return;
         }
+        let Some((config, prices)) = self.fib_levels() else {
+            return;
+        };
 
         let start = self.points[0];
         let end = self.points[1];
 
-        // Use configurable levels if available, otherwise use defaults
-        let config = self.fib_config.as_ref().cloned().unwrap_or_default();
-
-        // Collect visible levels for iteration
-        let visible_levels: Vec<_> = config.levels.iter().filter(|l| l.visible).collect();
-
-        // Get actual price values from chart_points if available
-        let (start_price, end_price) = if self.chart_points.len() >= 2 {
-            (self.chart_points[0].price, self.chart_points[1].price)
-        } else {
-            (0.0, 0.0) // Fallback
-        };
-        let level_y = |value: f32| {
-            config.retracement_position(f64::from(start.y), f64::from(end.y), f64::from(value))
-                as f32
-        };
+        // Each level sits at the price it is labelled with, on whatever scale the chart uses
+        let visible_levels: Vec<_> = config.visible_levels().collect();
+        let ys = &self.level_ys;
+        if ys.len() != prices.len() {
+            return;
+        }
 
         // Draw filled zones between levels if enabled
         if config.show_background && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
-                let level2 = visible_levels[i + 1];
 
-                let y1 = level_y(level1.value);
-                let y2 = level_y(level2.value);
+                let (y1, y2) = (ys[i], ys[i + 1]);
 
                 // Fill with semi-transparent color using config opacity
                 let fill_color = Color32::from_rgba_unmultiplied(
@@ -70,7 +60,7 @@ impl Drawing {
         };
 
         // Draw lines and labels for visible levels
-        for level in &visible_levels {
+        for ((level, &y), &price_at_lvl) in visible_levels.iter().zip(ys).zip(&prices) {
             let lvl_color = Color32::from_rgba_unmultiplied(
                 level.color[0],
                 level.color[1],
@@ -78,20 +68,11 @@ impl Drawing {
                 level.color[3],
             );
 
-            let y = level_y(level.value);
-
             // Draw line with extend support
             painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
-            // Calculate actual price at this level
-            let price_at_lvl = if start_price != 0.0 || end_price != 0.0 {
-                config.retracement_position(start_price, end_price, f64::from(level.value))
-            } else {
-                0.0
-            };
-
             // Draw label with price if show_price is enabled
-            let label_text = if level.show_price && price_at_lvl != 0.0 {
+            let label_text = if level.show_price {
                 format!("{} ({:.2})", level.label, price_at_lvl)
             } else {
                 level.label.clone()
@@ -114,35 +95,26 @@ impl Drawing {
         if self.points.len() < 2 {
             return;
         }
+        let Some((config, prices)) = self.fib_levels() else {
+            return;
+        };
 
         let start = self.points[0];
         let end = self.points[1];
 
-        // Use configurable levels if available, otherwise use extension defaults
-        let config = self
-            .fib_config
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(FibonacciConfig::extension_default);
-
-        // Collect visible levels
-        let visible_levels: Vec<_> = config.levels.iter().filter(|l| l.visible).collect();
-
-        // Get actual price values from chart_points if available
-        let (start_price, end_price) = if self.chart_points.len() >= 2 {
-            (self.chart_points[0].price, self.chart_points[1].price)
-        } else {
-            (0.0, 0.0)
-        };
+        // Each level sits at the price it is labelled with, on whatever scale the chart uses
+        let visible_levels: Vec<_> = config.visible_levels().collect();
+        let ys = &self.level_ys;
+        if ys.len() != prices.len() {
+            return;
+        }
 
         // Draw filled zones between levels if enabled
         if config.show_background && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
-                let level2 = visible_levels[i + 1];
 
-                let y1 = start.y + (end.y - start.y) * level1.value;
-                let y2 = start.y + (end.y - start.y) * level2.value;
+                let (y1, y2) = (ys[i], ys[i + 1]);
 
                 // Only draw if at least partially visible
                 if (y1 >= chart_rect.min.y || y2 >= chart_rect.min.y)
@@ -173,7 +145,7 @@ impl Drawing {
             start.x.max(end.x)
         };
 
-        for level in &visible_levels {
+        for ((level, &y), &price_at_lvl) in visible_levels.iter().zip(ys).zip(&prices) {
             let lvl_color = Color32::from_rgba_unmultiplied(
                 level.color[0],
                 level.color[1],
@@ -181,22 +153,13 @@ impl Drawing {
                 level.color[3],
             );
 
-            let y = start.y + (end.y - start.y) * level.value;
-
             // Only draw if within chart rect
             if y >= chart_rect.min.y && y <= chart_rect.max.y {
                 // Draw line with extend support
                 painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
-                // Calculate actual price at this level
-                let price_at_lvl = if start_price != 0.0 || end_price != 0.0 {
-                    start_price + (end_price - start_price) * (level.value as f64)
-                } else {
-                    0.0
-                };
-
                 // Draw label with price if show_price is enabled
-                let label_text = if level.show_price && price_at_lvl != 0.0 {
+                let label_text = if level.show_price {
                     format!("{} ({:.2})", level.label, price_at_lvl)
                 } else {
                     level.label.clone()

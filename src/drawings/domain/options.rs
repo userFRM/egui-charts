@@ -330,6 +330,25 @@ impl FibonacciConfig {
         };
         from + (to - from) * value
     }
+
+    /// Price of each visible level, in config order, between the anchor prices `start` and `end`:
+    /// a retracement's as [`Self::retracement_position`] places them, an extension's projected
+    /// from `start` by `end - start`.
+    pub(crate) fn level_prices(
+        &self,
+        start: f64,
+        end: f64,
+        extension: bool,
+    ) -> impl Iterator<Item = f64> + '_ {
+        self.visible_levels().map(move |level| {
+            let value = f64::from(level.value);
+            if extension {
+                start + (end - start) * value
+            } else {
+                self.retracement_position(start, end, value)
+            }
+        })
+    }
 }
 
 /// Settings of the fixed range and anchored volume profile drawings.

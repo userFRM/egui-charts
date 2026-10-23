@@ -598,7 +598,6 @@ mod tests {
             ChartPoint::new(10.5, 99.5),
             ChartPoint::new(-2.0, 120.0),
         ];
-        d.update_screen_coords(bar_to_x, price_to_y);
         d.color = [1, 2, 3, 4];
         d.stroke_width = 3.5;
         d.completed = true;
@@ -635,6 +634,7 @@ mod tests {
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
         d.z_order = -3;
+        d.update_screen_coords(bar_to_x, price_to_y);
         d
     }
 
