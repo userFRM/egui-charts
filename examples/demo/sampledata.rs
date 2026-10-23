@@ -170,13 +170,15 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
 
         let body_high = open.max(close);
         let body_low = open.min(close);
-        let body_range = (body_high - body_low).max(open * 0.0005);
+        let body_range =
+            (body_high - body_low).max(open * if session_fixture { 0.00005 } else { 0.0005 });
+        let wick_scale = if session_fixture { 0.5 } else { 2.0 };
 
-        let high = body_high + r2 * body_range * 2.0;
-        let low = body_low - r3 * body_range * 2.0;
+        let high = body_high + r2 * body_range * wick_scale;
+        let low = body_low - r3 * body_range * wick_scale;
 
         let base_vol = if session_fixture {
-            30_000.0 + r4.powi(24) * 1_000_000.0
+            10_000.0 + r4 * 40_000.0 + r4.powi(96) * 1_000_000.0
         } else {
             600.0 + r4 * 1400.0
         };
@@ -336,6 +338,20 @@ mod tests {
             let repeated = generate_sample_bars("SAMPLE", 600, timeframe);
             assert_eq!(bars.len(), 600);
             assert_eq!(bars, repeated);
+            let bodies: f64 = bars.iter().map(|bar| (bar.close - bar.open).abs()).sum();
+            let wicks: f64 = bars
+                .iter()
+                .map(|bar| bar.high - bar.low - (bar.close - bar.open).abs())
+                .sum();
+            assert!(
+                wicks < bodies,
+                "ordinary fixture wicks should not dominate bodies"
+            );
+            let peaks = bars.iter().filter(|bar| bar.volume > 250_000.0).count();
+            assert!(
+                peaks > 0 && peaks * 100 < bars.len() * 5,
+                "volume peaks should be occasional: {peaks}"
+            );
             assert!(bars.iter().all(|b| (680.0..790.0).contains(&b.close)));
             assert!(
                 bars.iter()
