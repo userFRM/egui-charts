@@ -301,7 +301,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 ### Volume
 - [x] OBV, VWAP (restarts at each session, week or month in the exchange zone and trading hours, with deviation bands; the indicator dialog builds it without an instrument, so its sessions follow the UTC date), Anchored VWAP
 - [x] MFI, A/D Line, CMF, Klinger Oscillator
-- [x] Ease of Movement, Net Volume, Volume ROC, Volume Oscillator
+- [x] Ease of Movement, Net Volume (volume signed by the change from the previous close, first bar blank), Volume ROC, Volume Oscillator
 - [ ] Volume Profile Visible Range, Volume Profile Fixed Range: bin volume over the whole history; bin 0 is plotted on the price scale, so nothing visible draws
 - [x] VWMA, Balance of Power
 - [x] Volume Price Trend, NVI, PVI

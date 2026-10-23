@@ -26,9 +26,9 @@ use crate::studies::{
     ADX, ATR, Aroon, BalanceOfPower, BollingerBands, CCI, ChaikinMoneyFlow,
     CommoditySelectionIndex, DirectionalMovement, DonchianChannels, EMA, HMA, IchimokuCloud,
     Indicator, IndicatorValue, KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD,
-    MoneyFlowIndex, ParabolicSAR, PercentageVolumeOscillator, PriceOscillator, RSI, RateOfChange,
-    SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, Week52HighLow, Week52HighLowLevels,
-    WilliamsR,
+    MoneyFlowIndex, NetVolume, ParabolicSAR, PercentageVolumeOscillator, PriceOscillator, RSI,
+    RateOfChange, SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, Week52HighLow,
+    Week52HighLowLevels, WilliamsR,
 };
 use chrono::{TimeZone, Utc};
 
@@ -85,6 +85,7 @@ fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
 fn staple_studies_match_published_definitions() {
     let bars = fixture();
     let studies: Vec<(&str, Box<dyn Indicator>)> = vec![
+        ("NetVolume", Box::new(NetVolume::default())),
         ("SMA(20)", Box::new(SMA::default())),
         ("EMA(12)", Box::new(EMA::default())),
         ("WMA(20)", Box::new(WMA::default())),
