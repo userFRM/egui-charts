@@ -1,5 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::stepper::{rolling_max, rolling_min};
 /// Schaff Trend Cycle (STC)
 /// Combines MACD with stochastic to create a faster, more accurate oscillator
 /// Oscillates between 0 and 100
@@ -75,23 +76,14 @@ impl SchaffTrendCycle {
 
     fn stochastic(values: &[f64], period: usize) -> Vec<f64> {
         let mut result = Vec::with_capacity(values.len());
-
+        let highest = rolling_max(values.iter().copied(), period);
+        let lowest = rolling_min(values.iter().copied(), period);
         for i in 0..values.len() {
             if i < period - 1 || values[i].is_nan() {
                 result.push(f64::NAN);
                 continue;
             }
-
-            let window = &values[i + 1 - period..=i];
-            let valid: Vec<f64> = window.iter().filter(|&&x| !x.is_nan()).copied().collect();
-
-            if valid.is_empty() {
-                result.push(f64::NAN);
-                continue;
-            }
-
-            let high = valid.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            let low = valid.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let (high, low) = (highest[i], lowest[i]);
             let range = high - low;
 
             if range == 0.0 {

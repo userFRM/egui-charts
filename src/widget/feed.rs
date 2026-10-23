@@ -286,6 +286,11 @@ impl Chart {
                 let merged = self.apply_by(&link.clock, incoming);
                 self.feed.late_ticks += merged.late_ticks;
             }
+            if let Some(quote) = updates.quote
+                && self.quote.as_ref().is_none_or(|old| quote.ts >= old.ts)
+            {
+                self.set_quote(Some(quote));
+            }
             let feed = &mut self.feed;
             feed.status = updates.status.or(feed.status);
             feed.last_error = updates.error.or(feed.last_error.take());
@@ -321,6 +326,7 @@ impl Chart {
         self.state.price_scale_mut().set_price_precision(None);
         link.trades = Trades::new(TRADE_CAPACITY);
         link.order_book = None;
+        self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
         link.clock = BarClock::new(timeframe);
@@ -352,7 +358,9 @@ impl Chart {
             .set_price_precision(instrument.price_decimals);
         link.instrument = Some(instrument);
         link.rebuild_bubbles();
-        let sink = link.inbox.subscribe(link.clock.clone(), TRADE_CAPACITY);
+        let sink = link
+            .inbox
+            .subscribe(self.symbol.clone(), link.clock.clone(), TRADE_CAPACITY);
         link.subscription = Some(sink.id);
         let subscription = Subscription {
             id: sink.id,
@@ -846,6 +854,40 @@ mod tests {
         assert_eq!(feed.calls(), [Call::Snapshot(id)], "c: snapshot");
         frames.run(&mut chart);
         assert_eq!(feed.calls(), [], "c: one snapshot");
+
+        let quote = |time, symbol: &str, bid| crate::model::Level1Quote {
+            ts: time,
+            symbol: symbol.into(),
+            bid,
+            ask: 8.0,
+            bid_size: 1.0,
+            ask_size: 2.0,
+        };
+        feed.sink().push_quote(quote(ts, "A", 6.0));
+        feed.sink()
+            .push_quote(quote(ts + TimeDelta::seconds(1), "B", 4.0));
+        frames.run(&mut chart);
+        assert_eq!(
+            chart.quote.as_ref().map(|q| q.bid),
+            Some(6.0),
+            "c: quote reaches legend"
+        );
+        feed.sink()
+            .push_quote(quote(ts - TimeDelta::seconds(1), "A", 5.0));
+        frames.run(&mut chart);
+        assert_eq!(
+            chart.quote.as_ref().map(|q| q.bid),
+            Some(6.0),
+            "c: older frame quote ignored"
+        );
+        feed.sink()
+            .push_quote(quote(ts + TimeDelta::seconds(1), "B", 4.0));
+        frames.run(&mut chart);
+        assert_eq!(
+            chart.quote.as_ref().map(|q| q.bid),
+            Some(6.0),
+            "c: other symbol ignored"
+        );
 
         // h. Bars appended while the view is scrolled back leave the visible bars where they are,
         // and so do updates of the forming bar stamped later inside its slot.

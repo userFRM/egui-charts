@@ -86,6 +86,38 @@ pub(crate) fn usable_behind(
     }
 }
 
+/// Mean of each complete window. Non-finite inputs leave that window without a
+/// value; the running finite sum recovers when they leave the window.
+pub(crate) fn rolling_mean(values: &[f64], period: usize) -> Vec<f64> {
+    let (mut sum, mut count) = (0.0, 0usize);
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| {
+            if v.is_finite() {
+                sum += v;
+                count += 1;
+            }
+            if i >= period && values[i - period].is_finite() {
+                sum -= values[i - period];
+                count -= 1;
+            }
+            // Overflow of a finite sum must not poison later ordinary windows.
+            if !sum.is_finite() {
+                sum = values[(i + 1).saturating_sub(period)..=i]
+                    .iter()
+                    .filter(|v| v.is_finite())
+                    .sum();
+            }
+            if count == period {
+                sum / period as f64
+            } else {
+                f64::NAN
+            }
+        })
+        .collect()
+}
+
 /// Highest value of each window `values[i + 1 - period..=i]`, shorter for the first bars, in
 /// linear time. Like folding the window with `f64::max` from negative infinity, NaN never wins
 /// and a window holding only NaN gives negative infinity. `period` must be at least 1.

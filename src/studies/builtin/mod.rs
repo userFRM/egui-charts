@@ -1,8 +1,9 @@
 //! Built-in technical indicators.
 //!
 //! This module contains the built-in technical indicators, grouped by
-//! category below. All indicators implement the
-//! [`Indicator`](super::Indicator) trait for a uniform API.
+//! category below. Bar-based indicators implement the
+//! [`Indicator`](super::Indicator) trait for a uniform API. Execution-based studies
+//! [`trade_delta`] and [`footprint_studies`] consume [`crate::data::Footprint`] explicitly.
 //!
 //! # Indicator categories
 //!
@@ -46,6 +47,11 @@
 
 use crate::model::Bar;
 use crate::studies::IndicatorValue;
+
+mod footprint_studies;
+pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studies};
+mod trade_delta;
+pub use trade_delta::{TradeDeltaValue, trade_delta};
 
 mod bollinger_bands;
 mod ema;
@@ -141,6 +147,7 @@ mod squeeze_momentum;
 // Fourth batch - Statistics and Price variants
 mod accumulation_swing;
 mod linear_regression;
+mod linear_regression_channel;
 mod percent_b;
 mod price_channel;
 mod relative_vigor;
@@ -184,10 +191,12 @@ mod zero_trend_vol;
 mod envelopes;
 mod guppy_ma;
 mod ma_channel;
+mod ma_combination;
 mod ma_cross;
 mod ma_ema_cross;
 mod ma_hamming;
 mod ma_multiple;
+mod ma_presets;
 mod smoothed_ma;
 
 // Tenth batch - Statistics indicators
@@ -298,6 +307,7 @@ pub use squeeze_momentum::SqueezeMomentum;
 // Re-exports - Fourth batch (Statistics and Price variants)
 pub use accumulation_swing::AccumulationSwingIndex;
 pub use linear_regression::{LinearRegression, LinearRegressionSlope};
+pub use linear_regression_channel::LinearRegressionChannel;
 pub use percent_b::PercentB;
 pub use price_channel::PriceChannel;
 pub use relative_vigor::RelativeVigorIndex;
@@ -341,10 +351,12 @@ pub use zero_trend_vol::ZeroTrendVol;
 pub use envelopes::Envelopes;
 pub use guppy_ma::GuppyMA;
 pub use ma_channel::MAChannel;
+pub use ma_combination::{AverageLine, AverageType, MACombination};
 pub use ma_cross::MACross;
 pub use ma_ema_cross::EMACross;
 pub use ma_hamming::HammingMA;
 pub use ma_multiple::MultipleMA;
+pub use ma_presets::{MARibbon, MixedMACross, TripleMA};
 pub use smoothed_ma::SmoothedMA;
 
 // Re-exports - Tenth batch (Statistics)

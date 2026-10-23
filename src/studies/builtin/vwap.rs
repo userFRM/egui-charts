@@ -1,7 +1,7 @@
 //! Volume Weighted Average Price (VWAP) Indicator
 //!
 //! VWAP is the average price weighted by volume over an anchor period: a trading
-//! session, a week or a month. It restarts at the first bar of each period and is
+//! session, a calendar period or a host-supplied event. It restarts at the first bar of each period and is
 //! commonly used as an execution benchmark.
 //!
 //! # Interpretation
@@ -53,6 +53,12 @@ pub enum VwapAnchor {
     Week,
     /// Each calendar month of trading days.
     Month,
+    /// Each calendar quarter of trading days.
+    Quarter,
+    /// Each calendar year of trading days.
+    Year,
+    /// Restart at timestamps supplied by the host with `with_event_anchors`.
+    Events,
 }
 
 impl VwapAnchor {
@@ -62,6 +68,9 @@ impl VwapAnchor {
             Self::Session => (day.year(), day.ordinal()),
             Self::Week => (day.iso_week().year(), day.iso_week().week()),
             Self::Month => (day.year(), day.month()),
+            Self::Quarter => (day.year(), (day.month() - 1) / 3),
+            Self::Year => (day.year(), 0),
+            Self::Events => (0, 0),
         }
     }
 }
@@ -108,12 +117,16 @@ pub struct VolumeWeightedAvgPrice {
     anchor: VwapAnchor,
     time_zone: TimezoneId,
     windows: Vec<SessionWindow>,
+    instrument_session: Option<(TimezoneId, Vec<SessionWindow>)>,
     bands: Vec<f64>,
+    percentage_bands: bool,
+    event_anchors: Vec<DateTime<Utc>>,
 }
 
 #[derive(Clone, Default)]
 struct State {
     period: Option<(i32, u32)>,
+    events: usize,
     volume: f64,
     tp_volume: f64,
     tp2_volume: f64,
@@ -132,11 +145,14 @@ impl VolumeWeightedAvgPrice {
             anchor: VwapAnchor::Session,
             time_zone: TimezoneId::utc(),
             windows: Vec::new(),
+            instrument_session: None,
             bands: Vec::new(),
+            percentage_bands: false,
+            event_anchors: Vec::new(),
         }
     }
 
-    /// Restarts at each session, week or month.
+    /// Restarts at each selected calendar period or host event.
     pub fn with_anchor(mut self, anchor: VwapAnchor) -> Self {
         self.anchor = anchor;
         self
@@ -163,6 +179,7 @@ impl VolumeWeightedAvgPrice {
     /// standard deviation of the typical price over the period. Multipliers clamp
     /// to 0 or more, NaN to 0. The bands are drawn in the VWAP colour at half intensity.
     pub fn with_std_dev_bands(mut self, multipliers: impl IntoIterator<Item = f64>) -> Self {
+        self.percentage_bands = false;
         self.bands = multipliers
             .into_iter()
             .map(|k| clamp_param(k, 0.0, f64::MAX))
@@ -170,6 +187,25 @@ impl VolumeWeightedAvgPrice {
         let band_color = self.colors[0].gamma_multiply(0.5);
         self.colors.truncate(1);
         self.colors.resize(self.line_cnt(), band_color);
+        self
+    }
+
+    /// Adds symmetric bands at percentages of the absolute VWAP. Percentages
+    /// clamp to 0 or more, NaN to 0, and replace any standard deviation bands.
+    pub fn with_percentage_bands(self, percentages: impl IntoIterator<Item = f64>) -> Self {
+        let mut study = self.with_std_dev_bands(percentages);
+        study.percentage_bands = true;
+        study
+    }
+
+    /// Restart on the first bar at or after each event timestamp. The host supplies
+    /// the chosen earnings, dividend or split events; no event feed is requested.
+    /// Timestamps are sorted and deduplicated. Selects `VwapAnchor::Events`.
+    pub fn with_event_anchors(mut self, times: impl IntoIterator<Item = DateTime<Utc>>) -> Self {
+        self.event_anchors = times.into_iter().collect();
+        self.event_anchors.sort_unstable();
+        self.event_anchors.dedup();
+        self.anchor = VwapAnchor::Events;
         self
     }
 
@@ -210,7 +246,10 @@ impl Indicator for VolumeWeightedAvgPrice {
         let daily = self.shared.is_none();
         let from = if daily != self.daily { 0 } else { from };
         self.daily = daily;
-        let zone = self.time_zone.tz();
+        let (zone, windows) = self.instrument_session.as_ref().map_or(
+            (self.time_zone.tz(), self.windows.as_slice()),
+            |(zone, windows)| (zone.tz(), windows.as_slice()),
+        );
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
                 // A bar with a non-finite price or volume has no value and adds nothing.
@@ -223,10 +262,16 @@ impl Indicator for VolumeWeightedAvgPrice {
                 let day = if daily {
                     bar.time.date_naive()
                 } else {
-                    trading_day(bar.time, zone, &self.windows)
+                    trading_day(bar.time, zone, windows)
                 };
                 let current = Some(self.anchor.period(day));
-                if current != state.period {
+                let events = if self.anchor == VwapAnchor::Events {
+                    self.event_anchors.partition_point(|time| *time <= bar.time)
+                } else {
+                    0
+                };
+                if current != state.period || events != state.events {
+                    state.events = events;
                     state.period = current;
                     (state.volume, state.tp_volume, state.tp2_volume) = (0.0, 0.0, 0.0);
                 }
@@ -248,6 +293,11 @@ impl Indicator for VolumeWeightedAvgPrice {
                             .sqrt(),
                     )
                 };
+                let band_unit = if self.percentage_bands {
+                    vwap.abs() / 100.0
+                } else {
+                    sigma
+                };
                 if self.bands.is_empty() {
                     IndicatorValue::Single(vwap)
                 } else {
@@ -256,12 +306,34 @@ impl Indicator for VolumeWeightedAvgPrice {
                             .chain(
                                 self.bands
                                     .iter()
-                                    .flat_map(|k| [vwap + k * sigma, vwap - k * sigma]),
+                                    .flat_map(|k| [vwap + k * band_unit, vwap - k * band_unit]),
                             )
                             .collect(),
                     )
                 }
             });
+    }
+
+    fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
+        let session = instrument.map(|instrument| {
+            (
+                instrument.time_zone.clone().unwrap_or_else(TimezoneId::utc),
+                instrument
+                    .session
+                    .as_ref()
+                    .map_or(&[][..], |s| s.windows.as_slice()),
+            )
+        });
+        if self
+            .instrument_session
+            .as_ref()
+            .map(|(zone, windows)| (zone, windows.as_slice()))
+            == session.as_ref().map(|(zone, windows)| (zone, *windows))
+        {
+            return false;
+        }
+        self.instrument_session = session.map(|(zone, windows)| (zone, windows.to_vec()));
+        true
     }
 
     fn is_incremental(&self) -> bool {
@@ -608,6 +680,109 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// Equal volumes at 10 and 14 give 12; a reset then starts at 18.
+    /// One-percent bands are 0.10, 0.12 and 0.18 from the VWAP.
+    #[test]
+    fn calendar_and_host_event_anchors_with_percentage_bands() {
+        let times = [
+            Utc.with_ymd_and_hms(2025, 12, 30, 12, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2025, 12, 31, 12, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2026, 1, 2, 12, 0, 0).unwrap(),
+        ];
+        for anchor in [VwapAnchor::Quarter, VwapAnchor::Year, VwapAnchor::Events] {
+            let times = if anchor == VwapAnchor::Quarter {
+                [
+                    Utc.with_ymd_and_hms(2026, 3, 30, 12, 0, 0).unwrap(),
+                    Utc.with_ymd_and_hms(2026, 3, 31, 12, 0, 0).unwrap(),
+                    Utc.with_ymd_and_hms(2026, 4, 1, 12, 0, 0).unwrap(),
+                ]
+            } else {
+                times
+            };
+            let mut study = VolumeWeightedAvgPrice::new().with_anchor(anchor);
+            if anchor == VwapAnchor::Events {
+                // Duplicate events in a closed-market gap still cause exactly one reset.
+                let event = times[2] - chrono::Duration::hours(12);
+                study = study.with_event_anchors([event, event, times[0]]);
+            }
+            study = study.with_percentage_bands([1.0]);
+            let bars: Vec<_> = times
+                .into_iter()
+                .zip([10.0, 14.0, 18.0])
+                .map(|(t, c)| Bar::new(t, c, c, c, c, 1.0))
+                .collect();
+            study.calculate(&bars);
+            for (got, want) in study.values().iter().zip([10.0, 12.0, 18.0]) {
+                let IndicatorValue::Multiple(lines) = got else {
+                    panic!("{got:?}")
+                };
+                for (actual, expected) in lines.iter().zip([want, want * 1.01, want * 0.99]) {
+                    assert!((actual - expected).abs() < 1e-12, "{anchor:?}: {got:?}");
+                }
+            }
+        }
+    }
+
+    /// A dialog-created VWAP inherits metadata both when added and when metadata arrives later.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn chart_supplies_the_exchange_session_to_vwap() {
+        use crate::model::{BarData, Instrument};
+        use crate::widget::{Chart, test_frames::shapes};
+        let bars: Vec<_> = [23, 24, 25]
+            .into_iter()
+            .zip([10.0, 14.0, 18.0])
+            .map(|(hour, c)| {
+                Bar::new(
+                    Utc.with_ymd_and_hms(2026, 3, 2, 0, 0, 0).unwrap()
+                        + chrono::Duration::hours(hour),
+                    c,
+                    c,
+                    c,
+                    c,
+                    1.0,
+                )
+            })
+            .collect();
+        let instrument = Instrument::new("SESSION")
+            .with_time_zone(TimezoneId::named("America/New_York").unwrap());
+        for late in [false, true] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            if !late {
+                chart.set_instrument(Some(instrument.clone()));
+            }
+            chart.add_indicator(Box::new(VolumeWeightedAvgPrice::new()));
+            if late {
+                chart.set_instrument(Some(instrument.clone()));
+                shapes(&egui::Context::default(), &mut chart, 0.0, Vec::new());
+            }
+            let study = chart.indicators().next().unwrap().1;
+            assert!(
+                matches!(study.values()[2], IndicatorValue::Single(v) if v == 14.0),
+                "late={late}: {:?}",
+                study.values()
+            );
+            chart.set_instrument(None);
+            shapes(&egui::Context::default(), &mut chart, 1.0, Vec::new());
+            let study = chart.indicators().next().unwrap().1;
+            assert!(
+                matches!(study.values()[2], IndicatorValue::Single(v) if v == 16.0),
+                "clearing metadata must restore UTC: {:?}",
+                study.values()
+            );
+        }
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.add_indicator(Box::new(
+            VolumeWeightedAvgPrice::new()
+                .with_time_zone(TimezoneId::named("America/New_York").unwrap()),
+        ));
+        shapes(&egui::Context::default(), &mut chart, 0.0, Vec::new());
+        assert!(matches!(
+            chart.indicators().next().unwrap().1.values()[2],
+            IndicatorValue::Single(v) if v == 14.0
+        ));
     }
 
     /// The local time of a bar at either end of the representable range is out of range

@@ -15,7 +15,14 @@ use egui::{Pos2, Rect, Response, Sense, Ui};
 impl Chart {
     /// Renders the main chart and, below it, a pane for each visible study that is not an
     /// overlay (RSI, MACD, Stochastic), with x-axes aligned to the main chart.
-    pub(super) fn show_with_panes(&mut self, ui: &mut Ui) -> Response {
+    pub(super) fn show_with_panes(
+        &mut self,
+        ui: &mut Ui,
+        footprint: Option<(
+            &crate::data::Footprint,
+            &crate::chart::overlays::FootprintConfig,
+        )>,
+    ) -> Response {
         // Panes are stacked edge to edge with explicit gaps; restore the host spacing after.
         let host_spacing = std::mem::take(&mut ui.spacing_mut().item_spacing);
 
@@ -82,7 +89,7 @@ impl Chart {
             .allocate_ui_with_layout(
                 main_rect.size(),
                 egui::Layout::top_down(egui::Align::LEFT),
-                |ui| self.show_internal(ui, Some(time_axis)),
+                |ui| self.show_internal(ui, Some(time_axis), footprint),
             )
             .inner;
 

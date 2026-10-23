@@ -2,9 +2,11 @@
 
 use super::selection::hit_test_main_chart;
 use super::{Chart, RightClickTarget};
+use crate::chart::overlays::FootprintConfig;
 use crate::chart::renderers::{self, ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
+use crate::data::Footprint;
 use crate::model::PriceLine;
 use crate::scales::TimeFormatterBuilder;
 use crate::styles::typography;
@@ -210,6 +212,26 @@ impl Chart {
     ///
     /// Returns an [`egui::Response`] for additional interaction handling.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
+        self.show_content(ui, None)
+    }
+
+    /// Draws a footprint in place of the price series, below studies, cursor and legend.
+    /// Supply executions aggregated with the same clock as the chart's source bars.
+    /// Price-based chart types keep their normal series because their x-axis is not time.
+    pub fn show_footprint(
+        &mut self,
+        ui: &mut Ui,
+        flow: &Footprint,
+        config: &FootprintConfig,
+    ) -> Response {
+        self.show_content(ui, Some((flow, config)))
+    }
+
+    fn show_content(
+        &mut self,
+        ui: &mut Ui,
+        footprint: Option<(&Footprint, &FootprintConfig)>,
+    ) -> Response {
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
@@ -224,9 +246,9 @@ impl Chart {
             .iter()
             .any(|study| !study.is_overlay() && study.is_visible());
         if has_panes && !self.chart_type.is_time_independent() {
-            self.show_with_panes(ui)
+            self.show_with_panes(ui, footprint)
         } else {
-            self.show_internal(ui, None)
+            self.show_internal(ui, None, footprint)
         }
     }
 
@@ -274,6 +296,7 @@ impl Chart {
         &mut self,
         ui: &mut Ui,
         shared_time_axis: Option<Rect>,
+        footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
         // Register the SVG image loader once per context so the embedded
         // icons used by the toolbars and panels decode without the host app
@@ -712,7 +735,33 @@ impl Chart {
             self.config.price_source,
         );
 
-        rendering::render_chart_type(self.chart_type, &render_ctx, &render_params, idx_to_coord);
+        if let Some((flow, config)) = footprint.filter(|_| time_based) {
+            if show_volume {
+                rendering::candles::volume::render_volume_bars(
+                    &clipped_volume_ctx,
+                    visible_data,
+                    start_idx,
+                    max_volume,
+                    &colors,
+                    chart_rect.min.x,
+                    idx_to_coord,
+                );
+            }
+            crate::chart::overlays::render_footprint(
+                &clipped_painter,
+                &self.get_chart_mapping(),
+                self.bars(super::SeriesId::MAIN),
+                flow,
+                config,
+            );
+        } else {
+            rendering::render_chart_type(
+                self.chart_type,
+                &render_ctx,
+                &render_params,
+                idx_to_coord,
+            );
+        }
 
         if let Some(bubbles) = self
             .feed_link
@@ -1329,6 +1378,85 @@ mod tests {
     use crate::scales::PriceScaleMode;
     use crate::widget::test_frames::{chart, frame, shapes};
     use egui::{Event, Pos2, Rect, Shape};
+
+    #[test]
+    fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
+        use crate::chart::overlays::{FootprintColor, FootprintConfig};
+        use crate::data::Footprint;
+        use crate::model::{BarClock, Tick, Timeframe, TradeSide};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for (width, pane) in [(1440.0, false), (600.0, false), (600.0, true)] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = chart(&[100.0], &[110.0]);
+                chart.set_symbol("FLOW");
+                #[cfg(feature = "studies")]
+                if pane {
+                    chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+                }
+                let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+                flow.push(&Tick::new(
+                    chart
+                        .bars(crate::widget::SeriesId::MAIN)
+                        .last()
+                        .unwrap()
+                        .time,
+                    100.0,
+                    2.0,
+                    Some(TradeSide::Buy),
+                ))
+                .unwrap();
+                let config = FootprintConfig {
+                    color_by: FootprintColor::Volume,
+                    neutral_color: egui::Color32::from_rgb(21, 45, 78),
+                    ..Default::default()
+                };
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(width, 500.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show_footprint(ui, &flow, &config);
+                    },
+                );
+                output.textures_delta.clear();
+                assert!(
+                    output.shapes.iter().any(|shape| match &shape.shape {
+                        Shape::Rect(rect) => rect.fill == theme.chart.volume_up(),
+                        _ => false,
+                    }),
+                    "footprint keeps the volume histogram"
+                );
+                let cells = output
+                    .shapes
+                    .iter()
+                    .position(|shape| match &shape.shape {
+                        Shape::Mesh(mesh) => mesh
+                            .vertices
+                            .iter()
+                            .any(|v| v.color == config.neutral_color.gamma_multiply(0.5)),
+                        _ => false,
+                    })
+                    .expect("footprint cells");
+                let legend = output
+                    .shapes
+                    .iter()
+                    .position(|shape| match &shape.shape {
+                        Shape::Text(text) => text.galley.text().contains("FLOW"),
+                        _ => false,
+                    })
+                    .expect("chart legend");
+                assert!(
+                    cells < legend,
+                    "width {width}, pane {pane}: cells cover legend"
+                );
+            }
+        }
+    }
 
     #[cfg(feature = "studies")]
     #[test]
