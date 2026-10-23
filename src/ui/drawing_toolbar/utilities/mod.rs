@@ -6,8 +6,7 @@
 //! - Magnet mode with dropdown
 //! - Keep drawing toggle
 //! - Lock drawings toggle
-//! - Templates dropdown
-//! - Hide/show objects dropdown
+//! - Hide/show objects dropdown with drawing templates
 //! - Remove objects dropdown
 
 mod hide_menu;

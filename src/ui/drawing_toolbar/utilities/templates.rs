@@ -1,26 +1,19 @@
 //! Drawing template management UI.
 //!
-//! Provides the template button and dropdown menu for saving,
-//! loading, and deleting drawing templates from the toolbar.
+//! Provides the visibility flyout rows and name dialog for saving
+//! and loading drawing templates.
 
 use crate::ext::UiExt;
-use crate::icons::icons;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::drawing_toolbar::DrawingTemplate;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
-use crate::ui::drawing_toolbar::components::draw_tool_button;
 use crate::ui::drawing_toolbar::submenu_builder::SubmenuBuilder;
-use egui::{Rect, Response, Ui};
+use egui::{Rect, Ui};
 
-/// Drawing template management button and dropdown.
+/// Drawing template rows and save dialog.
 pub struct TemplatesButton;
 
 impl TemplatesButton {
-    /// Render the templates button. A click opens the dropdown.
-    pub fn show(ui: &mut Ui) -> Response {
-        draw_tool_button(ui, &icons::TEMPLATE, "Drawing templates", false)
-    }
-
     /// Render the templates dropdown rows.
     ///
     /// Shows save template option, followed by existing templates

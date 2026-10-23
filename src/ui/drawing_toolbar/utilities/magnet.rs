@@ -8,7 +8,7 @@
 
 use crate::icons::icons;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
-use crate::ui::drawing_toolbar::components::draw_tool_button;
+use crate::ui::drawing_toolbar::components::icon_button::draw_latched_button;
 use crate::ui::drawing_toolbar::state::MagnetType;
 use crate::ui::drawing_toolbar::submenu_builder::SubmenuBuilder;
 use egui::{Response, Ui};
@@ -19,7 +19,7 @@ pub struct MagnetButton;
 impl MagnetButton {
     /// Render the magnet button, filled while snapping is on. A click opens the dropdown.
     pub fn show(ui: &mut Ui, is_active: bool) -> Response {
-        draw_tool_button(ui, &icons::MAGNET, "Magnet mode", is_active)
+        draw_latched_button(ui, &icons::DRAWING_MAGNET, "Magnet mode", is_active)
     }
 
     /// Render the magnet dropdown rows, with a check on the current mode. "Off" returns

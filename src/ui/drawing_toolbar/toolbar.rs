@@ -81,7 +81,7 @@ use super::{
     components::{draw_separator_styled, draw_tool_button, render_svg_at_rect_themed},
     data, icons,
     state::ToolbarState,
-    submenu_builder::{flyout_id, show_flyout},
+    submenu_builder::{flyout_id, section_header, show_flyout},
     utilities::{
         HideMenu, LockButton, MagnetButton, MeasureButton, RemoveMenu, StayInDrawingButton,
         TemplatesButton, ZoomInButton, ZoomOutButton,
@@ -113,13 +113,10 @@ impl DrawingToolbar {
     }
 
     /// Shows or hides `control`: Trading (the hide positions and orders rows) and Templates
-    /// (the templates button and its menu). The toolbar ignores the other controls.
+    /// (the template rows in the Hide flyout and their dialog). The toolbar ignores the other controls.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
         if control == Control::Templates && !visible {
-            if self.state.expanded_category.as_deref() == Some("Templates") {
-                self.state.expanded_category = None;
-            }
             self.state.show_template_name_input = false;
         }
     }
@@ -512,12 +509,6 @@ impl DrawingToolbar {
             action = a;
         }
 
-        // Templates
-        if !self.hidden.contains(&Control::Templates) {
-            let response = TemplatesButton::show(ui);
-            self.menu_button(ui, "Templates", &response);
-        }
-
         // Hide dropdown
         let response = HideMenu::show(ui);
         self.menu_button(ui, "Hide", &response);
@@ -567,11 +558,20 @@ impl DrawingToolbar {
         });
 
         let trading = !self.hidden.contains(&Control::Trading);
+        let templates = !self.hidden.contains(&Control::Templates);
         let sel_tool = self.state.sel_tool;
         let state = &mut self.state;
         let action = show_flyout(ui, category, anchor, |ui| match category {
             "Magnet" => MagnetButton::show_submenu(ui, state.magnet_mode, state.magnet_type),
-            "Hide" => HideMenu::show_submenu(ui, trading, state),
+            "Hide" => {
+                let mut action = HideMenu::show_submenu(ui, trading, state);
+                if templates {
+                    ui.separator();
+                    section_header(ui, "DRAWING TEMPLATES", ui.min_rect().width());
+                    action = action.or(TemplatesButton::show_submenu(ui, &state.templates));
+                }
+                action
+            }
             "Remove" => RemoveMenu::show_submenu(ui),
             "Icons/Emojis" => {
                 let mut builder = SubmenuBuilder::new(ui);
@@ -584,7 +584,6 @@ impl DrawingToolbar {
                 }
                 builder.show()
             }
-            "Templates" => TemplatesButton::show_submenu(ui, &state.templates),
             _ => {
                 let favorites = &mut state.favorites;
                 let action = match category {
@@ -994,7 +993,7 @@ mod tests {
     use super::*;
     use egui::{Context, Event, Key, Modifiers, RawInput};
 
-    /// The bar keeps a 28 px icon grid on a 38 px pitch and 34 px state fills in each theme.
+    /// The bar keeps its grid and utility order, with distinct selection and magnet fills.
     #[test]
     fn drawing_bar_icons_keep_their_grid_pitch_and_state_colours() {
         use egui::{Color32, Pos2, Shape, vec2};
@@ -1007,12 +1006,17 @@ mod tests {
             (crate::theme::Theme::light(), Color32::from_rgb(19, 23, 34)),
             (custom, Color32::GREEN),
         ] {
-            for selected in [None, Some(DrawingToolType::TrendLine)] {
+            for (selected, magnet) in [
+                (None, false),
+                (None, true),
+                (Some(DrawingToolType::TrendLine), false),
+            ] {
                 let ctx = Context::default();
                 egui_extras::install_image_loaders(&ctx);
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut toolbar = DrawingToolbar::new();
                 toolbar.state.sel_tool = selected;
+                toolbar.state.magnet_mode = magnet;
                 let mut origin = Pos2::ZERO;
                 let mut shapes = Vec::new();
                 for _ in 0..2 {
@@ -1038,17 +1042,23 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert_eq!(icons.len(), 16);
+                assert_eq!(icons.len(), 15);
                 for (i, y) in [
                     23.0, 61.0, 99.0, 137.0, 175.0, 213.0, 251.0, 289.0, 344.0, 382.0, 437.0,
-                    475.0, 513.0, 551.0, 589.0, 644.0,
+                    475.0, 513.0, 551.0, 606.0,
                 ]
                 .into_iter()
                 .enumerate()
                 {
                     let colour = if (i == 0 && selected.is_none()) || (i == 1 && selected.is_some())
                     {
-                        theme.ui.accent_text
+                        text
+                    } else if i == 10 && magnet {
+                        if theme.dark {
+                            theme.ui.panel_bg
+                        } else {
+                            Color32::WHITE
+                        }
                     } else {
                         text
                     };
@@ -1061,63 +1071,144 @@ mod tests {
                         "icon {i}, selected {selected:?}"
                     );
                 }
-                let selected_y = if selected.is_none() { 6.0 } else { 44.0 };
-                let selected_fill = if selected.is_none() {
-                    theme.ui.accent
+                let selected_y = if selected.is_none() { 5.5 } else { 43.5 };
+                let selected_fill = if theme.dark {
+                    theme.ui.btn_bg_active
                 } else {
-                    theme.ui.accent_hover
+                    Color32::from_gray(235)
                 };
                 let hovered_fill = if selected.is_none() {
                     theme.ui.btn_bg_hover
                 } else {
-                    theme.ui.accent_hover
+                    selected_fill
                 };
                 assert!(shapes.iter().any(|s| matches!(
                     &s.shape,
                     Shape::Rect(r) if r.fill == hovered_fill
-                        && r.rect == Rect::from_min_size(origin + vec2(9.0, 44.0), vec2(34.0, 34.0))
+                        && r.rect == Rect::from_min_size(origin + vec2(8.5, 43.5), vec2(35.0, 35.0))
                 )));
                 assert!(shapes.iter().any(|s| matches!(
                     &s.shape,
                     Shape::Rect(r) if r.fill == selected_fill
-                        && r.rect == Rect::from_min_size(origin + vec2(9.0, selected_y), vec2(34.0, 34.0))
+                        && r.rect == Rect::from_min_size(origin + vec2(8.5, selected_y), vec2(35.0, 35.0))
                 )));
+                if magnet {
+                    let fill = if theme.dark {
+                        theme.ui.text
+                    } else {
+                        Color32::from_gray(26)
+                    };
+                    assert!(shapes.iter().any(|s| matches!(
+                        &s.shape,
+                        Shape::Rect(r) if r.fill == fill
+                            && r.rect == Rect::from_center_size(origin + vec2(26.0, 437.0), vec2(35.0, 35.0))
+                    )));
+                }
+                let separator = if theme.dark {
+                    Color32::from_gray(74)
+                } else {
+                    Color32::from_gray(235)
+                };
                 assert!(shapes.iter().any(|s| matches!(
                     &s.shape,
-                    Shape::Rect(r) if r.fill == Color32::from_gray(74)
-                        && r.rect == Rect::from_min_size(origin + vec2(9.0, 316.0), vec2(33.0, 1.0))
+                    Shape::Rect(r) if r.fill == separator
+                        && r.rect == Rect::from_min_size(origin + vec2(8.0, 316.0), vec2(36.0, 1.0))
                 )));
             }
         }
     }
 
-    /// The name dialog that "Save as Template..." opens, with its name still empty, stays open
-    /// until it is cancelled.
+    /// The visibility flyout saves and loads templates unless the host hides them. An empty
+    /// save dialog stays open until cancelled.
     #[test]
-    fn the_template_name_dialog_stays_open_until_cancelled() {
-        let ctx = Context::default();
-        let mut toolbar = DrawingToolbar::new();
-        toolbar.state.show_template_name_input = true;
-        let escape = Event::Key {
-            key: Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: Modifiers::NONE,
-        };
-        let mut open = Vec::new();
-        for events in [vec![], vec![], vec![escape]] {
-            let input = RawInput {
-                events,
-                ..Default::default()
-            };
-            ctx.run_ui(input, |ui| {
-                toolbar.show_with_action(ui);
-            })
-            .drop_without_applying_deltas();
-            open.push(toolbar.state.show_template_name_input);
+    fn the_visibility_flyout_keeps_template_actions() {
+        use crate::ui::drawing_toolbar::DrawingTemplate;
+        use egui::{PointerButton, Pos2, Rect, Shape, vec2};
+
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for (visible, label) in [
+                (true, "Save as template…"),
+                (true, "Saved line"),
+                (false, "Saved line"),
+            ] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut toolbar = DrawingToolbar::new();
+                toolbar.state.templates.push(DrawingTemplate {
+                    id: "line".into(),
+                    name: "Saved line".into(),
+                    drawing_type: "TrendLine".into(),
+                    is_default: false,
+                });
+                toolbar.set_control_visible(Control::Templates, visible);
+                toolbar.toggle_category(
+                    &ctx,
+                    "Hide",
+                    Rect::from_min_size(Pos2::new(0.0, 100.0), vec2(52.0, 38.0)),
+                );
+                let frame = |toolbar: &mut DrawingToolbar, events| {
+                    let mut action = DrawingToolbarAction::None;
+                    let mut output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 450.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| action = toolbar.show_with_action(ui),
+                    );
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    (action, shapes)
+                };
+                frame(&mut toolbar, vec![]);
+                let (_, shapes) = frame(&mut toolbar, vec![]);
+                let row = shapes.iter().find_map(|s| match &s.shape {
+                    Shape::Text(t) if t.galley.text() == label => {
+                        Some(t.pos + t.galley.size() / 2.0)
+                    }
+                    _ => None,
+                });
+                assert_eq!(row.is_some(), visible);
+                if let Some(pos) = row {
+                    frame(&mut toolbar, vec![Event::PointerMoved(pos)]);
+                    for pressed in [true, false] {
+                        let (action, _) = frame(
+                            &mut toolbar,
+                            vec![Event::PointerButton {
+                                pos,
+                                button: PointerButton::Primary,
+                                pressed,
+                                modifiers: Modifiers::NONE,
+                            }],
+                        );
+                        if !pressed && label == "Saved line" {
+                            assert_eq!(
+                                action,
+                                DrawingToolbarAction::LoadTemplate {
+                                    template_id: "line".into(),
+                                }
+                            );
+                        }
+                    }
+                    let saving = label == "Save as template…";
+                    assert_eq!(toolbar.state.show_template_name_input, saving);
+                    assert!(toolbar.state.expanded_category.is_none());
+                    frame(&mut toolbar, vec![]);
+                    assert_eq!(toolbar.state.show_template_name_input, saving);
+                    frame(
+                        &mut toolbar,
+                        vec![Event::Key {
+                            key: Key::Escape,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        }],
+                    );
+                    assert!(!toolbar.state.show_template_name_input);
+                }
+            }
         }
-        assert_eq!(open, [true, true, false]);
     }
 
     /// Alt+T selects the trend line tool, unless a text field has the keyboard, where it must not
