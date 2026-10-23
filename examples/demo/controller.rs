@@ -245,10 +245,15 @@ impl DemoApp {
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
-                [("symbols", "Symbol search"), ("indicators", "Indicators"), ("settings", "Chart settings"), ("export", "Export chart")]
-                    .into_iter()
-                    .map(|(id, label)| egui_charts::ui_kit::command_palette::Command::new(id, label))
-                    .collect(),
+                [
+                    ("symbols", "Symbol search"),
+                    ("indicators", "Indicators"),
+                    ("settings", "Chart settings"),
+                    ("export", "Export chart"),
+                ]
+                .into_iter()
+                .map(|(id, label)| egui_charts::ui_kit::command_palette::Command::new(id, label))
+                .collect(),
             ),
             alert_dialog: AlertDialog::new(),
             series_settings: SeriesSettingsDialog::new(),
@@ -838,10 +843,16 @@ impl DemoApp {
                             )
                             .clicked();
                         search = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
-                            IconButton::new(&icons::QUICK_SEARCH).icon_scale(24.0 / 28.0).show(ui),
+                            IconButton::new(&icons::QUICK_SEARCH)
+                                .icon_scale(24.0 / 28.0)
+                                .show(ui),
                             "Quick search",
-                            Some(egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K)),
-                        ).clicked();
+                            Some(egui::KeyboardShortcut::new(
+                                egui::Modifiers::COMMAND,
+                                egui::Key::K,
+                            )),
+                        )
+                        .clicked();
                     },
                 );
                 self.handle_top_toolbar(ui.ctx(), action);
