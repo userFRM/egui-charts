@@ -309,8 +309,9 @@ mod tests {
         assert_eq!(qs.values.len(), 10);
 
         // Should be positive for bullish candles
-        if let IndicatorValue::Single(v) = qs.values.last().unwrap() {
-            assert!(*v > 0.0);
-        }
+        let IndicatorValue::Single(v) = qs.values.last().unwrap() else {
+            panic!("no value: {:?}", qs.values.last().unwrap());
+        };
+        assert!(*v > 0.0);
     }
 }

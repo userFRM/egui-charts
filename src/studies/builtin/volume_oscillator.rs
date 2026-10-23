@@ -210,8 +210,9 @@ mod tests {
         vo.calculate(&data);
 
         // Last value should be positive (rising volume)
-        if let IndicatorValue::Single(v) = vo.values.last().unwrap() {
-            assert!(*v > 0.0, "Oscillator should be positive for rising volume");
-        }
+        let IndicatorValue::Single(v) = vo.values.last().unwrap() else {
+            panic!("no value: {:?}", vo.values.last().unwrap());
+        };
+        assert!(*v > 0.0, "Oscillator should be positive for rising volume");
     }
 }

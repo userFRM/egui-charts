@@ -151,10 +151,10 @@ mod tests {
 
         pb.calculate(&data);
 
-        if let IndicatorValue::Single(v) = pb.values.last().unwrap() {
-            // With constant prices, %B should be 0.5 (middle of bands)
-            // But with zero std dev, bands collapse
-            assert!(v.is_finite());
-        }
+        let IndicatorValue::Single(v) = pb.values.last().unwrap() else {
+            panic!("no value: {:?}", pb.values.last().unwrap());
+        };
+        // Constant prices collapse the bands to a point: %B is the middle of the band
+        assert_eq!(*v, 0.5);
     }
 }

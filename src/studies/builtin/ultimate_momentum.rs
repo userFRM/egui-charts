@@ -156,8 +156,9 @@ mod tests {
         assert_eq!(um.values.len(), 30);
 
         // In uptrend, momentum should be positive
-        if let IndicatorValue::Single(v) = um.values.last().unwrap() {
-            assert!(*v > 0.0, "Momentum should be positive in uptrend");
-        }
+        let IndicatorValue::Single(v) = um.values.last().unwrap() else {
+            panic!("no value: {:?}", um.values.last().unwrap());
+        };
+        assert!(*v > 0.0, "Momentum should be positive in uptrend");
     }
 }

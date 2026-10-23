@@ -296,8 +296,9 @@ mod tests {
         assert_eq!(squeeze.values.len(), 50);
 
         // Should have momentum and squeeze state
-        if let IndicatorValue::Multiple(v) = squeeze.values.last().unwrap() {
-            assert_eq!(v.len(), 2);
-        }
+        let IndicatorValue::Multiple(v) = squeeze.values.last().unwrap() else {
+            panic!("no value: {:?}", squeeze.values.last().unwrap());
+        };
+        assert_eq!(v.len(), 2);
     }
 }

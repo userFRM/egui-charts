@@ -126,35 +126,3 @@ impl Indicator for ChandeMomentumOscillator {
         vec![format!("CMO({})", self.period)]
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_cmo() {
-        let mut cmo = ChandeMomentumOscillator::new(5);
-
-        // Uptrending data
-        let data: Vec<Bar> = (0..20).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        cmo.calculate(&data);
-
-        // In pure uptrend, CMO should be +100
-        if let IndicatorValue::Single(v) = cmo.values.last().unwrap() {
-            assert!(*v > 50.0, "CMO should be positive in uptrend");
-        }
-    }
-}

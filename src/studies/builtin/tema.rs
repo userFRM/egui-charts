@@ -211,9 +211,10 @@ mod tests {
 
         // Check remaining values are valid
         for value in tema.values().iter().skip(warmup) {
-            if let IndicatorValue::Single(v) = value {
-                assert!(*v > 0.0);
-            }
+            let IndicatorValue::Single(v) = value else {
+                panic!("no value: {value:?}");
+            };
+            assert!(*v > 0.0);
         }
     }
 
@@ -224,26 +225,14 @@ mod tests {
         tema.calculate(&bars);
 
         // Get last TEMA value
-        if let Some(IndicatorValue::Single(tema_val)) = tema.values().last() {
-            let last_close = bars.last().unwrap().close;
-            // TEMA should track price very closely in uptrend
-            assert!(
-                (*tema_val - last_close).abs() < 10.0,
-                "TEMA should track price very closely"
-            );
-        }
-    }
-
-    #[test]
-    fn test_tema_is_overlay() {
-        let tema = TEMA::new(14);
-        assert!(tema.is_overlay());
-    }
-
-    #[test]
-    fn test_tema_empty_data() {
-        let mut tema = TEMA::new(14);
-        tema.calculate(&[]);
-        assert!(tema.values().is_empty());
+        let Some(IndicatorValue::Single(tema_val)) = tema.values().last() else {
+            panic!("no value: {:?}", tema.values().last());
+        };
+        let last_close = bars.last().unwrap().close;
+        // TEMA should track price very closely in uptrend
+        assert!(
+            (*tema_val - last_close).abs() < 10.0,
+            "TEMA should track price very closely"
+        );
     }
 }

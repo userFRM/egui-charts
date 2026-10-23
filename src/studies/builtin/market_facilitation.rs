@@ -133,9 +133,10 @@ mod tests {
 
         assert_eq!(mfi.values.len(), 2);
 
-        if let IndicatorValue::Single(v) = mfi.values[0] {
-            assert!((v - 0.004).abs() < 0.0001);
-        }
+        let IndicatorValue::Single(v) = mfi.values[0] else {
+            panic!("no value: {:?}", mfi.values[0]);
+        };
+        assert!((v - 0.004).abs() < 0.0001);
     }
 
     #[test]

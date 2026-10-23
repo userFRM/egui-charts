@@ -355,9 +355,10 @@ mod tests {
         assert_eq!(vpt.values.len(), 3);
 
         // First VPT should be 0
-        if let IndicatorValue::Single(v) = vpt.values[0] {
-            assert_eq!(v, 0.0);
-        }
+        let IndicatorValue::Single(v) = vpt.values[0] else {
+            panic!("no value: {:?}", vpt.values[0]);
+        };
+        assert_eq!(v, 0.0);
     }
 
     /// Index and signal line against the published definition. On a bar whose volume fell (NVI)

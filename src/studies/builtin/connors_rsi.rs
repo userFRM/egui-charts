@@ -326,10 +326,13 @@ mod tests {
         crsi.calculate(&data);
 
         // CRSI should be bounded between 0 and 100
+        let mut checked = 0;
         for value in &crsi.values {
             if let IndicatorValue::Single(v) = value {
                 assert!(*v >= 0.0 && *v <= 100.0, "CRSI {v} out of range");
+                checked += 1;
             }
         }
+        assert!(checked > 0, "no value to check");
     }
 }

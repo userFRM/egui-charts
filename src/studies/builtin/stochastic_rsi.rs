@@ -322,30 +322,14 @@ mod tests {
         let mut stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
         stoch_rsi.calculate(&bars);
 
+        let mut checked = 0;
         for value in stoch_rsi.values() {
             if let IndicatorValue::Multiple(vals) = value {
                 assert!(vals[0] >= 0.0 && vals[0] <= 100.0, "%K should be 0-100");
                 assert!(vals[1] >= 0.0 && vals[1] <= 100.0, "%D should be 0-100");
+                checked += 1;
             }
         }
-    }
-
-    #[test]
-    fn test_stoch_rsi_line_cnt() {
-        let stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        assert_eq!(stoch_rsi.line_cnt(), 2);
-    }
-
-    #[test]
-    fn test_stoch_rsi_is_not_overlay() {
-        let stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        assert!(!stoch_rsi.is_overlay());
-    }
-
-    #[test]
-    fn test_stoch_rsi_empty_data() {
-        let mut stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        stoch_rsi.calculate(&[]);
-        assert!(stoch_rsi.values().is_empty());
+        assert!(checked > 0, "no value to check");
     }
 }

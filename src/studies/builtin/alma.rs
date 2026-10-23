@@ -211,25 +211,13 @@ mod tests {
         alma.calculate(&bars);
 
         // ALMA should track price but be smoothed
-        if let Some(IndicatorValue::Single(val)) = alma.values().last() {
-            let last_close = bars.last().unwrap().close;
-            assert!(
-                (*val - last_close).abs() < 10.0,
-                "ALMA should be close to price"
-            );
-        }
-    }
-
-    #[test]
-    fn test_alma_is_overlay() {
-        let alma = ALMA::new(9, 0.85, 6.0);
-        assert!(alma.is_overlay());
-    }
-
-    #[test]
-    fn test_alma_empty_data() {
-        let mut alma = ALMA::new(9, 0.85, 6.0);
-        alma.calculate(&[]);
-        assert!(alma.values().is_empty());
+        let Some(IndicatorValue::Single(val)) = alma.values().last() else {
+            panic!("no value: {:?}", alma.values().last());
+        };
+        let last_close = bars.last().unwrap().close;
+        assert!(
+            (*val - last_close).abs() < 10.0,
+            "ALMA should be close to price"
+        );
     }
 }

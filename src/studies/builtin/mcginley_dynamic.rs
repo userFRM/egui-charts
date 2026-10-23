@@ -147,8 +147,9 @@ mod tests {
         assert_eq!(md.values.len(), 20);
 
         // MD should track price but smoother
-        if let IndicatorValue::Single(v) = md.values.last().unwrap() {
-            assert!(*v > 100.0 && *v < 120.0);
-        }
+        let IndicatorValue::Single(v) = md.values.last().unwrap() else {
+            panic!("no value: {:?}", md.values.last().unwrap());
+        };
+        assert!(*v > 100.0 && *v < 120.0);
     }
 }

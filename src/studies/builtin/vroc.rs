@@ -149,8 +149,9 @@ mod tests {
         }
 
         // Check calculation at index 5: (1500 - 1000) / 1000 * 100 = 50%
-        if let IndicatorValue::Single(v) = vroc.values[5] {
-            assert!((v - 50.0).abs() < 0.01);
-        }
+        let IndicatorValue::Single(v) = vroc.values[5] else {
+            panic!("no value: {:?}", vroc.values[5]);
+        };
+        assert!((v - 50.0).abs() < 0.01);
     }
 }

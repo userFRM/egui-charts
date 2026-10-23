@@ -206,10 +206,9 @@ mod tests {
             })
             .collect();
 
-        if !valid_values.is_empty() {
-            let mean: f64 = valid_values.iter().sum::<f64>() / valid_values.len() as f64;
-            // Mean should be close to 0 after detrending
-            assert!(mean.abs() < 10.0, "DPO mean {mean} should be close to 0");
-        }
+        assert!(!valid_values.is_empty(), "no value to check");
+        let mean: f64 = valid_values.iter().sum::<f64>() / valid_values.len() as f64;
+        // Mean should be close to 0 after detrending
+        assert!(mean.abs() < 10.0, "DPO mean {mean} should be close to 0");
     }
 }

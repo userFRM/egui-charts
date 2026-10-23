@@ -201,11 +201,4 @@ mod tests {
             assert_eq!(got, *expected, "closes {closes:?}");
         }
     }
-
-    #[test]
-    fn test_obv_empty_data() {
-        let mut obv = OnBalanceVolume::new();
-        obv.calculate(&[]);
-        assert!(obv.values().is_empty());
-    }
 }

@@ -221,16 +221,18 @@ mod tests {
         assert_eq!(cvd.values.len(), 3);
 
         // First bar is bullish (close near high) - positive delta
-        if let IndicatorValue::Single(val) = cvd.values[0] {
-            assert!(val > 0.0, "First bar should have positive delta");
-        }
+        let IndicatorValue::Single(val) = cvd.values[0] else {
+            panic!("no value: {:?}", cvd.values[0]);
+        };
+        assert!(val > 0.0, "First bar should have positive delta");
 
         // After second bar (bearish), delta should decrease
-        if let (IndicatorValue::Single(v1), IndicatorValue::Single(v2)) =
+        let (IndicatorValue::Single(v1), IndicatorValue::Single(v2)) =
             (&cvd.values[0], &cvd.values[1])
-        {
-            assert!(v2 < v1, "Second bar should decrease cumulative delta");
-        }
+        else {
+            panic!("no values: {:?}", &cvd.values[..2]);
+        };
+        assert!(v2 < v1, "Second bar should decrease cumulative delta");
     }
 
     #[test]
@@ -262,12 +264,13 @@ mod tests {
         cvd.calculate(&bars);
 
         // Simple mode: first bar bullish = +1000, second bearish = -1000
-        if let IndicatorValue::Single(val) = cvd.values[1] {
-            // First is +1000 (bullish), second is -1000 (bearish) = 0
-            assert!(
-                val.abs() < 1.0,
-                "After one bullish and one bearish, delta should be near 0"
-            );
-        }
+        let IndicatorValue::Single(val) = cvd.values[1] else {
+            panic!("no value: {:?}", cvd.values[1]);
+        };
+        // First is +1000 (bullish), second is -1000 (bearish) = 0
+        assert!(
+            val.abs() < 1.0,
+            "After one bullish and one bearish, delta should be near 0"
+        );
     }
 }

@@ -207,9 +207,10 @@ mod tests {
         }
 
         // Should have positive volatility
-        if let IndicatorValue::Single(v) = hv.values[6] {
-            assert!(v > 0.0, "HV should be positive");
-        }
+        let IndicatorValue::Single(v) = hv.values[6] else {
+            panic!("no value: {:?}", hv.values[6]);
+        };
+        assert!(v > 0.0, "HV should be positive");
     }
 
     #[test]
@@ -228,9 +229,10 @@ mod tests {
         hv.calculate(&data);
 
         // With constant prices, HV should be 0
-        if let IndicatorValue::Single(v) = hv.values.last().unwrap() {
-            assert!(v.abs() < 0.01, "HV should be ~0 for constant prices");
-        }
+        let IndicatorValue::Single(v) = hv.values.last().unwrap() else {
+            panic!("no value: {:?}", hv.values.last().unwrap());
+        };
+        assert!(v.abs() < 0.01, "HV should be ~0 for constant prices");
     }
 
     #[test]
@@ -249,8 +251,9 @@ mod tests {
         hv.calculate(&data);
 
         // High volatility should produce large HV values
-        if let IndicatorValue::Single(v) = hv.values.last().unwrap() {
-            assert!(*v > 100.0, "HV should be high for volatile prices, got {v}");
-        }
+        let IndicatorValue::Single(v) = hv.values.last().unwrap() else {
+            panic!("no value: {:?}", hv.values.last().unwrap());
+        };
+        assert!(*v > 100.0, "HV should be high for volatile prices, got {v}");
     }
 }

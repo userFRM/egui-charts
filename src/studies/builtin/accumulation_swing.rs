@@ -179,10 +179,11 @@ mod tests {
         assert_eq!(asi.values.len(), 3);
 
         // In uptrend, ASI should increase
-        if let (IndicatorValue::Single(v1), IndicatorValue::Single(v2)) =
+        let (IndicatorValue::Single(v1), IndicatorValue::Single(v2)) =
             (&asi.values[1], &asi.values[2])
-        {
-            assert!(v2 > v1, "ASI should increase in uptrend");
-        }
+        else {
+            panic!("no values: {:?}", &asi.values[1..]);
+        };
+        assert!(v2 > v1, "ASI should increase in uptrend");
     }
 }

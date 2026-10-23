@@ -163,11 +163,12 @@ mod tests {
         assert_eq!(pc.values.len(), 5);
 
         // Last value should be highest=110, lowest=98, middle=104
-        if let IndicatorValue::Multiple(v) = pc.values.last().unwrap() {
-            assert_eq!(v.len(), 3);
-            assert!((v[0] - 110.0).abs() < 0.01); // Upper
-            assert!((v[1] - 98.0).abs() < 0.01); // Lower
-            assert!((v[2] - 104.0).abs() < 0.01); // Middle
-        }
+        let IndicatorValue::Multiple(v) = pc.values.last().unwrap() else {
+            panic!("no value: {:?}", pc.values.last().unwrap());
+        };
+        assert_eq!(v.len(), 3);
+        assert!((v[0] - 110.0).abs() < 0.01); // Upper
+        assert!((v[1] - 98.0).abs() < 0.01); // Lower
+        assert!((v[2] - 104.0).abs() < 0.01); // Middle
     }
 }

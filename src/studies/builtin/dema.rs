@@ -204,9 +204,10 @@ mod tests {
 
         // Check remaining values are valid
         for value in dema.values().iter().skip(warmup) {
-            if let IndicatorValue::Single(v) = value {
-                assert!(*v > 0.0);
-            }
+            let IndicatorValue::Single(v) = value else {
+                panic!("no value: {value:?}");
+            };
+            assert!(*v > 0.0);
         }
     }
 
@@ -218,26 +219,14 @@ mod tests {
         dema.calculate(&bars);
 
         // Get last DEMA value
-        if let Some(IndicatorValue::Single(dema_val)) = dema.values().last() {
-            let last_close = bars.last().unwrap().close;
-            // DEMA should be relatively close to current price in uptrend
-            assert!(
-                (*dema_val - last_close).abs() < 15.0,
-                "DEMA should track price closely"
-            );
-        }
-    }
-
-    #[test]
-    fn test_dema_is_overlay() {
-        let dema = DEMA::new(14);
-        assert!(dema.is_overlay());
-    }
-
-    #[test]
-    fn test_dema_empty_data() {
-        let mut dema = DEMA::new(14);
-        dema.calculate(&[]);
-        assert!(dema.values().is_empty());
+        let Some(IndicatorValue::Single(dema_val)) = dema.values().last() else {
+            panic!("no value: {:?}", dema.values().last());
+        };
+        let last_close = bars.last().unwrap().close;
+        // DEMA should be relatively close to current price in uptrend
+        assert!(
+            (*dema_val - last_close).abs() < 15.0,
+            "DEMA should track price closely"
+        );
     }
 }

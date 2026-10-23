@@ -236,8 +236,9 @@ mod tests {
         assert!(matches!(lsma.values[1], IndicatorValue::None));
 
         // Third value should be close to 102.0 (uptrend)
-        if let IndicatorValue::Single(v) = lsma.values[2] {
-            assert!((v - 102.0).abs() < 0.01);
-        }
+        let IndicatorValue::Single(v) = lsma.values[2] else {
+            panic!("no value: {:?}", lsma.values[2]);
+        };
+        assert!((v - 102.0).abs() < 0.01);
     }
 }

@@ -190,8 +190,9 @@ mod tests {
         assert!(matches!(swma.values[2], IndicatorValue::None));
 
         // Fourth bar: (100 + 2*102 + 2*101 + 103) / 6 = 609 / 6 = 101.5
-        if let IndicatorValue::Single(v) = swma.values[3] {
-            assert!((v - 101.5).abs() < 0.01);
-        }
+        let IndicatorValue::Single(v) = swma.values[3] else {
+            panic!("no value: {:?}", swma.values[3]);
+        };
+        assert!((v - 101.5).abs() < 0.01);
     }
 }

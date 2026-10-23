@@ -175,8 +175,9 @@ mod tests {
         assert_eq!(pgo.values.len(), 6);
 
         // Last value should be positive (price above avg)
-        if let IndicatorValue::Single(v) = pgo.values.last().unwrap() {
-            assert!(*v > 0.0, "PGO should be positive after upward move");
-        }
+        let IndicatorValue::Single(v) = pgo.values.last().unwrap() else {
+            panic!("no value: {:?}", pgo.values.last().unwrap());
+        };
+        assert!(*v > 0.0, "PGO should be positive after upward move");
     }
 }
