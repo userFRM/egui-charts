@@ -8,7 +8,9 @@
 //! the Percentage Volume Oscillator; Bollinger; Lambert
 //! 1980 for CCI; Quong and Soudack for MFI; Chande 1995 for Aroon; Hull; Chaikin; Lane; Williams;
 //! Donchian; Hosoda; ordinary least squares; population standard deviation) on the same fixture,
-//! and rounded to 12 significant digits.
+//! and rounded to 12 significant digits. Volume signs use exact integer comparisons; the
+//! volatility rows use decimal logarithms at 50-digit precision. Calendar-window rows are
+//! hand-calculated over an inclusive 364-day window.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -26,9 +28,9 @@ use crate::studies::{
     ADX, ATR, Aroon, BalanceOfPower, BollingerBands, CCI, ChaikinMoneyFlow,
     CommoditySelectionIndex, DirectionalMovement, DonchianChannels, EMA, HMA, IchimokuCloud,
     Indicator, IndicatorValue, KeltnerChannels, LinearRegression, LinearRegressionSlope, MACD,
-    MoneyFlowIndex, NetVolume, ParabolicSAR, PercentageVolumeOscillator, PriceOscillator, RSI,
-    RateOfChange, SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA, Week52HighLow,
-    Week52HighLowLevels, WilliamsR,
+    MoneyFlowIndex, NetVolume, ParabolicSAR, ParkinsonVol, PercentageVolumeOscillator,
+    PriceOscillator, RSI, RateOfChange, SMA, StandardDeviation, Stochastic, SuperTrend, VWMA, WMA,
+    Week52HighLow, Week52HighLowLevels, WilliamsR, ZeroTrendVol,
 };
 use chrono::{TimeZone, Utc};
 
@@ -85,6 +87,9 @@ fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
 fn staple_studies_match_published_definitions() {
     let bars = fixture();
     let studies: Vec<(&str, Box<dyn Indicator>)> = vec![
+        ("ZeroTrend(1)", Box::new(ZeroTrendVol::new(1))),
+        ("ZeroTrend(20)", Box::new(ZeroTrendVol::default())),
+        ("Parkinson(20)", Box::new(ParkinsonVol::default())),
         ("NetVolume", Box::new(NetVolume::default())),
         ("SMA(20)", Box::new(SMA::default())),
         ("EMA(12)", Box::new(EMA::default())),

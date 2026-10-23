@@ -175,6 +175,7 @@ impl IndicatorFactory {
                 Envelopes,
                 PercentB,
                 OhlcVolatility,
+                ParkinsonVol,
                 ZeroTrendVol,
                 CommoditySelectionIndex,
             ],
@@ -487,6 +488,7 @@ mod tests {
             Box::new(PercentB::new(l(0), x(2.0))),
             Box::new(CloseToCloseVol::new(l(0))),
             Box::new(OhlcVolatility::new(l(0))),
+            Box::new(ParkinsonVol::new(l(0))),
             Box::new(ZeroTrendVol::new(l(0))),
             Box::new(
                 CommoditySelectionIndex::new(l(0))

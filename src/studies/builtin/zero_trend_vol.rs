@@ -1,11 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Zero-Trend Volatility (Parkinson)
-/// Uses high-low range for volatility estimation assuming zero drift
-/// Parkinson = sqrt(1/(4*n*ln(2)) * sum(ln(H/L)^2))
 use crate::studies::{Indicator, IndicatorValue};
 use egui::Color32;
 
+/// Zero-mean close-to-close volatility, without subtracting the mean log return.
+///
+/// `sqrt(mean(ln(close / previous_close)^2)) * sqrt(252) * 100`.
+/// Annualisation assumes daily bars and 252 trading days per year (see #672).
+/// A full `period` of returns from positive closes is required before a value exists.
 #[derive(Clone)]
 pub struct ZeroTrendVol {
     period: usize,
@@ -15,6 +17,7 @@ pub struct ZeroTrendVol {
 }
 
 impl ZeroTrendVol {
+    /// Create a zero-trend study over `period` log returns (at least 1).
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -34,70 +37,43 @@ impl Default for ZeroTrendVol {
 impl ZeroTrendVol {
     /// The values over `data`, every bar of which has finite inputs.
     fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
-        if data.is_empty() {
-            return values;
-        }
-
-        let ln2 = 2.0_f64.ln();
-
-        // Calculate per-bar ln(H/L)^2
-        let mut hl_sq = Vec::with_capacity(data.len());
-
-        for bar in data {
-            if bar.low > 0.0 {
-                let ln_hl = (bar.high / bar.low).ln();
-                hl_sq.push(ln_hl * ln_hl);
-            } else {
-                hl_sq.push(f64::NAN);
-            }
-        }
-
-        // Rolling Parkinson estimator
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                values.push(IndicatorValue::None);
-                continue;
-            }
-
-            let window = &hl_sq[i + 1 - self.period..=i];
-            let valid: Vec<f64> = window.iter().filter(|x| !x.is_nan()).copied().collect();
-
-            if valid.is_empty() {
-                values.push(IndicatorValue::None);
-                continue;
-            }
-
-            let n = valid.len() as f64;
-            let sum = valid.iter().sum::<f64>();
-
-            // Parkinson = sqrt(1 / (4 * n * ln(2)) * sum(ln(H/L)^2))
-            let parkinson = (sum / (4.0 * n * ln2)).sqrt();
-
-            // Annualize and convert to percentage
-            let annualized = parkinson * 252.0_f64.sqrt() * 100.0;
-            values.push(IndicatorValue::Single(annualized));
-        }
-
-        values
+        let returns: Vec<_> = data
+            .windows(2)
+            .map(|bars| {
+                if bars[0].close > 0.0 && bars[1].close > 0.0 {
+                    (bars[1].close / bars[0].close).ln()
+                } else {
+                    f64::NAN
+                }
+            })
+            .collect();
+        (0..data.len())
+            .map(|i| {
+                if i < self.period {
+                    return IndicatorValue::None;
+                }
+                let window = &returns[i - self.period..i];
+                if window.iter().any(|r| !r.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let mean_squared = window.iter().map(|r| r * r).sum::<f64>() / self.period as f64;
+                IndicatorValue::Single(mean_squared.sqrt() * 252.0_f64.sqrt() * 100.0)
+            })
+            .collect()
     }
 }
 
 impl Indicator for ZeroTrendVol {
     fn name(&self) -> &str {
-        "Parkinson Vol"
+        "Zero-Trend Vol"
     }
 
     fn desc(&self) -> &str {
-        "Zero-Trend Volatility (Parkinson) - High-low range volatility estimator"
+        "Zero-Trend Close-to-Close Volatility - Annualised percentage assuming daily bars"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite(),
-            |data| self.compute(data),
-        );
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -131,6 +107,6 @@ impl Indicator for ZeroTrendVol {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!("Parkinson Vol({})", self.period)]
+        vec![format!("Zero-Trend Vol({})", self.period)]
     }
 }

@@ -29,7 +29,7 @@
 //! ## Volatility
 //! [`BollingerBands`], [`ATR`], [`KeltnerChannels`], [`DonchianChannels`],
 //! [`StandardDeviation`], [`HistoricalVolatility`], [`ChaikinVolatility`],
-//! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`]
+//! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`], [`ParkinsonVol`], [`ZeroTrendVol`]
 //!
 //! ## Volume
 //! [`OnBalanceVolume`], [`VolumeWeightedAvgPrice`], [`MoneyFlowIndex`],
@@ -177,6 +177,7 @@ mod vol_profile_visible;
 // Eighth batch - Volatility indicators
 mod close_to_close_vol;
 mod ohlc_volatility;
+mod parkinson_vol;
 mod zero_trend_vol;
 
 // Ninth batch - Moving average variants and cross indicators
@@ -333,6 +334,7 @@ pub use vol_profile_visible::VolProfileVisible;
 // Re-exports - Eighth batch (Volatility indicators)
 pub use close_to_close_vol::CloseToCloseVol;
 pub use ohlc_volatility::OhlcVolatility;
+pub use parkinson_vol::ParkinsonVol;
 pub use zero_trend_vol::ZeroTrendVol;
 
 // Re-exports - Ninth batch (Moving average variants and cross indicators)
