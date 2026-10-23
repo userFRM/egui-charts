@@ -52,11 +52,11 @@ impl Drawing {
         }
     }
 
-    /// The width a brush is drawn at: twice the stroke width for the brush and
-    /// paintbrush, eight times for the highlighter; `None` for other tools.
+    /// The width a brush is drawn at: twice the stroke width for the brush,
+    /// eight times for the highlighter; `None` for other tools.
     pub(crate) fn brush_width(&self) -> Option<f32> {
         match self.tool_type {
-            DrawingToolType::Brush | DrawingToolType::Paintbrush => Some(self.stroke_width * 2.0),
+            DrawingToolType::Brush => Some(self.stroke_width * 2.0),
             DrawingToolType::Highlighter => Some(self.stroke_width * 8.0),
             _ => None,
         }

@@ -99,7 +99,7 @@ impl DrawingToolType {
                 Self::DateRange,
                 Self::DateAndPriceRange,
             ],
-            "brushes" => vec![Self::Brush, Self::Highlighter, Self::Paintbrush],
+            "brushes" => vec![Self::Brush, Self::Highlighter],
             "arrows" => vec![
                 Self::ArrowMarker,
                 Self::Arrow,
@@ -243,10 +243,9 @@ impl DrawingToolType {
             Self::PriceRange,
             Self::DateRange,
             Self::DateAndPriceRange,
-            // Brushes (3)
+            // Brushes (2)
             Self::Brush,
             Self::Highlighter,
-            Self::Paintbrush,
             // Arrows (4)
             Self::ArrowMarker,
             Self::Arrow,
@@ -358,7 +357,6 @@ impl DrawingToolType {
             Self::DateAndPriceRange => "assets/icons/drawing/date-and-price-range.svg",
             Self::Brush => "assets/icons/drawing/brush.svg",
             Self::Highlighter => "assets/icons/drawing/highlighter.svg",
-            Self::Paintbrush => "assets/icons/drawing/paintbrush.svg",
             Self::ArrowMarker => "assets/icons/drawing/arrow-marker.svg",
             Self::Arrow => "assets/icons/drawing/arrow.svg",
             Self::ArrowMarkUp => "assets/icons/drawing/arrow-mark-up.svg",

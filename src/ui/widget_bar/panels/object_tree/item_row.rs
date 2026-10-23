@@ -383,7 +383,6 @@ fn get_tool_abbreviation(tool_type: DrawingToolType) -> &'static str {
         DrawingToolType::Triangle => "TR",
         DrawingToolType::Brush => "BR",
         DrawingToolType::Highlighter => "HI",
-        DrawingToolType::Paintbrush => "PB",
         DrawingToolType::TextLabel => "TX",
         DrawingToolType::Note => "NT",
         DrawingToolType::Arrow => "AR",

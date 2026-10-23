@@ -466,7 +466,8 @@ impl DrawingManager {
 
     // === Drawing lifecycle ===
 
-    /// Starts a new drawing of the given tool type at the given screen position.
+    /// Starts a new drawing of the given tool type at the given screen position, or places the
+    /// drawing [`Self::start_icon_insertion`] prepared for it.
     ///
     /// The coordinate conversion closures (`x_to_bar`, `y_to_price`) convert
     /// screen coordinates to chart coordinates for persistent storage. If the
@@ -482,8 +483,13 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let drawing_id = self.take_id();
-        let mut drawing = Drawing::with_color(drawing_id, tool_type, self.options.default_color);
+        // A drawing prepared before its first anchor, such as a picked icon, starts here.
+        let mut drawing = match self.curr_drawing.take() {
+            Some(prepared) if prepared.tool_type == tool_type && prepared.points.is_empty() => {
+                prepared
+            }
+            _ => Drawing::with_color(self.take_id(), tool_type, self.options.default_color),
+        };
         drawing.z_order = self.top_z_order();
         self.preview_point = false;
         drawing.add_point_with_chart_coords(point, x_to_bar, y_to_price);
@@ -559,13 +565,19 @@ impl DrawingManager {
     }
 
     /// Moves the completed current drawing to the drawing list and queues it to be saved.
+    /// In keep-drawing mode the icon tool goes on placing the icon that was picked.
     fn finish_curr_drawing(&mut self) {
         if let Some(drawing) = self.curr_drawing.take() {
+            let icon = (drawing.tool_type == DrawingToolType::FontIcon)
+                .then(|| drawing.text.clone())
+                .flatten();
             self.history.push_add(drawing.clone());
             self.queue(DrawingSyncAction::SaveDrawing(drawing.id));
             self.drawings.push(drawing);
             if !self.stay_in_drawing_mode {
                 self.active_tool = None;
+            } else if let Some(icon) = icon {
+                self.start_icon_insertion(icon);
             }
         }
     }
@@ -1107,6 +1119,28 @@ mod tests {
                 })
                 .collect();
             assert_eq!(queued, expected);
+        }
+    }
+
+    /// The click after an icon is picked places that icon, not a default one, and so does every
+    /// later click in keep-drawing mode.
+    #[test]
+    fn a_picked_icon_is_placed_by_the_next_click() {
+        for (keep_drawing, clicks) in [(false, 1), (true, 3)] {
+            let mut manager = DrawingManager::new();
+            manager.stay_in_drawing_mode = keep_drawing;
+            manager.start_icon_insertion("🔥".into());
+            for i in 0..clicks {
+                let tool = manager.active_tool.unwrap();
+                let at = Pos2::new(5.0 * (i + 1) as f32, 5.0);
+                manager.start_drawing_with_coords(tool, at, |x| x, f64::from);
+            }
+            let placed: Vec<_> = manager.drawings.iter().map(|d| d.text.as_deref()).collect();
+            assert_eq!(
+                placed,
+                vec![Some("🔥"); clicks],
+                "keep drawing {keep_drawing}"
+            );
         }
     }
 

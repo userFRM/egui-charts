@@ -267,6 +267,7 @@ All notable changes to this project are documented in this file. The format is b
 - Choosing the eraser in the drawing bar lets a click delete the drawing under the pointer. The chart erased only while a crate-private flag was on that nothing set; it now follows `DrawingManager::eraser_mode`, which the new `DrawingManager::set_eraser_mode` switches on (leaving the active tool) and off, and which choosing a tool with `set_active_tool` switches off.
 - In eraser mode a click deletes the drawing under the pointer while another drawing is selected too, instead of selecting it; a locked drawing is still not erased, and Escape switches the eraser off.
 - The drawing bar's "Save as Template..." opens a template name dialog that stays open until the name is saved or the dialog is cancelled, instead of closing on its first frame because its empty name read as a cancel. The Templates menu closes when the dialog opens. `TemplatesButton::show_name_dialog` returns `Some(DrawingToolbarAction::None)` on Cancel or Escape, where it returned `None`, so a caller can tell a cancel from a name still being typed.
+- The drawing bar's Icons/Emojis button opens a menu of icons and emoji that emits `DrawingToolbarAction::InsertEmoji`, drawn with the app's fonts (the demo enables egui's `monochrome_emoji_fonts` and lists Noto Emoji and emoji-icon-font in its font licences), and the next click on the chart places the one picked, as does every later click in keep-drawing mode; the button opened nothing, and a click after `DrawingManager::start_icon_insertion` placed a default `*` instead of the picked icon.
 
 ### Changed
 
@@ -426,7 +427,7 @@ All notable changes to this project are documented in this file. The format is b
 - `model::LibrarySymbolInfo`, `DataStatus`, `SymbolFormat`, `SubsessionInfo` and the `model::symbol_info` module, which nothing read: describe an instrument with `model::Instrument`. `SymbolType` is unchanged at `model::SymbolType`.
 - `model::bar::{MAX_BARS, MAX_VISIBLE_BARS}` and `BarData::{trim_to_limit, push_with_limit}`, which nothing applied.
 - `TopToolbarAction::{ChartGridChanged, SetSyncOptions}` and the `TopToolbar::{chart_grid_selector, sync_button}` fields, which the toolbar never drew: no control emits them. `ChartGridSelector` and `SyncButton` stay in `top_toolbar::components`.
-- `DrawingToolbarAction::{ClearSelection, AddFavorite, RemoveFavorite, OpenSettings, DeleteTemplate, InsertEmoji}`, which no control emits.
+- `DrawingToolbarAction::{ClearSelection, AddFavorite, RemoveFavorite, OpenSettings, DeleteTemplate}`, which no control emits.
 - `TimeframeToolbarAction::{TimeframeChanged, GoToDate, TimezoneChanged, SessionChanged, ZoomFitAll, ZoomToRange, ToggleTradingPanel, TradingPanelFullscreen}`, which no control emits, and `ui::timeframe_toolbar::{TradingPanelRow, TradingPanelRowAction, TradingPanelRowConfig}`, which nothing drew, with the `PanelSizingTokens::{trading_panel_row_height, trading_panel_row_icon_size, trading_panel_row_btn_size}` tokens that sized it and `TimeframeToolbarState::{trading_panel_expanded, toggle_trading_panel, set_trading_panel_expanded}`, which nothing read. Migration: the date picker emits `DatePickerAction::GoToDate`.
 - `ObjectTreeAction::{ShowSelected, LockSelected, UnlockSelected, UpdateProperties, Reorder, BringSelectedToFront, SendSelectedToBack, PanTo, SaveAsTemplate, LoadTemplate, DeleteTemplate, ToggleDataWindow}`, which no control emits.
 - `ContextMenuAction::{GoToDate, ChangeSymbol, ChangeInterval, SymbolInfo, InsertIndicator, CompareOrAddSymbol, DrawingTools, HideMarksOnBars, PriceScale, TimeScale}`, which no menu entry emits.
@@ -438,6 +439,7 @@ All notable changes to this project are documented in this file. The format is b
 - `MenuItem::submenu` and `MenuItem::is_submenu`, with the `ContextMenuSizingTokens::submenu_arrow_font_size` token of their arrow: no menu row opens a submenu.
 - `ExportConfig::{include_title, include_timestamp, include_watermark, width, height, transparent_background}` and the export dialog's checkboxes and size options for them, which no export applied, and `ExportFormat::Svg` with `Exportable::export_svg`, which nothing rendered. Migration: build `ExportConfig { format }`; an image export has the size of the chart on screen.
 - `TimeframeUnit::Tick` and the tick intervals of the interval menu: no data contract carries tick bars.
+- `DrawingToolType::Paintbrush`, which drew exactly as `Brush` and was on no menu. Migration: use `DrawingToolType::Brush`. Drawings saved in the crate's JSON format (`DrawingStorage`, versions 1 and 2) and other formats that store the tool by name, and names parsed with `FromStr`, load `Paintbrush` as a brush. Data that stores the variant index (bincode, postcard) must be re-saved in a name-based format before upgrading.
 
 ## [0.2.0] - 2026-06-04
 

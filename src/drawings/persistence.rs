@@ -886,6 +886,15 @@ mod tests {
         assert!(skipped.is_empty(), "{skipped:?}");
         assert_eq!(storage.drawings().len(), 2);
 
+        // A drawing saved with the former Paintbrush tool, which drew as a brush, loads as one.
+        let paintbrush = current.replace("\"TrendLine\"", "\"Paintbrush\"");
+        let (storage, skipped) = DrawingStorage::from_json(&paintbrush).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(
+            storage.drawings()[1].drawing.tool_type,
+            DrawingToolType::Brush
+        );
+
         // A filter naming no timeframe loads as visible on every timeframe.
         let hidden = current.replacen("\"show_on_all\": true", "\"show_on_all\": false", 1);
         let (storage, skipped) = DrawingStorage::from_json(&hidden).unwrap();

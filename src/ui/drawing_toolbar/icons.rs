@@ -127,10 +127,9 @@ pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
         DrawingToolType::DateRange => &icons::DATE_RANGE,
         DrawingToolType::DateAndPriceRange => &icons::DATE_AND_PRICE_RANGE,
 
-        // ============ BRUSHES (3 tools) ============
+        // ============ BRUSHES (2 tools) ============
         DrawingToolType::Brush => &icons::BRUSH,
         DrawingToolType::Highlighter => &icons::HIGHLIGHTER,
-        DrawingToolType::Paintbrush => &icons::PAINTBRUSH,
 
         // ============ ARROWS (4 tools) ============
         DrawingToolType::ArrowMarker => &icons::ARROW_MARKER,

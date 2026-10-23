@@ -212,13 +212,13 @@ pub enum DrawingToolType {
     /// Combined date-and-price range rectangle.
     DateAndPriceRange,
 
-    // ============ BRUSHES (3 tools) ============
-    /// Freehand drawing brush (continuous-draw interaction).
+    // ============ BRUSHES (2 tools) ============
+    /// Freehand drawing brush (continuous-draw interaction). Drawings saved with the former
+    /// `Paintbrush` tool, which drew the same, load as brushes.
+    #[serde(alias = "Paintbrush")]
     Brush,
     /// Semi-transparent highlighter brush for marking chart regions.
     Highlighter,
-    /// Paintbrush tool (alias for brush with different default styling).
-    Paintbrush,
 
     // ============ ARROWS (4 tools) ============
     /// Arrow marker (single-click directional indicator).
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_tool_count() {
-        assert_eq!(DrawingToolType::all().len(), 95);
+        assert_eq!(DrawingToolType::all().len(), 94);
     }
 
     #[test]

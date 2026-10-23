@@ -145,9 +145,8 @@ impl FromStr for DrawingToolType {
             "dateandpricerange" => Ok(Self::DateAndPriceRange),
 
             // Brushes
-            "freehand" => Ok(Self::Brush),
+            "freehand" | "paintbrush" | "paint brush" | "paint" => Ok(Self::Brush),
             "highlight" => Ok(Self::Highlighter),
-            "paint brush" | "paint" => Ok(Self::Paintbrush),
 
             // Arrows
             "arrowmarker" => Ok(Self::ArrowMarker),
@@ -285,7 +284,6 @@ impl DrawingToolType {
             // Brushes
             Self::Brush => "Brush",
             Self::Highlighter => "Highlighter",
-            Self::Paintbrush => "Paintbrush",
 
             // Arrows
             Self::ArrowMarker => "Arrow Marker",
@@ -400,7 +398,6 @@ impl DrawingToolType {
             Self::DateAndPriceRange => "LineToolDateAndPriceRange",
             Self::Brush => "LineToolBrush",
             Self::Highlighter => "LineToolHighlighter",
-            Self::Paintbrush => "LineToolPaintbrush",
             Self::ArrowMarker => "LineToolArrowMarker",
             Self::Arrow => "LineToolArrow",
             Self::ArrowMarkUp => "LineToolArrowMarkUp",

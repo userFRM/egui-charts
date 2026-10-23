@@ -170,7 +170,6 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 ### Brushes / Freehand
 - [x] Brush: Freehand stroke with connected segments
 - [x] Highlighter: Wider semi-transparent stroke
-- [ ] **Paintbrush**: Identical implementation to Brush (calls `render_brush()`)
 
 ### Arrows
 - [x] Arrow: Line + arrowhead
@@ -209,7 +208,7 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [ ] **Idea**: Decorative card only; no service connection
 
 ### Icons
-- [ ] Font Icon: renderer exists (text glyph sized from stroke width) but no toolbar control selects the tool
+- [x] Font Icon: the drawing bar's Icons/Emojis menu picks an icon or emoji, and the next click places it
 - Note: Icons module is feature-gated behind `icons` feature (enabled by default)
 
 ### Cursors (4 modes, no rendering needed)
@@ -447,7 +446,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 
 ### Other UI
 - [x] Context menu: entries with icons, shortcuts, disabled state, click-outside close
-- [ ] Emoji picker: Structure exists but actual emoji grid rendering unverified
+- [x] Emoji picker: a menu of ten icons and emoji in the drawing bar (a list, not a searchable grid)
 - [ ] Multi-chart layout component (only ChartSyncOptions exists; module is a stub)
 - [x] Symbol header display
 - [x] Connection status indicator
@@ -528,7 +527,6 @@ The ui_kit components are generic building blocks:
 | Medium | Magnet snapping never applied to drawings | `drawings/manager.rs` |
 | Medium | Rotated Rectangle renders as axis-aligned | `drawings/rendering/shapes.rs` |
 | Low | Double Curve uses sine offset, not bezier | `drawings/rendering/shapes.rs` |
-| Low | Paintbrush identical to Brush | `drawings/rendering/shapes.rs` |
 | Low | Cypher Pattern identical to XABCD | `drawings/rendering/patterns.rs` |
 
 ---
@@ -538,7 +536,7 @@ The ui_kit components are generic building blocks:
 ### What's built
 - 19 of 19 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
-- `DrawingToolType` defines 95 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
+- `DrawingToolType` defines 94 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
 - 123 registered indicators with calculation code
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - Reusable ui_kit building blocks
@@ -555,7 +553,6 @@ The ui_kit components are generic building blocks:
 - [ ] Implement Rotated Rectangle with actual rotation
 - [ ] Implement Double Curve with proper bezier geometry
 - [ ] Differentiate Cypher Pattern from XABCD
-- [ ] Differentiate Paintbrush from Brush
 - [ ] Export: integrate native file dialog, implement `Exportable`
 - [ ] Template system: persistence, serialization, user management UI
 

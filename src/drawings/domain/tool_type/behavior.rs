@@ -95,9 +95,7 @@ impl DrawingToolType {
             | Self::ProjectionTool => DrawingInteractionMode::DragToDraw,
 
             // Continuous drawing tools
-            Self::Brush | Self::Highlighter | Self::Paintbrush => {
-                DrawingInteractionMode::ContinuousDraw
-            }
+            Self::Brush | Self::Highlighter => DrawingInteractionMode::ContinuousDraw,
 
             // Multi-point tools
             Self::Polyline

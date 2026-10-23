@@ -76,4 +76,10 @@ pub enum DrawingToolbarAction {
     },
     /// Open the template management menu
     OpenTemplateMenu,
+    /// An icon or emoji was picked in the Icons/Emojis menu; the host calls
+    /// `DrawingManager::start_icon_insertion` with it, and the next click places it.
+    InsertEmoji {
+        /// The icon or emoji to place
+        icon_name: &'static str,
+    },
 }

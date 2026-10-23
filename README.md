@@ -197,7 +197,7 @@ Chart types in six categories:
 
 ## Drawing Tools
 
-`DrawingToolType` defines 95 drawing tool types, counting four cursor modes. Paintbrush draws the same as Brush, and the Font Icon tool is not reachable from the toolbar yet. The drawing toolbar groups the tools into eight categories:
+`DrawingToolType` defines 94 drawing tool types, counting four cursor modes. The drawing toolbar groups the tools into eight categories:
 
 | Category | Examples |
 |---|---|
@@ -208,7 +208,7 @@ Chart types in six categories:
 | **Projection** | Long/Short Position, Forecast, Anchored VWAP, Volume Profile |
 | **Shapes** | Brush, Highlighter, Rectangle, Circle, Ellipse, Polyline, Arc |
 | **Annotations** | Text, Note, Callout, Comment, Price Label, Signpost, Table, Image |
-| **Icons** | Font Icon / Emoji |
+| **Icons** | Icons and emoji, picked from a menu |
 
 Drawings are anchored in chart coordinates (bar index and price), so they stay in place through pan and zoom. Undo/redo is built in. Some tools are placeholders or approximations; [ROADMAP.md](ROADMAP.md) lists the status of each. Magnet snapping is not applied yet, and drawings cannot yet be saved and restored: the serializable types in `drawings::persistence` do not restore chart coordinates.
 

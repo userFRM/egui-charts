@@ -6,6 +6,7 @@
 //! - `categories/` for tool category submenus
 //! - `utilities/` for bottom toolbar btns
 
+use super::SubmenuBuilder;
 use super::categories::cursors::CursorType;
 use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons as embedded_icons};
@@ -16,6 +17,22 @@ use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::collections::HashSet;
+
+/// The icons the Icons/Emojis menu offers: the glyph a drawing shows, and its name. They are
+/// drawn with the app's fonts, so the app needs emoji fonts, such as egui's
+/// `monochrome_emoji_fonts` feature, as the demo has.
+const ICONS: [(&str, &str); 10] = [
+    ("👍", "Thumbs up"),
+    ("👎", "Thumbs down"),
+    ("🔥", "Fire"),
+    ("🚀", "Rocket"),
+    ("⭐", "Star"),
+    ("⚠", "Warning"),
+    ("✅", "Check mark"),
+    ("❌", "Cross mark"),
+    ("📌", "Pin"),
+    ("💰", "Money bag"),
+];
 
 /// Data struct for passing cursor state to submenu via context
 #[derive(Clone, Copy, Debug)]
@@ -561,6 +578,25 @@ impl DrawingToolbar {
             }
             "Remove" => {
                 return RemoveMenu::show_submenu(ui, sidebar_rect, self.expanded_category_rect);
+            }
+            "Icons/Emojis" => {
+                let mut builder = SubmenuBuilder::new(ui, sidebar_rect);
+                if let Some(rect) = self.expanded_category_rect {
+                    builder = builder.with_category_rect(rect);
+                }
+                for (icon_name, name) in ICONS {
+                    builder = builder.add_text_item_with_action(
+                        format!("{icon_name}  {name}"),
+                        format!("Place a {} icon", name.to_lowercase()),
+                        move || Some(DrawingToolbarAction::InsertEmoji { icon_name }),
+                    );
+                }
+                let action = builder.show();
+                if action.is_some() {
+                    self.select_tool(DrawingToolType::FontIcon);
+                    self.state.expanded_category = None;
+                }
+                return action;
             }
             "Templates" => {
                 let templates = self.state.templates.clone();

@@ -203,7 +203,6 @@ impl Drawing {
             | T::Path
             | T::Brush
             | T::Highlighter
-            | T::Paintbrush
             | T::XABCDPattern
             | T::CypherPattern
             | T::ABCDPattern
@@ -453,10 +452,9 @@ impl Drawing {
             DrawingToolType::PriceLabel => self.render_price_label(painter),
             DrawingToolType::FlagNote => self.render_flag_note(painter),
 
-            // Brushes (3 tools)
+            // Brushes (2 tools)
             DrawingToolType::Brush => self.render_brush(painter),
             DrawingToolType::Highlighter => self.render_highlighter(painter),
-            DrawingToolType::Paintbrush => self.render_brush(painter),
 
             // Arrows (4 tools)
             DrawingToolType::Arrow => self.render_arrow(painter, color, stroke),

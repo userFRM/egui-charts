@@ -823,6 +823,9 @@ impl DemoApp {
             DrawingToolbarAction::ZoomOut => {
                 let _ = dm.undo();
             }
+            DrawingToolbarAction::InsertEmoji { icon_name } => {
+                dm.start_icon_insertion(icon_name.to_string())
+            }
             // The rest (the favorites-bar toggle, the values tooltip toggle and
             // OpenTemplateMenu) mutate only the toolbar's own popup state, which
             // it manages internally; there is nothing for the host to do.
