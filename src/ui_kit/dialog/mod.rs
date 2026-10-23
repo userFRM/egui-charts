@@ -98,7 +98,10 @@ impl DialogFrame {
             .resizable(false)
             .frame(frame);
         let window = if self.auto_height {
-            window.default_width(inner.x)
+            window
+                .default_width(inner.x)
+                .default_height((max.y + frame.total_margin().sum().y).max(0.0))
+                .max_height((max.y + frame.total_margin().sum().y).max(0.0))
         } else {
             window.fixed_size(inner)
         };
@@ -108,6 +111,7 @@ impl DialogFrame {
             // A non-resizable window shrinks to its content, so hold the preferred size here.
             ui.set_min_size(inner);
             if auto_height {
+                ui.set_max_height(max.y.max(0.0));
                 add_contents(ui);
             } else {
                 // The tag lets a `DialogFooter` drawn directly in this Ui sit at the bottom.
@@ -293,5 +297,41 @@ mod tests {
         );
         let inner_bottom = second.0.bottom() - DESIGN_TOKENS.spacing.xxl;
         assert!((second.1.top() + ButtonSize::MD.pixels() - inner_bottom).abs() <= 1.5);
+    }
+
+    #[test]
+    fn auto_height_scroll_body_reaches_the_screen_cap() {
+        let ctx = Context::default();
+        for height in [900.0, 450.0] {
+            let mut window = egui::Id::NULL;
+            for _ in 0..3 {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(1440.0, height),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        DialogFrame::with_width("scroll", 500.0).show(ui.ctx(), |ui| {
+                            window = ui.layer_id().id;
+                            dialog_header(ui, "Scrolling body");
+                            egui::ScrollArea::vertical()
+                                .max_height(ui.available_height())
+                                .show(ui, |ui| {
+                                    for i in 0..100 {
+                                        ui.label(format!("Row {i}"));
+                                    }
+                                });
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            let rect = ctx.memory(|m| m.area_rect(window)).unwrap();
+            assert!((rect.height() - (height - 48.0)).abs() <= 2.0, "{rect:?}");
+            assert!(rect.top() >= 23.0 && rect.bottom() <= height - 23.0);
+        }
     }
 }
