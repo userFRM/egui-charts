@@ -163,10 +163,8 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
 
         let open = price;
         let close = if session_fixture {
-            spec.start_price
-                + (i as f64 / 19.0).sin() * 18.0
-                + (i as f64 / 6.0).sin() * 9.0
-                + (r1 - 0.5) * 3.0
+            open + (r1 - 0.5) * 2.0 + trend * 10.0
+                - (open - spec.start_price) * 0.02
         } else {
             open * (1.0 + return_pct)
         };
@@ -179,7 +177,7 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
         let low = body_low - r3 * body_range * 2.0;
 
         let base_vol = if session_fixture {
-            100_000.0 + r4 * 1_000_000.0
+            30_000.0 + r4.powi(6) * 1_000_000.0
         } else {
             600.0 + r4 * 1400.0
         };
@@ -371,6 +369,9 @@ mod tests {
         let regular = session_bars("SAMPLE", &source, SessionType::RTH, false);
         assert!(regular.len() < source.len());
         assert!(regular.iter().all(|b| b.time.hour() >= 14));
+        assert!(regular.windows(2).all(|bars| {
+            (bars[1].open - bars[0].close).abs() < DemoSymbol::find("SAMPLE").start_price * 0.01
+        }), "synthetic sessions should not form disconnected price clusters");
         for (session, count) in [
             (SessionType::RTH, regular.len()),
             (SessionType::ETH, source.len()),

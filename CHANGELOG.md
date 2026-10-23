@@ -75,6 +75,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The synthetic demo history keeps neighbouring sessions near the preceding close and puts most volume in a low band with occasional spikes. Session timestamps and adjustment inputs are unchanged.
+
 - Price ticks stay on the supplied decimal precision when zoomed in. Intraday marks survive bars that start between clock boundaries, and daily charts at multi-month zoom use calendar month names and year boundaries. Hover tags remain within narrow viewports.
 - Crosshair price and time tags default to black with white text, use 21 px and 25 px rows, and clamp at both horizontal edges. The price row reserves a 21 px add-action cell for the host to route with `chart::crosshair_price_action`. The default crosshair stroke is dotted; explicit colours and line styles remain supported. `chart::render_crosshair_full` and `RenderContext` let hosts draw the same readout over a combined price and volume viewport.
 - Price lines use 4 px dashes with 4 px gaps, and dotted price lines use 1 px dots with 3 px gaps. Drawing line patterns keep their existing lengths. Price tags are about 17 px high at the default axis font size.
