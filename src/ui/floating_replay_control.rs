@@ -473,23 +473,13 @@ impl FloatingReplayControl {
 
                     ui.separator();
 
-                    let exit = ui
-                        .scope(|ui| {
-                            let widgets = &mut ui.visuals_mut().widgets;
-                            for visuals in [
-                                &mut widgets.inactive,
-                                &mut widgets.hovered,
-                                &mut widgets.active,
-                            ] {
-                                visuals.fg_stroke.color = theme.ui.error;
-                            }
-                            Button::new("Exit replay")
-                                .secondary()
-                                .size(ButtonSize::MD)
-                                .show(ui)
-                        })
-                        .inner;
-                    if exit.clicked() {
+                    if Button::new("Exit replay")
+                        .secondary()
+                        .text_color(theme.ui.error)
+                        .size(ButtonSize::MD)
+                        .show(ui)
+                        .clicked()
+                    {
                         action = ReplayControlAction::Stop;
                     }
 
@@ -555,6 +545,48 @@ mod tests {
     }
 
     /// `current_bar` is zero-based: the first of 300 bars is 0% and the last 100%.
+    #[test]
+    fn exit_label_uses_error_colour_without_tinting_its_secondary_fill() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut bar = FloatingReplayControl::new();
+            bar.sync_from(true, false, 1.0, 150, 300);
+            for pass in 0..3 {
+                let mut neutral = egui::Color32::TRANSPARENT;
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        time: Some(f64::from(pass)),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        neutral = crate::ui_kit::buttons::ButtonVariant::Secondary
+                            .bg_color(ui, false, false);
+                        bar.show(ui.ctx());
+                    },
+                );
+                output.textures_delta.clear();
+                if pass == 2 {
+                    let text = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "Exit replay" => {
+                                Some(text)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(text.fallback_color, theme.ui.error);
+                    let center = text.pos + text.galley.size() / 2.0;
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Rect(rect) if rect.rect.contains(center) && rect.rect.height() == ButtonSize::MD.pixels() && rect.fill == neutral)));
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
     #[test]
     fn progress_spans_first_to_last_bar() {
         let mut bar = FloatingReplayControl::new();

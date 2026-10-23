@@ -129,7 +129,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Floating replay uses the shared speed combo, a danger-coloured Exit label on the secondary button and a 28 px hide button. Existing chart-bottom docking and playback behaviour are retained. ([#302](https://github.com/userFRM/egui-charts/issues/302))
+- `Button::text_color` changes a label without tinting its fill or icon. Floating replay uses the shared speed combo, a danger-coloured Exit label on the secondary button and a 28 px hide button. Existing chart-bottom docking and playback behaviour are retained. ([#302](https://github.com/userFRM/egui-charts/issues/302))
 
 - The bottom-bar clock requests a repaint at the next whole second while visible, so it keeps advancing without pointer or feed activity. Hidden clocks schedule no wake-up. ([#536](https://github.com/userFRM/egui-charts/issues/536))
 
