@@ -119,6 +119,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The live demo varies execution arrival intensity in clustered bursts and quieter stretches over a daily activity profile, so minute volume varies several-fold. Price steps, tick sizes and trade-size generation retain their seeded sequence; history and streaming use the same timing. ([#782](https://github.com/userFRM/egui-charts/issues/782))
+
 - Charts defer initial visible-bar and resize calculations while the plot is collapsed, preserving zoom and the right edge when a hidden or tiny canvas becomes visible. Pixel right offsets use the first usable bar spacing, and locked resizes retain fractional visible ranges. ([#781](https://github.com/userFRM/egui-charts/issues/781))
 
 - Study selection follows histogram and circle geometry in overlays and panes. The applied-study editor keeps its controls and footer inside narrow and short windows in both themes. ([#169](https://github.com/userFRM/egui-charts/issues/169))
