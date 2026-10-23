@@ -23,7 +23,7 @@ pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
 /// Paints `text` on a `fill` tag in the axis font and returns the tag's rect.
 ///
 /// The text sits where an axis label placed at `anchor` with `align` would, and the tag pads it.
-/// A tag that would end past `max_x` moves left to end there.
+/// A tag that would end past `max_x` moves left to end there, but stays inside the painter's left edge.
 pub(crate) fn paint_axis_tag(
     painter: &Painter,
     anchor: Pos2,
@@ -40,6 +40,10 @@ pub(crate) fn paint_axis_tag(
         .anchor_size(anchor, galley.size())
         .expand2(TAG_PADDING);
     tag = tag.translate(Vec2::new((max_x - tag.max.x).min(0.0), 0.0));
+    tag = tag.translate(Vec2::new(
+        (painter.clip_rect().left() - tag.min.x).max(0.0),
+        0.0,
+    ));
     let text_pos = tag.min + TAG_PADDING;
     painter.rect_filled(
         tag,

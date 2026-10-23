@@ -1417,6 +1417,9 @@ mod tests {
                     ask_size: 1.0,
                 }));
                 chart.config.show_quote_boxes = false;
+                chart.set_session_quote(Some(crate::model::quote::SessionQuote::new(
+                    115.0, "EXTENDED",
+                )));
                 chart.set_price_lines(
                     crate::chart::series::SeriesId::MAIN,
                     vec![crate::model::PriceLine::new(115.0, egui::Color32::GOLD)],
@@ -1436,6 +1439,19 @@ mod tests {
                 } else {
                     custom_tag.left() >= plot.right()
                 });
+                let session_text = painted
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text().starts_with("EXTENDED") => {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .expect("session tag");
+                assert!(
+                    session_text.pos.x >= plot.left() - chart.config.left_axis_width,
+                    "session label is clipped on the left"
+                );
                 let close_y = chart.last_price_map.price_to_y(120.0);
                 let prev_y = chart.last_price_map.price_to_y(110.0);
                 let price_tags: Vec<_> = painted

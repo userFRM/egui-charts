@@ -90,7 +90,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Chart settings read back current status and scale controls before opening. Choosing log or percentage scale clears the other mode; legend volume remains independent of the histogram. Custom price-line tags and axis gestures follow left placement.
+- Chart settings read back current status and scale controls before opening. Choosing log or percentage scale clears the other mode; legend volume remains independent of the histogram. Custom price-line tags and axis gestures follow left placement, and long session tags stay inside the chart.
 - Enlarged modals fit narrow windows, with scrollable settings content and tabs. Indicator results use a 32 px row pitch.
 - Symbol search gives its category strip and results separate scroll identities, keeps keyboard selection under a stationary pointer and scrolls the selected result into view. ([#597](https://github.com/userFRM/egui-charts/issues/597))
 - Opening chart settings now reads the chart's current candle, background and grid colours, so applying display controls preserves its appearance in every preset. ([#577](https://github.com/userFRM/egui-charts/issues/577))
