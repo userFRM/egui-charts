@@ -89,9 +89,10 @@ pub trait Indicator: Send {
     fn calculate(&mut self, data: &[Bar]);
 
     /// Bring [`values`](Indicator::values) up to date after `data[from..]` changed or grew,
-    /// given that `data[..from]` is unchanged since the previous call. The result equals
-    /// [`calculate`](Indicator::calculate) on the same data. After bars are prepended pass 0;
-    /// after bars are removed from the end pass the new length.
+    /// given that `data[..from]` is unchanged since the previous call. The values equal those of
+    /// [`calculate`](Indicator::calculate) on the same data, bit for bit. After bars are
+    /// prepended, or after a setting of the study changed, pass 0; after bars are removed from
+    /// the end pass the new length.
     ///
     /// The default recomputes everything.
     fn update(&mut self, data: &[Bar], from: usize) {

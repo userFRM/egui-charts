@@ -288,6 +288,8 @@ impl Default for IndicatorFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Bar, TimezoneId};
+    use chrono::{Duration, TimeZone, Utc};
 
     #[test]
     fn test_factory() {
@@ -533,6 +535,132 @@ mod tests {
             Box::new(Week52HighLow::new()),
             Box::new(Week52HighLowLevels::new()),
         ]
+    }
+
+    /// xorshift64*, so the event sequence is the same on every platform and run.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        /// Uniform in [0, 1).
+        fn unit(&mut self) -> f64 {
+            (self.next() >> 11) as f64 / (1u64 << 53) as f64
+        }
+    }
+
+    fn bar(rng: &mut Rng, time: chrono::DateTime<Utc>, prev_close: f64) -> Bar {
+        let close = prev_close + rng.unit() - 0.5;
+        let mut bar = Bar {
+            time,
+            open: prev_close,
+            high: prev_close.max(close) + rng.unit() * 0.2,
+            low: prev_close.min(close) - rng.unit() * 0.2,
+            close,
+            volume: 100.0 + rng.unit() * 900.0,
+        };
+        if rng.unit() < 0.01 {
+            bar.close = f64::NAN;
+        }
+        if rng.unit() < 0.01 {
+            bar.high = f64::INFINITY;
+        }
+        if rng.unit() < 0.01 {
+            bar.volume = f64::NAN;
+        }
+        bar
+    }
+
+    /// Each value's variant and bits, so -0.0 differs from 0.0 and NaN equals itself.
+    fn bits(values: &[IndicatorValue]) -> Vec<(u8, Vec<u64>)> {
+        values
+            .iter()
+            .map(|value| match value {
+                IndicatorValue::None => (0, Vec::new()),
+                IndicatorValue::Single(x) => (1, vec![x.to_bits()]),
+                IndicatorValue::Multiple(xs) => (2, xs.iter().map(|x| x.to_bits()).collect()),
+            })
+            .collect()
+    }
+
+    /// `update(data, from)` leaves the values of a fresh `calculate(data)`, bit for bit, for every
+    /// built-in after each change a chart passes on: a new bar, a new close of the last bar, a
+    /// correction up to five bars back, a removed last bar, bars loaded in front, a daily series
+    /// turning intraday, and bars with a non-finite price or volume. A checkpoint not restored on
+    /// a last-bar update, a correction resumed instead of restarted, a window read one bar short
+    /// or a warm-up threshold or VWAP's daily rule not rechecked fails it.
+    #[test]
+    fn every_update_equals_a_fresh_calculate() {
+        // In UTC no VWAP value depends on its daily rule; in Tokyo with weekly periods the
+        // daily and intraday trading days group the bars differently.
+        let tokyo_week = || -> Box<dyn Indicator> {
+            Box::new(
+                VolumeWeightedAvgPrice::new()
+                    .with_anchor(VwapAnchor::Week)
+                    .with_time_zone(TimezoneId::named("Asia/Tokyo").unwrap()),
+            )
+        };
+        let mut studies = builtins_with(|k| 3 + 2 * k, |v| v);
+        studies.push(tokyo_week());
+        let mut twins = builtins_with(|k| 3 + 2 * k, |v| v);
+        twins.push(tokyo_week());
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        let mut data = Vec::<Bar>::new();
+        for event in 0..200 {
+            let u = if event < 80 { 0.7 } else { rng.unit() };
+            let len = data.len();
+            let from = if u < 0.65 && len > 0 {
+                data[len - 1].close = data[len - 1].open + rng.unit() - 0.5;
+                len - 1
+            } else if (0.85..0.93).contains(&u) && len >= 7 {
+                let at = len - 2 - (rng.next() % 5) as usize;
+                data[at] = bar(&mut rng, data[at].time, data[at].open);
+                at
+            } else if (0.93..0.965).contains(&u) && len > 0 {
+                data.pop();
+                len - 1
+            } else if u >= 0.965 && len > 0 {
+                for _ in 0..1 + rng.next() % 3 {
+                    let b = bar(&mut rng, data[0].time - Duration::days(1), data[0].open);
+                    data.insert(0, b);
+                }
+                0
+            } else {
+                let time =
+                    data.last()
+                        .map_or(Utc.with_ymd_and_hms(2023, 9, 15, 23, 0, 0).unwrap(), |b| {
+                            b.time
+                                + if len < 60 {
+                                    Duration::days(1)
+                                } else {
+                                    Duration::minutes(1)
+                                }
+                        });
+                let close =
+                    data.last().map_or(
+                        100.0,
+                        |b| if b.close.is_finite() { b.close } else { b.open },
+                    );
+                data.push(bar(&mut rng, time, close));
+                len
+            };
+            for (study, twin) in studies.iter_mut().zip(&twins) {
+                study.update(&data, from);
+                let mut fresh = twin.clone_box();
+                fresh.calculate(&data);
+                assert_eq!(
+                    bits(study.values()),
+                    bits(fresh.values()),
+                    "{} event {event}",
+                    study.name()
+                );
+            }
+        }
     }
 
     /// No built-in may panic, hang or allocate without bound, whatever its
