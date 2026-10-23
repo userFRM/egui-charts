@@ -322,6 +322,7 @@ impl Drawing {
             T::FibonacciTimeZones => {
                 outline.lines = fibonacci::time_zone_lines(first, second, rect)
             }
+            T::FibonacciWedge => return self.fibonacci_wedge_outline(),
             T::FibonacciSpeedFan => outline.lines = fibonacci::speed_fan_lines(first, second, rect),
             _ => return None,
         }

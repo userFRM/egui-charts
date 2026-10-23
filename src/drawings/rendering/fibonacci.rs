@@ -529,6 +529,16 @@ impl Drawing {
             ));
         }
 
+        for [a, b] in speed_fan_lines(start, end, chart_rect)
+            .into_iter()
+            .skip(SPEED_FAN_LEVELS.len())
+        {
+            painter.line_segment(
+                [a, b],
+                Stroke::new(stroke::HAIRLINE, color.gamma_multiply(0.45)),
+            );
+        }
+
         // Draw the main trend line (thicker)
         painter.line_segment([start, end], Stroke::new(self.stroke_width + 0.5, color));
 
@@ -572,32 +582,43 @@ impl Drawing {
         ));
     }
 
-    pub(crate) fn render_fibonacci_wedge(&self, painter: &egui::Painter, _chart_rect: Rect) {
-        if self.points.len() < 2 {
+    pub(crate) fn render_fibonacci_wedge(&self, painter: &egui::Painter, rect: Rect) {
+        let Some(outline) = self.fibonacci_wedge_outline() else {
             return;
-        }
-        let start = self.points[0];
-        let end = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        let fib_ratios = [0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
-        let angle = (end.y - start.y).atan2(end.x - start.x);
-
-        for &ratio in &fib_ratios {
-            let wedge_angle = angle * ratio;
-            let len = 200.0;
-            let end_point = Pos2::new(
-                start.x + len * wedge_angle.cos(),
-                start.y + len * wedge_angle.sin(),
+        };
+        let painter = painter.with_clip_rect(rect);
+        for [a, b] in outline.lines {
+            self.styled_segment(
+                &painter,
+                a,
+                b,
+                Stroke::new(self.stroke_width, self.color32()),
             );
-            painter.line_segment([start, end_point], Stroke::new(stroke::HAIRLINE, color));
         }
-        painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
+    }
+
+    pub(super) fn fibonacci_wedge_outline(&self) -> Option<super::Outline> {
+        let &[start, edge, boundary, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let config = self.fib_config.clone().unwrap_or_default();
+        let mut outline = super::Outline::default();
+        let mut outer = 0.0_f32;
+        for level in config
+            .visible_levels()
+            .filter(|l| l.value.is_finite() && l.value >= 0.0)
+        {
+            let points = wedge_arc_points(start, edge, boundary, level.value);
+            outline
+                .lines
+                .extend(points.windows(2).map(|w| [w[0], w[1]]));
+            outer = outer.max(level.value);
+        }
+        let outer = wedge_arc_points(start, edge, boundary, outer);
+        outline
+            .lines
+            .extend([[start, outer[0]], [start, *outer.last()?]]);
+        Some(outline)
     }
 
     pub(crate) fn render_trend_based_fib_time(&self, painter: &egui::Painter, chart_rect: Rect) {
@@ -712,9 +733,43 @@ const SPEED_FAN_LEVELS: [(f32, &str); 7] = [
 
 /// The speed resistance fan's lines from `start` to the edge of `rect`.
 pub(super) fn speed_fan_lines(start: Pos2, end: Pos2, rect: Rect) -> Vec<[Pos2; 2]> {
-    SPEED_FAN_LEVELS
+    let mut lines: Vec<_> = SPEED_FAN_LEVELS
         .iter()
         .map(|&(ratio, _)| [start, speed_fan_line_end(start, end, ratio, rect)])
+        .collect();
+    let d = end - start;
+    for &(ratio, _) in &SPEED_FAN_LEVELS {
+        if ratio < 1.0 {
+            let through = start + egui::vec2(d.x * ratio, d.y);
+            lines.push([start, super::lines::ray_end(start, through, rect)]);
+        }
+        let at = start + d * ratio;
+        lines.extend([
+            [Pos2::new(at.x, start.y), Pos2::new(at.x, end.y)],
+            [Pos2::new(start.x, at.y), Pos2::new(end.x, at.y)],
+        ]);
+        let arc: Vec<_> = (0..=32)
+            .map(|i| {
+                let theta = std::f32::consts::FRAC_PI_2 * i as f32 / 32.0;
+                start + egui::vec2(d.x * ratio * theta.cos(), d.y * ratio * theta.sin())
+            })
+            .collect();
+        lines.extend(arc.windows(2).map(|w| [w[0], w[1]]));
+    }
+    lines
+}
+
+/// Circular ratio arcs between the two trend rays, following their shorter signed sweep.
+fn wedge_arc_points(start: Pos2, edge: Pos2, boundary: Pos2, ratio: f32) -> Vec<Pos2> {
+    let a = edge - start;
+    let b = boundary - start;
+    let angle = a.y.atan2(a.x);
+    let sweep = (a.x * b.y - a.y * b.x).atan2(a.dot(b));
+    (0..=64)
+        .map(|i| {
+            let theta = angle + sweep * i as f32 / 64.0;
+            start + a.length() * ratio * egui::vec2(theta.cos(), theta.sin())
+        })
         .collect()
 }
 
@@ -894,6 +949,38 @@ mod tests {
                     "spiral edge {edge:?} theta {theta}: got {got:?}, want {want:?}"
                 ));
             }
+        }
+
+        // Both fan axes: the 50% time ray goes through (50,100), the
+        // 50% price ray through (100,50), with grid and quarter ellipses between them.
+        for end in [Pos2::new(100.0, 100.0), Pos2::new(-100.0, -100.0)] {
+            let lines = speed_fan_lines(
+                Pos2::ZERO,
+                end,
+                Rect::from_min_max(Pos2::new(-200.0, -400.0), Pos2::new(200.0, 400.0)),
+            );
+            let ray = [Pos2::ZERO, Pos2::new(end.x * 2.0, end.y * 4.0)];
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l[0].distance(ray[0]) < 1e-3 && l[1].distance(ray[1]) < 1e-3),
+                "missing time ray: {lines:?}"
+            );
+            assert!(lines.contains(&[Pos2::new(end.x * 0.5, 0.0), Pos2::new(end.x * 0.5, end.y)]));
+        }
+        let mut wedge = Drawing::new(0, crate::drawings::DrawingToolType::FibonacciWedge);
+        wedge.points = vec![Pos2::ZERO, Pos2::new(100.0, 0.0), Pos2::new(0.0, 200.0)];
+        let outline = wedge.outline(rect).unwrap();
+        // A quarter circle at level 0.5: (50,0) through (sqrt(1250),sqrt(1250)) to (0,50).
+        for want in [
+            Pos2::new(50.0, 0.0),
+            Pos2::new(35.35534, 35.35534),
+            Pos2::new(0.0, 50.0),
+        ] {
+            assert!(
+                outline.lines.iter().flatten().any(|p| near(*p, want)),
+                "missing wedge point {want:?}"
+            );
         }
 
         assert!(wrong.is_empty(), "{wrong:#?}");

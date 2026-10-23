@@ -80,7 +80,6 @@ impl DrawingToolType {
             | Self::FibonacciCircles
             | Self::FibonacciSpeedFan
             | Self::FibonacciSpiral
-            | Self::FibonacciWedge
             | Self::TrendBasedFibTime
             | Self::Pitchfan
             | Self::GannFan
@@ -98,7 +97,8 @@ impl DrawingToolType {
             Self::Brush | Self::Highlighter => DrawingInteractionMode::ContinuousDraw,
 
             // Multi-point tools
-            Self::Polyline
+            Self::FibonacciWedge
+            | Self::Polyline
             | Self::Path
             | Self::Triangle
             | Self::ParallelChannel
@@ -138,7 +138,7 @@ impl DrawingToolType {
     /// tools draw a mark and a segment per anchor they have.
     pub(crate) fn anchors_needed(&self) -> usize {
         match self {
-            Self::ParallelChannel => 3,
+            Self::ParallelChannel | Self::FibonacciWedge => 3,
             Self::Triangle
             | Self::FlatTopBottom
             | Self::DisjointChannel
@@ -183,7 +183,8 @@ impl DrawingToolType {
             DrawingInteractionMode::MultiPoint => {
                 // Multi-point tools have varying requirements
                 match self {
-                    Self::Triangle
+                    Self::FibonacciWedge
+                    | Self::Triangle
                     | Self::ParallelChannel
                     | Self::Pitchfork
                     | Self::SchiffPitchfork
