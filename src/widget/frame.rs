@@ -46,7 +46,22 @@ impl Chart {
             &self.display_timezone(),
             timeframe,
         );
-        let session_close = session.bar_session_close(last.time, timeframe, self.extended_hours);
+        // Calendar bars encode their trading date in the feed's selected zone.
+        let session_open = if self.feed_link.is_some() && timeframe.duration_ms() >= 86_400_000 {
+            let date = match self.display_timezone() {
+                crate::scales::TimezoneMode::Local => {
+                    last.time.with_timezone(&chrono::Local).date_naive()
+                }
+                zone => last
+                    .time
+                    .with_timezone(&zone.to_tz().unwrap_or(chrono_tz::UTC))
+                    .date_naive(),
+            };
+            date.and_hms_opt(0, 0, 0)?.and_utc()
+        } else {
+            last.time
+        };
+        let session_close = session.bar_session_close(session_open, timeframe, self.extended_hours);
         let boundary = self
             .feed_link
             .as_ref()
@@ -1665,6 +1680,104 @@ mod tests {
     use crate::scales::PriceScaleMode;
     use crate::widget::test_frames::{chart, frame, shapes};
     use egui::{Event, Pos2, Rect, Shape};
+
+    #[test]
+    fn countdown_uses_feed_calendar_and_session_trading_dates() {
+        use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
+        use crate::model::{
+            Bar, Instrument, Level1Quote, Session, SessionWindow, Timeframe, TimezoneId,
+        };
+        use chrono::{
+            NaiveTime,
+            Weekday::{Fri, Mon, Thu, Tue, Wed},
+        };
+        struct Feed;
+        impl Datafeed for Feed {
+            fn history(&self, _: HistoryRequest, _: Reply<HistoryPage>) {
+                unreachable!("this test only reads the attached calendar");
+            }
+        }
+        for (interval, open, now, session, expected) in [
+            (
+                "7min",
+                "2024-03-31T00:59:00Z",
+                "2024-03-31T00:59:30Z",
+                false,
+                Some("00:30"),
+            ),
+            (
+                "1D",
+                "2024-03-10T23:00:00Z",
+                "2024-03-11T14:59:00Z",
+                true,
+                Some("01:00"),
+            ),
+            (
+                "1W",
+                "2024-03-10T23:00:00Z",
+                "2024-03-15T14:59:00Z",
+                true,
+                Some("01:00"),
+            ),
+            (
+                "1M",
+                "2024-02-29T23:00:00Z",
+                "2024-03-29T14:59:00Z",
+                true,
+                Some("01:00"),
+            ),
+            (
+                "10t",
+                "2024-03-11T14:59:00Z",
+                "2024-03-11T14:59:30Z",
+                false,
+                None,
+            ),
+        ] {
+            let timeframe: Timeframe = interval.parse().unwrap();
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.timeframe = Some(timeframe);
+            chart.chart_options.time_scale.timezone =
+                crate::scales::TimezoneMode::Exchange(chrono_tz::Europe::Zurich);
+            chart.attach_feed(std::sync::Arc::new(Feed), 1);
+            let mut instrument =
+                Instrument::new("TEST").with_time_zone(TimezoneId::named("Europe/Zurich").unwrap());
+            if session {
+                instrument.session = Some(Session::new([SessionWindow::new(
+                    [Mon, Tue, Wed, Thu, Fri],
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+                )]));
+            }
+            chart.set_instrument(Some(instrument));
+            // Metadata resolves Exchange timezone before the bar is assigned to its slot.
+            chart.feed_link.as_mut().unwrap().clock = chart.bar_clock();
+            chart.set_data(
+                crate::widget::SeriesId::MAIN,
+                vec![Bar::new(
+                    open.parse().unwrap(),
+                    100.0,
+                    110.0,
+                    100.0,
+                    110.0,
+                    1.0,
+                )],
+            );
+            chart.set_quote(Some(Level1Quote {
+                symbol: "TEST".into(),
+                ts: now.parse().unwrap(),
+                bid: 109.0,
+                ask: 111.0,
+                bid_size: 1.0,
+                ask_size: 1.0,
+            }));
+            assert_eq!(
+                chart.current_bar_countdown().as_deref(),
+                expected,
+                "{interval}"
+            );
+        }
+    }
 
     #[test]
     fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
