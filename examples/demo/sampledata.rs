@@ -80,9 +80,9 @@ impl DemoSymbol {
             // Neutral name for published screenshots: no real ticker with made-up prices.
             DemoSymbol {
                 symbol: "SAMPLE",
-                company_name: "Sample data",
+                company_name: "Synthetic ETF sample",
                 exchange: "Synthetic",
-                start_price: 42_500.0,
+                start_price: 735.0,
                 seed: 1,
             },
         ]
@@ -111,12 +111,29 @@ impl DemoSymbol {
 /// The same `(symbol, timeframe, count)` always produces identical bars, so a
 /// symbol switch is repeatable and indicators/replay see stable input.
 pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) -> Vec<Bar> {
-    use chrono::{TimeZone, Utc};
+    use chrono::{Datelike, TimeZone, Timelike, Utc, Weekday};
 
     let spec = DemoSymbol::find(symbol);
     let mut bars = Vec::with_capacity(count);
     let mut price = spec.start_price;
-    let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let session_fixture = spec.symbol == "SAMPLE";
+    let mut time = if session_fixture {
+        Utc.with_ymd_and_hms(
+            2026,
+            1,
+            5,
+            if timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
+                8
+            } else {
+                14
+            },
+            30,
+            0,
+        )
+        .unwrap()
+    } else {
+        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+    };
     let step_ms = timeframe.duration_ms();
 
     // Per-symbol salt so each instrument has its own price action.
@@ -143,7 +160,14 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
         volatility = volatility.clamp(0.5, 3.0);
 
         let open = price;
-        let close = open * (1.0 + return_pct);
+        let close = if session_fixture {
+            spec.start_price
+                + (i as f64 / 19.0).sin() * 18.0
+                + (i as f64 / 6.0).sin() * 9.0
+                + (r1 - 0.5) * 3.0
+        } else {
+            open * (1.0 + return_pct)
+        };
 
         let body_high = open.max(close);
         let body_low = open.min(close);
@@ -152,11 +176,13 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
         let high = body_high + r2 * body_range * 2.0;
         let low = body_low - r3 * body_range * 2.0;
 
-        let base_vol = 600.0 + r4 * 1400.0;
+        let base_vol = if session_fixture {
+            100_000.0 + r4 * 1_000_000.0
+        } else {
+            600.0 + r4 * 1400.0
+        };
         let vol_spike = 1.0 + return_pct.abs() * 30.0;
         let volume = base_vol * vol_spike;
-
-        let time = base_time + chrono::Duration::milliseconds(step_ms * i as i64);
 
         bars.push(Bar {
             time,
@@ -167,6 +193,18 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
             volume,
         });
         price = close;
+        time += chrono::Duration::milliseconds(step_ms);
+        if session_fixture {
+            if step_ms < Timeframe::Day1.duration_ms() && time.hour() >= 21 {
+                time = (time.date_naive() + chrono::Duration::days(1))
+                    .and_hms_opt(8, 30, 0)
+                    .unwrap()
+                    .and_utc();
+            }
+            while matches!(time.weekday(), Weekday::Sat | Weekday::Sun) {
+                time += chrono::Duration::days(1);
+            }
+        }
     }
 
     bars
@@ -213,6 +251,41 @@ pub fn chart_type_from_name(name: &str) -> Option<egui_charts::model::ChartType>
     }
 }
 
+/// Derive a displayed session and dividend basis from the unchanged source history.
+///
+/// SAMPLE supplies weekday extended hours from 08:30 to 21:00 UTC, with regular
+/// hours from 14:30. Its synthetic dividend on January 26 reduces earlier OHLC
+/// prices by 2% when adjusted; volumes and timestamps do not change.
+pub fn session_bars(
+    symbol: &str,
+    source: &[Bar],
+    session: egui_charts::ui::timeframe_toolbar::SessionType,
+    adjusted: bool,
+) -> Vec<Bar> {
+    use chrono::{NaiveTime, TimeZone, Utc};
+    use egui_charts::ui::timeframe_toolbar::SessionType;
+
+    let dividend = Utc.with_ymd_and_hms(2026, 1, 26, 14, 30, 0).unwrap();
+    source
+        .iter()
+        .filter(|bar| {
+            symbol != "SAMPLE"
+                || session != SessionType::RTH
+                || bar.time.time() >= NaiveTime::from_hms_opt(14, 30, 0).unwrap()
+        })
+        .map(|bar| {
+            let mut bar = bar.clone();
+            if symbol == "SAMPLE" && adjusted && bar.time < dividend {
+                bar.open *= 0.98;
+                bar.high *= 0.98;
+                bar.low *= 0.98;
+                bar.close *= 0.98;
+            }
+            bar
+        })
+        .collect()
+}
+
 /// Map a bottom-toolbar `DateRange` preset to a visible-bar count, so the
 /// preset actually re-zooms the chart's visible window.
 pub fn visible_bars_for_range(
@@ -242,4 +315,73 @@ fn hash_f64(index: usize, salt: usize) -> f64 {
     x ^= x << 5;
     x = x.wrapping_mul(1597334677);
     (x % 100_000) as f64 / 100_000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Datelike, Timelike, Weekday};
+
+    #[test]
+    fn synthetic_fixture_has_session_gaps_and_equity_prices() {
+        for timeframe in [Timeframe::Hour1, Timeframe::Day1] {
+            let bars = generate_sample_bars("SAMPLE", 600, timeframe);
+            let repeated = generate_sample_bars("SAMPLE", 600, timeframe);
+            assert_eq!(bars.len(), 600);
+            assert_eq!(bars[0].time, repeated[0].time);
+            assert_eq!(bars[599].close, repeated[599].close);
+            assert!(bars.iter().all(|b| (680.0..790.0).contains(&b.close)));
+            assert!(
+                bars.iter()
+                    .all(|b| !matches!(b.time.weekday(), Weekday::Sat | Weekday::Sun))
+            );
+            if timeframe == Timeframe::Hour1 {
+                assert!(bars.iter().all(|b| b.time.minute() == 30));
+                assert!(
+                    bars.windows(2)
+                        .any(|b| b[1].time - b[0].time > chrono::Duration::hours(24))
+                );
+            }
+        }
+        assert_eq!(DemoSymbol::find("SAMPLE").exchange, "Synthetic");
+
+        use egui_charts::ui::timeframe_toolbar::SessionType;
+        let source = generate_sample_bars("SAMPLE", 600, Timeframe::Hour1);
+        let unchanged: Vec<_> = source
+            .iter()
+            .map(|b| (b.time, b.open, b.high, b.low, b.close, b.volume))
+            .collect();
+        let regular = session_bars("SAMPLE", &source, SessionType::RTH, false);
+        assert!(regular.len() < source.len());
+        assert!(regular.iter().all(|b| b.time.hour() >= 14));
+        for (session, count) in [
+            (SessionType::RTH, regular.len()),
+            (SessionType::ETH, source.len()),
+            (SessionType::Full24x7, source.len()),
+        ] {
+            let raw = session_bars("SAMPLE", &source, session, false);
+            let adjusted = session_bars("SAMPLE", &source, session, true);
+            assert_eq!(raw.len(), count);
+            assert_eq!(adjusted.len(), count);
+            assert_eq!(raw[0].close * 0.98, adjusted[0].close);
+            assert_eq!(raw.last().unwrap().close, adjusted.last().unwrap().close);
+            for (raw, adjusted) in raw.iter().zip(adjusted.iter()) {
+                assert_eq!((raw.time, raw.volume), (adjusted.time, adjusted.volume));
+                assert!(adjusted.low <= adjusted.open.min(adjusted.close));
+                assert!(adjusted.high >= adjusted.open.max(adjusted.close));
+            }
+        }
+        assert_eq!(
+            source
+                .iter()
+                .map(|b| (b.time, b.open, b.high, b.low, b.close, b.volume))
+                .collect::<Vec<_>>(),
+            unchanged
+        );
+        let daily = generate_sample_bars("SAMPLE", 600, Timeframe::Day1);
+        assert_eq!(
+            session_bars("SAMPLE", &daily, SessionType::RTH, false).len(),
+            600
+        );
+    }
 }

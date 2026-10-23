@@ -10,7 +10,7 @@ use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
 use egui_charts::chart::series::SeriesSettings;
-use egui_charts::model::{Bar, ChartType, RenkoConfig, Timeframe};
+use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
@@ -25,9 +25,8 @@ use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
 use egui_charts::ui::model::{AlertCondition, AlertStatus, PriceAlert};
 use egui_charts::ui::replay::{ReplayAction, ReplayController};
-use egui_charts::ui::symbol_header::{OhlcData, SymbolHeader, SymbolInfo};
 use egui_charts::ui::timeframe_toolbar::{
-    DatePicker, DatePickerAction, TimeframeToolbar, TimeframeToolbarAction,
+    DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
 };
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
@@ -43,7 +42,7 @@ use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use std::sync::{Arc, mpsc};
 
 use crate::sampledata::{
-    DemoSymbol, bar_count_for_timeframe, chart_type_from_name, generate_sample_bars,
+    DemoSymbol, bar_count_for_timeframe, chart_type_from_name, generate_sample_bars, session_bars,
     visible_bars_for_range,
 };
 
@@ -118,14 +117,15 @@ pub struct DemoApp {
     menus: ChartMenus,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
+    // Immutable generated history; session and adjustment choices derive `bars` from it.
+    source_bars: Vec<Bar>,
     pub theme: Theme,
 
-    // Persistent toolbars / header.
+    // Persistent toolbars.
     top_toolbar: TopToolbar,
     drawing_toolbar: DrawingToolbar,
     timeframe_toolbar: TimeframeToolbar,
     widget_bar: WidgetBar,
-    symbol_header: SymbolHeader,
 
     // Dialogs (each owns its open/closed state).
     indicator_dialog: IndicatorDialog,
@@ -168,46 +168,30 @@ impl DemoApp {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let theme = Theme::dark();
-        let timeframe = Timeframe::Day1;
-        let symbol = "BTCUSD";
+        let theme = Theme::light();
+        let timeframe = Timeframe::Hour1;
+        let symbol = "SAMPLE";
+        let mut chart = Chart::with_config(
+            BarData::new(),
+            theme.apply_to_config(egui_charts::config::ChartConfig::default()),
+        );
+        chart.set_symbol("SAMPLE (synthetic)");
+        chart.set_timeframe(timeframe);
 
-        let mut chart = egui_charts::ChartBuilder::new()
-            .with_symbol(symbol)
-            .with_timeframe(timeframe)
-            .with_theme(theme.clone())
-            .with_chart_type(ChartType::Candles)
-            .with_indicators(default_indicators())
-            .with_visible_candles(100)
-            .build();
+        let source_bars =
+            generate_sample_bars(symbol, bar_count_for_timeframe(timeframe), timeframe);
+        let mut top_toolbar = TopToolbar::new();
+        top_toolbar.timeframe_selector.current =
+            egui_charts::ui::top_toolbar::components::timeframe_selector::Timeframe::new(
+                1,
+                egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Hour,
+            );
+        let mut widget_bar = WidgetBar::default();
+        widget_bar.config.width = 52.0;
+        let mut timeframe_toolbar = TimeframeToolbar::default();
+        timeframe_toolbar.state.timeframe = timeframe;
 
-        let bars = generate_sample_bars(symbol, 500, timeframe);
-        chart.set_data(SeriesId::MAIN, bars.clone());
-
-        let spec = DemoSymbol::find(symbol);
-        let last = bars.last().cloned().unwrap_or_else(|| Bar {
-            time: chrono::Utc::now(),
-            open: spec.start_price,
-            high: spec.start_price,
-            low: spec.start_price,
-            close: spec.start_price,
-            volume: 0.0,
-        });
-        let symbol_header = SymbolHeader::new(SymbolInfo {
-            symbol: symbol.into(),
-            company_name: spec.company_name.into(),
-            exchange: spec.exchange.into(),
-            timeframe: timeframe.as_str().to_string(),
-        })
-        .with_ohlc(OhlcData::new(
-            last.open,
-            last.high,
-            last.low,
-            last.close,
-            last.volume,
-        ));
-
-        Self {
+        let mut app = Self {
             chart,
             colour_drag: false,
             menus: ChartMenus::default(),
@@ -217,13 +201,13 @@ impl DemoApp {
                 chart_type: ChartType::Candles,
                 replay_active: false,
             },
-            bars,
+            bars: Vec::new(),
+            source_bars,
             theme,
-            top_toolbar: TopToolbar::new(),
+            top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
-            timeframe_toolbar: TimeframeToolbar::default(),
-            widget_bar: WidgetBar::default(),
-            symbol_header,
+            timeframe_toolbar,
+            widget_bar,
             indicator_dialog: IndicatorDialog::new(),
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
@@ -243,7 +227,9 @@ impl DemoApp {
             screenshot_requested: None,
             screenshots: mpsc::channel(),
             notice: None,
-        }
+        };
+        app.apply_session();
+        app
     }
 
     /// Surface a short-lived, honest status message in the UI.
@@ -258,7 +244,7 @@ impl DemoApp {
         self.chart.set_timeframe(tf);
         let count = bar_count_for_timeframe(tf);
         self.regenerate_bars(count, tf);
-        self.symbol_header.symbol_info.timeframe = tf.as_str().to_string();
+        self.timeframe_toolbar.state.timeframe = tf;
         // A replay continues at its current time on the new interval.
         if let Some(replay) = self.replay.as_mut() {
             let ts = self.bars.iter().map(|b| b.time).collect();
@@ -270,10 +256,21 @@ impl DemoApp {
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
         let spec = DemoSymbol::find(symbol);
         self.state.symbol = spec.symbol.to_string();
-        self.chart.set_symbol(spec.symbol);
-        self.symbol_header.symbol_info.symbol = spec.symbol.to_string();
-        self.symbol_header.symbol_info.company_name = spec.company_name.to_string();
-        self.symbol_header.symbol_info.exchange = spec.exchange.to_string();
+        self.chart
+            .set_symbol(format!("{} (synthetic) · {}", spec.symbol, spec.exchange));
+        for control in [
+            egui_charts::ui::Control::Session,
+            egui_charts::ui::Control::DividendAdjustment,
+        ] {
+            self.timeframe_toolbar
+                .set_control_visible(control, spec.symbol == "SAMPLE");
+        }
+        self.timeframe_toolbar
+            .set_session(if matches!(spec.exchange, "Crypto" | "Forex") {
+                SessionType::Full24x7
+            } else {
+                SessionType::RTH
+            });
         let count = bar_count_for_timeframe(self.state.timeframe);
         self.regenerate_bars(count, self.state.timeframe);
         // A symbol change invalidates an in-flight replay.
@@ -281,10 +278,9 @@ impl DemoApp {
     }
 
     fn regenerate_bars(&mut self, count: usize, tf: Timeframe) {
-        self.bars = generate_sample_bars(&self.state.symbol, count, tf);
-        self.chart.set_data(SeriesId::MAIN, self.bars.clone());
+        self.source_bars = generate_sample_bars(&self.state.symbol, count, tf);
+        self.apply_session();
         self.size_price_based_charts();
-        self.update_symbol_header();
     }
 
     /// The sizes of the price-based charts are in price units: take them from the bars on show.
@@ -301,11 +297,24 @@ impl DemoApp {
         }
     }
 
-    fn update_symbol_header(&mut self) {
-        if let Some(last) = self.bars.last() {
-            self.symbol_header.ohlc =
-                OhlcData::new(last.open, last.high, last.low, last.close, last.volume);
-        }
+    fn apply_session(&mut self) {
+        self.chart.config_mut().session_config =
+            (self.state.symbol == "SAMPLE").then(|| egui_charts::config::SessionConfig {
+                session_start: "14:30".into(),
+                session_end: "21:00".into(),
+                timezone: "UTC".into(),
+                show_premarket: self.timeframe_toolbar.state.session_type != SessionType::RTH,
+                show_postmarket: false,
+                premarket_start: Some("08:30".into()),
+                postmarket_end: None,
+            });
+        self.bars = session_bars(
+            &self.state.symbol,
+            &self.source_bars,
+            self.timeframe_toolbar.state.session_type,
+            self.timeframe_toolbar.state.adjust_for_dividends,
+        );
+        self.chart.set_data(SeriesId::MAIN, self.bars.clone());
     }
 
     // --- replay ------------------------------------------------------------
@@ -619,7 +628,6 @@ impl eframe::App for DemoApp {
         let panel_bg = ui.style().visuals.panel_fill;
 
         self.show_top_toolbar(ui, panel_bg);
-        self.show_symbol_header(ui, panel_bg);
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.show_side_panel(ui);
@@ -637,12 +645,6 @@ impl eframe::App for DemoApp {
 
         // Transient status notice.
         self.show_notice(&ctx);
-
-        // Keep the header OHLC in sync with whatever the chart last rendered.
-        if let Some(last) = self.chart.bars(SeriesId::MAIN).last() {
-            self.symbol_header.ohlc =
-                OhlcData::new(last.open, last.high, last.low, last.close, last.volume);
-        }
 
         // Repaint continuously while replay is playing.
         if self
@@ -740,16 +742,6 @@ impl DemoApp {
         cfg.background_color = self.theme.chart.bg;
         cfg.text_color = self.theme.chart.axis_text;
         cfg.grid_color = self.theme.chart.grid_line;
-    }
-
-    fn show_symbol_header(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        egui::Panel::top("symbol_header")
-            .exact_size(38.0)
-            .show_separator_line(true)
-            .frame(panel_frame(bg))
-            .show(ui, |ui| {
-                self.symbol_header.show(ui);
-            });
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
@@ -1341,17 +1333,6 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .fill(bg)
         .stroke(egui::Stroke::NONE)
         .inner_margin(egui::Margin::ZERO)
-}
-
-fn default_indicators() -> egui_charts::studies::IndicatorRegistry {
-    use egui_charts::studies::{BollingerBands, EMA, IndicatorRegistry, MACD, RSI, SMA};
-    let mut registry = IndicatorRegistry::new();
-    registry.add(Box::new(SMA::new(20)));
-    registry.add(Box::new(EMA::new(50)));
-    registry.add(Box::new(BollingerBands::new(20, 2.0)));
-    registry.add(Box::new(RSI::new(14)));
-    registry.add(Box::new(MACD::new(12, 26, 9)));
-    registry
 }
 
 fn condition_from_label(label: &str) -> AlertCondition {
