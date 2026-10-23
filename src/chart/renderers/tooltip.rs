@@ -283,6 +283,9 @@ pub fn render_floating_tooltip(
     let values_right = tooltip_rect.max.x - padding;
     for (i, (label, value)) in rows.into_iter().enumerate() {
         let y = tooltip_rect.min.y + padding + i as f32 * line_height;
+        if y + label.size().y.max(value.size().y) > tooltip_rect.bottom() - padding {
+            break;
+        }
         painter.galley(
             Pos2::new(tooltip_rect.min.x + padding, y),
             label,
@@ -312,6 +315,11 @@ pub fn render_tracking_tooltip(
     let bar_height = options.tracking_bar_height;
     let bar_rect = Rect::from_min_size(chart_rect.min, Vec2::new(chart_rect.width(), bar_height));
 
+    let painter = painter.with_clip_rect(
+        bar_rect
+            .intersect(chart_rect)
+            .intersect(painter.clip_rect()),
+    );
     // Draw bar background
     painter.rect_filled(bar_rect, 0.0, options.tracking_bar_background);
 
@@ -584,12 +592,17 @@ mod tests {
 
     const HOVER: Pos2 = Pos2::new(400.0, 250.0);
 
-    /// The shapes the lens paints over 80 bars on a logarithmic scale, cursor at `HOVER`.
     #[test]
-    fn floating_study_readout_fits_narrow_plots_away_from_the_pointer() {
+    fn study_readouts_fit_narrow_plots() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for width in [160.0, 320.0, 800.0] {
-                for (fraction, held) in [(0.25, false), (0.75, false), (0.25, true), (0.75, true)] {
+                for (fraction, held, tracking) in [
+                    (0.25, false, false),
+                    (0.75, false, false),
+                    (0.25, true, false),
+                    (0.75, true, false),
+                    (0.5, false, true),
+                ] {
                     let ctx = egui::Context::default();
                     crate::theme::apply_to_egui(&ctx, &theme);
                     let plot = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(width, 300.0));
@@ -606,6 +619,19 @@ mod tests {
                         12
                     ];
                     let mut output = ctx.run_ui(Default::default(), |ui| {
+                        if tracking {
+                            render_tracking_tooltip(
+                                ui.painter(),
+                                plot,
+                                &bar,
+                                &TooltipOptions::default(),
+                                crate::scales::TimeFormatterBuilder::new().build().as_ref(),
+                                3600,
+                                &studies,
+                                None,
+                            );
+                            return;
+                        }
                         render_floating_tooltip(
                             ui.painter(),
                             pointer,
@@ -659,6 +685,7 @@ mod tests {
         }
     }
 
+    /// The shapes the lens paints over 80 bars on a logarithmic scale, cursor at `HOVER`.
     fn lens_shapes(options: &TooltipOptions) -> Vec<egui::epaint::ClippedShape> {
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
         let transform = PriceTransform {

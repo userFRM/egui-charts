@@ -188,8 +188,14 @@ pub(crate) fn render_crosshair_price_tag(
         format!("{price:.decimals$}")
     };
     let left = axis_right <= context.rect.left();
+    let painter = context
+        .painter
+        .with_clip_rect(context.painter.clip_rect().intersect(Rect::from_x_y_ranges(
+            context.painter.clip_rect().x_range(),
+            context.rect.y_range(),
+        )));
     Some(paint_crosshair_tag(
-        context.painter,
+        &painter,
         Pos2::new(
             if left {
                 context.rect.left()
@@ -267,6 +273,8 @@ mod tests {
                 (29, 100.0, 300.0, CrosshairStyle::Full),
                 (0, 250.0, 300.0, CrosshairStyle::Full),
                 (0, 100.0, 60.0, CrosshairStyle::Full),
+                (0, 1.0, 300.0, CrosshairStyle::Full),
+                (0, 199.0, 300.0, CrosshairStyle::Full),
             ] {
                 let rect =
                     Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(100.0 + width, 200.0));
@@ -320,6 +328,10 @@ mod tests {
                 assert_eq!(date.height(), 25.0);
                 if let Some(tag) = tags[0] {
                     assert_eq!(tag.height(), 21.0);
+                    assert!(
+                        tag.top() >= rect.top() && tag.bottom() <= rect.bottom(),
+                        "{tag:?}"
+                    );
                     assert!(
                         tag.left() >= rect.right() && tag.right() <= axis_right,
                         "{tag:?}"

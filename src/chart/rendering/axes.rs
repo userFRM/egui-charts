@@ -264,6 +264,14 @@ pub(crate) fn paint_crosshair_tag(
     let mut tag = align.anchor_size(anchor, size);
     tag = tag.translate(Vec2::new((bounds.end() - tag.right()).min(0.0), 0.0));
     tag = tag.translate(Vec2::new((bounds.start() - tag.left()).max(0.0), 0.0));
+    tag = tag.translate(Vec2::new(
+        0.0,
+        (painter.clip_rect().bottom() - tag.bottom()).min(0.0),
+    ));
+    tag = tag.translate(Vec2::new(
+        0.0,
+        (painter.clip_rect().top() - tag.top()).max(0.0),
+    ));
     if let Some(covered) = covered.filter(|covered| covered.intersects(tag)) {
         let cover = covered.intersect(Rect::from_x_y_ranges(
             *bounds.start()..=*bounds.end(),
