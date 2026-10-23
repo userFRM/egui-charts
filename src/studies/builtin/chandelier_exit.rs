@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Chandelier Exit
 /// Trailing stop-loss indicator based on Wilder's ATR
 /// Developed by Chuck LeBeau
-use crate::studies::{ATR, Indicator, IndicatorValue};
+use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -13,7 +13,7 @@ pub struct ChandelierExit {
     period: usize,
     /// ATR multiplier (typically 3.0)
     multiplier: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Long exit, Short exit]
     colors: Vec<Color32>,
     visible: bool,
@@ -25,7 +25,7 @@ impl ChandelierExit {
         Self {
             period: period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Long exit
                 DESIGN_TOKENS.semantic.extended.error,   // Red - Short exit
@@ -40,15 +40,15 @@ impl ChandelierExit {
     }
 
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let mut atr = ATR::new(self.period);
         atr.calculate(data);
 
-        for (i, value) in atr.values().iter().enumerate() {
-            match *value {
-                IndicatorValue::Single(atr) if !atr.is_nan() => {
+        for i in 0..data.len() {
+            match atr.values().value(0, i) {
+                Some(atr) => {
                     // Find highest high and lowest low in period
                     let window = &data[i + 1 - self.period..=i];
                     let highest = window
@@ -62,7 +62,7 @@ impl ChandelierExit {
                     // Short exit = Lowest Low + ATR * multiplier
                     let short_exit = lowest + atr * self.multiplier;
 
-                    values.push(IndicatorValue::Multiple(vec![long_exit, short_exit]));
+                    values.push_lines(&[long_exit, short_exit]);
                 }
                 _ => values.push(IndicatorValue::None),
             }
@@ -94,7 +94,7 @@ impl Indicator for ChandelierExit {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -192,7 +192,7 @@ mod tests {
             let mut ce = ChandelierExit::new(3, 2.0);
             ce.calculate(&data);
 
-            let got = ce.values();
+            let got = ce.values().to_rows();
             let warm_up = got
                 .iter()
                 .take(2)

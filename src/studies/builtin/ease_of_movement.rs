@@ -1,6 +1,6 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -19,7 +19,7 @@ pub struct EaseOfMovement {
     period: usize,
     /// Volume divisor: Arms states volume in units of 10,000
     divisor: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -29,7 +29,7 @@ impl EaseOfMovement {
         Self {
             period: period.max(1),
             divisor: 10_000.0,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
         }
@@ -56,7 +56,7 @@ impl Default for EaseOfMovement {
 
 impl EaseOfMovement {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         // The raw value of bar `i + 1`, or `None` where it is undefined.
         let raw: Vec<Option<f64>> = data
             .windows(2)
@@ -109,7 +109,7 @@ impl Indicator for EaseOfMovement {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -262,7 +262,7 @@ mod tests {
             let mut eom = EaseOfMovement::new(period);
             eom.calculate(&data);
             assert_eq!(eom.values.len(), expected.len(), "{name}");
-            for (i, (got, want)) in eom.values.iter().zip(expected.iter()).enumerate() {
+            for (i, (got, want)) in eom.values.to_rows().iter().zip(expected.iter()).enumerate() {
                 match (got, want) {
                     (IndicatorValue::None, None) => {}
                     (IndicatorValue::Single(g), Some(w)) => {

@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Force Index
 /// Measures the force behind price movements using price change and volume
 /// Developed by Alexander Elder
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct ForceIndex {
     /// EMA period for smoothing (typically 13)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -20,7 +20,7 @@ impl ForceIndex {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
             visible: true,
         }
@@ -77,8 +77,8 @@ impl ForceIndex {
     }
 
     /// The values over `data`, every bar of which has a finite close and volume.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < 2 {
             for _ in 0..data.len() {
@@ -136,7 +136,7 @@ impl Indicator for ForceIndex {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

@@ -24,7 +24,7 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -33,7 +33,7 @@ use egui::Color32;
 pub struct AwesomeOscillator {
     fast_period: usize,
     slow_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     positive_color: Color32,
     negative_color: Color32,
     visible: bool,
@@ -49,7 +49,7 @@ impl AwesomeOscillator {
         Self {
             fast_period: fast_period.max(1),
             slow_period: slow_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             positive_color: DESIGN_TOKENS.semantic.extended.success, // Green
             negative_color: DESIGN_TOKENS.semantic.extended.error,   // Red
             visible: true,
@@ -119,7 +119,7 @@ impl Indicator for AwesomeOscillator {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

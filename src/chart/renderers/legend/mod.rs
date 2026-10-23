@@ -3,7 +3,7 @@
 use super::{price_decimals, semibold};
 use crate::chart::renderers::StyleColors;
 use crate::model::{Bar, Instrument, Level1Quote, percent_change};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::Indicator;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use egui::{Color32, FontId, ImageSource, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -316,17 +316,12 @@ impl<'a> Legend<'a> {
                         bounds.width(),
                     );
                 }
-                let values = match study.values().get(self.bar_index) {
-                    Some(IndicatorValue::Single(value)) => std::slice::from_ref(value),
-                    Some(IndicatorValue::Multiple(values)) => values,
-                    _ => &[],
-                };
                 let study_colors = study.colors();
-                for (index, value) in values
-                    .iter()
-                    .enumerate()
-                    .filter(|_| self.show_indicator_values)
-                {
+                for index in (0..study.line_cnt()).filter(|_| self.show_indicator_values) {
+                    let value = study
+                        .values()
+                        .value(index, self.bar_index)
+                        .unwrap_or(f64::NAN);
                     let text = if value.is_finite() {
                         format!("{value:.precision$}")
                     } else {

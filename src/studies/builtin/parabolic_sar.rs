@@ -28,7 +28,7 @@
 
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -38,7 +38,7 @@ pub struct ParabolicSAR {
     initial_af: f64,
     af_step: f64,
     max_af: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     bullish_color: Color32,
     bearish_color: Color32,
     visible: bool,
@@ -60,7 +60,7 @@ impl ParabolicSAR {
             initial_af,
             af_step: clamp_param(af_step, 0.001, 1.0),
             max_af: clamp_param(max_af, initial_af, 1.0),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             bullish_color: DESIGN_TOKENS.semantic.extended.bullish,
             bearish_color: DESIGN_TOKENS.semantic.extended.bearish,
             visible: true,
@@ -89,8 +89,8 @@ impl Default for ParabolicSAR {
 
 impl ParabolicSAR {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < 2 {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -183,9 +183,9 @@ impl ParabolicSAR {
             if i == 0 {
                 values.push(IndicatorValue::None);
             } else if trend[i] == 1 {
-                values.push(IndicatorValue::Multiple(vec![sar[i], f64::NAN]));
+                values.push_lines(&[sar[i], f64::NAN]);
             } else {
-                values.push(IndicatorValue::Multiple(vec![f64::NAN, sar[i]]));
+                values.push_lines(&[f64::NAN, sar[i]]);
             }
         }
 
@@ -210,7 +210,7 @@ impl Indicator for ParabolicSAR {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

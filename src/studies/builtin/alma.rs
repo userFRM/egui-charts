@@ -24,7 +24,7 @@
 
 use super::clamp_param;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -34,7 +34,7 @@ pub struct ALMA {
     period: usize,
     offset: f64,
     sigma: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -56,7 +56,7 @@ impl ALMA {
             period,
             offset,
             sigma,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange
             visible: true,
         }
@@ -121,7 +121,7 @@ impl Indicator for ALMA {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -195,11 +195,11 @@ mod tests {
 
         // First period-1 values should be None
         for i in 0..8 {
-            assert!(matches!(alma.values()[i], IndicatorValue::None));
+            assert!(matches!(alma.values().to_rows()[i], IndicatorValue::None));
         }
 
         // Check valid values exist
-        for value in alma.values().iter().skip(8) {
+        for value in alma.values().to_rows().iter().skip(8) {
             assert!(matches!(value, IndicatorValue::Single(_)));
         }
     }
@@ -211,8 +211,9 @@ mod tests {
         alma.calculate(&bars);
 
         // ALMA should track price but be smoothed
-        let Some(IndicatorValue::Single(val)) = alma.values().last() else {
-            panic!("no value: {:?}", alma.values().last());
+        let rows = alma.values().to_rows();
+        let Some(IndicatorValue::Single(val)) = rows.last() else {
+            panic!("no value: {:?}", alma.values().to_rows().last());
         };
         let last_close = bars.last().unwrap().close;
         assert!(

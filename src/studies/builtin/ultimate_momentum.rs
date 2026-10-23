@@ -2,7 +2,7 @@ use crate::model::Bar;
 /// Ultimate Momentum Oscillator
 /// Custom composite momentum indicator
 /// Combines multiple timeframes for confirmation
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -14,7 +14,7 @@ pub struct UltimateMomentum {
     medium_period: usize,
     /// Long period (typically 20)
     long_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -25,7 +25,7 @@ impl UltimateMomentum {
             short_period: short.max(1),
             medium_period: medium.max(1),
             long_period: long.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.purple,
             visible: true,
         }
@@ -91,7 +91,7 @@ impl Indicator for UltimateMomentum {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -156,8 +156,9 @@ mod tests {
         assert_eq!(um.values.len(), 30);
 
         // In uptrend, momentum should be positive
-        let IndicatorValue::Single(v) = um.values.last().unwrap() else {
-            panic!("no value: {:?}", um.values.last().unwrap());
+        let rows = um.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", um.values.to_rows().last().unwrap());
         };
         assert!(*v > 0.0, "Momentum should be positive in uptrend");
     }

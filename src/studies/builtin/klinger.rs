@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -19,7 +19,7 @@ pub struct KlingerOscillator {
     long_period: usize,
     /// Signal line period (typically 13)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Klinger, Signal]
     colors: Vec<Color32>,
     visible: bool,
@@ -31,7 +31,7 @@ impl KlingerOscillator {
             short_period: 34,
             long_period: 55,
             signal_period: 13,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - Klinger
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
@@ -96,7 +96,7 @@ impl KlingerOscillator {
     }
 
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut volume_force = vec![f64::NAN; data.len()];
         // 0.0 until a bar's sum first differs from the bar before.
         let mut trend = 0.0;
@@ -185,7 +185,7 @@ impl Indicator for KlingerOscillator {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -302,7 +302,7 @@ mod tests {
         let mut klinger = KlingerOscillator::new();
         klinger.calculate(&data);
 
-        let values = klinger.values();
+        let values = klinger.values().to_rows();
         assert_eq!(values.len(), 80);
         assert!(
             values[..55]
@@ -330,8 +330,11 @@ mod tests {
         // A bar with a non-finite price has no value; the study carries on after it.
         data[60].high = f64::NAN;
         klinger.calculate(&data);
-        assert!(matches!(klinger.values()[60], IndicatorValue::None));
-        assert!(klinger.values()[61..].iter().all(|v| matches!(
+        assert!(matches!(
+            klinger.values().to_rows()[60],
+            IndicatorValue::None
+        ));
+        assert!(klinger.values().to_rows()[61..].iter().all(|v| matches!(
             v,
             IndicatorValue::Multiple(l) if l[0].is_finite()
         )));
@@ -341,6 +344,7 @@ mod tests {
         assert!(
             klinger
                 .values()
+                .to_rows()
                 .iter()
                 .all(|v| matches!(v, IndicatorValue::None))
         );

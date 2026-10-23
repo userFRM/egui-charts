@@ -1,6 +1,6 @@
 use super::clamp_param;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -15,7 +15,7 @@ pub struct AccelerationBands {
     period: usize,
     /// Band width factor (typically 4.0)
     factor: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Upper, Middle, Lower]
     colors: Vec<Color32>,
     visible: bool,
@@ -27,7 +27,7 @@ impl AccelerationBands {
         Self {
             period: period.max(1),
             factor: clamp_param(factor, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Upper
                 DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber - Middle
@@ -87,16 +87,12 @@ impl Indicator for AccelerationBands {
                     lower += b.low * (1.0 - self.factor * r);
                 }
 
-                self.values.push(IndicatorValue::Multiple(vec![
-                    upper / n,
-                    middle / n,
-                    lower / n,
-                ]));
+                self.values.push_lines(&[upper / n, middle / n, lower / n]);
             }
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -186,11 +182,11 @@ mod tests {
         }
         assert_eq!(ab.values.len(), bars.len());
         assert!(matches!(
-            ab.values[..2],
+            ab.values.to_rows()[..2],
             [IndicatorValue::None, IndicatorValue::None]
         ));
         for (i, want) in expected.iter().enumerate() {
-            let IndicatorValue::Multiple(got) = &ab.values[i + 2] else {
+            let IndicatorValue::Multiple(got) = &ab.values.to_rows()[i + 2] else {
                 panic!("bar {}: no value", i + 2);
             };
             assert_eq!(got.len(), 3, "bar {}", i + 2);

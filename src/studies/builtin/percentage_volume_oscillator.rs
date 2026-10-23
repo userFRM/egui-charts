@@ -1,7 +1,8 @@
 use super::over_finite_bars;
 use super::price_oscillator::percentage_oscillator;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::Indicator;
+use crate::studies::IndicatorValues;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -21,7 +22,7 @@ pub struct PercentageVolumeOscillator {
     short_period: usize,
     long_period: usize,
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [PVO line, Signal line, Histogram]
     colors: Vec<Color32>,
     visible: bool,
@@ -33,7 +34,7 @@ impl PercentageVolumeOscillator {
             short_period: short_period.max(1),
             long_period: long_period.max(1),
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - PVO
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
@@ -49,7 +50,7 @@ impl PercentageVolumeOscillator {
     }
 
     /// The values over `data`, every bar of which has a finite volume.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let volumes: Vec<f64> = data.iter().map(|b| b.volume).collect();
         percentage_oscillator(
             &volumes,
@@ -80,7 +81,7 @@ impl Indicator for PercentageVolumeOscillator {
         self.values = over_finite_bars(data, |b| b.volume.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

@@ -18,7 +18,7 @@
 
 use crate::model::Bar;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -26,7 +26,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct ATR {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     stepper: Stepper<State>,
     color: Color32,
     visible: bool,
@@ -57,7 +57,7 @@ impl ATR {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
             visible: true,
@@ -130,7 +130,7 @@ impl Indicator for ATR {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -240,7 +240,7 @@ mod tests {
             let mut atr = ATR::new(period);
             atr.calculate(&data);
             assert_eq!(atr.values().len(), expected.len());
-            for (i, (got, want)) in atr.values().iter().zip(expected).enumerate() {
+            for (i, (got, want)) in atr.values().to_rows().iter().zip(expected).enumerate() {
                 let ok = match (got, want) {
                     (IndicatorValue::None, None) => true,
                     (IndicatorValue::Single(v), Some(w)) => (v - w).abs() < 1e-12,

@@ -4,7 +4,7 @@ use crate::studies::stepper::{rolling_max, rolling_min};
 /// Schaff Trend Cycle (STC)
 /// Combines MACD with stochastic to create a faster, more accurate oscillator
 /// Oscillates between 0 and 100
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -16,7 +16,7 @@ pub struct SchaffTrendCycle {
     macd_long: usize,
     /// Stochastic cycle period (typically 10)
     cycle: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -27,7 +27,7 @@ impl SchaffTrendCycle {
             macd_short: 23,
             macd_long: 50,
             cycle: 10,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.cyan,
             visible: true,
         }
@@ -115,8 +115,8 @@ impl SchaffTrendCycle {
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.macd_long.saturating_add(self.cycle) {
             for _ in 0..data.len() {
@@ -183,7 +183,7 @@ impl Indicator for SchaffTrendCycle {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -249,7 +249,7 @@ mod tests {
 
         // Check that valid values are between 0 and 100
         let mut checked = 0;
-        for value in &stc.values {
+        for value in &stc.values.to_rows() {
             if let IndicatorValue::Single(v) = value {
                 assert!(*v >= 0.0 && *v <= 100.0, "STC should be 0-100, got {v}");
                 checked += 1;
@@ -268,8 +268,9 @@ mod tests {
         stc.calculate(&data);
 
         // In uptrend, STC should be high (close to 100)
-        let IndicatorValue::Single(v) = stc.values.last().unwrap() else {
-            panic!("no value: {:?}", stc.values.last().unwrap());
+        let rows = stc.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", stc.values.to_rows().last().unwrap());
         };
         assert!(*v > 50.0, "STC should be high in uptrend, got {v}");
     }

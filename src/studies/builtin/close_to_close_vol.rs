@@ -2,13 +2,13 @@ use super::over_finite_bars;
 use crate::model::Bar;
 /// Close-to-Close Volatility
 /// Standard deviation of log returns, annualized by sqrt(252)
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 #[derive(Clone)]
 pub struct CloseToCloseVol {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -17,7 +17,7 @@ impl CloseToCloseVol {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![Color32::from_rgb(156, 39, 176)], // Purple
             visible: true,
         }
@@ -32,8 +32,8 @@ impl Default for CloseToCloseVol {
 
 impl CloseToCloseVol {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < 2 {
             for _ in data {
                 values.push(IndicatorValue::None);
@@ -95,7 +95,7 @@ impl Indicator for CloseToCloseVol {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

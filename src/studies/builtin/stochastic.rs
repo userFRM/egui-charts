@@ -24,7 +24,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::stepper::{rolling_max, rolling_min, update_window, usable_behind};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -34,7 +34,7 @@ pub struct Stochastic {
     k_period: usize,
     k_smooth: usize,
     d_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     k_color: Color32,
     d_color: Color32,
     visible: bool,
@@ -52,7 +52,7 @@ impl Stochastic {
             k_period: k_period.max(1),
             k_smooth: k_smooth.max(1),
             d_period: d_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             k_color: DESIGN_TOKENS.semantic.extended.info, // Blue
             d_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
@@ -89,8 +89,8 @@ impl Default for Stochastic {
 
 impl Stochastic {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let min_period = self.k_period.saturating_add(self.k_smooth) - 1;
         if data.len() < min_period {
             for _ in 0..data.len() {
@@ -171,7 +171,7 @@ impl Stochastic {
             if smooth_k[i].is_nan() || d_values[i].is_nan() {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![smooth_k[i], d_values[i]]));
+                values.push_lines(&[smooth_k[i], d_values[i]]);
             }
         }
 
@@ -212,7 +212,7 @@ impl Indicator for Stochastic {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

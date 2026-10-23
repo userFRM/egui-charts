@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::Duration;
 use egui::Color32;
@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 /// Bars before 52 weeks of history have no value, regardless of the bar interval.
 #[derive(Clone)]
 pub struct Week52HighLow {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -21,7 +21,7 @@ impl Week52HighLow {
     /// Create a 52-week high/low percentage study.
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![DESIGN_TOKENS.semantic.extended.pink],
             visible: true,
         }
@@ -36,7 +36,7 @@ impl Default for Week52HighLow {
 
 impl Week52HighLow {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         week52_ranges(data)
             .into_iter()
             .zip(data)
@@ -69,7 +69,7 @@ impl Indicator for Week52HighLow {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -108,7 +108,7 @@ impl Indicator for Week52HighLow {
 /// Bars before 52 weeks of history have no value, regardless of the bar interval.
 #[derive(Clone)]
 pub struct Week52HighLowLevels {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -117,7 +117,7 @@ impl Week52HighLowLevels {
     /// Create a 52-week high and low study.
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,
                 DESIGN_TOKENS.semantic.extended.pink,
@@ -158,7 +158,7 @@ impl Indicator for Week52HighLowLevels {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

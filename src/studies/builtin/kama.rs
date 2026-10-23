@@ -28,7 +28,7 @@
 
 use crate::model::Bar;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use std::collections::VecDeque;
@@ -45,7 +45,7 @@ pub struct KAMA {
     fast_period: usize,
     /// Slowest EMA period (typically 30).
     slow_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     stepper: Stepper<State>,
     color: Color32,
     visible: bool,
@@ -72,7 +72,7 @@ impl KAMA {
             period: period.max(1),
             fast_period: 2,
             slow_period: 30,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
             visible: true,
@@ -154,7 +154,7 @@ impl Indicator for KAMA {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -278,7 +278,13 @@ mod tests {
                 kama.update(&data[..len], len.saturating_sub(1));
             }
             assert_eq!(kama.values.len(), expected.len(), "{name}");
-            for (i, (got, want)) in kama.values.iter().zip(expected.iter()).enumerate() {
+            for (i, (got, want)) in kama
+                .values
+                .to_rows()
+                .iter()
+                .zip(expected.iter())
+                .enumerate()
+            {
                 match (got, want) {
                     (IndicatorValue::None, None) => {}
                     (IndicatorValue::Single(g), Some(w)) => {

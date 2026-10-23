@@ -37,7 +37,7 @@
 //! let mut bb = BollingerBands::new(20, 2.0);
 //! bb.calculate(&bars);
 //!
-//! if let IndicatorValue::Multiple(vals) = &bb.values()[30] {
+//! if let IndicatorValue::Multiple(vals) = &bb.values().to_rows()[30] {
 //!     let (upper, middle, lower) = (vals[0], vals[1], vals[2]);
 //! }
 //! ```
@@ -45,7 +45,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::stepper::{update_window, usable_behind};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -57,7 +57,7 @@ use egui::Color32;
 pub struct BollingerBands {
     period: usize,
     std_dev: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -68,7 +68,7 @@ impl BollingerBands {
         Self {
             period: period.max(1),
             std_dev: clamp_param(std_dev, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.indicators.bb_upper,  // Upper
                 DESIGN_TOKENS.semantic.indicators.bb_middle, // Middle
@@ -79,8 +79,8 @@ impl BollingerBands {
     }
 
     /// The values over `data`.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         for i in 0..data.len() {
             if i < self.period - 1 {
                 values.push(IndicatorValue::None);
@@ -98,7 +98,7 @@ impl BollingerBands {
                 let upper = sma + (std * self.std_dev);
                 let lower = sma - (std * self.std_dev);
 
-                values.push(IndicatorValue::Multiple(vec![upper, sma, lower]));
+                values.push_lines(&[upper, sma, lower]);
             }
         }
         values
@@ -141,7 +141,7 @@ impl Indicator for BollingerBands {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

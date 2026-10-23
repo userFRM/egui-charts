@@ -24,7 +24,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -32,7 +32,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct MoneyFlowIndex {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -45,7 +45,7 @@ impl MoneyFlowIndex {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.bullish,
             visible: true,
         }
@@ -73,8 +73,8 @@ impl Default for MoneyFlowIndex {
 
 impl MoneyFlowIndex {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -155,7 +155,7 @@ impl Indicator for MoneyFlowIndex {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

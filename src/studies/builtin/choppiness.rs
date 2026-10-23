@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Choppiness Index
 /// Measures market trendiness vs choppiness
 /// Values close to 100 = choppy market, values close to 0 = trending market
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct ChoppinessIndex {
     /// Lookback period (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -20,7 +20,7 @@ impl ChoppinessIndex {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.purple,
             visible: true,
         }
@@ -41,8 +41,8 @@ impl Default for ChoppinessIndex {
 
 impl ChoppinessIndex {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -114,7 +114,7 @@ impl Indicator for ChoppinessIndex {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

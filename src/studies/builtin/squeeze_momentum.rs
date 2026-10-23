@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Squeeze Momentum Indicator
 /// Combines Bollinger Bands and Keltner Channels to identify periods of low volatility
 /// When BB is inside KC = "squeeze" (low volatility period)
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -19,7 +19,7 @@ pub struct SqueezeMomentum {
     kc_mult: f64,
     /// Momentum period (typically 12)
     momentum_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Momentum positive, Squeeze on (the squeeze line), Momentum negative, Squeeze off]
     colors: Vec<Color32>,
     visible: bool,
@@ -33,7 +33,7 @@ impl SqueezeMomentum {
             kc_period: 20,
             kc_mult: 1.5,
             momentum_period: 12,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Momentum positive
                 DESIGN_TOKENS.semantic.extended.disabled, // Gray - Squeeze on
@@ -150,8 +150,8 @@ impl Default for SqueezeMomentum {
 
 impl SqueezeMomentum {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let required = self.bb_period.max(self.kc_period).max(self.momentum_period);
         if data.len() < required {
             for _ in 0..data.len() {
@@ -204,10 +204,7 @@ impl SqueezeMomentum {
                 // Squeeze is ON when BB is inside KC
                 let squeeze_on = bb_lower > kc_lower && bb_upper < kc_upper;
 
-                values.push(IndicatorValue::Multiple(vec![
-                    momentum[i],
-                    if squeeze_on { 1.0 } else { 0.0 },
-                ]));
+                values.push_lines(&[momentum[i], if squeeze_on { 1.0 } else { 0.0 }]);
             }
         }
 
@@ -232,7 +229,7 @@ impl Indicator for SqueezeMomentum {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -296,8 +293,9 @@ mod tests {
         assert_eq!(squeeze.values.len(), 50);
 
         // Should have momentum and squeeze state
-        let IndicatorValue::Multiple(v) = squeeze.values.last().unwrap() else {
-            panic!("no value: {:?}", squeeze.values.last().unwrap());
+        let rows = squeeze.values.to_rows();
+        let IndicatorValue::Multiple(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", squeeze.values.to_rows().last().unwrap());
         };
         assert_eq!(v.len(), 2);
     }

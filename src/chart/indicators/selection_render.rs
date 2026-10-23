@@ -3,7 +3,7 @@
 //! Draws selection dots on the selected indicator line.
 
 use crate::chart::coords::ChartMapping;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::Indicator;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Stroke};
 
@@ -55,11 +55,7 @@ pub fn render_indicator_selection_dots<F>(
             continue;
         }
 
-        let value = match values.get(i) {
-            Some(IndicatorValue::Single(v)) => Some(*v),
-            Some(IndicatorValue::Multiple(vals)) => vals.get(line_idx).copied(),
-            _ => None,
-        };
+        let value = values.value(line_idx, i);
 
         let Some(value) = value else { continue };
 

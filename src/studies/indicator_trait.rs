@@ -5,12 +5,14 @@
 //! enum used to represent computed output at each bar.
 
 use crate::model::Bar;
+use crate::studies::IndicatorValues;
 use egui::Color32;
 
 /// The output value of an indicator at a single bar position.
 ///
-/// Indicators produce one `IndicatorValue` per input [`Bar`]. The variant
-/// depends on the indicator:
+/// An owned row for constructing or exporting [`IndicatorValues`](super::IndicatorValues).
+/// Studies store columns; this row format is also accepted by custom calculation closures.
+/// The variant depends on the indicator:
 ///
 /// - **`Single(f64)`** -- used by single-line indicators (SMA, EMA, RSI, ATR, ...).
 /// - **`Multiple(Vec<f64>)`** -- used by multi-line indicators, one value per
@@ -171,11 +173,11 @@ pub trait Indicator: Send {
         false
     }
 
-    /// Return the slice of computed values (one per input bar).
+    /// Return the computed output columns, with NaN for missing values.
     ///
-    /// The length of the returned slice matches the length of the `data`
+    /// The length of the returned output matches the length of the `data`
     /// slice most recently passed to [`calculate`](Indicator::calculate).
-    fn values(&self) -> &[IndicatorValue];
+    fn values(&self) -> &IndicatorValues;
 
     /// Rendering style of an overlay line. Defaults to a 1 px line in its configured colour.
     fn line_style(&self, line: usize) -> IndicatorLineStyle {

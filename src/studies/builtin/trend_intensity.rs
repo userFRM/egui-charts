@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -13,7 +13,7 @@ use egui::Color32;
 pub struct TrendIntensityIndex {
     /// Number of deviations summed; the moving average spans twice as many bars.
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -22,7 +22,7 @@ impl TrendIntensityIndex {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.info, // Indigo/Blue
             visible: true,
         }
@@ -42,8 +42,8 @@ impl Default for TrendIntensityIndex {
 
 impl TrendIntensityIndex {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let n = self.period;
         let ma_len = n.saturating_mul(2);
         let first = ma_len.saturating_add(n) - 2;
@@ -99,7 +99,7 @@ impl Indicator for TrendIntensityIndex {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -140,7 +140,7 @@ impl Indicator for TrendIntensityIndex {
 #[derive(Clone)]
 pub struct Qstick {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -149,7 +149,7 @@ impl Qstick {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.purple, // Purple
             visible: true,
         }
@@ -201,7 +201,7 @@ impl Indicator for Qstick {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -280,6 +280,7 @@ mod tests {
             tii.calculate(&data);
             let got: Vec<Option<f64>> = tii
                 .values()
+                .to_rows()
                 .iter()
                 .map(|v| match v {
                     IndicatorValue::Single(x) => Some(*x),
@@ -309,8 +310,9 @@ mod tests {
         assert_eq!(qs.values.len(), 10);
 
         // Should be positive for bullish candles
-        let IndicatorValue::Single(v) = qs.values.last().unwrap() else {
-            panic!("no value: {:?}", qs.values.last().unwrap());
+        let rows = qs.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", qs.values.to_rows().last().unwrap());
         };
         assert!(*v > 0.0);
     }

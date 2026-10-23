@@ -27,7 +27,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -36,7 +36,7 @@ use egui::Color32;
 pub struct SuperTrend {
     atr_period: usize,
     multiplier: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     stepper: Stepper<State>,
     bullish_color: Color32,
     bearish_color: Color32,
@@ -76,7 +76,7 @@ impl SuperTrend {
         Self {
             atr_period: atr_period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             stepper: Stepper::default(),
             bullish_color: DESIGN_TOKENS.semantic.extended.success, // Green
             bearish_color: DESIGN_TOKENS.semantic.extended.error,   // Red
@@ -196,7 +196,7 @@ impl Indicator for SuperTrend {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

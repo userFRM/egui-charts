@@ -2,7 +2,7 @@ use crate::model::Bar;
 /// Coppock Curve
 /// A momentum indicator originally designed to identify buying opportunities in stock indices
 /// Uses a weighted moving avg of the sum of two ROC periods
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -14,7 +14,7 @@ pub struct CoppockCurve {
     short_roc: usize,
     /// WMA period (typically 10)
     wma_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -25,7 +25,7 @@ impl CoppockCurve {
             long_roc: 14,
             short_roc: 11,
             wma_period: 10,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.purple,
             visible: true,
         }
@@ -154,7 +154,7 @@ impl Indicator for CoppockCurve {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

@@ -1,5 +1,5 @@
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -17,7 +17,7 @@ pub struct RainbowOscillator {
     levels: usize,
     /// Base period for first SMA (typically 2)
     base_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -27,7 +27,7 @@ impl RainbowOscillator {
         Self {
             levels: levels.max(1),
             base_period: base_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.purple,
             visible: true,
         }
@@ -115,7 +115,7 @@ impl Indicator for RainbowOscillator {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -206,7 +206,7 @@ mod tests {
         rainbow.calculate(&closes.iter().map(|&c| make_bar(c)).collect::<Vec<_>>());
 
         assert_eq!(rainbow.values.len(), expected.len());
-        for (i, (got, want)) in rainbow.values.iter().zip(expected).enumerate() {
+        for (i, (got, want)) in rainbow.values.to_rows().iter().zip(expected).enumerate() {
             match (got, want) {
                 (IndicatorValue::None, None) => {}
                 (IndicatorValue::Single(g), Some(w)) => {

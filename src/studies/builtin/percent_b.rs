@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Percent B (%B)
 /// Shows where price is relative to Bollinger Bands
 /// 0 = at lower band, 1 = at upper band
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -13,7 +13,7 @@ pub struct PercentB {
     period: usize,
     /// Standard deviation multiplier (typically 2.0)
     multiplier: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -24,7 +24,7 @@ impl PercentB {
         Self {
             period: period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
             visible: true,
         }
@@ -91,7 +91,7 @@ impl Indicator for PercentB {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -151,8 +151,9 @@ mod tests {
 
         pb.calculate(&data);
 
-        let IndicatorValue::Single(v) = pb.values.last().unwrap() else {
-            panic!("no value: {:?}", pb.values.last().unwrap());
+        let rows = pb.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", pb.values.to_rows().last().unwrap());
         };
         // Constant prices collapse the bands to a point: %B is the middle of the band
         assert_eq!(*v, 0.5);

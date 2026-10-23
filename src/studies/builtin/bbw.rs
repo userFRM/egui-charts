@@ -1,6 +1,6 @@
 use super::clamp_param;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -12,7 +12,7 @@ use egui::Color32;
 pub struct BollingerBandsWidth {
     period: usize,
     std_dev: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -23,7 +23,7 @@ impl BollingerBandsWidth {
         Self {
             period: period.max(1),
             std_dev: clamp_param(std_dev, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![DESIGN_TOKENS.semantic.extended.purple],
             visible: true,
         }
@@ -78,7 +78,7 @@ impl Indicator for BollingerBandsWidth {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

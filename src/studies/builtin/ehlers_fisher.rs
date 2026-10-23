@@ -6,7 +6,7 @@ use crate::model::Bar;
 ///
 /// Related: [`FisherTransform`](super::FisherTransform) clamps the smoothed
 /// value instead of the normalized price.
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -14,7 +14,7 @@ use egui::Color32;
 pub struct EhlersFisher {
     /// Lookback period (typically 10)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Fisher, Trigger]
     colors: Vec<Color32>,
     visible: bool,
@@ -24,7 +24,7 @@ impl EhlersFisher {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - Fisher
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - Trigger
@@ -39,8 +39,8 @@ impl EhlersFisher {
     }
 
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
@@ -97,7 +97,7 @@ impl EhlersFisher {
             if fisher.is_nan() {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![fisher, trigger]));
+                values.push_lines(&[fisher, trigger]);
             }
         }
         values
@@ -127,7 +127,7 @@ impl Indicator for EhlersFisher {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -199,6 +199,7 @@ mod tests {
         // Should have Fisher values
         let valid_cnt = ef
             .values
+            .to_rows()
             .iter()
             .filter(|v| !matches!(v, IndicatorValue::None))
             .count();

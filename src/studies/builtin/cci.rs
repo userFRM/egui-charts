@@ -25,7 +25,7 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -33,7 +33,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct CCI {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -46,7 +46,7 @@ impl CCI {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
             visible: true,
         }
@@ -118,7 +118,7 @@ impl Indicator for CCI {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -176,7 +176,7 @@ mod tests {
         let mut cci = CCI::new(20);
         cci.calculate(&bars);
 
-        for value in cci.values().iter().skip(19) {
+        for value in cci.values().to_rows().iter().skip(19) {
             assert!(
                 matches!(value, IndicatorValue::Single(v) if *v == 0.0),
                 "a window without deviation reads 0, got {value:?}"

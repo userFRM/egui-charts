@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Zero-mean close-to-close volatility, without subtracting the mean log return.
@@ -11,7 +11,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct ZeroTrendVol {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -21,7 +21,7 @@ impl ZeroTrendVol {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![Color32::from_rgb(103, 58, 183)], // Deep purple
             visible: true,
         }
@@ -36,7 +36,7 @@ impl Default for ZeroTrendVol {
 
 impl ZeroTrendVol {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let returns: Vec<_> = data
             .windows(2)
             .map(|bars| {
@@ -76,7 +76,7 @@ impl Indicator for ZeroTrendVol {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

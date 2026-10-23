@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Mass Index
 /// Identifies trend reversals based on range expansion
 /// Developed by Donald Dorsey
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -13,7 +13,7 @@ pub struct MassIndex {
     ema_period: usize,
     /// Summation period (typically 25)
     sum_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -23,7 +23,7 @@ impl MassIndex {
         Self {
             ema_period: 9,
             sum_period: 25,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.deep_orange,
             visible: true,
         }
@@ -84,8 +84,8 @@ impl MassIndex {
     }
 
     /// The values over `data`, every bar of which has a finite high and low.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let required = self
             .ema_period
@@ -172,7 +172,7 @@ impl Indicator for MassIndex {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

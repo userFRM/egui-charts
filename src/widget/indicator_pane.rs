@@ -35,7 +35,7 @@
 use crate::chart::rendering::draw_dashed_line;
 use crate::model::Bar;
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::Indicator;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -580,20 +580,14 @@ impl IndicatorPane {
         let mut min_val = f64::MAX;
         let mut max_val = f64::MIN;
 
-        for i in visible_range.clone() {
-            if let Some(value) = values.get(i) {
-                match value {
-                    IndicatorValue::Single(v) => {
-                        min_val = min_val.min(*v);
-                        max_val = max_val.max(*v);
-                    }
-                    IndicatorValue::Multiple(vals) => {
-                        for v in vals {
-                            min_val = min_val.min(*v);
-                            max_val = max_val.max(*v);
-                        }
-                    }
-                    IndicatorValue::None => {}
+        for line in values.columns() {
+            for &value in line
+                .get(visible_range.start..visible_range.end.min(line.len()))
+                .unwrap_or_default()
+            {
+                if value.is_finite() {
+                    min_val = min_val.min(value);
+                    max_val = max_val.max(value);
                 }
             }
         }
@@ -823,12 +817,7 @@ impl IndicatorPane {
                     break;
                 }
 
-                let val = match &values[i] {
-                    IndicatorValue::Single(v) => Some(*v),
-                    IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
-                    IndicatorValue::None => None,
-                }
-                .filter(|v| v.is_finite());
+                let val = values.value(line_idx, i);
 
                 if let Some(v) = val {
                     // X position based on position in visible range
@@ -880,12 +869,7 @@ impl IndicatorPane {
                     break;
                 }
 
-                let val = match &values[i] {
-                    IndicatorValue::Single(v) => Some(*v),
-                    IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
-                    IndicatorValue::None => None,
-                }
-                .filter(|v| v.is_finite());
+                let val = values.value(line_idx, i);
 
                 if let Some(v) = val {
                     // Use the same coordinate formula as main chart
@@ -952,18 +936,12 @@ impl IndicatorPane {
             legend_parts.push(self.config.inputs.clone());
         }
         if self.config.show_values
-            && let Some(last_value) = values.last()
+            && let Some(bar) = values.len().checked_sub(1)
         {
-            match last_value {
-                IndicatorValue::Single(v) => {
-                    legend_parts.push(format!("{v:.2}"));
+            for line in 0..indicator.line_cnt() {
+                if let Some(value) = values.value(line, bar) {
+                    legend_parts.push(format!("{value:.2}"));
                 }
-                IndicatorValue::Multiple(vals) => {
-                    for v in vals {
-                        legend_parts.push(format!("{v:.2}"));
-                    }
-                }
-                IndicatorValue::None => {}
             }
         }
 

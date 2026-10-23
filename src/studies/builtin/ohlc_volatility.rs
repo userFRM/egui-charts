@@ -3,13 +3,13 @@ use crate::model::Bar;
 /// OHLC Volatility (Garman-Klass)
 /// Uses OHLC data for more efficient volatility estimation
 /// GK = 0.5 * ln(H/L)^2 - (2*ln(2)-1) * ln(C/O)^2
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 #[derive(Clone)]
 pub struct OhlcVolatility {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -18,7 +18,7 @@ impl OhlcVolatility {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![Color32::from_rgb(233, 30, 99)], // Pink
             visible: true,
         }
@@ -33,8 +33,8 @@ impl Default for OhlcVolatility {
 
 impl OhlcVolatility {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.is_empty() {
             return values;
         }
@@ -105,7 +105,7 @@ impl Indicator for OhlcVolatility {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Elder Impulse System
 /// Combines EMA slope and MACD histogram for trend signals
 /// Green = bullish, Red = bearish, Blue = neutral
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -28,7 +28,7 @@ pub struct ElderImpulseSystem {
     macd_slow: usize,
     /// MACD signal period
     macd_signal: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Bullish, Bearish, Neutral]
     colors: Vec<Color32>,
     visible: bool,
@@ -41,7 +41,7 @@ impl ElderImpulseSystem {
             macd_fast: macd_fast.max(1),
             macd_slow: macd_slow.max(1),
             macd_signal: macd_signal.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Bullish
                 DESIGN_TOKENS.semantic.extended.error,   // Red - Bearish
@@ -82,8 +82,8 @@ impl Default for ElderImpulseSystem {
 
 impl ElderImpulseSystem {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let min_period = self
             .macd_slow
             .max(self.ema_period)
@@ -153,7 +153,7 @@ impl Indicator for ElderImpulseSystem {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

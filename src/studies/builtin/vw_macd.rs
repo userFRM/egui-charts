@@ -31,7 +31,7 @@
 
 use super::{VWMA, over_finite_bars};
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -45,7 +45,7 @@ pub struct VolumeWeightedMACD {
     fast_period: usize,
     slow_period: usize,
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -63,7 +63,7 @@ impl VolumeWeightedMACD {
             fast_period: fast_period.max(1),
             slow_period: slow_period.max(1),
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.indicators.macd_line, // MACD line
                 DESIGN_TOKENS.semantic.indicators.macd_signal, // Signal line
@@ -74,7 +74,7 @@ impl VolumeWeightedMACD {
     }
 
     /// The values over `data`, every bar of which has a finite close and volume.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut fast = VWMA::new(self.fast_period);
         let mut slow = VWMA::new(self.slow_period);
         fast.calculate(data);
@@ -82,18 +82,18 @@ impl VolumeWeightedMACD {
 
         let signal_mult = 2.0 / (self.signal_period as f64 + 1.0);
         let mut signal: Option<f64> = None;
-        fast.values()
-            .iter()
-            .zip(slow.values())
-            .map(|pair| match pair {
-                (IndicatorValue::Single(fast), IndicatorValue::Single(slow)) => {
-                    let line = fast - slow;
-                    let sig = signal.map_or(line, |prev| (line - prev) * signal_mult + prev);
-                    signal = Some(sig);
-                    IndicatorValue::Multiple(vec![line, sig, line - sig])
-                }
-                _ => IndicatorValue::None,
-            })
+        (0..data.len())
+            .map(
+                |i| match (fast.values().value(0, i), slow.values().value(0, i)) {
+                    (Some(fast), Some(slow)) => {
+                        let line = fast - slow;
+                        let sig = signal.map_or(line, |prev| (line - prev) * signal_mult + prev);
+                        signal = Some(sig);
+                        IndicatorValue::Multiple(vec![line, sig, line - sig])
+                    }
+                    _ => IndicatorValue::None,
+                },
+            )
             .collect()
     }
 }
@@ -115,7 +115,7 @@ impl Indicator for VolumeWeightedMACD {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -175,9 +175,9 @@ mod tests {
             .collect()
     }
 
-    fn lines(study: &VolumeWeightedMACD, bar: usize) -> Option<&[f64]> {
-        match &study.values()[bar] {
-            IndicatorValue::Multiple(v) => Some(v),
+    fn lines(study: &VolumeWeightedMACD, bar: usize) -> Option<Vec<f64>> {
+        match &study.values().to_rows()[bar] {
+            IndicatorValue::Multiple(v) => Some(v.clone()),
             _ => None,
         }
     }

@@ -41,7 +41,7 @@
 
 use crate::model::Bar;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -52,7 +52,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct EMA {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// The EMA of the bars stepped so far, `None` before the first bar.
     stepper: Stepper<Option<f64>>,
     color: Color32,
@@ -67,7 +67,7 @@ impl EMA {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: DESIGN_TOKENS.semantic.indicators.ema, // Blue
             visible: true,
@@ -122,7 +122,7 @@ impl Indicator for EMA {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -203,7 +203,7 @@ mod tests {
         ema.calculate(&bars);
 
         assert_eq!(ema.values().len(), expected.len());
-        for (i, (v, e)) in ema.values().iter().zip(expected).enumerate() {
+        for (i, (v, e)) in ema.values().to_rows().iter().zip(expected).enumerate() {
             match v {
                 IndicatorValue::Single(v) => assert!((v - e).abs() < 1e-9, "bar {i}: {v} != {e}"),
                 _ => panic!("bar {i} must carry a value"),

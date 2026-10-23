@@ -2,13 +2,13 @@ use super::over_finite_bars;
 use crate::model::Bar;
 /// Volume Profile Fixed Range
 /// Distributes volume across price bins using fixed price boundaries
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 #[derive(Clone)]
 pub struct VolProfileFixed {
     row_count: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -19,15 +19,15 @@ impl VolProfileFixed {
     pub fn new(row_count: usize) -> Self {
         Self {
             row_count: row_count.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![Color32::from_rgb(41, 98, 255)], // Accent blue
             visible: true,
         }
     }
 
     /// The values over `data`, every bar of which has a finite high, low and volume.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
             return values;
@@ -51,8 +51,9 @@ impl VolProfileFixed {
 
         let range = price_max - price_min;
         if range <= 0.0 {
+            let zeros = vec![0.0; self.row_count];
             for _ in data {
-                values.push(IndicatorValue::Multiple(vec![0.0; self.row_count]));
+                values.push_lines(&zeros);
             }
             return values;
         }
@@ -107,7 +108,7 @@ impl Indicator for VolProfileFixed {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

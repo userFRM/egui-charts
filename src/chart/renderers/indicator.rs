@@ -3,7 +3,7 @@ use crate::model::Bar;
 use crate::scales::PriceMap;
 /// Indicator Renderer
 /// Renders indicator lines overlay on the chart
-use crate::studies::{CrossDirection, Indicator, IndicatorLineStyle, IndicatorValue};
+use crate::studies::{CrossDirection, Indicator, IndicatorLineStyle};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Stroke};
 
@@ -42,20 +42,9 @@ impl IndicatorRenderer {
                 // values[i] belongs to bar i of the full series and `bars` are the
                 // visible ones from coords.start_idx, so only that slice is walked.
                 let visible_end = (coords.start_idx + bars.len()).min(values.len());
-                let visible = values
-                    .get(coords.start_idx..visible_end)
-                    .unwrap_or_default();
-
-                for (i, value) in (coords.start_idx..).zip(visible) {
+                for i in coords.start_idx..visible_end {
                     let x = coords.idx_to_x(i);
-
-                    // A NaN line value has no point and breaks the line like `None`.
-                    let price = match value {
-                        IndicatorValue::Single(p) => Some(*p),
-                        IndicatorValue::Multiple(prices) => prices.get(line_idx).copied(),
-                        IndicatorValue::None => None,
-                    }
-                    .filter(|p| p.is_finite());
+                    let price = values.value(line_idx, i);
 
                     if let Some(price) = price {
                         // Convert price to screen Y coord

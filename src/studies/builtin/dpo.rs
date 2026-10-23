@@ -2,7 +2,7 @@ use crate::model::Bar;
 /// Detrended Price Oscillator (DPO)
 /// Removes trend from price to identify cycles
 /// Compares price to a displaced moving avg
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -10,7 +10,7 @@ use egui::Color32;
 pub struct DetrendedPriceOscillator {
     /// Period for SMA calculation
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -19,7 +19,7 @@ impl DetrendedPriceOscillator {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.deep_purple,
             visible: true,
         }
@@ -85,11 +85,7 @@ impl Indicator for DetrendedPriceOscillator {
         }
 
         // Pad the end with None values since we're using forward-looking SMA
-        let valid_cnt = self
-            .values
-            .iter()
-            .filter(|v| matches!(v, IndicatorValue::Single(_)))
-            .count();
+        let valid_cnt = usize::from(!self.values.columns().is_empty());
 
         if valid_cnt == 0 {
             // Alternative calculation: look backward instead of forward
@@ -112,7 +108,7 @@ impl Indicator for DetrendedPriceOscillator {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -177,6 +173,7 @@ mod tests {
         // Count valid values
         let valid_cnt = dpo
             .values
+            .to_rows()
             .iter()
             .filter(|v| matches!(v, IndicatorValue::Single(_)))
             .count();
@@ -196,6 +193,7 @@ mod tests {
         // DPO values should oscillate around 0 for a linear trend
         let valid_values: Vec<f64> = dpo
             .values
+            .to_rows()
             .iter()
             .filter_map(|v| {
                 if let IndicatorValue::Single(x) = v {

@@ -2,7 +2,7 @@ use crate::model::Bar;
 /// Linear Regression Indicators
 /// Includes Linear Regression Line, Slope, and R-Squared
 /// Popular for trend analysis
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -10,7 +10,7 @@ use egui::Color32;
 pub struct LinearRegression {
     /// Lookback period (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -19,7 +19,7 @@ impl LinearRegression {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.info,
             visible: true,
         }
@@ -87,7 +87,7 @@ impl Indicator for LinearRegression {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -126,7 +126,7 @@ impl Indicator for LinearRegression {
 #[derive(Clone)]
 pub struct LinearRegressionSlope {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -135,7 +135,7 @@ impl LinearRegressionSlope {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.warning,
             visible: true,
         }
@@ -199,7 +199,7 @@ impl Indicator for LinearRegressionSlope {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

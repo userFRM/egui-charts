@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Directional Movement Index (DMI / DI+ / DI-)
 /// Shows the positive and negative directional indicators and the ADX
 /// of the same length (Wilder 1978)
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct DirectionalMovement {
     /// Period for smoothing (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [+DI, -DI, ADX]
     colors: Vec<Color32>,
     visible: bool,
@@ -21,7 +21,7 @@ impl DirectionalMovement {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success,       // Green - +DI
                 DESIGN_TOKENS.semantic.extended.error,         // Red - -DI
@@ -37,8 +37,8 @@ impl DirectionalMovement {
     }
 
     /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
@@ -119,10 +119,7 @@ impl DirectionalMovement {
         // Calculate +DI and -DI, next to the ADX line of the ADX study
         let adx = ADX::new(self.period).compute(data);
         for i in 0..data.len() {
-            let adx = match &adx[i] {
-                IndicatorValue::Multiple(v) => v[0],
-                _ => f64::NAN,
-            };
+            let adx = adx.value(0, i).unwrap_or(f64::NAN);
             if smoothed_tr[i].is_nan() || smoothed_tr[i] == 0.0 {
                 values.push(if adx.is_nan() {
                     IndicatorValue::None
@@ -132,7 +129,7 @@ impl DirectionalMovement {
             } else {
                 let plus_di = 100.0 * smoothed_plus_dm[i] / smoothed_tr[i];
                 let minus_di = 100.0 * smoothed_minus_dm[i] / smoothed_tr[i];
-                values.push(IndicatorValue::Multiple(vec![plus_di, minus_di, adx]));
+                values.push_lines(&[plus_di, minus_di, adx]);
             }
         }
 
@@ -163,7 +160,7 @@ impl Indicator for DirectionalMovement {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

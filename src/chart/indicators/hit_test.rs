@@ -5,7 +5,7 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::hit_test::{HIT_TOLERANCE, point_to_segment_distance};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValues};
 use egui::{Pos2, Rect};
 
 /// Describes which indicator was hit by a click, and at which bar.
@@ -65,7 +65,7 @@ where
 /// Hit test a specific line of an indicator
 fn hit_test_indicator_line<F>(
     click_pos: Pos2,
-    values: &[IndicatorValue],
+    values: &IndicatorValues,
     line_idx: usize,
     indicator_idx: usize,
     visible_range: &std::ops::Range<usize>,
@@ -76,19 +76,12 @@ where
     F: Fn(f64) -> f32,
 {
     // Extract values for this line
-    let line_values: Vec<Option<f64>> = values
-        .iter()
-        .map(|v| match v {
-            IndicatorValue::Single(val) => Some(*val),
-            IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
-            IndicatorValue::None => None,
-        })
-        .collect();
+    let line_values = values.line(line_idx);
 
     // Check each segment
     for i in visible_range.start..visible_range.end.saturating_sub(1) {
-        let v1 = line_values.get(i).and_then(|v| *v);
-        let v2 = line_values.get(i + 1).and_then(|v| *v);
+        let v1 = line_values.get(i).copied().filter(|v| v.is_finite());
+        let v2 = line_values.get(i + 1).copied().filter(|v| v.is_finite());
 
         let (Some(v1), Some(v2)) = (v1, v2) else {
             continue;
@@ -188,7 +181,7 @@ pub fn hit_test_pane_indicator(
 /// Hit test a specific line of a pane indicator
 fn hit_test_pane_indicator_line<F>(
     click_pos: Pos2,
-    values: &[IndicatorValue],
+    values: &IndicatorValues,
     line_idx: usize,
     indicator_idx: usize,
     visible_range: &std::ops::Range<usize>,
@@ -200,19 +193,12 @@ where
     F: Fn(f64) -> f32,
 {
     // Extract values for this line
-    let line_values: Vec<Option<f64>> = values
-        .iter()
-        .map(|v| match v {
-            IndicatorValue::Single(val) => Some(*val),
-            IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
-            IndicatorValue::None => None,
-        })
-        .collect();
+    let line_values = values.line(line_idx);
 
     // Check each segment
     for i in visible_range.start..visible_range.end.saturating_sub(1) {
-        let v1 = line_values.get(i).and_then(|v| *v);
-        let v2 = line_values.get(i + 1).and_then(|v| *v);
+        let v1 = line_values.get(i).copied().filter(|v| v.is_finite());
+        let v2 = line_values.get(i + 1).copied().filter(|v| v.is_finite());
 
         let (Some(v1), Some(v2)) = (v1, v2) else {
             continue;

@@ -28,7 +28,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::stepper::{rolling_max, rolling_min};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -47,7 +47,7 @@ pub struct IchimokuCloud {
     kijun_period: usize,
     senkou_b_period: usize,
     displacement: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     tenkan_color: Color32,
     kijun_color: Color32,
     span_a_color: Color32,
@@ -70,7 +70,7 @@ impl IchimokuCloud {
             kijun_period,
             senkou_b_period: senkou_b_period.max(1),
             displacement: kijun_period,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             tenkan_color: DESIGN_TOKENS.semantic.extended.info, // Blue
             kijun_color: DESIGN_TOKENS.semantic.extended.error, // Red
             span_a_color: {
@@ -108,8 +108,8 @@ impl Default for IchimokuCloud {
 
 impl IchimokuCloud {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         // Midpoint of the highest high and lowest low of each full window
         let mid = |period: usize| -> Vec<Option<f64>> {
             let highest = rolling_max(data.iter().map(|b| b.high), period);
@@ -164,7 +164,7 @@ impl Indicator for IchimokuCloud {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -290,7 +290,7 @@ mod tests {
         ichimoku.calculate(&bars);
 
         assert_eq!(ichimoku.values().len(), bars.len());
-        for (i, (value, row)) in ichimoku.values().iter().zip(expected).enumerate() {
+        for (i, (value, row)) in ichimoku.values().to_rows().iter().zip(expected).enumerate() {
             let IndicatorValue::Multiple(got) = value else {
                 panic!("bar {i}: {value:?}");
             };

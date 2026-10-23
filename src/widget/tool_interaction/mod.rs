@@ -19,7 +19,6 @@ use crate::drawings::DrawingInteractionMode;
 use crate::drawings::DrawingManager;
 use crate::drawings::rendering::ChartView;
 use crate::scales::PriceMap;
-use crate::studies::IndicatorValue;
 use crate::widget::Chart;
 use egui::{Painter, Pos2, Rect, Response, Ui};
 
@@ -102,14 +101,10 @@ impl Chart {
                     .iter()
                     .filter(|s| s.is_visible() && s.is_overlay())
                 {
-                    match study.values().get(i) {
-                        Some(IndicatorValue::Single(price)) => add_price(*price),
-                        Some(IndicatorValue::Multiple(prices)) => {
-                            for price in prices.iter().take(study.line_cnt()) {
-                                add_price(*price);
-                            }
+                    for line in 0..study.line_cnt() {
+                        if let Some(price) = study.values().value(line, i) {
+                            add_price(price);
                         }
-                        _ => {}
                     }
                 }
             }

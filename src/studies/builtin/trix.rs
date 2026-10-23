@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// TRIX - Triple Exponential Avg
 /// A momentum oscillator that shows the rate of change of a triple-smoothed EMA
 /// Filters out insignificant price movements
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct TRIX {
     period: usize,
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [TRIX line, Signal line]
     colors: Vec<Color32>,
     visible: bool,
@@ -22,7 +22,7 @@ impl TRIX {
         Self {
             period: period.max(1),
             signal_period: 9,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - TRIX
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
@@ -94,8 +94,8 @@ impl TRIX {
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let required = self.period.saturating_mul(3).saturating_add(1);
         if data.len() < required {
@@ -132,7 +132,7 @@ impl TRIX {
             if trix_values[i].is_nan() {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![trix_values[i], signal[i]]));
+                values.push_lines(&[trix_values[i], signal[i]]);
             }
         }
 
@@ -160,7 +160,7 @@ impl Indicator for TRIX {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

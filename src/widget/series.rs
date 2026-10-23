@@ -624,6 +624,7 @@ mod tests {
             let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
             let values: Vec<Option<f64>> = study
                 .values()
+                .to_rows()
                 .iter()
                 .map(|value| match value {
                     IndicatorValue::Single(value) => Some(*value),
@@ -662,7 +663,7 @@ mod tests {
             }
             self.0.update(data, from);
         }
-        fn values(&self) -> &[IndicatorValue] {
+        fn values(&self) -> &crate::studies::IndicatorValues {
             self.0.values()
         }
         fn colors(&self) -> Vec<egui::Color32> {

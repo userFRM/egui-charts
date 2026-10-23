@@ -4,6 +4,7 @@ use super::{EMA, HMA, SMA, SmoothedMA, VWMA, WMA};
 use crate::model::{Bar, PriceSource};
 use crate::studies::{
     CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,
+    IndicatorValues,
 };
 use egui::Color32;
 
@@ -96,7 +97,7 @@ enum Ribbon {
 #[derive(Clone)]
 pub struct MACombination {
     lines: Vec<AverageLine>,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     markers: Vec<IndicatorMarker>,
     pair: Option<(usize, usize)>,
     pub(super) wait_for_all: bool,
@@ -112,7 +113,7 @@ impl MACombination {
         }
         Ok(Self {
             lines,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             markers: Vec::new(),
             pair: Some((0, 1)),
             wait_for_all: false,
@@ -193,10 +194,7 @@ impl Indicator for MACombination {
         for i in 0..data.len() {
             let lines: Vec<_> = averages
                 .iter()
-                .map(|average| match average.values()[i] {
-                    IndicatorValue::Single(value) => value,
-                    _ => f64::NAN,
-                })
+                .map(|average| average.values().value(0, i).unwrap_or(f64::NAN))
                 .collect();
             if lines.iter().all(|v| !v.is_finite())
                 || (self.wait_for_all && lines.iter().any(|v| !v.is_finite()))
@@ -229,7 +227,7 @@ impl Indicator for MACombination {
             self.values.push(IndicatorValue::Multiple(lines));
         }
     }
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
     fn colors(&self) -> Vec<Color32> {
@@ -297,7 +295,7 @@ macro_rules! impl_ma_preset {
             fn calculate(&mut self, data: &[crate::model::Bar]) {
                 self.inner.calculate(data);
             }
-            fn values(&self) -> &[crate::studies::IndicatorValue] {
+            fn values(&self) -> &crate::studies::IndicatorValues {
                 self.inner.values()
             }
             fn colors(&self) -> Vec<egui::Color32> {

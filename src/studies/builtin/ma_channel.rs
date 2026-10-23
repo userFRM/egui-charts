@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 /// Moving Average Channel
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -9,7 +9,7 @@ use egui::Color32;
 pub struct MAChannel {
     period: usize,
     offset_percent: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -20,7 +20,7 @@ impl MAChannel {
         Self {
             period: period.max(1),
             offset_percent: clamp_param(offset_percent, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Upper
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - Middle
@@ -69,13 +69,12 @@ impl Indicator for MAChannel {
                 let upper = sma * (1.0 + multiplier);
                 let lower = sma * (1.0 - multiplier);
 
-                self.values
-                    .push(IndicatorValue::Multiple(vec![upper, sma, lower]));
+                self.values.push_lines(&[upper, sma, lower]);
             }
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

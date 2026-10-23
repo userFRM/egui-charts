@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Fisher Transform
 /// Converts prices into a Gaussian normal distribution
 /// Creates sharper turning points for identifying reversals
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct FisherTransform {
     /// Lookback period
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Fisher, Signal/Trigger]
     colors: Vec<Color32>,
     visible: bool,
@@ -21,7 +21,7 @@ impl FisherTransform {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - Fisher
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
@@ -36,8 +36,8 @@ impl FisherTransform {
     }
 
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
@@ -102,7 +102,7 @@ impl FisherTransform {
             if fisher.is_nan() {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![fisher, signal]));
+                values.push_lines(&[fisher, signal]);
             }
         }
         values
@@ -133,7 +133,7 @@ impl Indicator for FisherTransform {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -227,7 +227,8 @@ mod tests {
         ft.calculate(&data);
 
         assert_eq!(ft.values.len(), REFERENCE.len());
-        for (i, (value, &(_, _, expected))) in ft.values.iter().zip(REFERENCE).enumerate() {
+        for (i, (value, &(_, _, expected))) in ft.values.to_rows().iter().zip(REFERENCE).enumerate()
+        {
             let actual = match value {
                 IndicatorValue::Multiple(v) => Some((v[0], v[1])),
                 _ => None,

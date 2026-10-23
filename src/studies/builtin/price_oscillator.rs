@@ -1,6 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -24,7 +24,7 @@ pub struct PriceOscillator {
     long_period: usize,
     /// Signal line EMA period (typically 9)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [PPO line, Signal line, Histogram]
     colors: Vec<Color32>,
     visible: bool,
@@ -36,7 +36,7 @@ impl PriceOscillator {
             short_period: short_period.max(1),
             long_period: long_period.max(1),
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - PPO
                 DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
@@ -52,7 +52,7 @@ impl PriceOscillator {
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
         percentage_oscillator(
             &closes,
@@ -94,7 +94,7 @@ pub(super) fn percentage_oscillator(
     short: usize,
     long: usize,
     signal: usize,
-) -> Vec<IndicatorValue> {
+) -> IndicatorValues {
     let values: Vec<Option<f64>> = values.iter().map(|&v| Some(v)).collect();
     let (short, long) = (ema_of(&values, short), ema_of(&values, long));
     let line: Vec<Option<f64>> = short
@@ -136,7 +136,7 @@ impl Indicator for PriceOscillator {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -209,6 +209,7 @@ mod tests {
         // Should have valid values after long period warmup
         let valid_cnt = ppo
             .values
+            .to_rows()
             .iter()
             .filter(|v| !matches!(v, IndicatorValue::None))
             .count();
@@ -226,7 +227,7 @@ mod tests {
         ppo.calculate(&data);
 
         // PPO should be positive in uptrend
-        if let Some(last_val) = ppo.values.last() {
+        if let Some(last_val) = ppo.values.to_rows().last() {
             let ppo_val = match last_val {
                 IndicatorValue::Multiple(vals) => vals[0],
                 IndicatorValue::Single(val) => *val,

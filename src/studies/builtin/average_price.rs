@@ -2,14 +2,14 @@ use super::over_finite_bars;
 use crate::model::Bar;
 /// Avg Price Indicators
 /// Simple price calculations useful for analysis
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// OHLC4 - Avg of Open, High, Low, Close
 #[derive(Clone)]
 pub struct OHLC4 {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -17,7 +17,7 @@ pub struct OHLC4 {
 impl OHLC4 {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.purple, // Purple
             visible: true,
         }
@@ -53,7 +53,7 @@ impl Indicator for OHLC4 {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -93,7 +93,7 @@ impl Indicator for OHLC4 {
 /// uses the common HLC3 name.
 #[derive(Clone)]
 pub struct HLC3 {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -101,7 +101,7 @@ pub struct HLC3 {
 impl HLC3 {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.info, // Blue
             visible: true,
         }
@@ -137,7 +137,7 @@ impl Indicator for HLC3 {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -177,7 +177,7 @@ impl Indicator for HLC3 {
 /// uses the common HL2 name.
 #[derive(Clone)]
 pub struct HL2 {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -185,7 +185,7 @@ pub struct HL2 {
 impl HL2 {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.warning, // Orange
             visible: true,
         }
@@ -221,7 +221,7 @@ impl Indicator for HL2 {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -259,7 +259,7 @@ impl Indicator for HL2 {
 /// True Range (not avgd)
 #[derive(Clone)]
 pub struct TrueRange {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -267,7 +267,7 @@ pub struct TrueRange {
 impl TrueRange {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.error, // Red
             visible: true,
         }
@@ -287,8 +287,8 @@ impl Default for TrueRange {
 
 impl TrueRange {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.is_empty() {
             return values;
         }
@@ -326,7 +326,7 @@ impl Indicator for TrueRange {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

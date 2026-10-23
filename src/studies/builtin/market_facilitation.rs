@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Market Facilitation Index (MFI / BW MFI)
 /// Developed by Bill Williams
 /// Measures price movement per unit of volume
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct MarketFacilitationIndex {
     /// Divisor for volume (typically 1 for crypto, 1000000 for stocks)
     divisor: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -20,7 +20,7 @@ impl MarketFacilitationIndex {
     pub fn new() -> Self {
         Self {
             divisor: 1.0,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
             visible: true,
         }
@@ -69,7 +69,7 @@ impl Indicator for MarketFacilitationIndex {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -133,8 +133,8 @@ mod tests {
 
         assert_eq!(mfi.values.len(), 2);
 
-        let IndicatorValue::Single(v) = mfi.values[0] else {
-            panic!("no value: {:?}", mfi.values[0]);
+        let IndicatorValue::Single(v) = mfi.values.to_rows()[0] else {
+            panic!("no value: {:?}", mfi.values.to_rows()[0]);
         };
         assert!((v - 0.004).abs() < 0.0001);
     }
@@ -147,6 +147,6 @@ mod tests {
 
         mfi.calculate(&data);
 
-        assert!(matches!(mfi.values[0], IndicatorValue::None));
+        assert!(matches!(mfi.values.to_rows()[0], IndicatorValue::None));
     }
 }
