@@ -119,6 +119,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Quick Search finds and executes drawing tools, built-in studies, chart settings and chart actions. The demo builds its entries from the existing tool and study catalogues; Ctrl/Cmd+K and the search button open the same palette. ([#120](https://github.com/userFRM/egui-charts/issues/120))
+
 - The demo gives dialogs keyboard input before the chart and replay controls. Escape closes the shortcuts help without changing the drawing selection, armed tool or replay; an open popup keeps the key even when opened during the same frame. ([#523](https://github.com/userFRM/egui-charts/issues/523))
 
 - Drawing Delete, Backspace, Escape and completion keys respect keyboard focus and open popups. Editing a text field leaves the selected drawing and armed tool intact; chart Delete still removes the selection and chart Escape cancels it. ([#640](https://github.com/userFRM/egui-charts/issues/640))

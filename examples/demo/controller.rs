@@ -6,6 +6,8 @@
 //! actions. Indicator templates live in host memory. Controls that need a trading
 //! account show a notice, and the context menu entries it does not model do nothing.
 
+#[path = "commands.rs"]
+mod commands;
 #[path = "live.rs"]
 mod live;
 
@@ -265,15 +267,7 @@ impl DemoApp {
             symbol_search: SymbolSearchDialog::new(),
             indicator_templates: Vec::new(),
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
-                [
-                    ("symbols", "Symbol search"),
-                    ("indicators", "Indicators"),
-                    ("settings", "Chart settings"),
-                    ("export", "Export chart"),
-                ]
-                .into_iter()
-                .map(|(id, label)| egui_charts::ui_kit::command_palette::Command::new(id, label))
-                .collect(),
+                commands::quick_search_commands(),
             ),
             alert_dialog: AlertDialog::new(),
             series_settings: SeriesSettingsDialog::new(),
@@ -582,14 +576,7 @@ impl DemoApp {
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
         if let Some(id) = self.quick_search.update(ctx) {
-            let action = match id.as_str() {
-                "symbols" => TopToolbarAction::OpenSymbolSearch,
-                "indicators" => TopToolbarAction::OpenIndicators,
-                "settings" => TopToolbarAction::OpenSettings,
-                "export" => TopToolbarAction::Save,
-                _ => TopToolbarAction::None,
-            };
-            self.handle_top_toolbar(ctx, action);
+            self.execute_search_command(ctx, &id);
         }
         // Indicators: add the study the dialog created.
         if let IndicatorDialogAction::AddIndicator(study) =
@@ -2028,6 +2015,52 @@ fn apply_settings_state(
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// Quick search executes catalogue entries as well as opening settings.
+    #[test]
+    fn quick_search_executes_studies_tools_and_settings() {
+        use egui::{Event, Key, Modifiers, RawInput};
+        for query in ["RSI", "Trend Line", "Chart settings"] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            let key = |key, modifiers| Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+            for (modifiers, events) in [
+                (Modifiers::CTRL, vec![key(Key::K, Modifiers::CTRL)]),
+                (Modifiers::NONE, vec![Event::Text(query.into())]),
+                (Modifiers::NONE, vec![key(Key::Enter, Modifiers::NONE)]),
+            ] {
+                ctx.run_ui(
+                    RawInput {
+                        events: std::iter::once(Event::ModifiersChanged(modifiers))
+                            .chain(events)
+                            .collect(),
+                        ..Default::default()
+                    },
+                    |ui| app.show_dialogs(ui.ctx()),
+                )
+                .drop_without_applying_deltas();
+            }
+            match query {
+                "RSI" => assert!(
+                    app.chart
+                        .indicators()
+                        .any(|(_, study)| study.name() == "RSI")
+                ),
+                "Trend Line" => assert_eq!(
+                    app.chart.drawings().active_tool,
+                    Some(egui_charts::drawings::DrawingToolType::TrendLine)
+                ),
+                _ => assert!(app.settings_dialog.is_open),
+            }
+        }
+    }
 
     /// The dialog gets Escape before the chart or replay transport.
     #[test]
