@@ -277,6 +277,22 @@ impl SymbolSearchDialog {
         self.update_filtered_symbols(all_symbols);
         let mut sel_symbol = None;
         let mut should_close = false;
+        let (up, down) = ctx.input(|input| {
+            (
+                input.key_pressed(egui::Key::ArrowUp),
+                input.key_pressed(egui::Key::ArrowDown),
+            )
+        });
+        let keyboard_move = up || down;
+        if !self.filtered_symbols.is_empty() {
+            if down {
+                self.sel_idx = (self.sel_idx + 1) % self.filtered_symbols.len();
+            }
+            if up {
+                self.sel_idx =
+                    (self.sel_idx + self.filtered_symbols.len() - 1) % self.filtered_symbols.len();
+            }
+        }
 
         let mut open = true;
         Modal::new("symbol_search", "")
@@ -324,19 +340,22 @@ impl SymbolSearchDialog {
                 if !categories.contains(&self.category) {
                     self.category = Category(None);
                 }
-                egui::ScrollArea::horizontal().show(ui, |ui| {
-                    if TabBar::new(&categories, &mut self.category)
-                        .pills()
-                        .show(ui)
-                    {
-                        self.sel_idx = 0;
-                        self.update_filtered_symbols(all_symbols);
-                    }
-                });
+                egui::ScrollArea::horizontal()
+                    .id_salt("symbol_categories")
+                    .show(ui, |ui| {
+                        if TabBar::new(&categories, &mut self.category)
+                            .pills()
+                            .show(ui)
+                        {
+                            self.sel_idx = 0;
+                            self.update_filtered_symbols(all_symbols);
+                        }
+                    });
                 ui.add_space(4.0);
 
                 // Results list
                 egui::ScrollArea::vertical()
+                    .id_salt("symbol_results")
                     .max_height(ui.available_height())
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -366,7 +385,13 @@ impl SymbolSearchDialog {
                                     should_close = true;
                                 }
 
-                                if response.hovered() {
+                                if keyboard_move && is_sel {
+                                    response.scroll_to_me(Some(egui::Align::Center));
+                                }
+                                if !keyboard_move
+                                    && response.hovered()
+                                    && ui.input(|input| input.pointer.delta() != Vec2::ZERO)
+                                {
                                     self.sel_idx = idx;
                                 }
                             }
@@ -375,16 +400,6 @@ impl SymbolSearchDialog {
 
                 // Keyboard navigation
                 ui.input(|i| {
-                    if i.key_pressed(egui::Key::ArrowDown) && !self.filtered_symbols.is_empty() {
-                        self.sel_idx = (self.sel_idx + 1) % self.filtered_symbols.len();
-                    }
-                    if i.key_pressed(egui::Key::ArrowUp) && !self.filtered_symbols.is_empty() {
-                        self.sel_idx = if self.sel_idx == 0 {
-                            self.filtered_symbols.len() - 1
-                        } else {
-                            self.sel_idx - 1
-                        };
-                    }
                     if i.key_pressed(egui::Key::Enter) && !self.filtered_symbols.is_empty() {
                         sel_symbol = Some(self.filtered_symbols[self.sel_idx].clone());
                         should_close = true;
@@ -407,25 +422,28 @@ impl SymbolSearchDialog {
 
         let query_lower = self.search_query.to_lowercase();
 
-        self.filtered_symbols = all_symbols
+        let mut filtered: Vec<_> = all_symbols
             .iter()
             .filter(|symbol| {
                 (self.category.0.is_none() || symbol.symbol_type == self.category.0)
                     && (symbol.name.to_lowercase().contains(&query_lower)
                         || symbol.display_name.to_lowercase().contains(&query_lower))
             })
-            .cloned()
             .collect();
 
         if self.search_query.is_empty() {
-            self.filtered_symbols.sort_by_key(|symbol| {
+            filtered.sort_by_key(|symbol| {
                 self.recent_symbols
                     .iter()
                     .position(|name| name == &symbol.name)
                     .unwrap_or(usize::MAX)
             });
         }
-        self.filtered_symbols.truncate(self.config.max_results);
+        self.filtered_symbols = filtered
+            .into_iter()
+            .take(self.config.max_results)
+            .cloned()
+            .collect();
         self.sel_idx = self
             .sel_idx
             .min(self.filtered_symbols.len().saturating_sub(1));
@@ -984,6 +1002,83 @@ mod tests {
             dialog.open();
             assert!(dialog.is_open());
             dialog.close();
+            assert!(!dialog.is_open());
+        }
+    }
+
+    #[test]
+    fn keyboard_selection_survives_a_stationary_pointer_and_scrolls() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let symbols: Vec<_> = (0..20)
+                .map(|i| Symbol::new(format!("S{i}"), "Sample"))
+                .collect();
+            let mut dialog = SymbolSearchDialog::new();
+            dialog.open();
+            let mut frame = |events| {
+                let mut picked = None;
+                let mut visible = Vec::new();
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(600.0, 400.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        picked = dialog.show(ui.ctx(), &symbols);
+                    },
+                );
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                        if shape.clip_rect.contains_rect(rect) {
+                            visible.push((text.galley.text().to_owned(), rect.center()));
+                        }
+                    }
+                }
+                output.drop_without_applying_deltas();
+                (picked, visible, dialog.sel_idx)
+            };
+            frame(vec![]);
+            let (_, visible, _) = frame(vec![]);
+            let pos = visible.iter().find(|(text, _)| text == "S0").unwrap().1;
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            let key = |key, pressed| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Default::default(),
+            };
+            for _ in 0..18 {
+                frame(vec![key(egui::Key::ArrowDown, true)]);
+                frame(vec![key(egui::Key::ArrowDown, false)]);
+            }
+            for _ in 0..30 {
+                frame(vec![]);
+            }
+            let visible = frame(vec![]);
+            assert!(
+                visible.1.iter().any(|(text, _)| text == "S18"),
+                "{visible:?}"
+            );
+            let picked = frame(vec![key(egui::Key::Enter, true)]).0.unwrap();
+            assert_eq!(picked.name, "S18");
+            dialog.open();
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![key(egui::Key::Escape, true)],
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = dialog.show(ui.ctx(), &symbols);
+                },
+            )
+            .drop_without_applying_deltas();
             assert!(!dialog.is_open());
         }
     }
