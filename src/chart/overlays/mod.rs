@@ -33,6 +33,5 @@ pub use heatmap_strip::{HeatmapCell, HeatmapStrip, HeatmapStripConfig};
 pub use order_lines::{
     OrderId, OrderLine, OrderLineAction, OrderLineOverlay, OrderLineType, OrderSide,
 };
-pub use volume_bubbles::{
-    AggregatedBubble, BubbleScalingMode, TradeBubble, VolumeBubbles, VolumeBubblesConfig,
-};
+pub(crate) use volume_bubbles::VolumeBubbles;
+pub use volume_bubbles::{BubbleColor, BubbleScalingMode, VolumeBubblesConfig};

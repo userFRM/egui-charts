@@ -560,6 +560,18 @@ impl Chart {
 
         rendering::render_chart_type(self.chart_type, &render_ctx, &render_params, idx_to_coord);
 
+        if let Some(bubbles) = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.bubbles.as_ref())
+            .filter(|_| !self.chart_type.is_time_independent())
+        {
+            let x = |i| idx_to_coord(start_idx + i, chart_rect.min.x);
+            bubbles.render(&clipped_painter, visible_data, x, |p| {
+                price_map.price_to_y(p)
+            });
+        }
+
         // Draw indicators
         renderers::IndicatorRenderer::render(
             &price_ctx,

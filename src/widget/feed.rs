@@ -6,6 +6,7 @@
 //! takes the egui context's lock.
 
 use super::{Chart, SeriesId};
+use crate::chart::overlays::{VolumeBubbles, VolumeBubblesConfig};
 use crate::data::inbox::{Answer, Inbox};
 use crate::data::merge::Origin;
 use crate::data::trades::Trades;
@@ -45,6 +46,8 @@ pub(crate) struct FeedLink {
     subscription: Option<SubscriptionId>,
     instrument: Option<Instrument>,
     trades: Trades,
+    /// The held trades as volume bubbles, when the host turned them on.
+    pub(super) bubbles: Option<VolumeBubbles>,
     order_book: Option<OrderBook>,
     /// A history or resolve request failed: no automatic request until the next reload.
     paging_stopped: bool,
@@ -62,6 +65,18 @@ impl FeedLink {
         self.next_key += 1;
         self.pending.push((self.next_key, request));
         self.inbox.reply(self.next_key)
+    }
+
+    /// Sums the held trades again, after the clock, the instrument or the trades changed.
+    fn rebuild_bubbles(&mut self) {
+        if let Some(bubbles) = self.bubbles.take() {
+            self.bubbles = Some(self.bubbles(bubbles.config));
+        }
+    }
+
+    fn bubbles(&self, config: VolumeBubblesConfig) -> VolumeBubbles {
+        let tick_size = self.instrument.as_ref().and_then(|i| i.tick_size);
+        VolumeBubbles::new(config, self.clock.clone(), tick_size, self.trades.iter())
     }
 }
 
@@ -92,6 +107,7 @@ impl Chart {
             subscription: None,
             instrument: None,
             trades: Trades::new(TRADE_CAPACITY),
+            bubbles: None,
             order_book: None,
             paging_stopped: false,
         });
@@ -149,6 +165,17 @@ impl Chart {
         link.into_iter().flat_map(|link| link.trades.iter())
     }
 
+    /// Draws the trades the feed sends as bubbles, one per bar and price level, from the next
+    /// frame, or stops with `None`. A chart without a feed holds no trades and draws none, and
+    /// Renko, Kagi, line break, point and figure and range charts draw none, since their x axis
+    /// is not time. Sums every held trade again: call it when the settings change, not every
+    /// frame.
+    pub fn set_volume_bubbles(&mut self, config: Option<VolumeBubblesConfig>) {
+        if let Some(link) = &mut self.feed_link {
+            link.bubbles = config.map(|config| link.bubbles(config));
+        }
+    }
+
     /// The order book of `series` the feed sent, if it holds one.
     pub fn order_book(&self, series: SeriesId) -> Option<&OrderBook> {
         let link = self
@@ -201,7 +228,13 @@ impl Chart {
                     Err(error) => self.stop(&mut link, error),
                 },
                 Request::Trades => match result::<TradePage>(answer) {
-                    Ok(page) => self.feed.rejected_bars += link.trades.prepend(page.trades),
+                    Ok(page) => {
+                        let bubbles = &mut link.bubbles;
+                        let fold = &mut |trade: &Tick, added| {
+                            bubbles.iter_mut().for_each(|b| b.fold(trade, added));
+                        };
+                        self.feed.rejected_bars += link.trades.prepend(page.trades, fold);
+                    }
                     Err(error) => log::debug!("no trade history for {}: {error}", self.symbol),
                 },
             }
@@ -224,7 +257,11 @@ impl Chart {
             feed.repeated_ticks += updates.repeated_ticks;
             feed.rejected_bars += updates.rejected;
             feed.rejected_depth += updates.rejected_depth;
-            link.trades.append(updates.trades);
+            let bubbles = &mut link.bubbles;
+            let fold = &mut |trade: &Tick, added| {
+                bubbles.iter_mut().for_each(|b| b.fold(trade, added));
+            };
+            link.trades.append(updates.trades, fold);
             link.order_book = updates.depth.or(link.order_book.take());
             resnapshot |= updates.resnapshot;
         }
@@ -250,6 +287,7 @@ impl Chart {
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
         link.clock = BarClock::new(timeframe);
+        link.rebuild_bubbles();
         // Drawings stay: they belong to the chart, not to the bars of one symbol.
         self.set_data(SeriesId::MAIN, Vec::new());
         self.feed = FeedState::default();
@@ -272,6 +310,7 @@ impl Chart {
     /// Subscribes to live updates once the symbol resolved, and asks for the recent trades.
     fn subscribe(&mut self, link: &mut FeedLink, instrument: Instrument) {
         link.instrument = Some(instrument);
+        link.rebuild_bubbles();
         let sink = link.inbox.subscribe(link.clock.clone(), TRADE_CAPACITY);
         link.subscription = Some(sink.id);
         let subscription = Subscription {
@@ -501,10 +540,10 @@ mod tests {
 
     /// Guards the feed contract of the chart: nothing blocks or calls the feed outside `show`,
     /// each request is issued once, answers and pushes reach the bars, a push from another thread
-    /// wakes the UI once per burst, order flow is asked for, scroll-back ends on every end
-    /// signal, an error stops automatic requests until the symbol or timeframe changes, a change
-    /// releases the old subscription and ignores whatever comes for it, and a dropped chart
-    /// unsubscribes without waking itself.
+    /// wakes the UI once per burst, order flow is asked for and reaches the volume bubbles,
+    /// scroll-back ends on every end signal, an error stops automatic requests until the symbol
+    /// or timeframe changes, a change releases the old subscription and ignores whatever comes
+    /// for it, and a dropped chart unsubscribes without waking itself.
     #[test]
     fn feed_lifecycle() {
         let main = SeriesId::MAIN;
@@ -539,6 +578,7 @@ mod tests {
         let subscribe = Call::Subscribe(id, "A".into(), Timeframe::Min1);
         assert_eq!(feed.calls(), [subscribe, trades], "c");
         assert_eq!(chart.instrument(), Some(&Instrument::new("A")), "c");
+        chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
         let woken = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&woken);
         frames
@@ -560,6 +600,13 @@ mod tests {
         let ticks = Bar::new(forming.time, 7.0, 7.0, 7.0, 7.0, 1000.0);
         assert_eq!(chart.bars(main).last(), Some(&ticks), "c: forming bar");
         assert_eq!(chart.trades(main).count(), 1000, "c: trades");
+        let bubbles = chart
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.bubbles.as_ref());
+        let shown = bubbles.unwrap().between(forming.time, forming.time);
+        let shown = Vec::from_iter(shown.map(|bubble| (bubble.price, bubble.volume)));
+        assert_eq!(shown, [(7.0, 1000.0)], "c: the trades reach the bubbles");
         assert_eq!(chart.feed_state(main).unwrap().repeated_ticks, 1, "c");
         let empty = OrderBook {
             ts,
@@ -660,13 +707,18 @@ mod tests {
         assert_eq!(calls.last(), Some(&older), "e: a live error stops nothing");
 
         // f. A change of symbol and timeframe between two frames is one load at the next frame,
-        // which releases the old subscription; what arrives for the old one changes nothing.
+        // which releases the old subscription and drops its trades and bubbles; what arrives for
+        // the old one changes nothing.
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         frames.run(&mut chart);
         feed.resolve().send(Ok(Instrument::new("A")));
         frames.run(&mut chart);
         let (old_sink, old_page) = (feed.sink(), feed.page());
+        chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
+        old_sink.push_tick(Tick::new(Utc::now(), 7.0, 1.0, None));
+        frames.run(&mut chart);
+        assert_eq!(chart.trades(main).count(), 1, "f: a trade of the old key");
         feed.calls();
         chart.set_symbol("B");
         chart.set_timeframe(Timeframe::Hour1);
@@ -683,6 +735,14 @@ mod tests {
         old_page.send(page(bars(10), false));
         frames.run(&mut chart);
         assert_eq!(chart.bars(main), [], "f: nothing of the old key");
+        let bubbles = chart
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.bubbles.as_ref());
+        let all = bubbles
+            .unwrap()
+            .between(DateTime::<Utc>::MIN_UTC, DateTime::<Utc>::MAX_UTC);
+        assert_eq!(all.count(), 0, "f: no bubble of the old key");
         for _ in 0..3 {
             chart.set_timeframe(Timeframe::Hour1);
             frames.run(&mut chart);

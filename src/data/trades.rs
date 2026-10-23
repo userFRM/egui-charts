@@ -47,33 +47,49 @@ impl Trades {
     /// Appends a trade validated by the caller unless its id is held, evicting the oldest beyond
     /// capacity.
     pub(crate) fn push(&mut self, trade: Tick) {
+        self.insert(trade, &mut |_, _| ());
+    }
+
+    /// [`push`](Self::push), calling `changed` with the trade if it is added (`true`) and with
+    /// the trade it evicts (`false`).
+    fn insert(&mut self, trade: Tick, changed: &mut impl FnMut(&Tick, bool)) {
         if trade.id.is_some_and(|id| !self.ids.insert(id)) {
             return;
         }
+        changed(&trade, true);
         self.trades.push_back(trade);
         if self.trades.len() > self.capacity
-            && let Some(id) = self.trades.pop_front().and_then(|evicted| evicted.id)
+            && let Some(evicted) = self.trades.pop_front()
         {
-            self.ids.remove(&id);
+            if let Some(id) = evicted.id {
+                self.ids.remove(&id);
+            }
+            changed(&evicted, false);
         }
     }
 
-    /// Appends `newer`, the trades pushed since the last drain, without those a page already added.
-    pub(crate) fn append(&mut self, newer: Trades) {
+    /// Appends `newer`, the trades pushed since the last drain, without those a page already
+    /// added. Calls `changed` with each trade added (`true`) or evicted (`false`).
+    pub(crate) fn append(&mut self, newer: Trades, changed: &mut impl FnMut(&Tick, bool)) {
         for trade in newer.trades {
             let paged_until = match trade.id {
                 Some(_) => self.paged_without_id_until,
                 None => self.paged_until,
             };
             if paged_until.is_none_or(|until| trade.ts > until) {
-                self.push(trade);
+                self.insert(trade, changed);
             }
         }
     }
 
     /// Puts the trades of a history page, oldest first, in front of the held ones, as many as fit,
-    /// so a page never evicts newer trades. Returns the number of invalid trades dropped.
-    pub(crate) fn prepend(&mut self, mut page: Vec<Tick>) -> u64 {
+    /// so a page never evicts newer trades. Calls `changed` with each trade added. Returns the
+    /// number of invalid trades dropped.
+    pub(crate) fn prepend(
+        &mut self,
+        mut page: Vec<Tick>,
+        changed: &mut impl FnMut(&Tick, bool),
+    ) -> u64 {
         let received = page.len();
         page.retain(valid);
         let rejected = (received - page.len()) as u64;
@@ -96,6 +112,7 @@ impl Trades {
             if trade.id.is_none() {
                 self.paged_without_id_until = self.paged_without_id_until.max(Some(trade.ts));
             }
+            changed(&trade, true);
             self.trades.push_front(trade);
         }
         rejected
@@ -205,9 +222,9 @@ mod tests {
                     Live(trades) => {
                         let mut pending = store.empty();
                         trades.into_iter().for_each(|trade| pending.push(trade));
-                        store.append(pending);
+                        store.append(pending, &mut |_, _| ());
                     }
-                    Page(page) => dropped += store.prepend(page),
+                    Page(page) => dropped += store.prepend(page, &mut |_, _| ()),
                 }
             }
             let held = Vec::from_iter(store.iter().map(|trade| trade.price));
