@@ -236,7 +236,11 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
         (fill, visuals.text_color(), tint, visuals.weak_text_color())
     };
     let painter = ui.painter();
-    painter.rect_filled(rect, 0.0, fill);
+    painter.rect_filled(
+        rect.shrink2(Vec2::new(theme.spacing.sm, 0.0)),
+        DESIGN_TOKENS.rounding.sm,
+        fill,
+    );
 
     // Every row reserves the icon slot, so labels line up.
     let icon_size = DESIGN_TOKENS.sizing.icon_sm;
