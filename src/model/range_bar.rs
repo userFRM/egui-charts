@@ -124,7 +124,8 @@ pub struct TickData {
     pub ts: DateTime<Utc>,
 }
 
-/// Build range bars from raw tick data (exact construction).
+/// Build range bars from raw tick data (exact construction). A tick's volume that would make its
+/// bar's volume overflow is left out.
 ///
 /// # Safety Limits
 /// - At most the newest 5,000 range bars
@@ -143,7 +144,7 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
         high: first_tick.price,
         low: first_tick.price,
         close: first_tick.price,
-        volume: first_tick.volume,
+        volume: add_volume(0.0, first_tick.volume),
         start_time: first_tick.ts,
         end_time: first_tick.ts,
         range_size,
@@ -155,7 +156,7 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
         curr_bar.high = curr_bar.high.max(tick.price);
         curr_bar.low = curr_bar.low.min(tick.price);
         curr_bar.close = tick.price;
-        curr_bar.volume += tick.volume;
+        curr_bar.volume = add_volume(curr_bar.volume, tick.volume);
         curr_bar.end_time = tick.ts;
         curr_bar.tick_cnt += 1;
 
@@ -205,7 +206,8 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
     bars
 }
 
-/// Convert OHLC bars to range bars (approximation)
+/// Convert OHLC bars to range bars (approximation). A bar's volume that would make its range bar's
+/// volume overflow is left out.
 ///
 /// # Safety Limits
 /// - At most the newest 5,000 range bars
@@ -241,7 +243,7 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
         high: first.high,
         low: first.low,
         close: first.close,
-        volume: first.volume,
+        volume: add_volume(0.0, first.volume),
         start_time: first.time,
         end_time: first.time,
         range_size,
@@ -298,7 +300,7 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
         }
 
         curr_bar.close = bar.close;
-        curr_bar.volume += bar.volume;
+        curr_bar.volume = add_volume(curr_bar.volume, bar.volume);
         curr_bar.end_time = bar.time;
         curr_bar.tick_cnt += 1;
     }
@@ -310,6 +312,13 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
 
     bars.drain(..bars.len().saturating_sub(MAX_BARS));
     bars
+}
+
+/// `volume` plus `added`, or `volume` alone when the sum is not finite: two valid volumes can add
+/// up to infinity.
+fn add_volume(volume: f64, added: f64) -> f64 {
+    let sum = volume + added;
+    if sum.is_finite() { sum } else { volume }
 }
 
 /// Calculate ATR for range size
@@ -417,6 +426,26 @@ mod tests {
         let bars = to_range_bars_from_ohlc(&data, &config);
 
         assert!(!bars.is_empty());
+    }
+
+    /// Guards the volume scale: an infinite first volume, or two valid volumes near `f64::MAX`,
+    /// must not give a range bar an infinite volume, from ticks or from bars.
+    #[test]
+    fn a_volume_that_would_overflow_is_left_out() {
+        let ts = Utc::now();
+        let tick = |volume| TickData {
+            price: 100.0,
+            volume,
+            ts,
+        };
+        let bar = |volume| Bar::new(ts, 100.0, 100.0, 100.0, 100.0, volume);
+        let volumes = [f64::INFINITY, f64::MAX, f64::MAX];
+        let config = RangeBarConfig::new(5.0);
+        let from_ticks = to_range_bars_from_ticks(&volumes.map(tick), &config);
+        let from_bars = to_range_bars_from_ohlc(&volumes.map(bar), &config);
+        let volumes = |bars: Vec<RangeBar>| Vec::from_iter(bars.iter().map(|bar| bar.volume));
+        assert_eq!(volumes(from_ticks), [f64::MAX]);
+        assert_eq!(volumes(from_bars), [f64::MAX]);
     }
 
     #[test]
