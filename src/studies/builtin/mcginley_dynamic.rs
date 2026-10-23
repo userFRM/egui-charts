@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// McGinley Dynamic
 /// Adaptive moving avg designed to track price better than traditional MAs
 /// Self-adjusts based on price volatility
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -11,7 +11,7 @@ use egui::Color32;
 pub struct McGinleyDynamic {
     /// Period (typically 10 or 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -20,7 +20,7 @@ impl McGinleyDynamic {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.pink, // Pink
             visible: true,
         }
@@ -32,8 +32,8 @@ impl McGinleyDynamic {
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
             return values;
@@ -73,6 +73,10 @@ impl Default for McGinleyDynamic {
 }
 
 impl Indicator for McGinleyDynamic {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "MD"
     }
@@ -85,7 +89,7 @@ impl Indicator for McGinleyDynamic {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -147,8 +151,9 @@ mod tests {
         assert_eq!(md.values.len(), 20);
 
         // MD should track price but smoother
-        let IndicatorValue::Single(v) = md.values.last().unwrap() else {
-            panic!("no value: {:?}", md.values.last().unwrap());
+        let rows = md.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", md.values.to_rows().last().unwrap());
         };
         assert!(*v > 100.0 && *v < 120.0);
     }

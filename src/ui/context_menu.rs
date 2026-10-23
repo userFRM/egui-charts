@@ -327,7 +327,15 @@ fn draw_item<A>(
 ) -> bool {
     let t = &DESIGN_TOKENS.sizing.context_menu;
     let c = &theme.ui;
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, t.item_height), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(width, t.item_height),
+        if item.enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
     response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, item.enabled, &item.label));
 
     let hovered = item.enabled && response.hovered();

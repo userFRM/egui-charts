@@ -1,214 +1,73 @@
-//! Alerts panel UI
-//!
-//! Widget for managing and displaying price, indicator, volume, and event alerts.
-use crate::ext::UiExt;
-use crate::theme::ThemeExt;
-use crate::tokens::DESIGN_TOKENS;
-use crate::ui::dialogs::alert_dialog::fields;
-use crate::ui::model::{
-    AlertCondition, AlertManager, AlertStatus, EventAlert, IndicatorAlert, IndicatorCondition,
-    PriceAlert, VolumeAlert,
-};
-use crate::ui_kit::{Card, EmptyState, PanelHeader};
-use egui::{Color32, Response, RichText, Ui};
+//! Host-supplied alerts and their trigger log. The host stores and evaluates alerts.
 
-/// Configuration for the alerts panel
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use egui::{Color32, RichText, Ui};
+
+use crate::data::{FeedError, inbox::Inbox};
+use crate::icons::icons;
+use crate::model::{Alert, AlertCondition, AlertId, AlertStatus};
+use crate::services::{AlertEvent, Alerts, Listener};
+use crate::theme::ThemeExt;
+use crate::ui_kit::notifications::Toasts;
+use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
+
+/// Configuration for the alerts panel.
 #[derive(Clone, Debug)]
 pub struct AlertsPanelConfig {
-    /// Show price alerts section
-    pub show_price_alerts: bool,
-    /// Show indicator alerts section
-    pub show_indicator_alerts: bool,
-    /// Show volume alerts section
-    pub show_volume_alerts: bool,
-    /// Show event alerts section
-    pub show_event_alerts: bool,
-    /// Max height of the panel
+    /// Maximum height of the scrolling list.
     pub max_height: f32,
-    /// Colors
-    pub active_color: Color32,
-    pub triggered_color: Color32,
-    pub disabled_color: Color32,
-    pub expired_color: Color32,
 }
 
 impl Default for AlertsPanelConfig {
     fn default() -> Self {
-        Self {
-            show_price_alerts: true,
-            show_indicator_alerts: true,
-            show_volume_alerts: true,
-            show_event_alerts: true,
-            max_height: 400.0,
-            active_color: DESIGN_TOKENS.semantic.extended.success,
-            triggered_color: DESIGN_TOKENS.semantic.extended.warning,
-            disabled_color: DESIGN_TOKENS.semantic.extended.disabled,
-            expired_color: DESIGN_TOKENS.semantic.extended.error,
-        }
+        Self { max_height: 400.0 }
     }
 }
 
-/// Response from alert panel interactions
-#[derive(Debug, Clone, Copy)]
+/// An action the host handles using its shared alert dialog or file export.
+#[derive(Clone, Debug, PartialEq, Default)]
 pub enum AlertPanelAction {
-    /// No action
+    /// No host action.
+    #[default]
     None,
-    /// Add new price alert
-    AddPriceAlert,
-    /// Add new indicator alert
-    AddIndicatorAlert,
-    /// Add new volume alert
-    AddVolumeAlert,
-    /// Add new event alert
-    AddEventAlert,
-    /// Remove alert by ID and type
-    RemoveAlert { id: usize, alert_type: AlertType },
-    /// Toggle alert active/disabled
-    ToggleAlert { id: usize, alert_type: AlertType },
-    /// Edit alert
-    EditAlert { id: usize, alert_type: AlertType },
+    /// Open the shared alert creation dialog; submit its result with [`AlertsPanel::save`].
+    CreateAlert,
+    /// Save this CSV text to a file chosen by the host.
+    ExportLog(String),
 }
 
-/// Type of alert for identification
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AlertType {
-    Price,
-    Indicator,
-    Volume,
-    Event,
+/// One trigger the host reported, retained even after the alert is removed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AlertTrigger {
+    /// Host alert identifier.
+    pub id: AlertId,
+    /// Symbol as known when the trigger arrived, empty if its alert was not yet supplied.
+    pub symbol: String,
+    /// Host trigger time, including triggers missed while the application was closed.
+    pub time: DateTime<Utc>,
+    /// Finite trigger price, if supplied.
+    pub price: Option<f64>,
 }
 
-/// Reusable widget for rendering a single alert row
-struct AlertRowWidget {
-    status_color: Color32,
-    description: String,
-    subtitle: Option<String>,
-    subtitle_color: Color32,
-    alert_id: usize,
-    alert_type: AlertType,
-    show_toggle: bool,
-}
-
-impl AlertRowWidget {
-    fn show(self, ui: &mut Ui) -> AlertPanelAction {
-        let mut action = AlertPanelAction::None;
-
-        Card::new().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("*").color(self.status_color));
-                self.render_content(ui);
-                action = self.render_actions(ui);
-            });
-        });
-
-        action
-    }
-
-    fn render_content(&self, ui: &mut Ui) {
-        ui.vertical(|ui| {
-            ui.strong_label(&self.description);
-            if let Some(ref subtitle) = self.subtitle {
-                ui.label(RichText::new(subtitle).small().color(self.subtitle_color));
-            }
-        });
-    }
-
-    fn render_actions(&self, ui: &mut Ui) -> AlertPanelAction {
-        let mut action = AlertPanelAction::None;
-
-        ui.right_aligned(|ui| {
-            if ui.small_button("X").clicked() {
-                action = AlertPanelAction::RemoveAlert {
-                    id: self.alert_id,
-                    alert_type: self.alert_type,
-                };
-            }
-            if self.show_toggle && ui.small_button("||").clicked() {
-                action = AlertPanelAction::ToggleAlert {
-                    id: self.alert_id,
-                    alert_type: self.alert_type,
-                };
-            }
-        });
-
-        action
-    }
-}
-
-/// Alerts panel widget
+/// An alert panel connected to the host's [`Alerts`] service.
+///
+/// Call [`poll`](Self::poll) each frame even while hidden, so triggers produce notifications.
+/// Creation returns an intent to open the shared alert dialog. Only host pushes change the list;
+/// successful saves and removals never invent local state. Accounts, evaluation and delivery
+/// outside the application remain the host's responsibility.
 pub struct AlertsPanel {
     config: AlertsPanelConfig,
-    /// Current editing state
-    _edit_state: EditState,
-    /// Add price alert dialog
-    new_price_alert: Option<PriceAlertForm>,
-    /// Add indicator alert dialog
-    new_indicator_alert: Option<IndicatorAlertForm>,
-    /// Add volume alert dialog
-    new_volume_alert: Option<VolumeAlertForm>,
-}
-
-/// Form data for creating a new price alert
-struct PriceAlertForm {
-    symbol: String,
-    price: String,
-    condition: AlertCondition,
-    message: String,
-    repeating: bool,
-}
-
-impl Default for PriceAlertForm {
-    fn default() -> Self {
-        Self {
-            symbol: String::new(),
-            price: String::new(),
-            condition: AlertCondition::CrossesAbove,
-            message: String::new(),
-            repeating: false,
-        }
-    }
-}
-
-/// Form data for creating a new indicator alert
-struct IndicatorAlertForm {
-    indicator_a: String,
-    indicator_b: String,
-    threshold: String,
-    condition: IndicatorCondition,
-    symbol: String,
-    message: String,
-    repeating: bool,
-    use_threshold: bool,
-}
-
-impl Default for IndicatorAlertForm {
-    fn default() -> Self {
-        Self {
-            indicator_a: String::new(),
-            indicator_b: String::new(),
-            threshold: String::new(),
-            condition: IndicatorCondition::CrossAbove,
-            symbol: String::new(),
-            message: String::new(),
-            repeating: false,
-            use_threshold: false,
-        }
-    }
-}
-
-/// Form data for creating a new volume alert
-#[derive(Default)]
-struct VolumeAlertForm {
-    symbol: String,
-    multiplier: String,
-    lookback: String,
-    message: String,
-}
-
-#[derive(Default)]
-struct EditState {
-    _editing_id: Option<usize>,
-    _editing_type: Option<AlertType>,
+    service: Option<Arc<dyn Alerts>>,
+    inbox: Arc<Inbox>,
+    listener: Option<Listener>,
+    generation: u64,
+    alerts: Vec<Alert>,
+    log: VecDeque<AlertTrigger>,
+    error: Option<FeedError>,
+    show_log: bool,
 }
 
 impl Default for AlertsPanel {
@@ -218,673 +77,402 @@ impl Default for AlertsPanel {
 }
 
 impl AlertsPanel {
+    /// Create an unconnected panel. Attach a service with [`set_service`](Self::set_service).
     pub fn new(config: AlertsPanelConfig) -> Self {
         Self {
             config,
-            _edit_state: EditState::default(),
-            new_price_alert: None,
-            new_indicator_alert: None,
-            new_volume_alert: None,
+            service: None,
+            inbox: Arc::default(),
+            listener: None,
+            generation: 0,
+            alerts: Vec::new(),
+            log: VecDeque::new(),
+            error: None,
+            show_log: false,
         }
     }
 
-    /// Set configuration
-    pub fn with_config(mut self, config: AlertsPanelConfig) -> Self {
-        self.config = config;
-        self
+    /// Attach a host service, clearing the previous account's alerts and log.
+    pub fn set_service(&mut self, service: Arc<dyn Alerts>) {
+        self.listener = None;
+        self.service = Some(service);
+        self.alerts.clear();
+        self.log.clear();
+        self.error = None;
+        self.inbox = Arc::default();
+        self.watch();
     }
 
-    /// Render the alerts panel
-    pub fn show(&mut self, ui: &mut Ui, manager: &AlertManager) -> AlertPanelAction {
-        let mut action = AlertPanelAction::None;
-
-        egui::ScrollArea::vertical()
-            .max_height(self.config.max_height)
-            .show(ui, |ui| {
-                // Header
-                PanelHeader::new("Alerts").show(ui, |ui| {
-                    let active_cnt = manager
-                        .price_alerts()
-                        .iter()
-                        .filter(|a| a.status == AlertStatus::Active)
-                        .count()
-                        + manager
-                            .indicator_alerts()
-                            .iter()
-                            .filter(|a| a.status == AlertStatus::Active)
-                            .count()
-                        + manager
-                            .volume_alerts()
-                            .iter()
-                            .filter(|a| a.status == AlertStatus::Active)
-                            .count();
-
-                    ui.label(
-                        RichText::new(format!("{active_cnt} active"))
-                            .small()
-                            .color(self.config.active_color),
-                    );
-                });
-
-                // Price Alerts Section
-                if self.config.show_price_alerts {
-                    action = self.render_price_alerts_section(ui, manager, action);
-                }
-
-                // Indicator Alerts Section
-                if self.config.show_indicator_alerts {
-                    action = self.render_indicator_alerts_section(ui, manager, action);
-                }
-
-                // Volume Alerts Section
-                if self.config.show_volume_alerts {
-                    action = self.render_volume_alerts_section(ui, manager, action);
-                }
-
-                // Event Alerts Section
-                if self.config.show_event_alerts {
-                    action = self.render_event_alerts_section(ui, manager, action);
-                }
-            });
-
-        action
-    }
-
-    fn render_price_alerts_section(
-        &mut self,
-        ui: &mut Ui,
-        manager: &AlertManager,
-        mut action: AlertPanelAction,
-    ) -> AlertPanelAction {
-        egui::CollapsingHeader::new("Price Alerts")
-            .default_open(true)
-            .show(ui, |ui| {
-                // Add button
-                if ui.button("+ Add Price Alert").clicked() {
-                    self.new_price_alert = Some(PriceAlertForm::default());
-                }
-
-                // Render add form if active
-                if let Some(form) = &mut self.new_price_alert {
-                    ui.space_sm();
-                    ui.group(|ui| {
-                        ui.label("New Price Alert");
-
-                        ui.horizontal(|ui| {
-                            ui.label("Symbol:");
-                            ui.text_edit_singleline(&mut form.symbol);
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Price:");
-                            ui.text_edit_singleline(&mut form.price);
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Condition:");
-                            ui.combo_select(
-                                "price_condition",
-                                &mut form.condition,
-                                [
-                                    AlertCondition::CrossesAbove,
-                                    AlertCondition::CrossesBelow,
-                                    AlertCondition::Above,
-                                    AlertCondition::Below,
-                                ],
-                                |v| v.as_str().to_string(),
-                            );
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Message:");
-                            ui.text_edit_singleline(&mut form.message);
-                        });
-
-                        ui.checkbox(&mut form.repeating, "Repeating");
-                    });
-
-                    let mut should_create = false;
-                    let mut should_cancel = false;
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                self.get_price_alert_form().is_some(),
-                                egui::Button::new("Create"),
-                            )
-                            .clicked()
-                        {
-                            should_create = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            should_cancel = true;
-                        }
-                    });
-                    if should_create {
-                        action = AlertPanelAction::AddPriceAlert;
-                        self.new_price_alert = None;
-                    } else if should_cancel {
-                        self.new_price_alert = None;
-                    }
-                }
-
-                ui.space_sm();
-
-                // List existing alerts
-                for alert in manager.price_alerts() {
-                    let result = self.render_price_alert(ui, alert);
-                    if !matches!(result, AlertPanelAction::None) {
-                        action = result;
-                    }
-                }
-
-                if manager.price_alerts().is_empty() {
-                    EmptyState::new("No price alerts").show(ui);
-                }
-            });
-
-        action
-    }
-
-    fn render_price_alert(&self, ui: &mut Ui, alert: &PriceAlert) -> AlertPanelAction {
-        let status_color = self.status_color(alert.status);
-        let description = format!(
-            "{}: {} {:.2}",
-            alert.symbol,
-            alert.condition.as_str(),
-            alert.target_price
-        );
-        let weak_color = ui.visuals().weak_text_color();
-
-        let action = AlertRowWidget {
-            status_color,
-            description,
-            subtitle: alert.message.clone(),
-            subtitle_color: weak_color,
-            alert_id: alert.id,
-            alert_type: AlertType::Price,
-            show_toggle: true,
-        }
-        .show(ui);
-
-        ui.space_xs();
-        action
-    }
-
-    fn render_indicator_alerts_section(
-        &mut self,
-        ui: &mut Ui,
-        manager: &AlertManager,
-        mut action: AlertPanelAction,
-    ) -> AlertPanelAction {
-        egui::CollapsingHeader::new("Indicator Alerts")
-            .default_open(true)
-            .show(ui, |ui| {
-                if ui.button("+ Add Indicator Alert").clicked() {
-                    self.new_indicator_alert = Some(IndicatorAlertForm::default());
-                }
-
-                // Render add form if active
-                if let Some(form) = &mut self.new_indicator_alert {
-                    ui.space_sm();
-                    ui.group(|ui| {
-                        ui.label("New Indicator Alert");
-
-                        ui.horizontal(|ui| {
-                            ui.label("Indicator A:");
-                            ui.text_edit_singleline(&mut form.indicator_a);
-                        });
-
-                        ui.checkbox(&mut form.use_threshold, "Use Threshold (vs Crossover)");
-
-                        if form.use_threshold {
-                            ui.horizontal(|ui| {
-                                ui.label("Threshold:");
-                                ui.text_edit_singleline(&mut form.threshold);
-                            });
-                        } else {
-                            ui.horizontal(|ui| {
-                                ui.label("Indicator B:");
-                                ui.text_edit_singleline(&mut form.indicator_b);
-                            });
-                        }
-
-                        ui.horizontal(|ui| {
-                            ui.label("Symbol:");
-                            ui.text_edit_singleline(&mut form.symbol);
-                        });
-                    });
-
-                    let mut should_create = false;
-                    let mut should_cancel = false;
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                self.get_indicator_alert_form().is_some(),
-                                egui::Button::new("Create"),
-                            )
-                            .clicked()
-                        {
-                            should_create = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            should_cancel = true;
-                        }
-                    });
-                    if should_create {
-                        action = AlertPanelAction::AddIndicatorAlert;
-                        self.new_indicator_alert = None;
-                    } else if should_cancel {
-                        self.new_indicator_alert = None;
-                    }
-                }
-
-                ui.space_sm();
-
-                for alert in manager.indicator_alerts() {
-                    let result = self.render_indicator_alert(ui, alert);
-                    if !matches!(result, AlertPanelAction::None) {
-                        action = result;
-                    }
-                }
-
-                if manager.indicator_alerts().is_empty() {
-                    EmptyState::new("No indicator alerts").show(ui);
-                }
-            });
-
-        action
-    }
-
-    fn render_indicator_alert(&self, ui: &mut Ui, alert: &IndicatorAlert) -> AlertPanelAction {
-        let status_color = self.status_color(alert.status);
-        let description = Self::format_indicator_description(alert);
-        let symbol_text = alert.symbol.clone();
-        let weak_color = ui.visuals().weak_text_color();
-
-        let action = AlertRowWidget {
-            status_color,
-            description,
-            subtitle: symbol_text,
-            subtitle_color: weak_color,
-            alert_id: alert.id,
-            alert_type: AlertType::Indicator,
-            show_toggle: false,
-        }
-        .show(ui);
-
-        ui.space_xs();
-        action
-    }
-
-    fn format_indicator_description(alert: &IndicatorAlert) -> String {
-        if let Some(ref ind_b) = alert.indicator_b {
-            format!(
-                "{} {} {}",
-                alert.indicator_a,
-                alert.condition.as_str(),
-                ind_b
-            )
-        } else if let Some(thresh) = alert.threshold {
-            format!(
-                "{} {} {:.2}",
-                alert.indicator_a,
-                alert.condition.as_str(),
-                thresh
-            )
-        } else {
-            alert.indicator_a.clone()
+    fn watch(&mut self) {
+        self.generation += 1;
+        let (listener, events) = Listener::new(&self.inbox, self.generation);
+        self.listener = Some(listener);
+        if let Some(service) = &self.service {
+            service.watch(events);
         }
     }
 
-    fn render_volume_alerts_section(
-        &mut self,
-        ui: &mut Ui,
-        manager: &AlertManager,
-        mut action: AlertPanelAction,
-    ) -> AlertPanelAction {
-        egui::CollapsingHeader::new("Volume Alerts")
-            .default_open(true)
-            .show(ui, |ui| {
-                if ui.button("+ Add Volume Alert").clicked() {
-                    self.new_volume_alert = Some(VolumeAlertForm {
-                        multiplier: "2.0".to_string(),
-                        lookback: "20".to_string(),
-                        ..Default::default()
-                    });
-                }
-
-                // Render add form if active
-                if let Some(form) = &mut self.new_volume_alert {
-                    ui.space_sm();
-                    ui.group(|ui| {
-                        ui.label("New Volume Spike Alert");
-
-                        ui.horizontal(|ui| {
-                            ui.label("Symbol:");
-                            ui.text_edit_singleline(&mut form.symbol);
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Spike Multiplier:");
-                            ui.text_edit_singleline(&mut form.multiplier);
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Lookback Periods:");
-                            ui.text_edit_singleline(&mut form.lookback);
-                        });
-                    });
-
-                    let mut should_create = false;
-                    let mut should_cancel = false;
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                self.get_volume_alert_form().is_some(),
-                                egui::Button::new("Create"),
-                            )
-                            .clicked()
-                        {
-                            should_create = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            should_cancel = true;
-                        }
-                    });
-                    if should_create {
-                        action = AlertPanelAction::AddVolumeAlert;
-                        self.new_volume_alert = None;
-                    } else if should_cancel {
-                        self.new_volume_alert = None;
-                    }
-                }
-
-                ui.space_sm();
-
-                for alert in manager.volume_alerts() {
-                    let result = self.render_volume_alert(ui, alert);
-                    if !matches!(result, AlertPanelAction::None) {
-                        action = result;
-                    }
-                }
-
-                if manager.volume_alerts().is_empty() {
-                    EmptyState::new("No volume alerts").show(ui);
-                }
-            });
-
-        action
+    /// The latest alerts supplied by the host.
+    pub fn alerts(&self) -> &[Alert] {
+        &self.alerts
     }
 
-    fn render_volume_alert(&self, ui: &mut Ui, alert: &VolumeAlert) -> AlertPanelAction {
-        let status_color = self.status_color(alert.status);
-        let description = format!(
-            "{}: Volume > {:.1}x avg ({})",
-            alert.symbol, alert.spike_multiplier, alert.lookback_periods
-        );
-        let weak_color = ui.visuals().weak_text_color();
-
-        let action = AlertRowWidget {
-            status_color,
-            description,
-            subtitle: None,
-            subtitle_color: weak_color,
-            alert_id: alert.id,
-            alert_type: AlertType::Volume,
-            show_toggle: false,
-        }
-        .show(ui);
-
-        ui.space_xs();
-        action
+    /// The most recent 10,000 host triggers in arrival order.
+    pub fn log(&self) -> &VecDeque<AlertTrigger> {
+        &self.log
     }
 
-    fn render_event_alerts_section(
-        &mut self,
-        ui: &mut Ui,
-        manager: &AlertManager,
-        mut action: AlertPanelAction,
-    ) -> AlertPanelAction {
-        egui::CollapsingHeader::new("Event Alerts")
-            .default_open(false)
-            .show(ui, |ui| {
-                if ui.button("+ Add Event Alert").clicked() {
-                    action = AlertPanelAction::AddEventAlert;
-                }
-
-                ui.space_sm();
-
-                for alert in manager.event_alerts() {
-                    let result = self.render_event_alert(ui, alert);
-                    if !matches!(result, AlertPanelAction::None) {
-                        action = result;
-                    }
-                }
-
-                if manager.event_alerts().is_empty() {
-                    EmptyState::new("No event alerts").show(ui);
-                }
-            });
-
-        action
-    }
-
-    fn render_event_alert(&self, ui: &mut Ui, alert: &EventAlert) -> AlertPanelAction {
-        let status_color = self.status_color(alert.status);
-        let description = format!(
-            "{}: {} min before ({})",
-            alert.event_type, alert.minutes_before, alert.min_impact
-        );
-        let weak_color = ui.visuals().weak_text_color();
-
-        let action = AlertRowWidget {
-            status_color,
-            description,
-            subtitle: None,
-            subtitle_color: weak_color,
-            alert_id: alert.id,
-            alert_type: AlertType::Event,
-            show_toggle: false,
-        }
-        .show(ui);
-
-        ui.space_xs();
-        action
-    }
-
-    fn status_color(&self, status: AlertStatus) -> Color32 {
-        match status {
-            AlertStatus::Active => self.config.active_color,
-            AlertStatus::Triggered => self.config.triggered_color,
-            AlertStatus::Disabled => self.config.disabled_color,
-            AlertStatus::Expired => self.config.expired_color,
-        }
-    }
-
-    /// Get the form data for creating a new price alert
-    pub fn get_price_alert_form(&self) -> Option<(&str, f64, AlertCondition, &str, bool)> {
-        self.new_price_alert.as_ref().and_then(|form| {
-            fields::level(&form.price).map(|price| {
-                (
-                    form.symbol.as_str(),
-                    price,
-                    form.condition,
-                    form.message.as_str(),
-                    form.repeating,
-                )
-            })
-        })
-    }
-
-    /// Get form data for indicator alert
-    pub fn get_indicator_alert_form(&self) -> Option<IndicatorAlertFormData> {
-        self.new_indicator_alert.as_ref().and_then(|form| {
-            Some(IndicatorAlertFormData {
-                indicator_a: fields::indicator(&form.indicator_a)?,
-                indicator_b: if form.use_threshold {
-                    None
-                } else {
-                    Some(fields::indicator(&form.indicator_b)?)
-                },
-                threshold: if form.use_threshold {
-                    Some(fields::level(&form.threshold)?)
-                } else {
-                    None
-                },
-                condition: form.condition,
-                symbol: if form.symbol.is_empty() {
-                    None
-                } else {
-                    Some(form.symbol.clone())
-                },
-                message: if form.message.is_empty() {
-                    None
-                } else {
-                    Some(form.message.clone())
-                },
-                repeating: form.repeating,
-            })
-        })
-    }
-
-    /// Get form data for volume alert
-    pub fn get_volume_alert_form(&self) -> Option<VolumeAlertFormData> {
-        self.new_volume_alert.as_ref().and_then(|form| {
-            let multiplier = fields::multiplier(&form.multiplier)?;
-            let lookback = fields::lookback(&form.lookback)? as usize;
-            Some(VolumeAlertFormData {
-                symbol: form.symbol.clone(),
-                multiplier,
-                lookback,
-                message: if form.message.is_empty() {
-                    None
-                } else {
-                    Some(form.message.clone())
-                },
-            })
-        })
-    }
-}
-
-/// Exported form data for indicator alerts
-#[derive(Debug, Clone)]
-pub struct IndicatorAlertFormData {
-    pub indicator_a: String,
-    pub indicator_b: Option<String>,
-    pub threshold: Option<f64>,
-    pub condition: IndicatorCondition,
-    pub symbol: Option<String>,
-    pub message: Option<String>,
-    pub repeating: bool,
-}
-
-/// Exported form data for volume alerts
-#[derive(Debug, Clone)]
-pub struct VolumeAlertFormData {
-    pub symbol: String,
-    pub multiplier: f64,
-    pub lookback: usize,
-    pub message: Option<String>,
-}
-
-/// Compact inline alert status display
-pub struct AlertStatusWidget;
-
-impl AlertStatusWidget {
-    /// Show a compact alert status indicator
-    pub fn show(ui: &mut Ui, manager: &AlertManager) -> Response {
-        let active_cnt = manager
-            .price_alerts()
-            .iter()
-            .filter(|a| a.status == AlertStatus::Active)
-            .count()
-            + manager
-                .indicator_alerts()
-                .iter()
-                .filter(|a| a.status == AlertStatus::Active)
-                .count()
-            + manager
-                .volume_alerts()
-                .iter()
-                .filter(|a| a.status == AlertStatus::Active)
-                .count();
-
-        let triggered_cnt = manager
-            .price_alerts()
-            .iter()
-            .filter(|a| a.status == AlertStatus::Triggered)
-            .count()
-            + manager
-                .indicator_alerts()
-                .iter()
-                .filter(|a| a.status == AlertStatus::Triggered)
-                .count();
-
-        let color = if triggered_cnt > 0 {
-            ui.visuals().warn_fg_color
-        } else if active_cnt > 0 {
-            ui.active_theme().ui.success
-        } else {
-            ui.visuals().weak_text_color()
+    /// Save a price alert from the shared dialog. The list changes only after a host push.
+    pub fn save(&mut self, alert: Alert) {
+        let level = match alert.condition {
+            AlertCondition::Crossing(v)
+            | AlertCondition::CrossingUp(v)
+            | AlertCondition::CrossingDown(v)
+            | AlertCondition::Above(v)
+            | AlertCondition::Below(v) => v,
         };
-
-        let text = format!("{active_cnt} alerts");
-
-        ui.label(RichText::new(text).color(color))
-    }
-}
-
-/// Alert notification popup widget
-pub struct AlertNotification {
-    pub message: String,
-    pub symbol: String,
-    pub price: f64,
-    pub condition: String,
-    pub ts: chrono::DateTime<chrono::Utc>,
-}
-
-impl AlertNotification {
-    pub fn new(
-        symbol: impl Into<String>,
-        price: f64,
-        condition: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self {
-            message: message.into(),
-            symbol: symbol.into(),
-            price,
-            condition: condition.into(),
-            ts: chrono::Utc::now(),
+        if alert.symbol.trim().is_empty() || !level.is_finite() {
+            self.error = Some(FeedError::InvalidData(
+                "Alert needs a symbol and a finite price".into(),
+            ));
+            return;
+        }
+        if let Some(service) = &self.service {
+            service.save(alert, self.inbox.reply(0));
+        } else {
+            self.error = Some(FeedError::NotSupported);
         }
     }
 
-    pub fn show(&self, ui: &mut Ui) {
-        use crate::styles::typography;
-        egui::Frame::NONE
-            .fill(ui.visuals().window_fill)
-            .inner_margin(DESIGN_TOKENS.spacing.xl)
-            .corner_radius(DESIGN_TOKENS.rounding.lg)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("!").size(typography::HERO));
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new("Alert Triggered")
-                                .strong()
-                                .color(ui.visuals().warn_fg_color),
-                        );
-                        ui.label(RichText::new(&self.symbol).strong().size(typography::XXL));
-                        ui.label(format!("{} @ ${:.2}", self.condition, self.price));
-                        if !self.message.is_empty() {
-                            ui.label(
-                                RichText::new(&self.message)
-                                    .italics()
-                                    .color(ui.visuals().weak_text_color()),
-                            );
-                        }
-                    });
+    /// Drain service pushes and replies, recover a lagged stream, and append trigger notifications.
+    /// Render `toasts` once per frame with the host's other notifications.
+    pub fn poll(&mut self, ctx: &egui::Context, toasts: &mut Toasts) {
+        let repaint = ctx.clone();
+        self.inbox.set_waker(move || repaint.request_repaint());
+        if self.listener.as_ref().is_some_and(|l| !l.is_active()) {
+            self.listener = None;
+            self.alerts.clear();
+            self.watch();
+        }
+        for (key, answer) in self.inbox.drain().answers {
+            if key == self.generation {
+                if let Ok(event) = answer.downcast::<AlertEvent>() {
+                    self.apply_event(*event, toasts);
+                }
+            } else if key == 0
+                && let Ok(result) = answer.downcast::<Result<(), FeedError>>()
+            {
+                match *result {
+                    Ok(()) => self.error = None,
+                    Err(error) => self.error = Some(error),
+                }
+            }
+        }
+    }
+
+    fn apply_event(&mut self, event: AlertEvent, toasts: &mut Toasts) {
+        match event {
+            AlertEvent::Upsert(alert) => {
+                if alert.id.is_none() {
+                    return;
+                }
+                if let Some(existing) = self.alerts.iter_mut().find(|a| a.id == alert.id) {
+                    *existing = alert;
+                } else {
+                    self.alerts.push(alert);
+                }
+            }
+            AlertEvent::Remove(id) => self.alerts.retain(|a| a.id.as_ref() != Some(&id)),
+            AlertEvent::Clear => self.alerts.clear(),
+            AlertEvent::Triggered { id, time, price } => {
+                let symbol = self
+                    .alerts
+                    .iter()
+                    .find(|a| a.id.as_ref() == Some(&id))
+                    .map(|a| a.symbol.clone())
+                    .unwrap_or_default();
+                toasts.info(format!(
+                    "Alert triggered: {}",
+                    if symbol.is_empty() { &id.0 } else { &symbol }
+                ));
+                let extra = toasts.len().saturating_sub(5);
+                toasts.toasts_mut().drain(..extra);
+                self.log.push_back(AlertTrigger {
+                    id,
+                    symbol,
+                    time,
+                    price: price.filter(|p| p.is_finite()),
                 });
+                if self.log.len() > 10_000 {
+                    self.log.pop_front();
+                }
+            }
+        }
+    }
+
+    /// Export the retained trigger log. Text fields are quoted and embedded quotes doubled.
+    pub fn log_csv(&self) -> String {
+        let mut csv = String::from("id,symbol,time,price\r\n");
+        for trigger in &self.log {
+            let id = trigger.id.0.replace('"', "\"\"");
+            let symbol = trigger.symbol.replace('"', "\"\"");
+            let price = trigger.price.map(|p| p.to_string()).unwrap_or_default();
+            csv.push_str(&format!(
+                "\"{id}\",\"{symbol}\",{},{}\r\n",
+                trigger.time.to_rfc3339(),
+                price
+            ));
+        }
+        csv
+    }
+
+    fn status_color(&self, ui: &Ui, status: AlertStatus) -> Color32 {
+        let theme = ui.active_theme();
+        match status {
+            AlertStatus::Active => theme.ui.success,
+            AlertStatus::Triggered => theme.ui.warning,
+            AlertStatus::Disabled => theme.ui.text_disabled,
+            AlertStatus::Expired => theme.ui.error,
+        }
+    }
+
+    /// Render the host's alerts or trigger log after `poll`, returning creation or export intents.
+    pub fn show(&mut self, ui: &mut Ui) -> AlertPanelAction {
+        let mut action = AlertPanelAction::None;
+        PanelHeader::new("Alerts").show(ui, |ui| {
+            if IconButton::new(&icons::PLUS)
+                .tooltip("New alert")
+                .show(ui)
+                .clicked()
+            {
+                action = AlertPanelAction::CreateAlert;
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.show_log, false, "Alerts");
+            ui.selectable_value(&mut self.show_log, true, "Log");
+        });
+        if let Some(error) = &self.error {
+            ui.colored_label(ui.visuals().error_fg_color, error.to_string());
+        }
+        if self.show_log {
+            if ui
+                .add_enabled(!self.log.is_empty(), egui::Button::new("Export CSV…"))
+                .clicked()
+            {
+                action = AlertPanelAction::ExportLog(self.log_csv());
+            }
+            egui::ScrollArea::vertical()
+                .max_height(self.config.max_height)
+                .show(ui, |ui| {
+                    for trigger in self.log.iter().rev() {
+                        ui.label(format!(
+                            "{} · {}",
+                            trigger.symbol,
+                            trigger.time.format("%Y-%m-%d %H:%M:%S UTC")
+                        ));
+                        if let Some(price) = trigger.price {
+                            ui.label(price.to_string());
+                        }
+                        ui.separator();
+                    }
+                });
+            if self.log.is_empty() {
+                EmptyState::new("No triggers yet")
+                    .icon(&icons::ALERTS)
+                    .fill_height()
+                    .show(ui);
+            }
+        } else if self.alerts.is_empty() {
+            if EmptyState::new("No alerts yet")
+                .icon(&icons::ALERTS)
+                .description("Create an alert with the + button or the chart menu.")
+                .action("Create alert")
+                .fill_height()
+                .show(ui)
+            {
+                action = AlertPanelAction::CreateAlert;
+            }
+        } else {
+            let mut remove = None;
+            let mut toggle = None;
+            egui::ScrollArea::vertical()
+                .max_height(self.config.max_height)
+                .show(ui, |ui| {
+                    for alert in &self.alerts {
+                        let Some(id) = &alert.id else { continue };
+                        ui.push_id(&id.0, |ui| {
+                            ui.label(RichText::new(&alert.symbol).strong());
+                            ui.label(match alert.condition {
+                                AlertCondition::Crossing(v) => format!("Crossing {v}"),
+                                AlertCondition::CrossingUp(v) => format!("Crossing up {v}"),
+                                AlertCondition::CrossingDown(v) => format!("Crossing down {v}"),
+                                AlertCondition::Above(v) => format!("Above {v}"),
+                                AlertCondition::Below(v) => format!("Below {v}"),
+                            });
+                            let color = self.status_color(ui, alert.status);
+                            ui.colored_label(
+                                color,
+                                match alert.status {
+                                    AlertStatus::Active => "Active",
+                                    AlertStatus::Triggered => "Triggered",
+                                    AlertStatus::Disabled => "Disabled",
+                                    AlertStatus::Expired => "Expired",
+                                },
+                            );
+                            if !alert.message.is_empty() {
+                                ui.label(&alert.message);
+                            }
+                            ui.horizontal(|ui| {
+                                let active = alert.status == AlertStatus::Active;
+                                if ui.button(if active { "Pause" } else { "Enable" }).clicked() {
+                                    let mut changed = alert.clone();
+                                    changed.status = if active {
+                                        AlertStatus::Disabled
+                                    } else {
+                                        AlertStatus::Active
+                                    };
+                                    toggle = Some(changed);
+                                }
+                                if IconButton::new(&icons::TRASH)
+                                    .tooltip("Remove alert")
+                                    .show(ui)
+                                    .clicked()
+                                {
+                                    remove = Some(id.clone());
+                                }
+                            });
+                            ui.separator();
+                        });
+                    }
+                });
+            if let Some(alert) = toggle {
+                self.save(alert);
+            }
+            if let Some(id) = remove
+                && let Some(service) = &self.service
+            {
+                service.remove(id, self.inbox.reply(0));
+            }
+        }
+        action
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Reply;
+    use crate::services::Events;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Host {
+        events: Mutex<Option<Events<AlertEvent>>>,
+        reply: Mutex<Option<Reply<()>>>,
+    }
+
+    impl Alerts for Host {
+        fn watch(&self, events: Events<AlertEvent>) {
+            *self.events.lock().unwrap() = Some(events);
+        }
+        fn save(&self, _: Alert, reply: Reply<()>) {
+            *self.reply.lock().unwrap() = Some(reply);
+        }
+        fn remove(&self, _: AlertId, reply: Reply<()>) {
+            reply.send(Ok(()));
+        }
+    }
+
+    #[test]
+    fn only_host_pushes_change_the_list_and_triggers_survive_removal_and_export() {
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let ctx = egui::Context::default();
+        let mut toasts = Toasts::new();
+        let mut frame = |panel: &mut AlertsPanel| {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                panel.poll(ui.ctx(), &mut toasts)
             });
+            output.drop_without_applying_deltas();
+        };
+        let mut alert = Alert::new("S\"IM", AlertCondition::CrossingUp(12.5));
+        alert.id = Some(AlertId("host,\"1".into()));
+        panel.save(alert.clone());
+        host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+        frame(&mut panel);
+        assert!(panel.alerts().is_empty());
+        events.push(AlertEvent::Upsert(alert.clone()));
+        events.push(AlertEvent::Triggered {
+            id: alert.id.clone().unwrap(),
+            time: "2026-10-23T12:00:00Z".parse().unwrap(),
+            price: Some(12.5),
+        });
+        frame(&mut panel);
+        assert_eq!(panel.alerts(), &[alert.clone()]);
+        assert_eq!(panel.alerts()[0].status, AlertStatus::Active);
+        assert_eq!(panel.log().len(), 1);
+        assert_eq!(
+            panel.log_csv(),
+            "id,symbol,time,price\r\n\"host,\"\"1\",\"S\"\"IM\",2026-10-23T12:00:00+00:00,12.5\r\n"
+        );
+        alert.status = AlertStatus::Disabled;
+        events.push(AlertEvent::Upsert(alert.clone()));
+        frame(&mut panel);
+        assert_eq!(panel.alerts(), &[alert.clone()]);
+        panel.save(alert.clone());
+        host.reply
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .send(Err(FeedError::NotSupported));
+        frame(&mut panel);
+        assert_eq!(panel.error, Some(FeedError::NotSupported));
+        events.push(AlertEvent::Remove(alert.id.clone().unwrap()));
+        frame(&mut panel);
+        assert!(panel.alerts().is_empty());
+        assert_eq!(panel.log().len(), 1);
+        panel.save(alert);
+        for _ in 0..10_001 {
+            events.push(AlertEvent::Clear);
+        }
+        frame(&mut panel);
+        assert!(!events.is_active());
+        let renewed = host.events.lock().unwrap().clone().unwrap();
+        assert!(renewed.is_active());
+        host.reply
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .send(Err(FeedError::Unanswered));
+        frame(&mut panel);
+        assert_eq!(panel.error, Some(FeedError::Unanswered));
+        assert_eq!(panel.log().len(), 1);
+        drop(panel);
+        assert!(!renewed.is_active());
+    }
+
+    #[test]
+    fn default_alert_status_colours_follow_theme_changes() {
+        let panel = AlertsPanel::default();
+        let ctx = egui::Context::default();
+        for (_, theme) in crate::theme::presets() {
+            crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.run_ui(Default::default(), |ui| {
+                for (status, expected) in [
+                    (AlertStatus::Active, theme.ui.success),
+                    (AlertStatus::Triggered, theme.ui.warning),
+                    (AlertStatus::Disabled, theme.ui.text_disabled),
+                    (AlertStatus::Expired, theme.ui.error),
+                ] {
+                    assert_eq!(panel.status_color(ui, status), expected);
+                }
+            })
+            .drop_without_applying_deltas();
+        }
     }
 }

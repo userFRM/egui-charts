@@ -21,7 +21,7 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -29,7 +29,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct StandardDeviation {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -42,7 +42,7 @@ impl StandardDeviation {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.favorite_gold,
             visible: true,
         }
@@ -68,6 +68,10 @@ impl Default for StandardDeviation {
 }
 
 impl Indicator for StandardDeviation {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "StdDev"
     }
@@ -107,7 +111,7 @@ impl Indicator for StandardDeviation {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -169,7 +173,7 @@ mod tests {
         let mut std_dev = StandardDeviation::new(20);
         std_dev.calculate(&bars);
 
-        for value in std_dev.values().iter().skip(19) {
+        for value in std_dev.values().to_rows().iter().skip(19) {
             assert!(
                 matches!(value, IndicatorValue::Single(v) if v.abs() < 1e-9),
                 "a window without deviation reads 0, got {value:?}"

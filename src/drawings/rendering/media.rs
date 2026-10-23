@@ -382,8 +382,7 @@ impl Drawing {
         // Default icon if none specified
         let icon = self.text.as_deref().unwrap_or("*");
 
-        // Icon size based on stroke_width or default
-        let icon_size = (self.stroke_width * 8.0).clamp(24.0, 72.0);
+        let icon_size = self.font_size;
 
         // Optional background circle
         let has_bg = self.stroke_width > 2.0;

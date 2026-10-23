@@ -199,6 +199,8 @@ pub struct Chart {
     pub(crate) state: ChartState,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
     pub(crate) config: ChartConfig,
+    /// Whether the main price series and its volume are drawn.
+    pub(crate) main_series_visible: bool,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
     /// Starting index of visible range (for backward compatibility)
@@ -272,6 +274,7 @@ pub struct Chart {
     quote_action: Option<QuoteSide>,
     server_time_offset: Option<chrono::TimeDelta>,
     bar_close_time: Option<chrono::DateTime<chrono::Utc>>,
+    indicator_settings_request: Option<SeriesId>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,
@@ -562,7 +565,10 @@ impl Chart {
         } else {
             Rect::NOTHING
         };
-        let volume_rect = if self.config.show_volume && self.chart_type.supports_volume() {
+        let volume_rect = if self.main_series_visible
+            && self.config.show_volume
+            && self.chart_type.supports_volume()
+        {
             let inset = self
                 .config
                 .volume_baseline_inset
@@ -668,6 +674,15 @@ impl Chart {
     /// whole [`ChartConfig`]. Changes take effect on the next rendered frame.
     pub fn config_mut(&mut self) -> &mut ChartConfig {
         &mut self.config
+    }
+
+    /// Apply a theme to this chart and to the UI in `ctx`, without changing data or pan and zoom.
+    ///
+    /// Other charts sharing the context keep their configured series colours until updated.
+    pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
+        self.config = theme.apply_to_config(self.config.clone());
+        crate::theme::apply_to_egui(ctx, theme);
+        ctx.request_repaint();
     }
 
     /// The chart's visual configuration.

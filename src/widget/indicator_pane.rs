@@ -35,7 +35,7 @@
 use crate::chart::rendering::draw_dashed_line;
 use crate::model::Bar;
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::Indicator;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -70,8 +70,6 @@ mod indicator_sizing {
 pub struct IndicatorPaneConfig {
     /// Panel height in pixels
     pub height: f32,
-    /// Decimals for the pane ticks and readouts. `None` uses two decimals.
-    pub price_precision: Option<u8>,
     /// Fixed y-axis range (None = auto-scale)
     pub y_range: Option<(f64, f64)>,
     /// Show horizontal zone lines (e.g., RSI 70/30)
@@ -94,7 +92,6 @@ impl Default for IndicatorPaneConfig {
     fn default() -> Self {
         Self {
             height: DESIGN_TOKENS.sizing.panel.bottom_default_height,
-            price_precision: None,
             y_range: None,
             show_zones: false,
             zones: Vec::new(),
@@ -112,7 +109,6 @@ impl IndicatorPaneConfig {
     pub fn rsi() -> Self {
         Self {
             height: indicator_sizing::OSCILLATOR_HEIGHT,
-            price_precision: Some(2),
             y_range: Some((0.0, 100.0)),
             show_zones: true,
             zones: vec![
@@ -132,7 +128,6 @@ impl IndicatorPaneConfig {
     pub fn macd() -> Self {
         Self {
             height: indicator_sizing::MULTI_LINE_HEIGHT,
-            price_precision: None,
             y_range: None, // Auto-scale
             show_zones: true,
             zones: vec![(0.0, DESIGN_TOKENS.semantic.extended.chart_text, "Zero Line")],
@@ -148,7 +143,6 @@ impl IndicatorPaneConfig {
     pub fn stochastic() -> Self {
         Self {
             height: indicator_sizing::OSCILLATOR_HEIGHT,
-            price_precision: Some(2),
             y_range: Some((0.0, 100.0)),
             show_zones: true,
             zones: vec![
@@ -616,22 +610,31 @@ impl IndicatorPane {
         let mut min_val = f64::MAX;
         let mut max_val = f64::MIN;
 
-        for i in visible_range.clone() {
-            if let Some(value) = values.get(i) {
-                match value {
-                    IndicatorValue::Single(v) => {
-                        min_val = min_val.min(*v);
-                        max_val = max_val.max(*v);
-                    }
-                    IndicatorValue::Multiple(vals) => {
-                        for v in vals {
-                            min_val = min_val.min(*v);
-                            max_val = max_val.max(*v);
-                        }
-                    }
-                    IndicatorValue::None => {}
+        for (_, line) in values
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| indicator.plot_style(*index).visible)
+        {
+            for &value in line
+                .get(visible_range.start..visible_range.end.min(line.len()))
+                .unwrap_or_default()
+            {
+                if value.is_finite() {
+                    min_val = min_val.min(value);
+                    max_val = max_val.max(value);
                 }
             }
+        }
+
+        if min_val != f64::MAX
+            && (0..indicator.line_cnt()).any(|line| {
+                let plot = indicator.plot_style(line);
+                plot.visible && plot.plot_type == crate::studies::PlotType::Histogram
+            })
+        {
+            min_val = min_val.min(0.0);
+            max_val = max_val.max(0.0);
         }
 
         if min_val == f64::MAX {
@@ -851,7 +854,12 @@ impl IndicatorPane {
         let bar_spacing = rect.width() / visible_bars as f32;
 
         for line_idx in 0..line_cnt {
-            let color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
+            let plot = indicator.plot_style(line_idx);
+            if !plot.visible {
+                continue;
+            }
+            let mut plot = plot;
+            plot.color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
             let mut points = Vec::new();
 
             for i in visible_range.clone() {
@@ -859,13 +867,17 @@ impl IndicatorPane {
                     break;
                 }
 
-                let val = match &values[i] {
-                    IndicatorValue::Single(v) => Some(*v),
-                    IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
-                    IndicatorValue::None => None,
-                }
-                .filter(|v| v.is_finite());
+                let val = values.value(line_idx, i);
 
+                if val.is_none() && !points.is_empty() {
+                    crate::chart::renderers::paint_study_plot(
+                        &painter.with_clip_rect(rect),
+                        &points,
+                        plot,
+                        self.value_to_y(0.0, rect, y_min, y_max),
+                    );
+                    points.clear();
+                }
                 if let Some(v) = val {
                     // X position based on position in visible range
                     let local_idx = i - visible_range.start;
@@ -878,14 +890,13 @@ impl IndicatorPane {
                 }
             }
 
-            // Draw connected line segments
-            if points.len() > 1 {
-                for i in 0..points.len() - 1 {
-                    painter.line_segment(
-                        [points[i], points[i + 1]],
-                        Stroke::new(DESIGN_TOKENS.stroke.medium, color),
-                    );
-                }
+            if !points.is_empty() {
+                crate::chart::renderers::paint_study_plot(
+                    &painter.with_clip_rect(rect),
+                    &points,
+                    plot,
+                    self.value_to_y(0.0, rect, y_min, y_max),
+                );
             }
         }
     }
@@ -908,7 +919,12 @@ impl IndicatorPane {
         let mapping = coords.to_mapping(rect, y_min, y_max);
 
         for line_idx in 0..line_cnt {
-            let color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
+            let plot = indicator.plot_style(line_idx);
+            if !plot.visible {
+                continue;
+            }
+            let mut plot = plot;
+            plot.color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
             let mut points = Vec::new();
 
             for i in visible_range.clone() {
@@ -916,13 +932,17 @@ impl IndicatorPane {
                     break;
                 }
 
-                let val = match &values[i] {
-                    IndicatorValue::Single(v) => Some(*v),
-                    IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
-                    IndicatorValue::None => None,
-                }
-                .filter(|v| v.is_finite());
+                let val = values.value(line_idx, i);
 
+                if val.is_none() && !points.is_empty() {
+                    crate::chart::renderers::paint_study_plot(
+                        &painter.with_clip_rect(rect),
+                        &points,
+                        plot,
+                        self.value_to_y(0.0, rect, y_min, y_max),
+                    );
+                    points.clear();
+                }
                 if let Some(v) = val {
                     // Use the same coordinate formula as main chart
                     let x = mapping.idx_to_x(i);
@@ -934,14 +954,13 @@ impl IndicatorPane {
                 }
             }
 
-            // Draw connected line segments
-            if points.len() > 1 {
-                for i in 0..points.len() - 1 {
-                    painter.line_segment(
-                        [points[i], points[i + 1]],
-                        Stroke::new(DESIGN_TOKENS.stroke.medium, color),
-                    );
-                }
+            if !points.is_empty() {
+                crate::chart::renderers::paint_study_plot(
+                    &painter.with_clip_rect(rect),
+                    &points,
+                    plot,
+                    self.value_to_y(0.0, rect, y_min, y_max),
+                );
             }
         }
     }
@@ -978,7 +997,7 @@ impl IndicatorPane {
             chart_rect.bottom(),
             false,
         )
-        .with_price_precision(self.config.price_precision);
+        .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
         let mut tags = Vec::new();
         if self.config.show_values {
             crate::chart::rendering::axes::render_study_tags(
@@ -1025,7 +1044,6 @@ impl IndicatorPane {
     fn legend_text(&self, indicator: &dyn Indicator) -> String {
         let values = indicator.values();
         let mut legend_parts = Vec::new();
-        let precision = self.config.price_precision.map_or(2, usize::from);
         if self.config.show_name {
             legend_parts.push(indicator.name().to_string());
         }
@@ -1033,18 +1051,14 @@ impl IndicatorPane {
             legend_parts.push(self.config.inputs.clone());
         }
         if self.config.show_values
-            && let Some(last_value) = values.last()
+            && let Some(bar) = values.len().checked_sub(1)
         {
-            match last_value {
-                IndicatorValue::Single(v) => {
-                    legend_parts.push(format!("{v:.precision$}"));
+            for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
+            {
+                if let Some(value) = values.value(line, bar) {
+                    let precision = indicator.precision().unwrap_or(2);
+                    legend_parts.push(format!("{value:.precision$}"));
                 }
-                IndicatorValue::Multiple(vals) => {
-                    for v in vals {
-                        legend_parts.push(format!("{v:.precision$}"));
-                    }
-                }
-                IndicatorValue::None => {}
             }
         }
 

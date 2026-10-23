@@ -28,6 +28,7 @@ pub use crosshair::render_crosshair_full;
 #[cfg(feature = "icons")]
 pub(crate) use crosshair::snap_to_nearest_ohlc;
 pub use indicator::IndicatorRenderer;
+pub(crate) use indicator::paint_study_plot;
 pub use labels::{
     Legend, LegendStatus, QuoteSide, render_price_labels, render_price_labels_at_pos,
     render_time_labels,

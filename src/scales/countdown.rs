@@ -1,7 +1,7 @@
 //! Countdown labels from bar boundaries and a host clock.
 
-use crate::model::Timeframe;
-use chrono::{DateTime, Datelike, Days, Months, NaiveTime, TimeDelta, Utc};
+use crate::model::{BarClock, Timeframe};
+use chrono::{DateTime, Utc};
 
 /// Formats the time left in an open bar, using an exact host or session close when supplied.
 /// Without an exact close, calendar months end at the next month's first day and intraday
@@ -12,28 +12,21 @@ pub fn bar_countdown(
     now: DateTime<Utc>,
     close: Option<DateTime<Utc>>,
 ) -> Option<String> {
-    let end = match timeframe {
-        Timeframe::Month1 => open
-            .date_naive()
-            .with_day(1)?
-            .checked_add_months(Months::new(1))?
-            .and_time(NaiveTime::MIN)
-            .and_utc(),
-        _ => {
-            let end = open.checked_add_signed(TimeDelta::milliseconds(timeframe.duration_ms()))?;
-            if timeframe.duration_ms() < 86_400_000 {
-                end.min(
-                    open.date_naive()
-                        .checked_add_days(Days::new(1))?
-                        .and_time(NaiveTime::MIN)
-                        .and_utc(),
-                )
-            } else {
-                end
-            }
+    if matches!(timeframe, Timeframe::Ticks(_)) {
+        return None;
+    }
+    let end = close.or_else(|| {
+        let clock = BarClock::new(timeframe);
+        if timeframe.duration_ms() < 86_400_000 {
+            let midnight = BarClock::new(Timeframe::Day1);
+            Some(
+                open.checked_add_signed(timeframe.duration())?
+                    .min(midnight.next_open(midnight.bar_open(open))?),
+            )
+        } else {
+            clock.next_open(clock.bar_open(open))
         }
-    };
-    let end = close.unwrap_or(end);
+    })?;
     if now < open || now >= end {
         return None;
     }
@@ -63,6 +56,13 @@ mod tests {
     #[test]
     fn countdown_uses_calendar_boundaries_and_exact_closes() {
         for (open, timeframe, now, close, expected) in [
+            (
+                "2024-03-01T00:00:00Z",
+                "10t".parse().unwrap(),
+                "2024-03-01T00:00:00Z",
+                Some("2024-03-01T00:01:00Z"),
+                None,
+            ),
             (
                 "2024-02-01T00:00:00Z",
                 Timeframe::Month1,

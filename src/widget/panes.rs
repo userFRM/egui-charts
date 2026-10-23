@@ -127,11 +127,6 @@ impl Chart {
                 _ => IndicatorPaneConfig::default(),
             };
 
-            if config.price_precision.is_none() {
-                config.price_precision = self
-                    .instrument()
-                    .and_then(crate::scales::instrument_price_precision);
-            }
             config.show_name = self.config.show_indicator_labels;
             config.show_values = self.config.show_indicator_last_val;
             config.inputs = if self.config.show_indicator_inputs {
@@ -172,6 +167,9 @@ impl Chart {
 
                 // A click on the legend's close "x" removes this study.
                 let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
+                if pane_response.double_clicked() {
+                    self.indicator_settings_request = Some(id);
+                }
                 if close_clicked {
                     pending_indicator_remove = Some(id);
                 }

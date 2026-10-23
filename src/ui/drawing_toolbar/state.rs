@@ -12,11 +12,11 @@ use std::collections::{HashMap, VecDeque};
 /// Types of magnet snapping behavior
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MagnetType {
-    /// Weak magnetic snapping (loose tolerance)
+    /// Snap only within the configured pixel threshold
     Weak,
-    /// Strong magnetic snapping (tight tolerance)
+    /// Snap to the nearest OHLC value of the bar under the pointer
     Strong,
-    /// Snap to OHLC price values
+    /// Snap to OHLC price values, with the same behavior as strong magnet
     OHLC,
 }
 

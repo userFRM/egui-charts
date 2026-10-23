@@ -2,7 +2,7 @@ use crate::model::Bar;
 /// Center of Gravity Oscillator
 /// Developed by John Ehlers
 /// Uses a weighted moving avg to identify reversal points
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -10,7 +10,7 @@ use egui::Color32;
 pub struct CenterOfGravity {
     /// Lookback period (typically 10)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [COG, Signal]
     colors: Vec<Color32>,
     visible: bool,
@@ -20,7 +20,7 @@ impl CenterOfGravity {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.bullish,     // Teal - COG
                 DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange - Signal
@@ -42,6 +42,10 @@ impl Default for CenterOfGravity {
 }
 
 impl Indicator for CenterOfGravity {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "COG"
     }
@@ -101,13 +105,12 @@ impl Indicator for CenterOfGravity {
             if cog.is_nan() {
                 self.values.push(IndicatorValue::None);
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![*cog, *signal]));
+                self.values.push_lines(&[*cog, *signal]);
             }
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -179,6 +182,7 @@ mod tests {
         // Should have valid values after period
         let valid_cnt = cog
             .values
+            .to_rows()
             .iter()
             .filter(|v| !matches!(v, IndicatorValue::None))
             .count();

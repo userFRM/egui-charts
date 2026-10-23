@@ -4,13 +4,14 @@ use crate::model::{Bar, BarClock, Timeframe};
 use chrono::TimeDelta;
 
 /// Builds bars of interval `to` from `bars` of interval `from`, which must be in time order.
+/// Pass timeframes for UTC boundaries, or [`BarClock`] values for a selected calendar timezone.
 /// Prices and volumes are expected to be finite, as stored series keep them.
 ///
 /// Each output bar gathers the consecutive input bars that fall in one bar of
-/// [`BarClock::new(to)`](BarClock::new) and is stamped with that bar's open time. It takes the open
+/// the target [`BarClock`] and is stamped with that bar's open time. It takes the open
 /// of the first input bar, the highest high, the lowest low, the close of the last input bar and
 /// the summed volume. A period without input bars has no output bar. When `from == to`, the bars
-/// are returned unchanged.
+/// are returned unchanged when the clocks also share a timezone.
 ///
 /// Returns `None` when `from` bars do not nest in `to` bars: weekly and monthly bars into any
 /// other interval, or an input bar that would span two output bars, as a 5-minute bar opening at
@@ -38,21 +39,29 @@ use chrono::TimeDelta;
 ///     (105.0, 110.0, 104.0, 109.5, 50.0)
 /// );
 /// ```
-pub fn resample(bars: &[Bar], from: Timeframe, to: Timeframe) -> Option<Vec<Bar>> {
-    if from == to {
+pub fn resample(
+    bars: &[Bar],
+    from: impl Into<BarClock>,
+    to: impl Into<BarClock>,
+) -> Option<Vec<Bar>> {
+    let (source, target) = (from.into(), to.into());
+    let (from, to) = (source.timeframe()?, target.timeframe()?);
+    if source == target || (from == to && matches!(from, Timeframe::Ticks(_))) {
         return Some(bars.to_vec());
+    }
+    if matches!(from, Timeframe::Ticks(_)) || matches!(to, Timeframe::Ticks(_)) {
+        return None;
     }
     // Weeks do not nest in months or in fixed multi-week intervals, and a month has no fixed length.
     if matches!(from, Timeframe::Week1 | Timeframe::Month1) {
         return None;
     }
-    let (source, target) = (BarClock::new(from), BarClock::new(to));
     let mut resampled: Vec<Bar> = Vec::new();
     for bar in bars {
         let open = source.bar_open(bar.time);
         // The next open rather than `open + from`: the last bar of a day is short when `from`
         // does not divide a day.
-        let end = source.bar_open(open.checked_add_signed(from.duration())?);
+        let end = source.next_open(open)?;
         let slot = target.bar_open(open);
         if target.bar_open(end - TimeDelta::milliseconds(1)) != slot {
             return None;
@@ -147,5 +156,19 @@ mod tests {
         for (from, to, bars, expected) in cases {
             assert_eq!(resample(&bars, from, to), expected, "{from} to {to}");
         }
+        let local = BarClock::new(Timeframe::Hour4).with_timezone(chrono_tz::America::New_York);
+        // Local midnight to 04:00 lasts three hours on the spring clock change.
+        let input = vec![
+            bar("2024-03-10T05:00:00Z", [100.0, 101.0, 99.0, 100.0, 2.0]),
+            bar("2024-03-10T07:59:00Z", [102.0, 104.0, 101.0, 103.0, 3.0]),
+            bar("2024-03-10T08:00:00Z", [103.0, 105.0, 102.0, 104.0, 4.0]),
+        ];
+        assert_eq!(
+            resample(&input, Timeframe::Min1, local),
+            Some(vec![
+                bar("2024-03-10T05:00:00Z", [100.0, 104.0, 99.0, 103.0, 5.0]),
+                bar("2024-03-10T08:00:00Z", [103.0, 105.0, 102.0, 104.0, 4.0]),
+            ])
+        );
     }
 }

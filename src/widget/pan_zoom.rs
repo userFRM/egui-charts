@@ -575,6 +575,10 @@ impl Chart {
     /// Apply pending timescale configuration: width, initial visible bars,
     /// lock-on-resize behavior, and pending start-index jumps.
     pub fn apply_timescale_config(&mut self, chart_width: f32) {
+        // Hidden or collapsed layouts cannot establish a zoom or a resize baseline.
+        if !chart_width.is_finite() || chart_width <= 1.0 {
+            return;
+        }
         self.state.time_scale_mut().set_width(chart_width);
 
         if self.apply_visible_bars_once {
@@ -583,27 +587,22 @@ impl Chart {
             {
                 let spacing = self.calculate_bar_spacing(chart_width, desired);
                 self.state.time_scale_mut().set_bar_spacing(spacing);
+                if self.prev_width.is_none() {
+                    self.state.time_scale_mut().jump_to_latest();
+                }
             }
             self.apply_visible_bars_once = false;
-        }
-
-        // lockVisibleTimeRangeOnResize
-        if self
+        } else if self
             .chart_options
             .time_scale
             .lock_visible_time_range_on_resize
+            && let Some(prev_width) = self.prev_width
+            && (chart_width - prev_width).abs() > 1.0
         {
-            if let Some(prev_width) = self.prev_width
-                && (chart_width - prev_width).abs() > 1.0
-            {
-                let prev_visible_bars = self.calculate_visible_bars(prev_width);
-                if prev_visible_bars > 0 {
-                    let spacing = chart_width / prev_visible_bars as f32;
-                    self.state.time_scale_mut().set_bar_spacing(spacing);
-                }
-            }
-            self.prev_width = Some(chart_width);
+            let spacing = self.state.time_scale().bar_spacing() * chart_width / prev_width;
+            self.state.time_scale_mut().set_bar_spacing(spacing);
         }
+        self.prev_width = Some(chart_width);
 
         if let Some(time) = self.pending_scroll_time
             && let Some(first) = self.state.data().bars.first()
@@ -653,6 +652,72 @@ mod tests {
     use crate::widget::Chart;
     use crate::widget::test_frames::{chart, frame};
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
+
+    /// Startup and suspended layouts must not consume the requested zoom or move the right edge.
+    #[test]
+    fn degenerate_width_preserves_pending_view_and_resize_anchor() {
+        for lock in [false, true] {
+            for pixels in [None, Some(60.0)] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0], &[105.0]).visible_bars(100);
+                let options = &mut chart.chart_options.time_scale;
+                options.min_bar_spacing = 0.01;
+                options.lock_visible_time_range_on_resize = lock;
+                options.right_offset_pixels = pixels;
+                let options = chart.chart_options.clone();
+                chart = chart.with_chart_options(options);
+                let show = |chart: &mut Chart, width| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                };
+                show(&mut chart, 0.0);
+                show(&mut chart, 1.0);
+                assert_eq!(chart.state.time_scale().bar_spacing(), 6.0);
+                assert!(chart.apply_visible_bars_once);
+                show(&mut chart, 1064.0);
+                let width = chart.last_rendered_price_rect.width();
+                let scale = chart.state.time_scale();
+                let spacing = width / 100.0;
+                assert!((scale.bar_spacing() - spacing).abs() < 1e-5);
+                let offset = pixels.map_or(2.5, |px| px / spacing);
+                assert!((scale.right_offset() - offset).abs() < 1e-5);
+                chart.state.time_scale_mut().set_right_offset(-20.0);
+                show(&mut chart, 0.0);
+                show(&mut chart, 1.0);
+                show(&mut chart, 1064.0);
+                assert!((chart.state.time_scale().bar_spacing() - spacing).abs() < 1e-5);
+                assert_eq!(chart.state.time_scale().right_offset(), -20.0);
+                show(&mut chart, 1564.0);
+                let expected = if lock {
+                    chart.last_rendered_price_rect.width() / 100.0
+                } else {
+                    spacing
+                };
+                assert!((chart.state.time_scale().bar_spacing() - expected).abs() < 1e-5);
+                assert_eq!(chart.state.time_scale().right_offset(), -20.0);
+                chart.set_visible_bars(80);
+                show(&mut chart, 1264.0);
+                assert!(
+                    (chart.state.time_scale().bar_spacing()
+                        - chart.last_rendered_price_rect.width() / 80.0)
+                        .abs()
+                        < 1e-5,
+                    "a pending view must take precedence over a locked resize"
+                );
+            }
+        }
+    }
 
     /// Drags down by 100 points in `steps` frames from the point `start` picks given the price pane.
     fn drag_down(chart: &mut Chart, start: fn(Rect) -> Pos2, steps: usize) {

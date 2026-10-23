@@ -2,7 +2,7 @@
 
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::utils::draw_dashed_line;
-use crate::styles::{stroke, typography};
+use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
@@ -37,7 +37,7 @@ impl Drawing {
 
         // Draw sign plate at top
         let text = self.text.as_deref().unwrap_or("Event");
-        let font = egui::FontId::proportional(typography::SM);
+        let font = self.annotation_font();
         let galley = painter.layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE);
         let text_size = galley.size();
         let padding = egui::vec2(
@@ -79,7 +79,7 @@ impl Drawing {
         if !self.chart_points.is_empty() {
             let bar_idx = self.chart_points[0].bar_idx as i64;
             let date_text = format!("Bar {bar_idx}");
-            let date_font = egui::FontId::proportional(typography::XS);
+            let date_font = self.annotation_font();
             painter.text(
                 Pos2::new(
                     pos.x,

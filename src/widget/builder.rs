@@ -105,6 +105,7 @@ impl Chart {
             },
             from_ticks: BTreeSet::new(),
             studies: IndicatorRegistry::new(),
+            main_series_visible: true,
             study_ids: Vec::new(),
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),
@@ -126,6 +127,7 @@ impl Chart {
             quote_action: None,
             server_time_offset: None,
             bar_close_time: None,
+            indicator_settings_request: None,
             session_quote: None,
             session_provider: None,
             extended_hours: false,
@@ -637,7 +639,7 @@ impl ChartBuilder {
     /// Set the number of bars visible in the initial viewport (default: 100).
     ///
     /// This controls the initial bar spacing so that approximately `count` bars
-    /// fit within the chart width.
+    /// fit within the chart width. Use zero to keep the configured bar spacing.
     #[must_use]
     pub fn with_visible_candles(mut self, count: usize) -> Self {
         self.visible_candles = count;

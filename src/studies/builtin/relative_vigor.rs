@@ -4,7 +4,7 @@ use crate::studies::stepper::rolling_mean;
 /// Relative Vigor Index (RVI)
 /// Measures conviction of price movement
 /// Uses the relationship between close-open vs high-low
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -12,7 +12,7 @@ use egui::Color32;
 pub struct RelativeVigorIndex {
     /// Period for smoothing (typically 10)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [RVI, Signal]
     colors: Vec<Color32>,
     visible: bool,
@@ -22,7 +22,7 @@ impl RelativeVigorIndex {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - RVI
                 DESIGN_TOKENS.semantic.extended.error,   // Red - Signal
@@ -61,8 +61,8 @@ impl Default for RelativeVigorIndex {
 
 impl RelativeVigorIndex {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         // Calculate (Close - Open) for numerator
         let close_open: Vec<f64> = data.iter().map(|b| b.close - b.open).collect();
 
@@ -95,7 +95,7 @@ impl RelativeVigorIndex {
             if rvi[i].is_nan() {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![rvi[i], signal[i]]));
+                values.push_lines(&[rvi[i], signal[i]]);
             }
         }
 
@@ -104,6 +104,10 @@ impl RelativeVigorIndex {
 }
 
 impl Indicator for RelativeVigorIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "RVI"
     }
@@ -122,7 +126,7 @@ impl Indicator for RelativeVigorIndex {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

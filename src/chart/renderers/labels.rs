@@ -617,14 +617,27 @@ mod tests {
                     Color32::from_rgb(41, 98, 255),
                     Color32::from_rgb(255, 167, 38),
                 ];
-                chart.add_indicator(Box::new(
+                let id = chart.add_indicator(Box::new(
                     CustomIndicator::new("Colliding", |bars| {
-                        vec![IndicatorValue::Multiple(vec![105.0, 105.0, f64::NAN]); bars.len()]
+                        vec![
+                            IndicatorValue::Multiple(vec![105.0, 105.0, 106.0, f64::NAN]);
+                            bars.len()
+                        ]
                     })
                     .with_overlay(overlay)
-                    .with_line_cnt(3)
-                    .with_colors(vec![colors[0], colors[1], Color32::RED]),
+                    .with_line_cnt(4)
+                    .with_colors(vec![
+                        colors[0],
+                        colors[1],
+                        Color32::RED,
+                        Color32::GREEN,
+                    ]),
                 ));
+                let study = chart.indicator_mut(id).unwrap();
+                let mut settings = study.settings();
+                settings.precision = Some(4);
+                settings.plots[2].visible = false;
+                study.apply_settings(&[], settings).unwrap();
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
                 let plot = if overlay {
@@ -639,6 +652,9 @@ mod tests {
                         _ => None,
                     })
                     .collect();
+                assert!(!painted.iter().any(|shape| matches!(shape,
+                    Shape::Text(text) if text.galley.text() == "106.0000"
+                )));
                 assert_eq!(
                     tags.len(),
                     if shown && side.is_some() { 2 } else { 0 },
@@ -667,6 +683,7 @@ mod tests {
                                 _ => None,
                             })
                             .expect("value text inside its tag");
+                        assert_eq!(text.galley.text(), "105.0000");
                         assert_eq!(text.galley.job.sections[0].format.color, Color32::WHITE);
                     }
                     let separation = (tags[0].center().y - tags[1].center().y).abs();

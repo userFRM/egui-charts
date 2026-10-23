@@ -129,35 +129,37 @@ pub(crate) fn render_study_tags(
     axis_right: f32,
     occupied: &mut Vec<Option<Rect>>,
 ) {
-    use crate::studies::IndicatorValue;
     if !study.is_visible() {
         return;
     }
     let values = study.values();
-    let values = match values.last() {
-        Some(IndicatorValue::Single(value)) => std::slice::from_ref(value),
-        Some(IndicatorValue::Multiple(values)) => values.as_slice(),
-        _ => return,
+    let Some(bar) = values.len().checked_sub(1) else {
+        return;
     };
-    let colors = study.colors();
     let transform = map.transform();
-    for (line, value) in values.iter().enumerate().take(study.line_cnt()) {
-        if !value.is_finite()
-            || study.line_style(line).width <= 0.0
-            || !map.range().contains(transform.to_scale(*value))
+    for line in 0..study.line_cnt() {
+        let plot_style = study.plot_style(line);
+        let Some(value) = values.value(line, bar) else {
+            continue;
+        };
+        if !plot_style.visible
+            || plot_style.width <= 0.0
+            || !map.range().contains(transform.to_scale(value))
         {
             continue;
         }
         let label = transform.label(
-            transform.to_scale(*value),
-            map.price_precision().unwrap_or(2),
+            transform.to_scale(value),
+            study
+                .precision()
+                .unwrap_or_else(|| map.price_precision().unwrap_or(2)),
         );
-        let color = colors.get(line).copied().unwrap_or(Color32::WHITE);
+        let color = plot_style.color;
         occupied.push(render_axis_value(
             painter,
             plot,
             axis_right,
-            map.price_to_y(*value),
+            map.price_to_y(value),
             label,
             (Color32::WHITE, color),
             occupied,
@@ -452,15 +454,20 @@ pub(crate) fn render_quote_tags_with_countdown(
 
 /// Draws and routes the add cell of a crosshair price tag. A click returns the tagged price
 /// for the host's alert, order or price-line menu. Call before handling price-axis drags.
+/// Pass the resolved label text colour as `foreground` to keep the glyph on the same pair.
 #[cfg(feature = "icons")]
-pub fn crosshair_price_action(ui: &mut egui::Ui, tag: Rect, price: f64) -> Option<f64> {
+pub fn crosshair_price_action(
+    ui: &mut egui::Ui,
+    tag: Rect,
+    price: f64,
+    foreground: Color32,
+) -> Option<f64> {
     let cell = Rect::from_min_size(tag.min, Vec2::new(21.0, tag.height())).intersect(tag);
     let response = ui.interact(
         cell,
         ui.scope_id().with("crosshair_price_action"),
         egui::Sense::click(),
     );
-    let foreground = Color32::WHITE;
     ui.painter().line_segment(
         [cell.right_top(), cell.right_bottom()],
         Stroke::new(0.5, foreground),
@@ -775,6 +782,25 @@ mod tests {
         let ctx = Context::default();
         let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
         let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
+        for (_, theme) in crate::theme::presets() {
+            crate::theme::apply_to_egui(&ctx, &theme);
+            for configured in [Color32::PLACEHOLDER, Color32::WHITE, Color32::BLACK] {
+                let options = crate::config::CrosshairOptions {
+                    label_text_color: configured,
+                    ..Default::default()
+                }
+                .resolved(&ctx);
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    crosshair_price_action(ui, tag, 704.64, options.label_text_color);
+                });
+                let color = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                assert_eq!(color, Some(options.label_text_color));
+            }
+        }
         let mut actions = Vec::new();
         for (pos, expected) in [
             (Pos2::new(110.0, 110.0), "add"),
@@ -792,7 +818,7 @@ mod tests {
                     });
                 }
                 let output = ctx.run_ui(input, |ui| {
-                    if let Some(price) = crosshair_price_action(ui, tag, 704.64) {
+                    if let Some(price) = crosshair_price_action(ui, tag, 704.64, Color32::WHITE) {
                         assert_eq!(price, 704.64);
                         actions.push("add");
                     }

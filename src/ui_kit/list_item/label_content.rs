@@ -82,13 +82,12 @@ impl<'a> ListItemContent for LabelContent<'a> {
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> Response {
         let egui_visuals = ui.style().visuals.clone();
 
-        // Use ListVisuals methods for color computation (rerun-inspired)
         let mut list_visuals = context.visuals.clone();
         list_visuals.strong = self.strong;
 
         // Determine text color using ListVisuals
         let text_color = if self.subdued {
-            egui_visuals.widgets.noninteractive.fg_stroke.color
+            egui_visuals.weak_text_color()
         } else {
             list_visuals.text_color(&egui_visuals)
         };

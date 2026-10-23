@@ -8,9 +8,6 @@ use egui::{Color32, Ui};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 
-/// How far one interaction step (hover, then press) moves a fill towards the text colour.
-const STATE_STEP: f32 = 0.1;
-
 /// Button variant for different emphasis levels
 ///
 /// Semantic variants communicate importance and action type visually.
@@ -47,14 +44,10 @@ pub enum ButtonVariant {
 impl ButtonVariant {
     /// Get the background color for this variant in the given state.
     ///
-    /// Colours follow the theme applied to `ui`. Primary steps through the theme's accent,
-    /// accent hover and accent pressed shades, and Danger through its danger shades; both
-    /// move away from their text colour, so the text keeps its contrast. Secondary is one step above the
-    /// surface, and Ghost and Outlined are transparent at rest. For these neutral variants
-    /// hover and press each move the fill one step further from the surface towards the text
-    /// colour, so a pressed button never looks paler than a hovered one. In a disabled `ui`,
-    /// Primary and Danger paint as Secondary, because egui's fade would leave their text
-    /// barely readable on a light accent or red.
+    /// Primary and Danger use the theme's opaque state shades. Ghost and Outlined
+    /// share egui's hover and pressed fills; Secondary retains its filled state ladder.
+    /// In a disabled `ui`, Primary and Danger paint as Secondary so fading keeps
+    /// their text readable.
     pub fn bg_color(&self, ui: &Ui, hovered: bool, pressed: bool) -> Color32 {
         let state = |rest, hover, press| {
             if pressed {
@@ -65,7 +58,7 @@ impl ButtonVariant {
                 rest
             }
         };
-        let (rest, rest_steps) = match self {
+        match self {
             Self::Primary if ui.is_enabled() => {
                 let colors = ui.active_theme().ui;
                 return state(colors.accent, colors.accent_hover, colors.accent_active);
@@ -78,15 +71,17 @@ impl ButtonVariant {
                     colors.danger_bg_active,
                 );
             }
-            Self::Secondary | Self::Primary | Self::Danger => (Color32::TRANSPARENT, 1),
-            Self::Ghost | Self::Outlined => (Color32::TRANSPARENT, 0),
-        };
-        let steps = rest_steps + u8::from(hovered || pressed) + u8::from(pressed);
-        // Blending from transparent gives a translucent overlay that works on any surface.
-        rest.lerp_to_gamma(
-            ui.visuals().strong_text_color(),
-            STATE_STEP * f32::from(steps),
-        )
+            Self::Ghost | Self::Outlined => {
+                return state(
+                    Color32::TRANSPARENT,
+                    ui.visuals().widgets.hovered.bg_fill,
+                    ui.visuals().widgets.active.bg_fill,
+                );
+            }
+            Self::Secondary | Self::Primary | Self::Danger => {}
+        }
+        let steps = 1 + u8::from(hovered || pressed) + u8::from(pressed);
+        Color32::TRANSPARENT.lerp_to_gamma(ui.visuals().strong_text_color(), 0.1 * f32::from(steps))
     }
 
     /// Get the foreground (text/icon) color for this variant
@@ -94,7 +89,7 @@ impl ButtonVariant {
         match self {
             Self::Primary if ui.is_enabled() => ui.active_theme().ui.accent_text,
             Self::Danger if ui.is_enabled() => ui.active_theme().ui.danger_text,
-            _ => ui.visuals().strong_text_color(),
+            _ => ui.visuals().widgets.inactive.fg_stroke.color,
         }
     }
 
@@ -113,7 +108,15 @@ impl ButtonVariant {
     /// Call it inside `ui.scope` so the style is restored after rendering the button.
     pub fn apply_to_style(&self, ui: &mut Ui, hovered: bool, active: bool) {
         let bg = self.bg_color(ui, hovered, active);
-        let fg = self.fg_color(ui);
+        let fg = if self.is_inverse() {
+            self.fg_color(ui)
+        } else if active {
+            ui.visuals().widgets.active.fg_stroke.color
+        } else if hovered {
+            ui.visuals().widgets.hovered.fg_stroke.color
+        } else {
+            self.fg_color(ui)
+        };
         let border = self.border_color(ui);
 
         let widgets = &mut ui.visuals_mut().widgets;
@@ -123,6 +126,7 @@ impl ButtonVariant {
             &mut widgets.active,
         ] {
             w.bg_fill = bg;
+            w.weak_bg_fill = bg;
             w.fg_stroke.color = fg;
             if let Some(border) = border {
                 w.bg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, border);
@@ -145,6 +149,34 @@ impl ButtonVariant {
 mod tests {
     use super::*;
     use crate::theme::{Theme, apply_to_egui, contrast, presets};
+
+    #[test]
+    fn neutral_buttons_share_widget_fills_and_resting_foreground() {
+        for (_, theme) in presets() {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &theme);
+            ctx.run_ui(Default::default(), |ui| {
+                // A host may distinguish resting controls from strong body text.
+                ui.visuals_mut().widgets.inactive.fg_stroke.color =
+                    Color32::from_rgb(150, 160, 170);
+                for variant in [ButtonVariant::Ghost, ButtonVariant::Outlined] {
+                    assert_eq!(
+                        variant.fg_color(ui),
+                        ui.visuals().widgets.inactive.fg_stroke.color
+                    );
+                    assert_eq!(variant.bg_color(ui, false, false), Color32::TRANSPARENT);
+                    for (hovered, pressed, expected) in [
+                        (true, false, ui.visuals().widgets.hovered.bg_fill),
+                        (false, true, ui.visuals().widgets.active.bg_fill),
+                        (true, true, ui.visuals().widgets.active.bg_fill),
+                    ] {
+                        assert_eq!(variant.bg_color(ui, hovered, pressed), expected);
+                    }
+                }
+            })
+            .drop_without_applying_deltas();
+        }
+    }
 
     #[test]
     fn primary_and_danger_text_reads_on_the_fill_in_every_state_and_preset() {
@@ -175,16 +207,6 @@ mod tests {
                                     let fill = variant.bg_color(ui, hovered, pressed);
                                     let ratio =
                                         contrast(text, surface.blend(fill.gamma_multiply(fade)));
-                                    // The specified dark accent reads at 4.05:1 with white.
-                                    let min = if name == "dark"
-                                        && enabled
-                                        && matches!(variant, ButtonVariant::Primary)
-                                        && state == "rest"
-                                    {
-                                        4.0
-                                    } else {
-                                        min
-                                    };
                                     if ratio < min {
                                         failures.push(format!(
                                             "{name}: {variant:?} {state} (enabled: {enabled}) is \

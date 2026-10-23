@@ -1,6 +1,6 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -50,7 +50,7 @@ pub struct ZigZag {
     depth: usize,
     /// Price mode
     mode: ZigZagMode,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -62,7 +62,7 @@ impl ZigZag {
             deviation_percent: clamp_param(deviation_percent, 0.0, f64::MAX),
             depth: depth.max(1),
             mode: ZigZagMode::HighLow,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.info,
             visible: true,
         }
@@ -94,8 +94,8 @@ impl ZigZag {
     }
 
     /// The values over `data`, every bar of which has finite prices.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = vec![IndicatorValue::None; data.len()];
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::missing(data.len());
         let (depth, deviation) = (self.depth, self.deviation_percent);
         if deviation <= 0.0 {
             return values;
@@ -192,7 +192,7 @@ impl ZigZag {
             let ((start, from), (end, to)) = (leg[0], leg[1]);
             for i in start..=end {
                 let t = (i - start) as f64 / (end - start) as f64;
-                values[i] = IndicatorValue::Single(from + (to - from) * t);
+                values.set(i, IndicatorValue::Single(from + (to - from) * t));
             }
         }
         values
@@ -207,6 +207,12 @@ impl Default for ZigZag {
 }
 
 impl Indicator for ZigZag {
+    crate::studies::inputs::study_inputs!(self;
+        deviation_percent: number("Deviation percent", 0.0, f64::MAX),
+        depth: length("Depth", 1, usize::MAX),
+        mode: choice("Mode", [ZigZagMode::HighLow, ZigZagMode::Close, ZigZagMode::Typical])
+    ; {});
+
     fn name(&self) -> &str {
         "ZigZag"
     }
@@ -227,7 +233,7 @@ impl Indicator for ZigZag {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -502,6 +508,7 @@ mod tests {
             zz.calculate(&data);
             let got: Vec<Option<f64>> = zz
                 .values()
+                .to_rows()
                 .iter()
                 .map(|v| match v {
                     IndicatorValue::Single(x) => Some(*x),

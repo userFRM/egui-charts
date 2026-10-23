@@ -292,6 +292,21 @@ impl ExchangeSessionProvider {
         session.extended_windows.iter().any(contains) && !session.windows.iter().any(contains)
     }
 
+    /// Whether the exchange is open, optionally including extended windows.
+    pub fn is_open(&self, time: DateTime<Utc>, extended_hours: bool) -> bool {
+        let Some(session) = &self.session else {
+            return true;
+        };
+        if session.windows.is_empty() && session.extended_windows.is_empty() {
+            return !session.holidays.contains(&self.wall_time(time).date());
+        }
+        session
+            .windows
+            .iter()
+            .chain(session.extended_windows.iter().filter(|_| extended_hours))
+            .any(|window| self.window_close(time, window).is_some())
+    }
+
     /// Closing instant of the active trading window. Outside trading hours, including holidays,
     /// returns `None`. Extended windows participate only when requested.
     pub fn session_close(&self, time: DateTime<Utc>, extended: bool) -> Option<DateTime<Utc>> {
@@ -929,6 +944,18 @@ mod tests {
                 .map(|bar| provider.is_extended(bar.time))
                 .collect::<Vec<_>>(),
             [true, false, false, true, true, false, true, false]
+        );
+        assert_eq!(
+            bars.iter()
+                .map(|bar| provider.is_open(bar.time, false))
+                .collect::<Vec<_>>(),
+            [false, false, false, false, false, true, false, false]
+        );
+        assert_eq!(
+            bars.iter()
+                .map(|bar| provider.is_open(bar.time, true))
+                .collect::<Vec<_>>(),
+            [true, false, false, true, true, true, true, false]
         );
         // Split regular windows do not create a second trading day after lunch.
         let split = ExchangeSessionProvider::new(
