@@ -9,6 +9,7 @@
 
 use crate::model::PriceSource;
 use crate::scales::PriceScaleMode;
+use crate::theme::Theme;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -298,11 +299,10 @@ pub enum WatermarkPos {
 
 impl Default for ChartConfig {
     fn default() -> Self {
+        let chart = Theme::dark().chart;
         Self {
-            // Bullish color: #26a69a
-            bullish_color: DESIGN_TOKENS.semantic.extended.bullish,
-            // Bearish color: #F23645
-            bearish_color: DESIGN_TOKENS.semantic.extended.bearish,
+            bullish_color: chart.candle_up,
+            bearish_color: chart.candle_down,
             // Border colors (None = same as body)
             bullish_border_color: None,
             bearish_border_color: None,
@@ -312,13 +312,13 @@ impl Default for ChartConfig {
             // Price source for line charts (default: Close)
             price_source: PriceSource::default(),
             // Dark background
-            background_color: DESIGN_TOKENS.semantic.chart.bg,
+            background_color: chart.bg,
             // Default to solid background
             background_style: BackgroundStyle::Solid,
-            // Grid: ~5% opacity
-            grid_color: DESIGN_TOKENS.semantic.chart.grid_line,
+            // Grid colour from the default theme
+            grid_color: chart.grid_line,
             // Text color
-            text_color: DESIGN_TOKENS.semantic.extended.chart_text,
+            text_color: chart.axis_text,
             // Candle style - wider bodies
             candle_width: 0.8,
             // Wick - thin crisp lines
@@ -351,17 +351,17 @@ impl Default for ChartConfig {
             realtime_button_size: (110.0, 28.0),
             realtime_button_color: DESIGN_TOKENS.semantic.extended.chart_tooltip_bg,
             realtime_button_hover_color: DESIGN_TOKENS.semantic.extended.chart_axis_bg,
-            realtime_button_text_color: DESIGN_TOKENS.semantic.extended.chart_text,
+            realtime_button_text_color: chart.axis_text,
             navigation_buttons: NavigationButtons::default(),
             // Session breaks disabled by default
             show_session_breaks: false,
-            session_break_color: DESIGN_TOKENS.semantic.chart.grid_line_major,
+            session_break_color: chart.grid_line_major,
             session_break_style: SessionBreakStyle::Dashed,
             session_config: None,
             // Watermark disabled by default
             show_watermark: false,
             watermark_text: None,
-            watermark_color: DESIGN_TOKENS.semantic.chart.grid_line,
+            watermark_color: chart.grid_line,
             watermark_font_size: 48.0,
             watermark_pos: WatermarkPos::Center,
             // Background enabled by default (set false when inside a container)

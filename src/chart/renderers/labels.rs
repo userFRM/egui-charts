@@ -225,13 +225,19 @@ pub fn render_time_labels(
     context: &RenderContext,
     visible_data: &[Bar],
     coords: &ChartMapping,
-    colors: &StyleColors,
+    _colors: &StyleColors,
     formatter: &dyn TimeFormatter,
     tags: &[Option<Rect>],
     slot: ShapeIdx,
 ) {
     let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter);
     let font = axis_font(context.painter.ctx());
+    let text_color = context
+        .painter
+        .ctx()
+        .active_theme()
+        .chart
+        .axis_text_secondary;
 
     // Track last rendered label position to prevent overlap
     let min_label_spacing = 80.0; // Min pixels between label centers
@@ -261,10 +267,10 @@ pub fn render_time_labels(
         let y = context.rect.max.y + TIME_LABEL_GAP;
         let galley = context
             .painter
-            .layout_no_wrap(mark.label, font.clone(), colors.text);
+            .layout_no_wrap(mark.label, font.clone(), text_color);
         let rect = egui::Align2::CENTER_TOP.anchor_size(Pos2::new(x, y), galley.size());
         if !under_tag(tags, rect) {
-            labels.push(Shape::galley(rect.min, galley, colors.text));
+            labels.push(Shape::galley(rect.min, galley, text_color));
         }
 
         last_label_x = Some(x);
