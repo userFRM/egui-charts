@@ -28,7 +28,8 @@ pub(crate) struct SeriesBars {
 pub(crate) struct Merged {
     /// Index of the first bar inserted or changed. Bars after it may have moved.
     pub(crate) first_changed: Option<usize>,
-    /// Invalid bars dropped.
+    /// Invalid bars dropped, and the trades of a bar built from ticks that would overflow its stored
+    /// bar.
     pub(crate) rejected: u64,
     /// Trades of bars older than the last bar, dropped.
     pub(crate) late_ticks: u64,
@@ -57,6 +58,12 @@ impl SeriesBars {
         incoming.dedup_by(|later, earlier| {
             let same = clock.same_bar(later.0.time, earlier.0.time);
             if same {
+                if later.0 != earlier.0 {
+                    log::debug!(
+                        "dropped the bar at {} for a later bar of its slot",
+                        earlier.0.time
+                    );
+                }
                 std::mem::swap(later, earlier);
             }
             same
@@ -84,8 +91,8 @@ impl SeriesBars {
             }
             let old = stored.next_if(|old| slot(old) == at);
             let new = match (old, origin) {
-                (Some(old), Origin::Ticks(_)) => fold(old, &bar).unwrap_or_else(|| {
-                    merged.rejected += 1;
+                (Some(old), Origin::Ticks(trades)) => fold(old, &bar).unwrap_or_else(|| {
+                    merged.rejected += trades;
                     old.clone()
                 }),
                 (Some(old), Origin::History) if !self.from_ticks.contains(&old.time) => old.clone(),
@@ -201,10 +208,10 @@ mod tests {
                 vec![(History, vec![bar(0, 1.0), ohlcv(1, [5.0, 7.0, 4.0, 6.0, 10.0])]),
                     (Ticks(3), vec![ohlcv(1, [8.0, 8.0, 3.0, 3.0, 3.0])])],
                 vec![bar(0, 1.0), ohlcv(1, [5.0, 8.0, 3.0, 3.0, 13.0])], (Some(1), 0, 0)),
-            ("ticks that would overflow the volume are rejected",
+            ("every trade of a bar that would overflow the volume is rejected",
                 vec![(History, vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1.5e308])]),
-                    (Ticks(1), vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1e308])])],
-                vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1.5e308])], (None, 1, 0)),
+                    (Ticks(3), vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1e308])])],
+                vec![ohlcv(1, [5.0, 5.0, 5.0, 5.0, 1.5e308])], (None, 3, 0)),
             ("every trade of a bar older than the last bar is late",
                 vec![(History, vec![bar(0, 1.0), bar(1, 2.0)]), (Ticks(3), vec![bar(0, 9.0)])],
                 vec![bar(0, 1.0), bar(1, 2.0)], (None, 0, 3)),
