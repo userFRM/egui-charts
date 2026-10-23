@@ -623,8 +623,6 @@ impl DemoApp {
 
         // Symbol search (used by the pill, quick search, and compare entry).
         let symbols = DemoSymbol::symbols();
-        // No comparison renderer is attached in this demo; retain the chart's empty list.
-        self.compare_dialog.set_compared_symbols(Vec::new());
         if let egui_charts::ui::top_toolbar::CompareAction::AddSymbol(symbol) =
             self.compare_dialog.show(ctx, &symbols)
         {

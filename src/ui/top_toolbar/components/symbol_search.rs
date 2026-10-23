@@ -730,14 +730,11 @@ pub struct CompareSymbolsDialog {
     pub is_open: bool,
     /// Search query
     search_query: String,
-    /// Currently compared symbols
+    /// Current comparison series on the host's chart. Update after accepting an intent,
+    /// including changes made outside this dialog.
     pub compared_symbols: Vec<CompareSymbol>,
     /// Configuration
     config: CompareSymbolsConfig,
-    /// Color palette for new symbols
-    color_palette: Vec<Color32>,
-    /// Next color index
-    next_color_idx: usize,
 }
 
 impl Default for CompareSymbolsDialog {
@@ -754,17 +751,6 @@ impl CompareSymbolsDialog {
             search_query: String::new(),
             compared_symbols: Vec::new(),
             config: CompareSymbolsConfig::default(),
-            color_palette: vec![
-                DESIGN_TOKENS.semantic.extended.warning,       // Orange
-                DESIGN_TOKENS.semantic.extended.info,          // Blue
-                DESIGN_TOKENS.semantic.extended.success,       // Green
-                DESIGN_TOKENS.semantic.extended.purple,        // Purple
-                DESIGN_TOKENS.semantic.extended.error,         // Red
-                DESIGN_TOKENS.semantic.extended.cyan,          // Cyan
-                DESIGN_TOKENS.semantic.extended.favorite_gold, // Yellow
-                DESIGN_TOKENS.semantic.extended.brown,         // Brown
-            ],
-            next_color_idx: 0,
         }
     }
 
@@ -783,19 +769,6 @@ impl CompareSymbolsDialog {
     /// Close the dialog
     pub fn close(&mut self) {
         self.is_open = false;
-    }
-
-    /// Replace the displayed comparison list with the host's current chart series.
-    /// Call before showing the dialog so rejected or externally changed series stay in sync.
-    pub fn set_compared_symbols(&mut self, symbols: Vec<CompareSymbol>) {
-        self.compared_symbols = symbols;
-    }
-
-    /// Get next color from palette
-    fn next_color(&mut self) -> Color32 {
-        let color = self.color_palette[self.next_color_idx % self.color_palette.len()];
-        self.next_color_idx += 1;
-        color
     }
 
     /// Show the dialog, suggesting `symbols`: the symbols the host's data source offers
@@ -918,31 +891,6 @@ impl CompareSymbolsDialog {
                     }
                 }
             });
-
-        // Handle add action
-        if let CompareAction::AddSymbol(ref sym) = action
-            && !self.compared_symbols.iter().any(|s| s.symbol == *sym)
-        {
-            let color = self.next_color();
-            let name = symbols
-                .iter()
-                .find(|s| s.name == *sym)
-                .map_or("", |s| s.display_name.as_str());
-            self.compared_symbols
-                .push(CompareSymbol::new(sym.clone(), name, "", color));
-        }
-
-        // Handle remove action
-        if let CompareAction::RemoveSymbol(ref sym) = action {
-            self.compared_symbols.retain(|s| s.symbol != *sym);
-        }
-
-        // Handle toggle visibility
-        if let CompareAction::ToggleVisibility(ref sym) = action
-            && let Some(s) = self.compared_symbols.iter_mut().find(|s| s.symbol == *sym)
-        {
-            s.visible = !s.visible;
-        }
 
         action
     }
@@ -1331,5 +1279,65 @@ mod tests {
 
         dialog.close();
         assert!(!dialog.is_open);
+        let symbols = create_test_symbols();
+        for (label, expected, populated) in [
+            ("AAPL", CompareAction::AddSymbol("AAPL".into()), false),
+            ("X", CompareAction::RemoveSymbol("AAPL".into()), true),
+            ("Hide", CompareAction::ToggleVisibility("AAPL".into()), true),
+        ] {
+            let ctx = Context::default();
+            let mut dialog = CompareSymbolsDialog::new();
+            if populated {
+                dialog.compared_symbols.push(CompareSymbol::new(
+                    "AAPL",
+                    "Apple",
+                    "Test",
+                    Color32::GOLD,
+                ));
+            }
+            let config = dialog.config.resolved(&ctx.global_style().visuals);
+            let mut frame = |events| {
+                let mut action = CompareAction::None;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        action = dialog.draw_content(ui, &symbols, &config);
+                    },
+                );
+                let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                (action, pos)
+            };
+            frame(vec![]);
+            let pos = frame(vec![]).1.unwrap();
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(vec![button(true)]);
+            assert_eq!(frame(vec![button(false)]).0, expected);
+            assert_eq!(
+                dialog.compared_symbols.len(),
+                usize::from(populated),
+                "only the host updates chart membership"
+            );
+            if populated {
+                assert!(
+                    dialog.compared_symbols[0].visible,
+                    "only the host updates chart visibility"
+                );
+            }
+        }
     }
 }
