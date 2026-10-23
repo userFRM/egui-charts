@@ -205,16 +205,10 @@ impl Drawing {
 
             // Draw arc segments (approximate with line segments)
             let segments = 32;
-            let start_angle = std::f32::consts::PI;
-            let end_angle = 0.0;
-
             let mut prev_point: Option<Pos2> = None;
             for i in 0..=segments {
-                let t = i as f32 / segments as f32;
-                let angle = start_angle + (end_angle - start_angle) * t;
-                let x = end.x + radius * angle.cos();
-                let y = end.y + radius * angle.sin();
-                let point = Pos2::new(x, y);
+                let angle = std::f32::consts::PI * (1.0 - i as f32 / segments as f32);
+                let point = speed_arc_point(start, end, radius, angle);
 
                 if let Some(prev) = prev_point {
                     painter.line_segment([prev, point], Stroke::new(stroke::HAIRLINE, color));
@@ -252,31 +246,14 @@ impl Drawing {
             self.color[3],
         );
 
-        // Base distance for time zones (distance between first two points)
-        let base_distance = (end.x - start.x).abs();
-        let direction = if end.x >= start.x { 1.0 } else { -1.0 };
-
-        // Fibonacci sequence for time zones
-        let fib_sequence: [u32; 12] = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89];
-
         // Collect zone positions for fill
         let mut zone_positions: Vec<f32> = Vec::new();
 
-        for (idx, &fib_num) in fib_sequence.iter().enumerate() {
-            let curr_x = start.x + base_distance * (fib_num as f32) * direction;
-
-            // Skip if outside chart
-            if curr_x < chart_rect.min.x || curr_x > chart_rect.max.x {
-                if curr_x > chart_rect.max.x {
-                    break;
-                }
-                continue;
-            }
-
+        for (fib_num, curr_x) in fib_time_zone_lines(start.x, end.x, chart_rect.x_range()) {
             zone_positions.push(curr_x);
 
             // Determine line style based on position
-            let (stroke_width, alpha) = if idx <= 2 {
+            let (stroke_width, alpha) = if fib_num <= 2 {
                 (self.stroke_width, 255) // First few zones are prominent
             } else {
                 (stroke::HAIRLINE, 180)
@@ -293,7 +270,7 @@ impl Drawing {
             );
 
             // Draw label with background at top
-            if idx > 0 || fib_num > 0 {
+            if fib_num > 0 {
                 let label_bg = DESIGN_TOKENS
                     .semantic
                     .extended
@@ -370,20 +347,13 @@ impl Drawing {
             return;
         }
 
-        // Calculate perpendicular unit vector
-        let perp_x = -dy / line_length;
-        let perp_y = dx / line_length;
-
         // Channel width from third point if available, otherwise use 50% of line length
-        let channel_width = if self.points.len() >= 3 {
-            let p3 = self.points[2];
-            // Project p3 onto perpendicular to get width
-            let to_p3_x = p3.x - start.x;
-            let to_p3_y = p3.y - start.y;
-            (to_p3_x * perp_x + to_p3_y * perp_y).abs()
-        } else {
-            line_length * 0.5
-        };
+        let width_point = self
+            .points
+            .get(2)
+            .copied()
+            .unwrap_or_else(|| start + egui::vec2(-dy, dx) * 0.5);
+        let level_line = |value: f32| fib_channel_level_line(start, end, width_point, value);
 
         // Draw filled zones between levels
         if config.show_background && visible_levels.len() > 1 {
@@ -391,13 +361,8 @@ impl Drawing {
                 let level1 = visible_levels[i];
                 let level2 = visible_levels[i + 1];
 
-                let offset1 = channel_width * level1.value;
-                let offset2 = channel_width * level2.value;
-
-                let p1_l1 = Pos2::new(start.x + perp_x * offset1, start.y + perp_y * offset1);
-                let p2_l1 = Pos2::new(end.x + perp_x * offset1, end.y + perp_y * offset1);
-                let p1_l2 = Pos2::new(start.x + perp_x * offset2, start.y + perp_y * offset2);
-                let p2_l2 = Pos2::new(end.x + perp_x * offset2, end.y + perp_y * offset2);
+                let [p1_l1, p2_l1] = level_line(level1.value);
+                let [p1_l2, p2_l2] = level_line(level2.value);
 
                 let fill_color = Color32::from_rgba_unmultiplied(
                     level1.color[0],
@@ -423,9 +388,7 @@ impl Drawing {
                 level.color[3],
             );
 
-            let offset = channel_width * level.value;
-            let p1 = Pos2::new(start.x + perp_x * offset, start.y + perp_y * offset);
-            let p2 = Pos2::new(end.x + perp_x * offset, end.y + perp_y * offset);
+            let [p1, p2] = level_line(level.value);
 
             // Extend lines if configured
             let (draw_start, draw_end) = if config.extend_left || config.extend_right {
@@ -537,10 +500,7 @@ impl Drawing {
             self.color[3],
         );
 
-        // Calculate direction and distances
-        let dx = end.x - start.x;
-        let dy = end.y - start.y;
-        let is_upward = dy < 0.0;
+        let is_upward = end.y < start.y;
 
         // Fibonacci speed resistance fan ratios with labels
         let fib_ratios: [(f32, &str); 7] = [
@@ -578,17 +538,9 @@ impl Drawing {
 
         // Draw fan lines
         for (i, (ratio, label)) in fib_ratios.iter().enumerate() {
-            let target_y = start.y + dy * ratio;
-
-            // Extend to chart edge
-            let extend_distance = chart_rect.max.x - start.x;
-            let slope = if dx.abs() > 0.001 {
-                (target_y - start.y) / dx
-            } else {
-                0.0
-            };
-            let fan_end_y = start.y + slope * extend_distance;
-            let fan_end = Pos2::new(chart_rect.max.x, fan_end_y);
+            // Extend to the chart edge on the side of the second anchor
+            let fan_end = speed_fan_line_end(start, end, *ratio, chart_rect);
+            let fan_end_y = fan_end.y;
 
             let line_color = level_colors[i];
             let stroke_width = if *ratio == 0.5 {
@@ -600,8 +552,13 @@ impl Drawing {
             // Draw the fan line
             painter.line_segment([start, fan_end], Stroke::new(stroke_width, line_color));
 
-            // Draw label with background
-            let label_pos = Pos2::new(chart_rect.max.x - DESIGN_TOKENS.rounding.lg, fan_end_y);
+            // Draw label with background, inside the edge the line runs to
+            let label_x = if fan_end.x < start.x {
+                chart_rect.min.x + DESIGN_TOKENS.rounding.lg + 45.0
+            } else {
+                chart_rect.max.x - DESIGN_TOKENS.rounding.lg
+            };
+            let label_pos = Pos2::new(label_x, fan_end_y);
             let label_bg = DESIGN_TOKENS
                 .semantic
                 .extended
@@ -627,23 +584,8 @@ impl Drawing {
         // Draw fill between adjacent fan lines (subtle)
         let fill_alpha = 10u8;
         for i in 0..fib_ratios.len() - 1 {
-            let y1 = start.y + dy * fib_ratios[i].0;
-            let y2 = start.y + dy * fib_ratios[i + 1].0;
-
-            let slope1 = if dx.abs() > 0.001 {
-                (y1 - start.y) / dx
-            } else {
-                0.0
-            };
-            let slope2 = if dx.abs() > 0.001 {
-                (y2 - start.y) / dx
-            } else {
-                0.0
-            };
-
-            let extend = chart_rect.max.x - start.x;
-            let end_y1 = start.y + slope1 * extend;
-            let end_y2 = start.y + slope2 * extend;
+            let end1 = speed_fan_line_end(start, end, fib_ratios[i].0, chart_rect);
+            let end2 = speed_fan_line_end(start, end, fib_ratios[i + 1].0, chart_rect);
 
             let fill_color = Color32::from_rgba_unmultiplied(
                 level_colors[i].r(),
@@ -653,11 +595,7 @@ impl Drawing {
             );
 
             painter.add(egui::epaint::PathShape::convex_polygon(
-                vec![
-                    start,
-                    Pos2::new(chart_rect.max.x, end_y1),
-                    Pos2::new(chart_rect.max.x, end_y2),
-                ],
+                vec![start, end1, end2],
                 fill_color,
                 Stroke::NONE,
             ));
@@ -693,22 +631,17 @@ impl Drawing {
             self.color[2],
             self.color[3],
         );
-        let base_radius = ((edge.x - center.x).powi(2) + (edge.y - center.y).powi(2)).sqrt();
-
-        // Golden spiral approximation
-        let phi = std::f32::consts::GOLDEN_RATIO;
-        let mut prev_point: Option<Pos2> = None;
-        for i in 0..100 {
-            let angle = i as f32 * 0.1;
-            let r = base_radius * 0.1 * phi.powf(angle / (2.0 * std::f32::consts::PI));
-            let x = center.x + r * angle.cos();
-            let y = center.y + r * angle.sin();
-            let point = Pos2::new(x, y);
-            if let Some(prev) = prev_point {
-                painter.line_segment([prev, point], Stroke::new(stroke::HAIRLINE, color));
-            }
-            prev_point = Some(point);
+        if center.distance(edge) < 1.0 {
+            return;
         }
+        // Two turns inside the second anchor, down to 1/47 of its distance, and one turn outside.
+        let points = (-80..=40)
+            .map(|i| fib_spiral_point(center, edge, i as f32 * 0.05 * std::f32::consts::PI))
+            .collect();
+        painter.add(egui::Shape::line(
+            points,
+            Stroke::new(stroke::HAIRLINE, color),
+        ));
     }
 
     pub(crate) fn render_fibonacci_wedge(&self, painter: &egui::Painter, _chart_rect: Rect) {
@@ -770,5 +703,156 @@ impl Drawing {
                 color,
             );
         }
+    }
+}
+
+/// The line of a Fibonacci channel level: the base line from `start` to `end`
+/// moved `level` times the channel width towards `width_point`, on whichever
+/// side of the base line that point lies.
+fn fib_channel_level_line(start: Pos2, end: Pos2, width_point: Pos2, level: f32) -> [Pos2; 2] {
+    let d = end - start;
+    let perp = egui::vec2(-d.y, d.x) / d.length();
+    let width = (width_point - start).dot(perp);
+    [start, end].map(|p| p + perp * width * level)
+}
+
+/// A point of a speed resistance arc of `radius` around `end`, `angle`
+/// radians from the forward direction, on the side of `end` facing `start`'s
+/// price: below the end of a rise, above the end of a fall.
+fn speed_arc_point(start: Pos2, end: Pos2, radius: f32, angle: f32) -> Pos2 {
+    let side = if start.y >= end.y { 1.0 } else { -1.0 };
+    end + radius * egui::vec2(angle.cos(), side * angle.sin())
+}
+
+/// Where the speed resistance fan line through `start` and the point `ratio`
+/// of the way from `start`'s price to `end`'s, above `end`, leaves the chart
+/// on the side of `end`.
+fn speed_fan_line_end(start: Pos2, end: Pos2, ratio: f32, chart_rect: Rect) -> Pos2 {
+    let d = end - start;
+    let slope = if d.x.abs() > 0.001 {
+        d.y * ratio / d.x
+    } else {
+        0.0
+    };
+    let edge = if d.x < 0.0 {
+        chart_rect.min.x
+    } else {
+        chart_rect.max.x
+    };
+    Pos2::new(edge, start.y + slope * (edge - start.x))
+}
+
+/// Fibonacci number and screen x of each time zone line inside `x_range`:
+/// the anchors are one unit apart, and the lines follow the Fibonacci sequence
+/// from the first anchor towards the second. Empty when the anchors are less
+/// than a pixel apart horizontally.
+fn fib_time_zone_lines(start_x: f32, end_x: f32, x_range: egui::Rangef) -> Vec<(u32, f32)> {
+    let unit = end_x - start_x;
+    if unit.abs() < 1.0 {
+        return Vec::new();
+    }
+    [0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
+        .into_iter()
+        .map(|n| (n, start_x + unit * n as f32))
+        .take_while(|&(_, x)| {
+            if unit > 0.0 {
+                x <= x_range.max
+            } else {
+                x >= x_range.min
+            }
+        })
+        .filter(|&(_, x)| x_range.contains(x))
+        .collect()
+}
+
+/// The point of the golden spiral around `center` that passes through `edge`,
+/// `theta` radians past it: the radius grows by the golden ratio every quarter turn.
+fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f32) -> Pos2 {
+    let d = edge - center;
+    let r = d.length() * std::f32::consts::GOLDEN_RATIO.powf(theta / std::f32::consts::FRAC_PI_2);
+    let angle = d.y.atan2(d.x) + theta;
+    center + r * egui::vec2(angle.cos(), angle.sin())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::FRAC_PI_2;
+
+    /// Each tool against coordinates worked by hand (screen y grows downward).
+    #[test]
+    fn fibonacci_tools_follow_their_construction() {
+        let near = |a: Pos2, b: Pos2| a.distance(b) < 1e-2;
+        let mut wrong = Vec::new();
+
+        // Channel along y = 100 with its width point 40 px above: level 1 runs
+        // through the width point, level 0.5 halfway.
+        let (start, end) = (Pos2::new(0.0, 100.0), Pos2::new(100.0, 100.0));
+        for (level, y) in [(1.0, 60.0), (0.5, 80.0)] {
+            let got = fib_channel_level_line(start, end, Pos2::new(50.0, 60.0), level);
+            let want = [Pos2::new(0.0, y), Pos2::new(100.0, y)];
+            if !(near(got[0], want[0]) && near(got[1], want[1])) {
+                wrong.push(format!("channel level {level}: got {got:?}, want {want:?}"));
+            }
+        }
+
+        // Arcs open towards the first anchor's price: below the end of a rise,
+        // above the end of a fall. Radius 50, a quarter turn from forward.
+        for (start, end, want) in [
+            ((0.0, 100.0), (100.0, 0.0), (100.0, 50.0)),
+            ((0.0, 0.0), (100.0, 100.0), (100.0, 50.0)),
+        ] {
+            let (start, end) = (Pos2::from(start), Pos2::from(end));
+            let got = speed_arc_point(start, end, 50.0, FRAC_PI_2);
+            if !near(got, Pos2::from(want)) {
+                wrong.push(format!(
+                    "arc {start:?} to {end:?}: got {got:?}, want {want:?}"
+                ));
+            }
+        }
+
+        // A fan drawn right to left, (200, 100) to (100, 50), leaves on the left
+        // edge: slope 0.5 * ratio, so at x = 0, y = 100 - 200 * 0.5 * ratio.
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
+        for (ratio, want) in [(1.0, (0.0, 0.0)), (0.5, (0.0, 50.0))] {
+            let got =
+                speed_fan_line_end(Pos2::new(200.0, 100.0), Pos2::new(100.0, 50.0), ratio, rect);
+            if !near(got, Pos2::from(want)) {
+                wrong.push(format!("fan ratio {ratio}: got {got:?}, want {want:?}"));
+            }
+        }
+
+        // Time zones 10 px apart from x = 100: one line per Fibonacci number.
+        let got = fib_time_zone_lines(100.0, 110.0, egui::Rangef::new(0.0, 300.0));
+        let want = [
+            (0, 100.0),
+            (1, 110.0),
+            (2, 120.0),
+            (3, 130.0),
+            (5, 150.0),
+            (8, 180.0),
+            (13, 230.0),
+        ];
+        if got != want {
+            wrong.push(format!("time zones: got {got:?}, want {want:?}"));
+        }
+
+        // Golden spiral through the second anchor, its radius growing by phi
+        // (1.618034) every quarter turn.
+        for (edge, theta, want) in [
+            ((100.0, 0.0), 0.0, (100.0, 0.0)),
+            ((100.0, 0.0), FRAC_PI_2, (0.0, 161.8034)),
+            ((100.0, 0.0), -FRAC_PI_2, (0.0, -61.8034)),
+            ((0.0, 100.0), 0.0, (0.0, 100.0)),
+        ] {
+            let got = fib_spiral_point(Pos2::ZERO, Pos2::from(edge), theta);
+            if !near(got, Pos2::from(want)) {
+                wrong.push(format!(
+                    "spiral edge {edge:?} theta {theta}: got {got:?}, want {want:?}"
+                ));
+            }
+        }
+
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 }
