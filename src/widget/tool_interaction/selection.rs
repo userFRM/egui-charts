@@ -107,15 +107,40 @@ pub fn handle_selection<F1, F2>(
     }
 }
 
+/// Drawing keys belong to this chart or to an otherwise unfocused canvas.
+pub(super) fn keyboard_available(ui: &Ui, response: &Response) -> bool {
+    !egui::Popup::is_any_open(ui.ctx())
+        && ui.memory(|m| m.focused().is_none_or(|id| id == response.id))
+}
+
 /// Handle Delete/Backspace to remove selected drawing, and Escape to deselect/cancel.
-pub fn handle_keyboard_shortcuts(ui: &Ui, drawing_manager: &mut DrawingManager) {
-    ui.input(|i| {
-        if (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+pub fn handle_keyboard_shortcuts(
+    ui: &Ui,
+    response: &Response,
+    drawing_manager: &mut DrawingManager,
+) {
+    // egui releases a text field's focus before delivering its Escape frame.
+    let focus_id = response.id.with("drawing_keyboard_focus");
+    let was_elsewhere = ui
+        .ctx()
+        .data(|d| d.get_temp::<bool>(focus_id))
+        .unwrap_or(false);
+    let elsewhere = ui.memory(|m| m.focused().is_some_and(|id| id != response.id));
+    ui.ctx().data_mut(|d| d.insert_temp(focus_id, elsewhere));
+    if !keyboard_available(ui, response)
+        || (was_elsewhere && ui.input(|i| i.key_pressed(egui::Key::Escape)))
+    {
+        return;
+    }
+    ui.input_mut(|i| {
+        if (i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+            || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
             && let Some(sel_id) = drawing_manager.sel_drawing()
         {
             drawing_manager.delete_drawing(sel_id);
         }
-        if i.key_pressed(egui::Key::Escape) {
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+            drawing_manager.cancel_curr_drawing();
             drawing_manager.deselect();
             drawing_manager.active_tool = None;
             drawing_manager.set_eraser_mode(false);
@@ -175,6 +200,83 @@ mod tests {
     use crate::drawings::manager::DrawingSyncAction;
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use egui::{Context, Event, Id, PointerButton, Pos2, RawInput, Sense};
+
+    /// Editing a field must leave the selection and armed tool alone, while chart keys
+    /// still delete and cancel. Drive the real widget so focus ownership is exercised.
+    #[test]
+    fn drawing_keys_respect_text_field_focus() {
+        use crate::widget::test_frames::chart;
+        use egui::{Key, Modifiers};
+
+        for key in [Key::Backspace, Key::Delete, Key::Escape] {
+            for field_focused in [true, false] {
+                let ctx = Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                chart
+                    .drawings_mut()
+                    .drawings
+                    .push(Drawing::new(7, DrawingToolType::TrendLine));
+                chart.drawings_mut().select(7);
+                chart
+                    .drawings_mut()
+                    .set_active_tool(Some(DrawingToolType::TrendLine));
+                let mut text = "label".to_owned();
+                for pass in 0..3 {
+                    ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(800.0, 600.0),
+                            )),
+                            events: if pass == 2 {
+                                vec![Event::Key {
+                                    key,
+                                    physical_key: None,
+                                    pressed: true,
+                                    repeat: false,
+                                    modifiers: Modifiers::NONE,
+                                }]
+                            } else {
+                                vec![]
+                            },
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let field = ui.text_edit_singleline(&mut text);
+                            let response = chart.show(ui);
+                            if pass < 2 {
+                                if field_focused {
+                                    field.request_focus();
+                                } else {
+                                    response.request_focus();
+                                }
+                            }
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                }
+                let kept = field_focused || key == Key::Escape;
+                assert_eq!(
+                    chart.drawings().drawings.len(),
+                    usize::from(kept),
+                    "{key:?}, field {field_focused}"
+                );
+                if field_focused {
+                    assert_eq!(chart.drawings().sel_drawing(), Some(7), "{key:?}");
+                    assert_eq!(
+                        chart.drawings().active_tool,
+                        Some(DrawingToolType::TrendLine)
+                    );
+                    if key == Key::Backspace {
+                        assert_eq!(text, "labe");
+                    }
+                } else if key == Key::Escape {
+                    assert_eq!(chart.drawings().sel_drawing(), None);
+                    assert_eq!(chart.drawings().active_tool, None);
+                }
+            }
+        }
+    }
 
     /// A body grab keeps its offset from the anchors, translates every price and bar by
     /// the pointer's data delta, and produces one history step and one host update.

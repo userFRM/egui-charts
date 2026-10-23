@@ -157,16 +157,12 @@ pub fn handle_active_tool<F1, F2>(
     }
 
     // Handle Enter to complete multi-point drawings
-    if ui.input(|i| i.key_pressed(egui::Key::Enter))
+    if super::selection::keyboard_available(ui, response)
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
         && matches!(interaction_mode, DrawingInteractionMode::MultiPoint)
         && drawing_manager.curr_drawing.is_some()
     {
         drawing_manager.complete_curr_drawing();
-    }
-
-    // Handle Escape to cancel current drawing
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) && drawing_manager.curr_drawing.is_some() {
-        drawing_manager.cancel_curr_drawing();
     }
 
     // Request repaint when drawing for live preview

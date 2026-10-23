@@ -119,6 +119,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Drawing Delete, Backspace, Escape and completion keys respect keyboard focus and open popups. Editing a text field leaves the selected drawing and armed tool intact; chart Delete still removes the selection and chart Escape cancels it. ([#640](https://github.com/userFRM/egui-charts/issues/640))
+
 - `Chart::set_theme(ctx, theme)` updates chart colours and the context theme while retaining data and viewport. Crosshair labels and their add controls use the active theme's colour pair, rectangle measurements use its axis colour pair, connection and alert statuses follow its semantic colours, and TPO letters retain at least 4.5:1 contrast on both the plot and value-area shading. The settings dialog resolves default background swatches from the theme instead of a fixed dark fill. Explicit crosshair, background and alert colours remain overrides. Default settings swatches follow runtime theme changes without changing saved values on Cancel. Migration: standalone `crosshair_price_action` calls pass the resolved label text colour as the final argument. ([#275](https://github.com/userFRM/egui-charts/issues/275))
 
 - Selected indicator rows take both their fill and text from `IndicatorDialogConfig`, including when the configuration was frozen from another theme. The default follows the active selection pair. Migration: add `sel_text_color` to configuration literals or use `..Default::default()`. ([#437](https://github.com/userFRM/egui-charts/issues/437))
