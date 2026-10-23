@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The Save arrow opens a compact export menu while the label keeps its existing action. Entries requiring hosted layout storage are omitted.
+
 - Snapshot offers image download in a compact menu beneath its trigger. Opening the menu leaves capture to an explicit download choice.
 
 - Chart-type menu rows use a single 14 px name beside each icon, neutral selection and separators between type families.

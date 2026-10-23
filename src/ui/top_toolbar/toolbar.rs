@@ -480,7 +480,38 @@ impl TopToolbar {
             S::Compare | S::Templates | S::Layouts => {
                 ToolbarIconButton::new(icon, label, &self.config).show(ui)
             }
-            S::Save => Self::save_button(&self.config).show(ui),
+            S::Save => {
+                let response = Self::save_button(&self.config).show(ui);
+                let arrow = ui.interact(
+                    egui::Rect::from_min_max(
+                        egui::pos2(response.rect.right() - 16.0, response.rect.top()),
+                        response.rect.max,
+                    ),
+                    response.id.with("save_menu"),
+                    egui::Sense::click(),
+                );
+                egui::Popup::menu(&arrow)
+                    .align(egui::RectAlign::BOTTOM_START)
+                    .align_alternatives(&[])
+                    .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
+                    .show(|ui| {
+                        ui.set_width(200.0);
+                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
+                        if ListItem::new()
+                            .height(32.0)
+                            .show_with_icon(ui, "Export chart…", &embedded_icons::IMAGE)
+                            .clicked()
+                        {
+                            *action = TopToolbarAction::Save;
+                            ui.close();
+                        }
+                    });
+                if arrow.clicked() {
+                    return;
+                }
+                response
+            }
+
             S::Screenshot => {
                 let response = ToolbarIconButton::new(icon, label, &self.config).show(ui);
                 egui::Popup::menu(&response)
@@ -704,67 +735,74 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_download_requires_a_menu_choice() {
+    fn export_menus_require_a_choice() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
-            let mut toolbar = TopToolbar::new();
-            let mut frame = |events| {
-                let mut action = TopToolbarAction::None;
-                let mut rect = Rect::NOTHING;
-                let output = ctx.run_ui(
-                    RawInput {
-                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        rect = ui
-                            .horizontal(|ui| {
-                                toolbar.show_control(
-                                    ui,
-                                    S::Screenshot,
-                                    false,
-                                    "SAMPLE",
-                                    &mut action,
-                                )
-                            })
-                            .response
-                            .rect;
-                    },
+            for (slot, label, expected) in [
+                (
+                    S::Screenshot,
+                    "Download image",
+                    TopToolbarAction::TakeScreenshot,
+                ),
+                (S::Save, "Export chart…", TopToolbarAction::Save),
+            ] {
+                let mut toolbar = TopToolbar::new();
+                let mut frame = |events| {
+                    let mut action = TopToolbarAction::None;
+                    let mut rect = Rect::NOTHING;
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            rect = ui
+                                .horizontal(|ui| {
+                                    toolbar.show_control(ui, slot, false, "SAMPLE", &mut action)
+                                })
+                                .response
+                                .rect;
+                        },
+                    );
+                    let download = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    });
+                    output.drop_without_applying_deltas();
+                    (action, rect, download)
+                };
+                let (_, rect, _) = frame(vec![]);
+                let pos = if slot == S::Save {
+                    pos2(rect.right() - 8.0, rect.center().y)
+                } else {
+                    rect.center()
+                };
+                frame(vec![Event::PointerMoved(pos)]);
+                let click = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                frame(vec![click(pos, true)]);
+                let (action, _, _) = frame(vec![click(pos, false)]);
+                assert_eq!(
+                    action,
+                    TopToolbarAction::None,
+                    "opening the menu must not capture an image"
                 );
-                let download = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Download image" => {
-                        Some(text.pos + text.galley.size() / 2.0)
-                    }
-                    _ => None,
-                });
-                output.drop_without_applying_deltas();
-                (action, rect, download)
-            };
-            let (_, rect, _) = frame(vec![]);
-            let pos = rect.center();
-            frame(vec![Event::PointerMoved(pos)]);
-            let click = |pos, pressed| Event::PointerButton {
-                pos,
-                button: PointerButton::Primary,
-                pressed,
-                modifiers: Default::default(),
-            };
-            frame(vec![click(pos, true)]);
-            let (action, _, _) = frame(vec![click(pos, false)]);
-            assert_eq!(
-                action,
-                TopToolbarAction::None,
-                "opening the menu must not capture an image"
-            );
-            frame(vec![]);
-            let (_, _, download) = frame(vec![]);
-            let pos = download.expect("download choice");
-            frame(vec![Event::PointerMoved(pos)]);
-            frame(vec![click(pos, true)]);
-            let (action, _, _) = frame(vec![click(pos, false)]);
-            assert_eq!(action, TopToolbarAction::TakeScreenshot);
+                frame(vec![]);
+                let (_, _, download) = frame(vec![]);
+                let pos = download.expect("download choice");
+                frame(vec![Event::PointerMoved(pos)]);
+                frame(vec![click(pos, true)]);
+                let (action, _, _) = frame(vec![click(pos, false)]);
+                assert_eq!(action, expected);
+            }
         }
     }
 
