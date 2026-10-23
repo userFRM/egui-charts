@@ -127,6 +127,8 @@ impl ListItem {
             }
         }
 
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
+
         // Handle selection on click
         if response.clicked() && interactive {
             response.mark_changed();
@@ -253,6 +255,47 @@ mod tests {
                     "{name}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn tab_reaches_list_rows_in_visual_order_and_draws_their_ring() {
+        let ctx = egui::Context::default();
+        let frame = |events| {
+            let mut rows = Vec::new();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    for label in ["First", "Second", "Third"] {
+                        rows.push(ListItem::new().show_text(ui, label));
+                    }
+                },
+            );
+            let rings: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.stroke.width == 2.0 => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            (rows, rings)
+        };
+        frame(vec![]);
+        for index in 0..3 {
+            let (rows, rings) = frame(vec![egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            assert!(rows[index].has_focus(), "row {index}");
+            assert_eq!(rings, vec![rows[index].rect.expand(2.0)]);
         }
     }
 }
