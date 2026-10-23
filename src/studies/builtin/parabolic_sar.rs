@@ -14,6 +14,9 @@
 //! - SAR above price: Downtrend (SAR acts as resistance/trailing stop)
 //! - When price crosses SAR: Trend reversal signal
 //!
+//! The SAR is output as two lines, the uptrend SAR and the downtrend SAR; each bar has a
+//! value on exactly one of them, the other is NaN.
+//!
 //! # Example
 //! ```
 //! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
@@ -175,12 +178,14 @@ impl ParabolicSAR {
             }
         }
 
-        // Build output: [sar, trend]
+        // Build output: [uptrend SAR, downtrend SAR]
         for i in 0..data.len() {
             if i == 0 {
                 values.push(IndicatorValue::None);
+            } else if trend[i] == 1 {
+                values.push(IndicatorValue::Multiple(vec![sar[i], f64::NAN]));
             } else {
-                values.push(IndicatorValue::Multiple(vec![sar[i], trend[i] as f64]));
+                values.push(IndicatorValue::Multiple(vec![f64::NAN, sar[i]]));
             }
         }
 
@@ -226,10 +231,6 @@ impl Indicator for ParabolicSAR {
         true // PSAR is drawn on main chart
     }
 
-    fn line_cnt(&self) -> usize {
-        1 // Single SAR line (dots, color changes with trend)
-    }
-
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -243,9 +244,6 @@ impl Indicator for ParabolicSAR {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!(
-            "PSAR({}, {}, {})",
-            self.initial_af, self.af_step, self.max_af
-        )]
+        vec!["Up Trend".to_string(), "Down Trend".to_string()]
     }
 }

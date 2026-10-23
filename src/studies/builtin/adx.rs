@@ -89,7 +89,7 @@ impl Default for ADX {
 
 impl ADX {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    pub(super) fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
         let mut values = Vec::new();
         if data.len() < self.period.saturating_mul(2) {
             for _ in 0..data.len() {

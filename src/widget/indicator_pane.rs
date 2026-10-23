@@ -780,7 +780,8 @@ impl IndicatorPane {
                     IndicatorValue::Single(v) => Some(*v),
                     IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
                     IndicatorValue::None => None,
-                };
+                }
+                .filter(|v| v.is_finite());
 
                 if let Some(v) = val {
                     // X position based on position in visible range
@@ -836,7 +837,8 @@ impl IndicatorPane {
                     IndicatorValue::Single(v) => Some(*v),
                     IndicatorValue::Multiple(vals) => vals.get(line_idx).copied(),
                     IndicatorValue::None => None,
-                };
+                }
+                .filter(|v| v.is_finite());
 
                 if let Some(v) = val {
                     // Use the same coordinate formula as main chart

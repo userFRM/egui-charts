@@ -251,7 +251,6 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [ ] Ichimoku cloud renders as 5 separate lines instead of filled cloud regions
 - [ ] Parabolic SAR renders as a connected line instead of individual dots
 - [ ] Volume Profile outputs `IndicatorValue::Multiple` but there is no horizontal bar chart renderer
-- [ ] Multi-line studies that keep the default line count of 1 draw only their first line (signal lines, second DI or VI line, lower bands, pivot levels)
 
 ### Moving Averages
 - [x] SMA, EMA, WMA, DEMA, TEMA, HMA, ALMA, VWMA, LSMA, SWMA
@@ -266,23 +265,23 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] RSI, MACD, VW-MACD, Stochastic, Stochastic RSI
 - [x] Williams %R, CCI, ROC, Momentum, Aroon, Awesome Oscillator
 - [x] Ultimate Oscillator, Connors RSI, Coppock Curve
-- [x] DPO, TRIX (signal line not drawn), Mass Index, Chande Momentum (CMO)
-- [x] Know Sure Thing (KST): only the first line is drawn (no signal line)
+- [x] DPO, TRIX with its signal line, Mass Index, Chande Momentum (CMO)
+- [x] Know Sure Thing (KST) with its signal line
 - [x] True Strength Index (TSI) with its signal line, KDJ with its K, D and J lines
-- [x] Schaff Trend Cycle, Double Stochastic, Elder Ray (Bear Power not drawn)
-- [x] Fisher Transform (signal not drawn), Ehlers Fisher (trigger not drawn), Force Index
-- [x] Center of Gravity (signal not drawn), Pretty Good Oscillator, Rainbow Oscillator
-- [x] Relative Vigor Index, Stochastic Momentum Index (signal lines not drawn)
+- [x] Schaff Trend Cycle, Double Stochastic, Elder Ray (Bull and Bear Power)
+- [x] Fisher Transform and Ehlers Fisher with their triggers, Force Index
+- [x] Center of Gravity with its signal line, Pretty Good Oscillator, Rainbow Oscillator
+- [x] Relative Vigor Index, Stochastic Momentum Index, each with its signal line
 - [x] Ultimate Momentum, Trend Intensity Index, Qstick
 - [x] Elder Impulse System, Trend Detection Index
 
 ### Trend / Overlay
 - [x] ADX: ADX, +DI, -DI lines
-- [x] SuperTrend: ATR-based trailing stop
+- [x] SuperTrend: ATR-based trailing stop, drawn as an up and a down trend line
 - [x] Ichimoku Cloud: Tenkan and Kijun; Senkou A/B plotted the displacement ahead and Chikou the displacement behind; the part of the cloud projected past the last bar is not drawn
-- [x] Parabolic SAR: SAR values with acceleration factor, drawn as a connected line
-- [x] Directional Movement (DMI): +DI and -DI computed; only +DI is drawn
-- [x] Vortex Indicator: VI+ and VI- computed; only VI+ is drawn
+- [x] Parabolic SAR: SAR values with acceleration factor, drawn as an uptrend and a downtrend line
+- [x] Directional Movement (DMI): +DI, -DI and ADX
+- [x] Vortex Indicator: VI+ and VI-
 - [x] Choppiness Index: ATR sum / range
 - [x] Linear Regression: Rolling LinReg endpoint overlay
 
@@ -294,8 +293,8 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Standard Deviation
 - [x] Bollinger Band Width (BBW), %B
 - [x] Chandelier Exit: N-bar high minus and N-bar low plus ATR*multiplier (long and short exits)
-- [x] Squeeze Momentum: momentum line drawn; BB-inside-KC flag computed but not shown
-- [x] Price Channel (same values as Donchian; only the upper line is drawn)
+- [x] Squeeze Momentum: momentum line and the BB-inside-KC flag (1 or 0) as a second line
+- [x] Price Channel (same values as Donchian)
 - [x] Historical Volatility: Annualized log-return std dev
 - [x] Chaikin Volatility
 - [x] Acceleration Bands
@@ -333,7 +332,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] 52-Week High/Low %
 
 ### Support / Resistance
-- [x] Pivot Points: Standard, Fibonacci, Woodie, Camarilla, DeMark formulas over a rolling N-bar window; only the pivot line is drawn
+- [x] Pivot Points: Standard, Fibonacci, Woodie, Camarilla, DeMark formulas over a rolling N-bar window, pivot and six support and resistance levels
 - [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; the last leg follows the current extreme until the next reversal
 
 ### Price Oscillators
@@ -543,7 +542,7 @@ The ui_kit components are generic building blocks:
 - 19 of 19 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
 - `DrawingToolType` defines 95 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
-- 129 registered indicators with calculation code; studies that keep the default line count of 1 draw only their first line
+- 129 registered indicators with calculation code
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - Reusable ui_kit building blocks
 - Theme system with design tokens and dark, light and high-contrast presets

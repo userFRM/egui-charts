@@ -564,6 +564,12 @@ mod tests {
             lengths.extend([huge, longer]);
         }
 
+        // Every value has one entry per declared line and every line a name. The volume
+        // profiles emit a histogram per bar instead of lines (#167).
+        let fits = |v: &IndicatorValue, lines: usize| match v {
+            IndicatorValue::Multiple(xs) => xs.len() == lines,
+            _ => true,
+        };
         let mut failures = Vec::new();
         for n in lengths {
             for mut study in builtins_with(|k| n[k], |v| v) {
@@ -581,7 +587,23 @@ mod tests {
                             study.name(),
                             bars.len()
                         )),
-                        Ok(_) => {}
+                        Ok(_) if study.name().starts_with("Vol Profile") => {}
+                        Ok(_) => {
+                            let lines = study.line_cnt();
+                            if study.line_names().len() != lines {
+                                failures.push(format!(
+                                    "{}: {lines} lines with names {:?}",
+                                    study.name(),
+                                    study.line_names()
+                                ));
+                            } else if let Some(v) = study.values().iter().find(|v| !fits(v, lines))
+                            {
+                                failures.push(format!(
+                                    "{}{n:?} on {label}: {v:?} for {lines} lines",
+                                    study.name()
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -628,10 +650,12 @@ mod tests {
                 }
             }
         }
+        // Counted per bar: SuperTrend and PSAR split one series over two lines by trend,
+        // and the trend may differ at 0.0.
         let finite = |v: &IndicatorValue| match v {
-            IndicatorValue::Single(x) => vec![x.is_finite()],
-            IndicatorValue::Multiple(xs) => xs.iter().map(|x| x.is_finite()).collect(),
-            IndicatorValue::None => Vec::new(),
+            IndicatorValue::Single(x) => usize::from(x.is_finite()),
+            IndicatorValue::Multiple(xs) => xs.iter().filter(|x| x.is_finite()).count(),
+            IndicatorValue::None => 0,
         };
         // A Zig Zag deviation of 0 filters nothing, so it has no values by design.
         for (study, conventional) in bottom
@@ -643,12 +667,7 @@ mod tests {
                 .values()
                 .iter()
                 .zip(conventional.values())
-                .any(|(b, c)| {
-                    let (b, c) = (finite(b), finite(c));
-                    c.iter()
-                        .enumerate()
-                        .any(|(k, c)| *c && !b.get(k).copied().unwrap_or(false))
-                });
+                .any(|(b, c)| finite(b) < finite(c));
             if lost {
                 failures.push(format!(
                     "{} with float parameters at 0.0 loses values",

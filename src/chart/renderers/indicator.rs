@@ -48,11 +48,13 @@ impl IndicatorRenderer {
                 for (i, value) in (coords.start_idx..).zip(visible) {
                     let x = coords.idx_to_x(i);
 
+                    // A NaN line value has no point and breaks the line like `None`.
                     let price = match value {
                         IndicatorValue::Single(p) => Some(*p),
                         IndicatorValue::Multiple(prices) => prices.get(line_idx).copied(),
                         IndicatorValue::None => None,
-                    };
+                    }
+                    .filter(|p| p.is_finite());
 
                     if let Some(price) = price {
                         // Convert price to screen Y coord
@@ -64,7 +66,7 @@ impl IndicatorRenderer {
                         }
                     } else {
                         // Break the line if we have a None value
-                        if points.len() > 1 {
+                        if !points.is_empty() {
                             Self::draw_line(context.painter, &points, color);
                         }
                         points.clear();
@@ -72,7 +74,7 @@ impl IndicatorRenderer {
                 }
 
                 // Draw final segment
-                if points.len() > 1 {
+                if !points.is_empty() {
                     Self::draw_line(context.painter, &points, color);
                 }
             }
@@ -80,7 +82,9 @@ impl IndicatorRenderer {
     }
 
     fn draw_line(painter: &egui::Painter, points: &[Pos2], color: Color32) {
-        if points.len() < 2 {
+        // A run of one point, such as a one-bar trend of a split line, is a dot.
+        if let [p] = points {
+            painter.circle_filled(*p, DESIGN_TOKENS.stroke.thick, color);
             return;
         }
 

@@ -142,17 +142,20 @@ pub trait Indicator: Send {
         true
     }
 
-    /// The number of lines this indicator plots.
+    /// The number of lines this indicator plots, and the number of entries in
+    /// each [`IndicatorValue::Multiple`] it emits. Renderers draw lines
+    /// `0..line_cnt()`.
     ///
     /// For example, SMA returns `1`, MACD returns `3` (MACD line, signal,
-    /// histogram), and Ichimoku returns `5`. Defaults to `1`.
+    /// histogram), and Ichimoku returns `5`. Defaults to the number of
+    /// [`line_names`](Indicator::line_names).
     fn line_cnt(&self) -> usize {
-        1
+        self.line_names().len()
     }
 
     /// Return display names for each line, used in chart legends.
     ///
-    /// The length of the returned `Vec` should match [`line_cnt`](Indicator::line_cnt).
+    /// The length of the returned `Vec` must match [`line_cnt`](Indicator::line_cnt).
     /// Defaults to a single entry containing [`name`](Indicator::name).
     fn line_names(&self) -> Vec<String> {
         vec![self.name().to_string()]

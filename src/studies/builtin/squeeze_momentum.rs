@@ -20,7 +20,7 @@ pub struct SqueezeMomentum {
     /// Momentum period (typically 12)
     momentum_period: usize,
     values: Vec<IndicatorValue>,
-    /// Colors: [Momentum positive, Momentum negative, Squeeze on, Squeeze off]
+    /// Colors: [Momentum positive, Squeeze on (the squeeze line), Momentum negative, Squeeze off]
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -36,8 +36,8 @@ impl SqueezeMomentum {
             values: Vec::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.success, // Green - Momentum positive
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Momentum negative
                 DESIGN_TOKENS.semantic.extended.disabled, // Gray - Squeeze on
+                DESIGN_TOKENS.semantic.extended.error,   // Red - Momentum negative
                 DESIGN_TOKENS.semantic.extended.info,    // Blue - Squeeze off
             ],
             visible: true,

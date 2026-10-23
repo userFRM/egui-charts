@@ -5,8 +5,10 @@
 //! trend direction and potential entry/exit points.
 //!
 //! # Components
-//! - SuperTrend Line: Dynamic support/resistance level
-//! - Trend Direction: Bullish (below price) or Bearish (above price)
+//! - Up Trend: the SuperTrend line while the trend is bullish (below price)
+//! - Down Trend: the SuperTrend line while the trend is bearish (above price)
+//!
+//! Each bar has a value on exactly one of the two lines; the other is NaN.
 //!
 //! # Interpretation
 //! - SuperTrend below price (green): Bullish trend
@@ -174,16 +176,14 @@ impl SuperTrend {
             }
         }
 
-        // Build output values: [supertrend, direction]
+        // Build output values: [up trend, down trend]
         for i in 0..data.len() {
             if i < self.atr_period - 1 {
                 values.push(IndicatorValue::None);
+            } else if direction[i] == 1 {
+                values.push(IndicatorValue::Multiple(vec![supertrend[i], f64::NAN]));
             } else {
-                // direction: 1.0 for bullish, -1.0 for bearish
-                values.push(IndicatorValue::Multiple(vec![
-                    supertrend[i],
-                    direction[i] as f64,
-                ]));
+                values.push(IndicatorValue::Multiple(vec![f64::NAN, supertrend[i]]));
             }
         }
 
@@ -229,10 +229,6 @@ impl Indicator for SuperTrend {
         true // SuperTrend is drawn on main chart
     }
 
-    fn line_cnt(&self) -> usize {
-        1 // SuperTrend line (color changes with direction)
-    }
-
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -246,9 +242,6 @@ impl Indicator for SuperTrend {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!(
-            "SuperTrend({}, {})",
-            self.atr_period, self.multiplier
-        )]
+        vec!["Up Trend".to_string(), "Down Trend".to_string()]
     }
 }
