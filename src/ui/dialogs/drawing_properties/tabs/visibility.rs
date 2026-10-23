@@ -7,8 +7,10 @@ use crate::tokens::DESIGN_TOKENS;
 use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::FormGrid;
 
-/// Available timeframes
-const TIMEFRAMES: &[&str] = &["1m", "5m", "15m", "30m", "1h", "4h", "1D", "1W", "1M"];
+/// Available timeframes, named as `Timeframe::as_str` names them for the chart's interval label
+const TIMEFRAMES: &[&str] = &[
+    "1min", "5min", "15min", "30min", "1h", "4h", "1D", "1W", "1M",
+];
 
 /// Visibility tab renderer
 pub struct VisibilityTab;

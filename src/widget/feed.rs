@@ -78,8 +78,8 @@ impl Drop for FeedLink {
 impl Chart {
     /// Drives the chart from `feed` from the next [`show`](Self::show) on.
     pub(crate) fn attach_feed(&mut self, feed: Arc<dyn Datafeed>, initial_bars: usize) {
+        self.set_timeframe(self.timeframe.unwrap_or_default());
         let timeframe = self.timeframe.unwrap_or_default();
-        self.timeframe = Some(timeframe);
         self.feed_link = Some(FeedLink {
             feed,
             inbox: Arc::default(),
@@ -114,7 +114,8 @@ impl Chart {
 
     /// Shows bars of `timeframe` from the next [`show`](Self::show), by the rules of
     /// [`set_symbol`](Self::set_symbol). Without a feed it sets the legend label and the
-    /// session breaks only.
+    /// session breaks only. It is also the interval the drawings' per-interval visibility is
+    /// checked against.
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
         if self.timeframe != Some(timeframe)
             && let Some(link) = &mut self.feed_link
@@ -122,6 +123,7 @@ impl Chart {
             link.reload_pending = true;
         }
         self.timeframe = Some(timeframe);
+        self.drawings.curr_timeframe = timeframe.as_str().into_owned();
     }
 
     /// The symbol the chart shows.

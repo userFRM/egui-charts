@@ -164,8 +164,9 @@ pub struct DrawingManager {
 
     /// Whether to stay in drawing mode after completing a drawing.
     pub stay_in_drawing_mode: bool,
-    /// Current chart timeframe string (e.g., `"1D"`, `"1h"`), used for
-    /// per-timeframe drawing visibility filtering.
+    /// Current chart timeframe string (e.g., `"1D"`, `"1h"`): drawings hidden on it are
+    /// neither drawn nor hit. [`Chart::set_timeframe`](crate::widget::Chart::set_timeframe)
+    /// keeps it in step with the chart.
     pub curr_timeframe: String,
     /// Whether eraser mode is active.
     pub eraser_mode: bool,
@@ -750,7 +751,7 @@ impl DrawingManager {
     pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
-            if drawing.visible {
+            if drawing.is_visible_on_timeframe(&self.curr_timeframe) {
                 drawing.render(painter, price_rect, view);
             }
         }

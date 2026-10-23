@@ -131,3 +131,34 @@ impl Chart {
         selection::render_eraser_highlight(painter, drawing_manager, cursor_modes);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType, TimeframeVisibility};
+    use crate::model::Timeframe;
+    use crate::widget::test_frames::{chart, shapes};
+    use egui::{Color32, Context, Shape};
+
+    /// A drawing shown only on the daily interval is neither drawn nor hit once the chart is
+    /// set to another interval.
+    #[test]
+    fn a_drawing_hidden_on_the_chart_interval_is_neither_drawn_nor_hit() {
+        let color = Color32::from_rgb(1, 2, 3);
+        for (interval, shown) in [(Timeframe::Day1, true), (Timeframe::Hour1, false)] {
+            let (ctx, mut chart) = (Context::default(), chart(&[10.0], &[20.0]));
+            chart.set_timeframe(interval);
+            let mut line =
+                Drawing::with_color(1, DrawingToolType::HorizontalLine, color.to_array());
+            line.chart_points = vec![ChartPoint::new(50.0, 15.0)];
+            line.timeframe_visibility = TimeframeVisibility::specific(&["1D"]);
+            chart.drawings_mut().drawings.push(line);
+
+            let painted = shapes(&ctx, &mut chart, 0.0, vec![])
+                .iter()
+                .any(|s| matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color));
+            let on_line = chart.drawings().drawings[0].points[0];
+            let hit = chart.drawings().hit_test(on_line) == Some(1);
+            assert_eq!((painted, hit), (shown, shown), "{interval:?}");
+        }
+    }
+}
