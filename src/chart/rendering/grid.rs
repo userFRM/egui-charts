@@ -142,11 +142,11 @@ mod tests {
             false,
         );
         let coords = ChartMapping::new(rect, 6.0, 0, 60, 0.0, price);
-        for (theme, dotted, scale) in [
-            (Theme::light(), true, 1.0),
-            (Theme::light(), true, 2.0),
-            (Theme::dark(), true, 1.0),
-            (Theme::dark(), true, 2.0),
+        for (theme, scale) in [
+            (Theme::light(), 1.0),
+            (Theme::light(), 2.0),
+            (Theme::dark(), 1.0),
+            (Theme::dark(), 2.0),
         ] {
             let ctx = Context::default();
             apply_to_egui(&ctx, &theme);
@@ -169,15 +169,8 @@ mod tests {
                 let mut span_count = 0;
                 for shape in &output.shapes {
                     match &shape.shape {
-                        Shape::LineSegment { points, stroke } => {
-                            assert!(!dotted, "solid light grid segment");
-                            assert_eq!(stroke.color, Color32::RED);
-                            assert_eq!(stroke.width, 1.0);
-                            assert!(points[0].distance(points[1]) >= rect.height());
-                            span_count += 1;
-                        }
+                        Shape::LineSegment { .. } => panic!("solid grid segment"),
                         Shape::Mesh(mesh) => {
-                            assert!(dotted);
                             let dots: Vec<_> = mesh
                                 .vertices
                                 .as_chunks::<4>()

@@ -69,7 +69,7 @@ const RIGHT: &[&[Slot]] = &[
 
 /// Controls that move into the overflow menu when the strip is too narrow, the first to go
 /// first.
-const OVERFLOW_ORDER: [Slot; 9] = [
+const OVERFLOW_ORDER: [Slot; 12] = [
     S::Compare,
     S::Templates,
     S::Save,
@@ -79,6 +79,9 @@ const OVERFLOW_ORDER: [Slot; 9] = [
     S::Alert,
     S::Indicators,
     S::Settings,
+    S::Redo,
+    S::Undo,
+    S::Replay,
 ];
 
 /// Space between the controls of a group.
@@ -611,7 +614,11 @@ mod tests {
             }
         }
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for width in [640.0, 1440.0] {
+            for (width, host_label) in [
+                (640.0, "Host action"),
+                (1440.0, "Host action"),
+                (600.0, "Search   Trade   Publish"),
+            ] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut toolbar = TopToolbar::new();
@@ -630,7 +637,7 @@ mod tests {
                                 IconButton::new(&embedded_icons::MENU).show(ui);
                             },
                             |ui| {
-                                host_rect = crate::ui_kit::buttons::Button::new("Host action")
+                                host_rect = crate::ui_kit::buttons::Button::new(host_label)
                                     .ghost()
                                     .show(ui)
                                     .rect;

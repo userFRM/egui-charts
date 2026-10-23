@@ -89,6 +89,16 @@ impl<'a> Legend<'a> {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
+        self.show_with_colors(ui, plot, &colors)
+    }
+
+    pub(crate) fn show_with_colors(
+        &self,
+        ui: &mut Ui,
+        plot: Rect,
+        colors: &StyleColors,
+    ) -> Option<QuoteSide> {
+        let theme = ui.active_theme();
         let bounds = plot.shrink(8.0);
         if !bounds.is_positive() {
             return None;
@@ -96,7 +106,7 @@ impl<'a> Legend<'a> {
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
         let painter = ui.painter().with_clip_rect(bounds);
-        let mut layout = Layout::new(&painter, bounds, &colors);
+        let mut layout = Layout::new(&painter, bounds, colors);
         if let Some(badge) = &self.badge {
             let rect = layout.reserve(Vec2::splat(18.0));
             let mut badge_ui = ui.new_child(egui::UiBuilder::new().max_rect(bounds));

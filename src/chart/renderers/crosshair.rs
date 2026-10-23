@@ -169,7 +169,7 @@ pub fn render_crosshair_full(
 }
 
 /// Snap to nearest OHLC price (for Magnet mode)
-fn snap_to_nearest_ohlc(hover_y: f32, price_scale: &PriceMap, candle: &Bar) -> f64 {
+pub(crate) fn snap_to_nearest_ohlc(hover_y: f32, price_scale: &PriceMap, candle: &Bar) -> f64 {
     // Get Y positions of all OHLC values
     let open_y = price_scale.price_to_y(candle.open);
     let high_y = price_scale.price_to_y(candle.high);

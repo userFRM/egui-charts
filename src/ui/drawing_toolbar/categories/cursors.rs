@@ -169,6 +169,22 @@ impl ToolCategory for CursorsCategory {
             response.widget_info(|| {
                 egui::WidgetInfo::selected(egui::Role::RadioButton, true, active, cursor.name())
             });
+            if response.has_focus() {
+                ui.painter().rect_stroke(
+                    rect.shrink(2.0),
+                    6,
+                    egui::Stroke::new(
+                        2.0,
+                        if active {
+                            foreground
+                        } else {
+                            crate::styles::focus::focus_ring_color(ui)
+                        },
+                    ),
+                    egui::StrokeKind::Inside,
+                );
+                response.scroll_to_me(None);
+            }
             if response.clicked() {
                 action = match cursor {
                     CursorType::Eraser => DrawingToolbarAction::ToggleEraserMode,
@@ -212,6 +228,15 @@ impl ToolCategory for CursorsCategory {
         response.widget_info(|| {
             egui::WidgetInfo::selected(egui::Role::Switch, true, state.values_tooltip, values_label)
         });
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                rect.shrink(2.0),
+                6,
+                egui::Stroke::new(2.0, crate::styles::focus::focus_ring_color(ui)),
+                egui::StrokeKind::Inside,
+            );
+            response.scroll_to_me(None);
+        }
         if response.clicked() {
             action = DrawingToolbarAction::ToggleValuesTooltip;
         }

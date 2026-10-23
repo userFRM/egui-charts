@@ -1,4 +1,4 @@
-use super::context::{ChartMapping, RenderContext};
+use super::context::{ChartMapping, RenderContext, StyleColors};
 use super::labels::price_decimals;
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::model::{Bar, percent_change};
@@ -21,6 +21,7 @@ pub fn render_tooltip_with_options(
     candle: &Bar,
     previous_close: Option<f64>,
     options: &TooltipOptions,
+    colors: &StyleColors,
     price_scale: &PriceMap,
     coords: &ChartMapping,
     visible_data: &[Bar],
@@ -34,6 +35,7 @@ pub fn render_tooltip_with_options(
                 candle,
                 previous_close,
                 options,
+                colors.bar_color(candle.close >= candle.open),
             );
         }
         TooltipMode::Tracking => {
@@ -62,6 +64,7 @@ pub fn render_floating_tooltip(
     candle: &Bar,
     previous_close: Option<f64>,
     options: &TooltipOptions,
+    value_color: egui::Color32,
 ) {
     let options = &options.resolved(painter.ctx());
     let price = |price: f64| {
@@ -107,11 +110,6 @@ pub fn render_floating_tooltip(
     let rows: Vec<_> = rows
         .into_iter()
         .map(|(label, value)| {
-            let value_color = if candle.is_bullish() {
-                theme.chart.candle_up
-            } else {
-                theme.chart.candle_down
-            };
             (
                 painter.layout_no_wrap(label.to_owned(), font_id.clone(), options.text_color),
                 painter.layout_no_wrap(value, font_id.clone(), value_color),
