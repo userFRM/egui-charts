@@ -47,6 +47,7 @@ pub use components::{
     SymbolSearchDialog,
     Timeframe,
     TimeframeAction,
+    TimeframePreferences,
     TimeframeSelector,
     TimeframeSelectorConfig,
     TimeframeUnit,

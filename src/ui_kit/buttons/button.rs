@@ -46,6 +46,7 @@ pub struct Button<'a> {
     enabled: bool,
     selected: bool,
     icon_scale: Option<f32>,
+    text_color: Option<Color32>,
 }
 
 impl<'a> Button<'a> {
@@ -60,6 +61,7 @@ impl<'a> Button<'a> {
             enabled: true,
             selected: false,
             icon_scale: None,
+            text_color: None,
         }
     }
 
@@ -74,6 +76,7 @@ impl<'a> Button<'a> {
             enabled: true,
             selected: false,
             icon_scale: None,
+            text_color: None,
         }
     }
 
@@ -88,6 +91,7 @@ impl<'a> Button<'a> {
             enabled: true,
             selected: false,
             icon_scale: None,
+            text_color: None,
         }
     }
 
@@ -130,6 +134,13 @@ impl<'a> Button<'a> {
     #[must_use]
     pub fn danger(mut self) -> Self {
         self.variant = ButtonVariant::Danger;
+        self
+    }
+
+    /// Override only the label colour, retaining the variant's fill and icon colour.
+    #[must_use]
+    pub fn text_color(mut self, color: Color32) -> Self {
+        self.text_color = Some(color);
         self
     }
 
@@ -265,7 +276,8 @@ impl<'a> Widget for Button<'a> {
             }
             if let Some(galley) = galley {
                 let pos = pos2(x, rect.center().y - galley.size().y / 2.0);
-                ui.painter().galley(pos, galley, fg);
+                ui.painter()
+                    .galley(pos, galley, self.text_color.unwrap_or(fg));
             }
         }
 

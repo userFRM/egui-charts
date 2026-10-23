@@ -51,7 +51,7 @@ use egui_charts::ui_kit::notifications::{NotificationPanel, Toast, Toasts};
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
 
-use crate::sampledata::{DemoSymbol, chart_type_from_name, visible_bars_for_range};
+use crate::sampledata::{DemoSymbol, visible_bars_for_range};
 
 struct SavedIndicators {
     name: String,
@@ -244,6 +244,12 @@ impl DemoApp {
                 tooltip: "Data Window".into(),
                 section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
             });
+        if let Some(preferences) = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "interval_preferences"))
+        {
+            top_toolbar.timeframe_selector.set_preferences(preferences);
+        }
         let mut timeframe_toolbar = TimeframeToolbar::default();
         timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
         timeframe_toolbar.state.timeframe = timeframe;
@@ -797,6 +803,14 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 
 impl eframe::App for DemoApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(
+            storage,
+            "interval_preferences",
+            &self.top_toolbar.timeframe_selector.preferences(),
+        );
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);
@@ -1006,12 +1020,10 @@ impl DemoApp {
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
-            TopToolbarAction::ChartStyleSelected(name) => {
-                if let Some(ct) = chart_type_from_name(&name) {
-                    self.state.chart_type = ct;
-                    self.chart.set_chart_type(ct);
-                    self.size_price_based_charts();
-                }
+            TopToolbarAction::ChartStyleSelected(ct) => {
+                self.state.chart_type = ct;
+                self.chart.set_chart_type(ct);
+                self.size_price_based_charts();
             }
             TopToolbarAction::IntervalSelected(tf) => self.switch_timeframe(tf),
             TopToolbarAction::OpenSymbolSearch => self.symbol_search.open(),
@@ -1440,6 +1452,7 @@ impl DemoApp {
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| {
+                self.timeframe_toolbar.state.date_picker_open = self.date_picker.is_open;
                 let action = self.timeframe_toolbar.show(ui);
                 self.handle_timeframe_toolbar(action);
                 self.show_timeframe_menus(ui.ctx());
