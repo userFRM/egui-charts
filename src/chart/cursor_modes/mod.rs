@@ -23,6 +23,7 @@ pub struct CursorModeState {
     /// Eraser mode: click on drawings to delete them.
     pub eraser: EraserMode,
     trail: Vec<(egui::Pos2, f32)>,
+    last_pointer: Option<egui::Pos2>,
 }
 
 impl CursorModeState {
@@ -43,6 +44,18 @@ impl CursorModeState {
     pub fn render(&self, ui: &mut egui::Ui, rect: egui::Rect) {
         use crate::theme::ThemeExt;
         let painter = ui.painter().with_clip_rect(rect);
+        for pair in self.trail.windows(2) {
+            painter.line_segment(
+                [pair[0].0, pair[1].0],
+                egui::Stroke::new(
+                    6.0,
+                    ui.active_theme()
+                        .ui
+                        .accent
+                        .gamma_multiply((1.0 - pair[0].1 / 0.5) * 0.65),
+                ),
+            );
+        }
         for (pos, age) in &self.trail {
             painter.circle_filled(
                 *pos,
@@ -61,17 +74,18 @@ impl CursorModeState {
     pub(crate) fn move_pointer(&mut self, pos: Option<egui::Pos2>) {
         if let Some(pos) = pos {
             if self
-                .trail
-                .last()
-                .is_none_or(|(last, _)| last.distance(pos) > 1.0)
+                .last_pointer
+                .is_none_or(|last| last.distance(pos) > 1.0)
             {
                 if self.trail.len() == 64 {
                     self.trail.remove(0);
                 }
                 self.trail.push((pos, 0.0));
+                self.last_pointer = Some(pos);
             }
         } else {
             self.trail.clear();
+            self.last_pointer = None;
         }
     }
 
@@ -79,5 +93,31 @@ impl CursorModeState {
     pub fn clear_all(&mut self) {
         self.eraser.clear();
         self.trail.clear();
+        self.last_pointer = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stationary pointer must not restart a trail after its last point expires.
+    #[test]
+    fn demonstration_trail_expires_without_restarting() {
+        let mut modes = CursorModeState::new();
+        for (dt, x, expected) in [
+            (0.0, 10.0, 1),
+            (0.1, 20.0, 2),
+            (0.4, 20.0, 1),
+            (0.2, 20.0, 0),
+            (0.1, 20.0, 0),
+            (0.1, 30.0, 1),
+        ] {
+            modes.update(dt);
+            modes.move_pointer(Some(egui::pos2(x, 10.0)));
+            assert_eq!(modes.trail.len(), expected, "at {x} after {dt}");
+        }
+        modes.clear_all();
+        assert!(modes.trail.is_empty());
     }
 }
