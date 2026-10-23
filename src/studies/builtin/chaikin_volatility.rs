@@ -3,7 +3,7 @@ use crate::model::Bar;
 /// Chaikin Volatility
 /// Measures the rate of change of the trading range
 /// High values indicate increased volatility
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -13,7 +13,7 @@ pub struct ChaikinVolatility {
     ema_period: usize,
     /// ROC period (typically 10)
     roc_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -23,7 +23,7 @@ impl ChaikinVolatility {
         Self {
             ema_period: ema_period.max(1),
             roc_period: roc_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.deep_orange,
             visible: true,
         }
@@ -52,8 +52,8 @@ impl ChaikinVolatility {
     }
 
     /// The values over `data`, every bar of which has a finite high and low.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let min_period = self.ema_period.saturating_add(self.roc_period);
         if data.len() < min_period {
@@ -98,6 +98,11 @@ impl Default for ChaikinVolatility {
 }
 
 impl Indicator for ChaikinVolatility {
+    crate::studies::inputs::study_inputs!(self;
+        ema_period: length("EMA period", 1, usize::MAX),
+        roc_period: length("Roc period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "CV"
     }
@@ -114,7 +119,7 @@ impl Indicator for ChaikinVolatility {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

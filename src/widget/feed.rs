@@ -40,6 +40,7 @@ pub(crate) struct FeedLink {
     wake: Arc<Mutex<Option<ViewportId>>>,
     /// The symbol or timeframe changed: the next `pump` reloads.
     reload_pending: bool,
+    paused: bool,
     next_key: u64,
     /// Requests not answered yet; an answer under any other key is stale and dropped.
     pending: Vec<(u64, Request)>,
@@ -102,6 +103,7 @@ impl Chart {
             initial_bars,
             wake: Arc::default(),
             reload_pending: true,
+            paused: false,
             next_key: 0,
             pending: Vec::new(),
             subscription: None,
@@ -111,6 +113,25 @@ impl Chart {
             order_book: None,
             paging_stopped: false,
         });
+    }
+
+    /// Suspends feed requests and unsubscribes while the host supplies replay bars by hand.
+    /// Resuming reloads the current symbol and interval, including any trades retained by the
+    /// host. Bars supplied while paused are matched by exact opening time.
+    pub fn set_feed_paused(&mut self, paused: bool) {
+        if let Some(link) = &mut self.feed_link
+            && link.paused != paused
+        {
+            link.paused = paused;
+            link.reload_pending = true;
+            if paused {
+                if let Some(id) = link.subscription.take() {
+                    link.inbox.unsubscribe(id);
+                    link.feed.unsubscribe(id);
+                }
+                link.pending.clear();
+            }
+        }
     }
 
     /// Shows `symbol` from the next [`show`](Self::show). With a feed, a changed symbol clears
@@ -124,6 +145,7 @@ impl Chart {
             && let Some(link) = &mut self.feed_link
         {
             link.reload_pending = true;
+            link.instrument = None;
         }
         if symbol != self.symbol {
             self.pending_scroll_time = None;
@@ -155,6 +177,9 @@ impl Chart {
             self.pending_scroll_time = None;
         }
         self.timeframe = Some(timeframe);
+        for study in self.studies.indicators_mut() {
+            study.set_timeframe(timeframe);
+        }
         self.drawings.curr_timeframe = timeframe.as_str().into_owned();
     }
 
@@ -221,21 +246,38 @@ impl Chart {
         link.order_book.as_ref()
     }
 
+    /// Calendar boundaries selected by the chart, including the resolved exchange or local zone.
+    pub fn bar_clock(&self) -> BarClock {
+        let clock = BarClock::new(self.timeframe.unwrap_or_default());
+        match self.display_timezone() {
+            crate::scales::TimezoneMode::Local => clock.with_local_timezone(),
+            zone => clock.with_timezone(zone.to_tz().unwrap_or(chrono_tz::UTC)),
+        }
+    }
+
     /// The clock bars merge by: the feed's, or exact times without a feed.
     pub(super) fn clock(&self) -> BarClock {
         self.feed_link
             .as_ref()
+            .filter(|link| !link.paused)
             .map_or_else(BarClock::exact, |link| link.clock.clone())
     }
 
     /// Issues what the feed must be asked and applies what it sent since the last call. Called
     /// first in [`show`](Self::show); does nothing without a feed.
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
+        if self.feed_link.as_ref().is_some_and(|link| link.paused) {
+            return;
+        }
+        let clock = self.bar_clock();
         let Some(mut link) = self.feed_link.take() else {
             return;
         };
+        if link.clock != clock {
+            link.reload_pending = true;
+        }
         if link.reload_pending {
-            self.reload(&mut link);
+            self.reload(&mut link, clock);
         }
         // The chart's own viewport, also after it moved to another: off the UI thread
         // `request_repaint` wakes the root one.
@@ -315,21 +357,24 @@ impl Chart {
     }
 
     /// Drops what the chart held for the old symbol or timeframe and asks for the new one.
-    fn reload(&mut self, link: &mut FeedLink) {
+    fn reload(&mut self, link: &mut FeedLink, clock: BarClock) {
         link.reload_pending = false;
         if let Some(id) = link.subscription.take() {
             link.inbox.unsubscribe(id);
             link.feed.unsubscribe(id);
         }
         link.pending.clear();
-        link.instrument = None;
+        self.legend_instrument = link
+            .instrument
+            .take()
+            .filter(|instrument| instrument.symbol == self.symbol);
         self.state.price_scale_mut().set_price_precision(None);
         link.trades = Trades::new(TRADE_CAPACITY);
         link.order_book = None;
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
-        link.clock = BarClock::new(timeframe);
+        link.clock = clock;
         link.rebuild_bubbles();
         // Drawings stay: they belong to the chart, not to the bars of one symbol.
         self.set_data(SeriesId::MAIN, Vec::new());
@@ -343,6 +388,7 @@ impl Chart {
         let request = HistoryRequest {
             symbol: self.symbol.clone(),
             timeframe,
+            clock: link.clock.clone(),
             before: None,
             count: link.initial_bars,
             extended_hours: self.extended_hours,
@@ -366,6 +412,7 @@ impl Chart {
             id: sink.id,
             symbol: self.symbol.clone(),
             timeframe: self.timeframe.unwrap_or_default(),
+            clock: link.clock.clone(),
             extended_hours: self.extended_hours,
             sink,
         };
@@ -428,6 +475,7 @@ impl Chart {
         let request = HistoryRequest {
             symbol: self.symbol.clone(),
             timeframe: self.timeframe.unwrap_or_default(),
+            clock: link.clock.clone(),
             before: Some(before),
             count: link.initial_bars.max(MIN_SCROLL_BACK_PAGE),
             extended_hours: self.extended_hours,
@@ -517,6 +565,7 @@ mod tests {
                 timeframe,
                 extended_hours,
                 sink,
+                ..
             } = subscription;
             let call = Call::Subscribe(id, symbol, timeframe, extended_hours);
             self.calls.lock().unwrap().push(call);
@@ -562,6 +611,7 @@ mod tests {
         Call::History(HistoryRequest {
             symbol: symbol.into(),
             timeframe,
+            clock: BarClock::new(timeframe),
             before,
             count: 1000,
             extended_hours: false,
@@ -631,6 +681,45 @@ mod tests {
             frames.run(&mut chart);
             previous = Some(id);
         }
+    }
+
+    /// Resolving an exchange zone must realign history, live aggregation and the countdown
+    /// once, then keep the subscription stable through ordinary repaints.
+    #[test]
+    fn calendar_reload_uses_the_resolved_exchange_zone() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.chart_options.time_scale.timezone =
+            crate::scales::TimezoneMode::Exchange(chrono_tz::UTC);
+        chart.set_timeframe(Timeframe::Hour4);
+        let mut frames = Frames::new();
+        let zone = crate::model::TimezoneId::named("America/New_York").unwrap();
+        let expected = BarClock::new(Timeframe::Hour4).with_timezone(chrono_tz::America::New_York);
+        frames.run(&mut chart);
+        feed.page().send(page(Vec::new(), true));
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_time_zone(zone.clone())));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert_eq!(chart.bar_clock(), expected);
+        assert!(
+            feed.calls()
+                .iter()
+                .any(|call| matches!(call, Call::History(request) if request.clock == expected))
+        );
+        feed.page().send(page(Vec::new(), true));
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_time_zone(zone)));
+        frames.run(&mut chart);
+        let sink = feed.sink();
+        let time = "2024-03-10T07:30:00Z".parse().unwrap();
+        sink.push_tick(Tick::new(time, 100.0, 2.0, None));
+        frames.run(&mut chart);
+        assert_eq!(chart.bars(SeriesId::MAIN)[0].time, expected.bar_open(time));
+        assert_eq!(chart.feed_link.as_ref().unwrap().clock, expected);
+        feed.calls();
+        frames.run(&mut chart);
+        assert!(feed.calls().is_empty());
     }
 
     #[test]

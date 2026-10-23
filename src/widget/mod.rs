@@ -270,6 +270,7 @@ pub struct Chart {
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    indicator_settings_request: Option<SeriesId>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,

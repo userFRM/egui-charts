@@ -240,7 +240,7 @@ impl Indicator for Counted {
         }
         self.0.update(data, from);
     }
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         self.0.values()
     }
     fn colors(&self) -> Vec<Color32> {

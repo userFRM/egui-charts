@@ -3,6 +3,7 @@
 
 use crate::model::Bar;
 use crate::studies::IndicatorValue;
+use crate::studies::IndicatorValues;
 use std::collections::VecDeque;
 
 /// Runs a causal study one `step` per bar and keeps the state before the last bar, so a
@@ -28,7 +29,7 @@ impl<S: Clone + Default> Stepper<S> {
         &mut self,
         data: &[Bar],
         from: usize,
-        out: &mut Vec<IndicatorValue>,
+        out: &mut IndicatorValues,
         mut step: impl FnMut(&mut S, &Bar) -> IndicatorValue,
     ) {
         let start = if self.len > 0 && from >= self.len - 1 && data.len() >= self.len {
@@ -56,17 +57,17 @@ impl<S: Clone + Default> Stepper<S> {
 /// from `from` on depend on. Equals a full `compute` bit for bit when `compute` evaluates every
 /// window afresh and no value from `from` on depends on a bar before `read`.
 pub(crate) fn update_window(
-    values: &mut Vec<IndicatorValue>,
+    values: &mut IndicatorValues,
     data: &[Bar],
     from: usize,
     read_from: impl FnOnce(&[Bar], usize) -> usize,
-    compute: impl FnOnce(&[Bar]) -> Vec<IndicatorValue>,
+    compute: impl FnOnce(&[Bar]) -> IndicatorValues,
 ) {
     let from = from.min(values.len()).min(data.len());
     values.truncate(from);
     if from < data.len() {
         let read = read_from(data, from).min(from);
-        values.extend(compute(&data[read..]).into_iter().skip(from - read));
+        values.append_from(&compute(&data[read..]), from - read);
     }
 }
 

@@ -37,14 +37,14 @@
 //! let mut macd = MACD::new(12, 26, 9);
 //! macd.calculate(&bars);
 //!
-//! if let IndicatorValue::Multiple(vals) = &macd.values()[50] {
+//! if let IndicatorValue::Multiple(vals) = &macd.values().to_rows()[50] {
 //!     let (macd_line, signal, histogram) = (vals[0], vals[1], vals[2]);
 //! }
 //! ```
 
 use crate::model::Bar;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -57,7 +57,7 @@ pub struct MACD {
     fast_period: usize,
     slow_period: usize,
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     stepper: Stepper<State>,
     colors: Vec<Color32>,
     visible: bool,
@@ -83,7 +83,7 @@ impl MACD {
             fast_period: fast_period.max(1),
             slow_period: slow_period.max(1),
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
                 DESIGN_TOKENS.semantic.indicators.macd_line, // MACD line
@@ -103,6 +103,12 @@ impl Default for MACD {
 }
 
 impl Indicator for MACD {
+    crate::studies::inputs::study_inputs!(self;
+        fast_period: length("Fast period", 1, usize::MAX),
+        slow_period: length("Slow period", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "MACD"
     }
@@ -156,7 +162,7 @@ impl Indicator for MACD {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

@@ -30,7 +30,7 @@
 //! the original does.
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ pub struct CustomIndicator {
     name: String,
     desc: String,
     calculate_fn: CalculateFn,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     is_overlay: bool,
     line_cnt: usize,
@@ -76,7 +76,7 @@ impl CustomIndicator {
             name,
             desc: String::new(),
             calculate_fn: Arc::new(calculate_fn),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![DESIGN_TOKENS.semantic.extended.caution], // Yellow default
             is_overlay: true,
             line_cnt: 1,
@@ -132,10 +132,10 @@ impl Indicator for CustomIndicator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = (self.calculate_fn)(data);
+        self.values = (self.calculate_fn)(data).into();
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

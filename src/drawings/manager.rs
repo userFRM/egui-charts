@@ -85,6 +85,9 @@ pub struct DrawingManagerOptions {
     pub magnet_mode: bool,
     /// Magnet snap distance threshold in screen pixels.
     pub magnet_distance: f32,
+    /// Snap to the nearest OHLC value of the bar under the pointer regardless of distance.
+    /// Requires `magnet_mode`; `false` retains the pixel threshold and nearby overlay targets.
+    pub strong_magnet: bool,
     /// Configuration for selection handle appearance and hit testing.
     pub handle_config: HandleConfig,
 }
@@ -98,9 +101,17 @@ impl Default for DrawingManagerOptions {
             snap_distance: DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs,
             magnet_mode: false,
             magnet_distance: DESIGN_TOKENS.sizing.drawing.magnet_distance,
+            strong_magnet: false,
             handle_config: HandleConfig::default(),
         }
     }
+}
+
+/// Last painted geometry, invalid once its anchors have moved.
+struct PaintedDrawing {
+    id: usize,
+    points: Vec<Pos2>,
+    shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 /// Central coordinator for chart drawings.
@@ -158,6 +169,8 @@ pub struct DrawingManager {
     selection: SelectionService,
     history: HistoryService,
     snap_service: SnapService,
+    /// Geometry from the last paint, including laid-out text and data-driven shapes.
+    painted: Mutex<Vec<PaintedDrawing>>,
     /// Nearby bar and overlay points, refreshed by the chart before pointer handling.
     pub(crate) snap_targets: Vec<Pos2>,
 
@@ -168,6 +181,8 @@ pub struct DrawingManager {
     pub dragging_handle: Option<(usize, HandlePos)>,
     /// Snapshot of the drawing state before the current drag began (for undo).
     drag_old_state: Option<Drawing>,
+    /// Pointer origin of a body or centre-handle translation.
+    drag_origin: Option<Pos2>,
 
     /// Whether to stay in drawing mode after completing a drawing.
     pub stay_in_drawing_mode: bool,
@@ -205,10 +220,12 @@ impl DrawingManager {
             selection: SelectionService::new(),
             history: HistoryService::new(),
             snap_service: SnapService::new(),
+            painted: Mutex::new(Vec::new()),
             snap_targets: Vec::new(),
             options: DrawingManagerOptions::default(),
             dragging_handle: None,
             drag_old_state: None,
+            drag_origin: None,
             stay_in_drawing_mode: false,
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
@@ -303,6 +320,10 @@ impl DrawingManager {
         let Some(id) = step(&mut self.history, &mut self.drawings) else {
             return false;
         };
+        self.painted
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| p.id != id);
         for &(changed_id, _, old_layer) in &before {
             if changed_id != id
                 && self
@@ -360,6 +381,16 @@ impl DrawingManager {
     /// Targets keep their time and price paired. A dragged drawing cannot snap to itself.
     /// Drawing anchors are borrowed without flattening or cloning their geometry.
     pub fn snap_point(&self, point: Pos2, drawings: &[Drawing]) -> Pos2 {
+        if self.options.magnet_mode
+            && self.options.strong_magnet
+            && let Some(target) = self
+                .snap_targets
+                .iter()
+                .filter(|p| p.is_finite())
+                .min_by(|a, b| (a.y - point.y).abs().total_cmp(&(b.y - point.y).abs()))
+        {
+            return *target;
+        }
         self.snap_service.snap_point_with_drawing_points(
             point,
             &[],
@@ -387,19 +418,37 @@ impl DrawingManager {
     ///
     /// Returns the [`HandlePos`] if a handle was hit, `None` otherwise.
     pub fn hit_test_handle(&self, drawing: &Drawing, point: Pos2) -> Option<HandlePos> {
+        if !drawing.is_visible_on_timeframe(&self.curr_timeframe) {
+            return None;
+        }
         HandleService::hit_test_handle(drawing, point, self.options.handle_config.size)
     }
 
     /// Begins a handle drag operation, saving the drawing's current state for undo. A locked
     /// drawing is not dragged.
     pub fn start_drag_handle(&mut self, drawing_id: usize, handle: HandlePos) {
-        if let Some(drawing) = self
-            .drawings
-            .iter()
-            .find(|d| d.id == drawing_id && !d.locked)
-        {
+        if let Some(drawing) = self.drawings.iter().find(|d| {
+            d.id == drawing_id && !d.locked && d.is_visible_on_timeframe(&self.curr_timeframe)
+        }) {
             self.dragging_handle = Some((drawing_id, handle));
             self.drag_old_state = Some(drawing.clone());
+            self.drag_origin = (handle == HandlePos::Middle)
+                .then(|| {
+                    HandleService::get_handles(drawing)
+                        .into_iter()
+                        .find(|(h, _)| *h == handle)
+                        .map(|(_, p)| p)
+                })
+                .flatten();
+        }
+    }
+
+    /// Begins moving every anchor from a body grab at `origin`, retaining the grab offset.
+    /// Locked drawings ignore the grab. The move shares the handle drag's undo and sync lifecycle.
+    pub fn start_drag_body(&mut self, drawing_id: usize, origin: Pos2) {
+        self.start_drag_handle(drawing_id, HandlePos::Middle);
+        if self.dragging_handle == Some((drawing_id, HandlePos::Middle)) {
+            self.drag_origin = Some(origin);
         }
     }
 
@@ -413,8 +462,19 @@ impl DrawingManager {
         if let Some((id, handle)) = self.dragging_handle {
             // Compute snapped position before mutable borrow
             let snapped = self.snap_point(new_pos, &self.drawings);
-            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
-                HandleService::update_handle(drawing, handle, snapped, x_to_bar, y_to_price);
+            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
+                if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
+                    let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
+                    let price = y_to_price(snapped.y) - y_to_price(origin.y);
+                    for (point, before) in drawing.chart_points.iter_mut().zip(&old.chart_points) {
+                        *point = ChartPoint::new(before.bar_idx + bars, before.price + price);
+                    }
+                    for (point, before) in drawing.points.iter_mut().zip(&old.points) {
+                        *point = *before + (snapped - origin);
+                    }
+                } else {
+                    HandleService::update_handle(drawing, handle, snapped, x_to_bar, y_to_price);
+                }
             }
         }
     }
@@ -428,6 +488,7 @@ impl DrawingManager {
             self.queue(DrawingSyncAction::UpdateDrawing(drawing_id));
         }
         self.dragging_handle = None;
+        self.drag_origin = None;
     }
 
     /// Renders selection handles for a drawing, highlighting the currently
@@ -731,11 +792,21 @@ impl DrawingManager {
 
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
     /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
-    /// saved. Does nothing if there is no such drawing.
+    /// saved. A locked drawing accepts only an edit that unlocks it.
+    /// Does nothing if there is no such drawing.
     pub fn edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
-            self.history.push_modify(id, drawing.clone());
+            let old = drawing.clone();
             edit(drawing);
+            if old.locked && drawing.locked {
+                *drawing = old;
+                return;
+            }
+            self.history.push_modify(id, old);
+            self.painted
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|p| p.id != id);
             self.queue(DrawingSyncAction::UpdateDrawing(id));
         }
     }
@@ -743,14 +814,18 @@ impl DrawingManager {
     /// Applies `edit` as one frame of a continuous edit, such as dragging a colour picker: the
     /// first frame records the drawing's state and nothing is queued until
     /// [`Self::end_drag_handle`], which makes the whole gesture one undo step and queues one
-    /// update. Does nothing if there is no such drawing.
+    /// update. Does nothing if there is no such drawing or it is locked.
     pub fn drag_edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
         if self.drag_old_state.as_ref().is_some_and(|d| d.id != id) {
             self.end_drag_handle();
         }
-        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
+        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
             self.drag_old_state.get_or_insert_with(|| drawing.clone());
             edit(drawing);
+            self.painted
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|p| p.id != id);
         }
     }
 
@@ -842,8 +917,27 @@ impl DrawingManager {
     /// channels, Fibonacci levels, fans, and pitchforks are selectable along
     /// their drawn geometry rather than only near a control point. Honors the
     /// active timeframe so drawings hidden on the current timeframe are not hit.
+    /// After [`Self::render_all`], uses the actual clipped paint geometry, including text and
+    /// data-driven bodies. Before the first paint, falls back to the tool's geometric outline.
     pub fn hit_test(&self, point: Pos2) -> Option<usize> {
-        DrawingInteraction::new().hit_test(point, &self.drawings, &self.curr_timeframe)
+        let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        in_z_order(&self.drawings)
+            .into_iter()
+            .rev()
+            .filter(|d| d.is_visible_on_timeframe(&self.curr_timeframe))
+            .find(|drawing| {
+                let paint = painted
+                    .iter()
+                    .find(|p| p.id == drawing.id && p.points == drawing.points);
+                if paint.is_some_and(|p| !p.shapes.iter().any(|s| s.clip_rect.contains(point))) {
+                    return false;
+                }
+                paint.is_some_and(|p| DrawingInteraction::hit_test_painted(point, &p.shapes))
+                    || DrawingInteraction::new()
+                        .hit_test(point, std::slice::from_ref(*drawing), &self.curr_timeframe)
+                        .is_some()
+            })
+            .map(|d| d.id)
     }
 
     // === Visibility ===
@@ -954,10 +1048,27 @@ impl DrawingManager {
 
     /// Render all drawings against the chart's bars and coordinate mapping
     pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
+        let painter = &painter.with_clip_rect(price_rect);
+        let mut painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        painted.clear();
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
             if drawing.is_visible_on_timeframe(&self.curr_timeframe) {
+                let start = painter.ctx().graphics(|g| {
+                    g.get(painter.layer_id())
+                        .map_or(0, |list| list.next_idx().0)
+                });
                 drawing.render(painter, price_rect, view);
+                let shapes = painter.ctx().graphics(|g| {
+                    g.get(painter.layer_id())
+                        .map(|list| list.all_entries().skip(start).cloned().collect())
+                        .unwrap_or_default()
+                });
+                painted.push(PaintedDrawing {
+                    id: drawing.id,
+                    points: drawing.points.clone(),
+                    shapes,
+                });
             }
         }
 
@@ -986,6 +1097,85 @@ fn sync_id(drawing: &Drawing) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Text extents, position zones, Fibonacci rings and repeating cycle lines are
+    /// selectable away from every anchor, using their actual paint geometry.
+    #[test]
+    fn painted_bodies_are_hit_away_from_anchors() {
+        use egui::{Context, RawInput};
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        for (tool, anchors, hit, miss) in [
+            (
+                DrawingToolType::TrendLine,
+                vec![(50., 100.), (550., 100.)],
+                (200., 100.),
+                (510., 100.),
+            ),
+            (
+                DrawingToolType::TextLabel,
+                vec![(50., 100.)],
+                (180., 105.),
+                (180., 160.),
+            ),
+            (
+                DrawingToolType::LongPos,
+                vec![(50., 150.), (250., 50.), (250., 250.)],
+                (180., 100.),
+                (350., 300.),
+            ),
+            (
+                DrawingToolType::FibonacciCircles,
+                vec![(100., 100.), (200., 100.)],
+                (100., 200.),
+                (400., 350.),
+            ),
+            (
+                DrawingToolType::CyclicLines,
+                vec![(50., 100.), (150., 100.)],
+                (250., 300.),
+                (480., 390.),
+            ),
+        ] {
+            let ctx = Context::default();
+            let mut manager = DrawingManager::new();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = anchors.into_iter().map(|(x, y)| Pos2::new(x, y)).collect();
+            drawing.chart_points = drawing
+                .points
+                .iter()
+                .map(|p| ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
+                .collect();
+            drawing.text = Some("A long text annotation".into());
+            manager.drawings.push(drawing);
+            ctx.run_ui(RawInput::default(), |ui| {
+                let view = ChartView {
+                    instrument: None,
+                    bars: &[],
+                    revision: 0,
+                    bar_to_x: &|b| b * 10.0,
+                    price_to_y: &|p| 500.0 - p as f32,
+                };
+                manager.render_all(ui.painter(), pane, &view);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                manager.hit_test(Pos2::new(hit.0, hit.1)),
+                Some(7),
+                "{tool:?}"
+            );
+            assert_eq!(
+                manager.hit_test(Pos2::new(miss.0, miss.1)),
+                None,
+                "{tool:?}"
+            );
+            if tool == DrawingToolType::TextLabel {
+                manager.edit_drawing(7, |d| d.text = Some("x".into()));
+                assert_eq!(manager.hit_test(Pos2::new(hit.0, hit.1)), None);
+            }
+            manager.drawings[0].visible = false;
+            assert_eq!(manager.hit_test(Pos2::new(hit.0, hit.1)), None);
+        }
+    }
 
     #[test]
     fn test_new_manager() {
@@ -1058,7 +1248,7 @@ mod tests {
     }
 
     /// A locked drawing keeps its place when one of its handles is dragged and survives a
-    /// delete, which is how the eraser, the Delete key and the menus remove a drawing.
+    /// delete or style edit, until it is explicitly unlocked.
     #[test]
     fn a_locked_drawing_is_neither_moved_nor_deleted() {
         let mut manager = DrawingManager::new();
@@ -1072,6 +1262,15 @@ mod tests {
         manager.update_drag_handle(Pos2::new(50.0, 50.0), |x| x, f64::from);
         manager.end_drag_handle();
         manager.delete_drawing(3);
+        manager.edit_drawing(3, |d| d.font_size = 30.0);
+        manager.drag_edit_drawing(3, |d| d.font_size = 40.0);
+        manager.end_drag_handle();
+        assert_eq!(manager.drawings[0].font_size, 12.0);
+        assert!(!manager.can_undo());
+        assert!(manager.pending_sync.lock().unwrap().is_empty());
+        manager.edit_drawing(3, |d| d.locked = false);
+        manager.edit_drawing(3, |d| d.font_size = 30.0);
+        assert_eq!(manager.drawings[0].font_size, 30.0);
 
         assert_eq!(manager.drawings.len(), 1);
         assert_eq!(

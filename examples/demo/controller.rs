@@ -6,6 +6,9 @@
 //! actions. Indicator templates live in host memory. Controls that need a trading
 //! account show a notice, and the context menu entries it does not model do nothing.
 
+#[path = "live.rs"]
+mod live;
+
 use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
@@ -30,7 +33,7 @@ use egui_charts::ui::timeframe_toolbar::{
 };
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
-    IndicatorDialog, IndicatorDialogAction,
+    IndicatorDialog, IndicatorDialogAction, IndicatorSettingsDialog,
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
@@ -41,12 +44,10 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
+use live::LiveFeed;
 use std::sync::{Arc, mpsc};
 
-use crate::sampledata::{
-    DemoSymbol, bar_count_for_timeframe, chart_type_from_name, generate_sample_bars, session_bars,
-    visible_bars_for_range,
-};
+use crate::sampledata::{DemoSymbol, chart_type_from_name, visible_bars_for_range};
 
 struct SavedIndicators {
     name: String,
@@ -125,15 +126,15 @@ impl ChartAppState for DemoAppState {
 /// The full demo application.
 pub struct DemoApp {
     pub chart: Chart,
+    live: Arc<LiveFeed>,
     /// Whether an object tree colour picker is editing a drawing, as one undo step.
     colour_drag: bool,
     footprint: Option<egui_charts::data::Footprint>,
     footprint_scale: Option<(f32, f32)>,
+    feed_before_footprint: bool,
     menus: ChartMenus,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
-    // Immutable generated history; session and adjustment choices derive `bars` from it.
-    source_bars: Vec<Bar>,
     pub theme: Theme,
 
     // Persistent toolbars.
@@ -144,6 +145,7 @@ pub struct DemoApp {
 
     // Dialogs (each owns its open/closed state).
     indicator_dialog: IndicatorDialog,
+    indicator_settings: IndicatorSettingsDialog,
     settings_dialog: SettingsDialog,
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
@@ -166,6 +168,7 @@ pub struct DemoApp {
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
+    live_was_paused: bool,
     replay_control: FloatingReplayControl,
 
     // A pending screenshot request the egui backend fulfils next frame.
@@ -195,22 +198,24 @@ impl DemoApp {
         // The scale reserves half a slot and one pixel after the last centre.
         options.time_scale.right_offset_pixels = Some(65.0 - 6.1 * 0.5 - 1.0);
         options.time_scale.time_visible = true;
-        options.time_scale.seconds_visible = false;
-        let mut chart = Chart::with_config(
-            BarData::new(),
-            theme.apply_to_config(egui_charts::config::ChartConfig::default()),
-        )
-        .with_chart_options(options);
+        options.time_scale.seconds_visible = true;
+        let live = Arc::new(LiveFeed::new(symbol, chrono::Utc::now()));
+        let mut chart = egui_charts::ChartBuilder::new()
+            .with_feed(live.clone())
+            .with_symbol(symbol)
+            .with_timeframe(timeframe)
+            .with_theme(theme.clone())
+            .with_visible_candles(210)
+            .with_chart_options(options)
+            .build();
         chart.config_mut().volume_height_fraction = 0.25;
         chart.config_mut().volume_baseline_inset = 0.0;
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
         chart.config_mut().skip_background = true;
-        chart.set_symbol("SAMPLE (synthetic)");
+        chart.set_symbol(symbol);
         chart.set_timeframe(timeframe);
 
-        let source_bars =
-            generate_sample_bars(symbol, bar_count_for_timeframe(timeframe), timeframe);
         let mut top_toolbar = TopToolbar::new().with_config(
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
         );
@@ -232,12 +237,15 @@ impl DemoApp {
         let mut timeframe_toolbar = TimeframeToolbar::default();
         timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
         timeframe_toolbar.state.timeframe = timeframe;
+        timeframe_toolbar.set_session(SessionType::Full24x7);
 
         let mut app = Self {
             chart,
+            live,
             colour_drag: false,
             footprint: None,
             footprint_scale: None,
+            feed_before_footprint: false,
             menus: ChartMenus::default(),
             state: DemoAppState {
                 symbol: symbol.into(),
@@ -246,13 +254,13 @@ impl DemoApp {
                 replay_active: false,
             },
             bars: Vec::new(),
-            source_bars,
             theme,
             top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
             timeframe_toolbar,
             widget_bar,
             indicator_dialog: IndicatorDialog::new(),
+            indicator_settings: IndicatorSettingsDialog::default(),
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
@@ -279,6 +287,7 @@ impl DemoApp {
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
             replay: None,
+            live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
             screenshots: mpsc::channel(),
@@ -300,8 +309,7 @@ impl DemoApp {
     fn switch_timeframe(&mut self, tf: Timeframe) {
         self.state.timeframe = tf;
         self.chart.set_timeframe(tf);
-        let count = bar_count_for_timeframe(tf);
-        self.regenerate_bars(count, tf);
+        self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
         // A replay continues at its current time on the new interval.
         if let Some(replay) = self.replay.as_mut() {
@@ -313,10 +321,10 @@ impl DemoApp {
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
         let spec = DemoSymbol::find(symbol);
+        self.live.set_symbol(spec.symbol);
         self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
-        self.chart
-            .set_symbol(format!("{} (synthetic) · {}", spec.symbol, spec.exchange));
+        self.chart.set_symbol(spec.symbol);
         for control in [
             egui_charts::ui::Control::Session,
             egui_charts::ui::Control::DividendAdjustment,
@@ -330,14 +338,12 @@ impl DemoApp {
             } else {
                 SessionType::RTH
             });
-        let count = bar_count_for_timeframe(self.state.timeframe);
-        self.regenerate_bars(count, self.state.timeframe);
+        self.regenerate_bars();
         // A symbol change invalidates an in-flight replay.
         self.stop_replay();
     }
 
-    fn regenerate_bars(&mut self, count: usize, tf: Timeframe) {
-        self.source_bars = generate_sample_bars(&self.state.symbol, count, tf);
+    fn regenerate_bars(&mut self) {
         self.apply_session();
         self.size_price_based_charts();
     }
@@ -357,83 +363,30 @@ impl DemoApp {
     }
 
     fn apply_session(&mut self) {
-        self.chart.config_mut().session_config =
-            (self.state.symbol == "SAMPLE").then(|| egui_charts::config::SessionConfig {
-                session_start: "14:30".into(),
-                session_end: "21:00".into(),
-                timezone: "UTC".into(),
-                show_premarket: self.timeframe_toolbar.state.session_type != SessionType::RTH,
-                show_postmarket: false,
-                premarket_start: Some("08:30".into()),
-                postmarket_end: None,
-            });
-        self.bars = session_bars(
-            &self.state.symbol,
-            &self.source_bars,
+        self.live.set_view(
             self.timeframe_toolbar.state.session_type,
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
+        self.chart.set_symbol("");
+        self.chart.set_symbol(&self.state.symbol);
+        self.chart
+            .set_extended_hours(self.timeframe_toolbar.state.session_type != SessionType::RTH);
+        let tf = self.state.timeframe;
+        let clock = self.chart.bar_clock();
+        self.bars = self.live.snapshot(tf, clock, self.chart.extended_hours());
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
         if self.footprint.is_some() {
             self.rebuild_footprint();
         }
-        let spec = DemoSymbol::find(&self.state.symbol);
-        self.chart.set_instrument(Some(
-            egui_charts::model::Instrument::new(spec.symbol)
-                .with_description(format!("{} (synthetic)", spec.company_name))
-                .with_exchange(spec.exchange)
-                .with_price_decimals(2),
-        ));
+        self.chart.set_instrument(Some(self.live.instrument()));
         self.chart
             .set_legend_statuses(&[egui_charts::widget::LegendStatus {
                 text: "SIM",
                 color: egui::Color32::from_rgb(38, 166, 154),
                 background: egui::Color32::TRANSPARENT,
             }]);
-        // An extended-session quote comes from the fixture's latest session, never the hover bar.
-        let session = self
-            .source_bars
-            .last()
-            .filter(|bar| {
-                self.state.symbol == "SAMPLE"
-                    && self
-                        .bars
-                        .last()
-                        .is_some_and(|regular| bar.time > regular.time)
-            })
-            .and_then(|bar| {
-                session_bars(
-                    "SAMPLE",
-                    std::slice::from_ref(bar),
-                    SessionType::ETH,
-                    self.timeframe_toolbar.state.adjust_for_dividends,
-                )
-                .first()
-                .map(|bar| egui_charts::model::quote::SessionQuote::new(bar.close, "PRE"))
-            });
-        self.chart.set_session_quote(session);
-        self.chart
-            .set_quote(self.bars.last().map(|bar| egui_charts::model::Level1Quote {
-                // The frozen quote is fifteen seconds before this synthetic bar closes.
-                ts: bar.time
-                    + chrono::Duration::milliseconds(self.state.timeframe.duration_ms() - 15_000),
-                symbol: self.state.symbol.clone(),
-                bid: (bar.close * 100.0).round() / 100.0 - 0.02,
-                ask: (bar.close * 100.0).round() / 100.0 + 0.02,
-                bid_size: 100.0,
-                ask_size: 100.0,
-            }));
-        self.chart.set_events(
-            self.bars
-                .last()
-                .map(|bar| {
-                    egui_charts::model::Marker::event(bar.time, "S")
-                        .with_id("sample-session")
-                        .with_tooltip("Synthetic session: generated example data")
-                })
-                .into_iter()
-                .collect(),
-        );
+        self.chart.set_quote(None);
+        self.chart.set_events(Vec::new());
     }
 
     // --- replay ------------------------------------------------------------
@@ -449,6 +402,14 @@ impl DemoApp {
     }
 
     fn start_replay(&mut self) {
+        self.live_was_paused = if self.footprint.is_some() {
+            self.feed_before_footprint
+        } else {
+            self.live.paused()
+        };
+        self.live.set_paused(true);
+        self.chart.set_feed_paused(true);
+        self.bars = self.chart.bars(SeriesId::MAIN).to_vec();
         let ts: Vec<_> = self.bars.iter().map(|b| b.time).collect();
         let mut controller =
             ReplayController::new(self.bars.clone(), ts).with_symbol(self.state.symbol.clone());
@@ -465,6 +426,9 @@ impl DemoApp {
 
     fn stop_replay(&mut self) {
         if self.replay.take().is_some() {
+            self.chart.set_feed_paused(self.footprint.is_some());
+            self.live
+                .set_paused(self.footprint.is_some() || self.live_was_paused);
             self.state.replay_active = false;
             self.replay_control.hide_control();
             // Restore the full series the chart had before replay.
@@ -575,11 +539,39 @@ impl DemoApp {
         let props = DrawingProps {
             color: drawing.color32(),
             line_width: drawing.stroke_width,
+            line_style: match drawing.line_style {
+                egui_charts::drawings::LineStyle::Solid => DrawingLineStyle::Solid,
+                egui_charts::drawings::LineStyle::Dashed => DrawingLineStyle::Dashed,
+                egui_charts::drawings::LineStyle::Dotted => DrawingLineStyle::Dotted,
+            },
+            fill_color: drawing.fill_color32(),
+            fill_enabled: drawing.fill_color.is_some(),
+            extend_left: drawing.extend_left,
+            extend_right: drawing.extend_right,
+            font_size: drawing.font_size,
+            visible_all_timeframes: drawing.timeframe_visibility.show_on_all,
+            visible_timeframes: drawing
+                .timeframe_visibility
+                .visible_timeframes
+                .iter()
+                .cloned()
+                .collect(),
             label: drawing.text.clone().unwrap_or_default(),
             ..DrawingProps::default()
         };
         let name = drawing.tool_type.as_str().to_string();
         self.drawing_props.open(DrawingId(drawing_id), name, props);
+    }
+
+    fn open_indicator_settings(&mut self, id: SeriesId) {
+        if let Some((_, study)) = self
+            .chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+        {
+            self.indicator_settings
+                .open(id, study, self.chart.timeframe());
+        }
     }
 
     // --- dialog wiring -----------------------------------------------------
@@ -602,6 +594,46 @@ impl DemoApp {
             let inputs = self.indicator_dialog.input_summary(study.name());
             let id = self.chart.add_indicator(study);
             self.chart.set_indicator_inputs(id, inputs);
+        }
+
+        if let Some(edit) = self.indicator_settings.show(ctx, &self.theme) {
+            let result = self
+                .chart
+                .indicator_mut(edit.id)
+                .ok_or("Study was removed")
+                .and_then(|study| {
+                    study.apply_settings(&edit.inputs, edit.settings)?;
+                    Ok(study
+                        .inputs()
+                        .iter()
+                        .map(|input| match (&input.kind, &input.value) {
+                            (
+                                egui_charts::studies::InputKind::Choice(choices),
+                                egui_charts::studies::InputValue::Choice(index),
+                            ) => choices.get(*index).cloned().unwrap_or_default(),
+                            (_, egui_charts::studies::InputValue::Length(value)) => {
+                                value.to_string()
+                            }
+                            (_, egui_charts::studies::InputValue::Integer(value)) => {
+                                value.to_string()
+                            }
+                            (_, egui_charts::studies::InputValue::Number(value)) => {
+                                value.to_string()
+                            }
+                            (_, egui_charts::studies::InputValue::Toggle(value)) => {
+                                value.to_string()
+                            }
+                            _ => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "))
+                });
+            match result {
+                Ok(inputs) => {
+                    self.chart.set_indicator_inputs(edit.id, inputs);
+                }
+                Err(error) => self.notify(error),
+            }
         }
 
         // Chart settings.
@@ -689,14 +721,21 @@ impl DemoApp {
 
     fn apply_drawing_props(&mut self, id: DrawingId, props: DrawingProps) {
         self.chart.drawings_mut().edit_drawing(id.0, |drawing| {
-            drawing.color = props.color.to_array();
+            drawing.color = props.color.to_srgba_unmultiplied();
             drawing.stroke_width = props.line_width;
             drawing.line_style = line_style_from_dialog(props.line_style);
             drawing.extend_left = props.extend_left;
             drawing.extend_right = props.extend_right;
-            if !props.label.is_empty() {
-                drawing.text = Some(props.label);
-            }
+            drawing.text = (!props.label.is_empty()).then_some(props.label);
+            drawing.fill_color = props
+                .fill_color
+                .filter(|_| props.fill_enabled)
+                .map(|c| c.to_srgba_unmultiplied());
+            drawing.font_size = props.font_size;
+            drawing.timeframe_visibility = egui_charts::drawings::TimeframeVisibility {
+                show_on_all: props.visible_all_timeframes,
+                visible_timeframes: props.visible_timeframes.into_iter().collect(),
+            };
         });
     }
 
@@ -794,6 +833,12 @@ impl eframe::App for DemoApp {
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
+        if self.replay.is_none() {
+            let delay = self.live.advance(chrono::Utc::now());
+            if !self.live.paused() {
+                ctx.request_repaint_after(delay);
+            }
+        }
 
         // A colour picker drag ends, as one edit, when the pointer is released.
         if self.colour_drag && !ctx.input(|i| i.pointer.any_down()) {
@@ -860,13 +905,15 @@ impl DemoApp {
                 let mut trade = false;
                 let mut publish = false;
                 let mut footprint_enabled = self.footprint.is_some();
+                let mut paused = self.live.paused();
                 let action = self.top_toolbar.show_with_slots(
                     ui,
                     &self.state,
                     |ui| {
                         let response = IconButton::new(&icons::MENU).tooltip("Menu").show(ui);
                         egui::Popup::menu(&response).show(|ui| {
-                            ui.checkbox(&mut footprint_enabled, "Footprint (synthetic)");
+                            ui.checkbox(&mut footprint_enabled, "Footprint (synthetic)")
+                                .on_hover_text("Pause the feed to inspect the footprint sample");
                             for (label, action) in [
                                 ("Quick search", TopToolbarAction::OpenSymbolSearch),
                                 ("Switch theme", TopToolbarAction::ThemeToggle),
@@ -881,6 +928,20 @@ impl DemoApp {
                     |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         ui.add_space(8.0);
+                        if egui_charts::ui_kit::buttons::Button::new(if paused {
+                            "Resume feed"
+                        } else {
+                            "Pause feed"
+                        })
+                        .small()
+                        .ghost()
+                        .enabled(self.replay.is_none() && self.footprint.is_none())
+                        .tooltip("Synthetic executions")
+                        .show(ui)
+                        .clicked()
+                        {
+                            paused = !paused;
+                        }
                         publish = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
                             ui.add(
                                 egui::Button::new(
@@ -921,8 +982,12 @@ impl DemoApp {
                         .clicked();
                     },
                 );
+                self.live.set_paused(paused);
                 if footprint_enabled != self.footprint.is_some() {
                     if footprint_enabled {
+                        self.feed_before_footprint = self.live.paused();
+                        self.live.set_paused(true);
+                        self.chart.set_feed_paused(true);
                         self.footprint_scale = Some(self.chart.get_time_scale_state());
                         self.rebuild_footprint();
                         if self.footprint.is_some() {
@@ -930,6 +995,7 @@ impl DemoApp {
                         }
                     } else {
                         self.footprint = None;
+                        self.restore_feed_after_footprint();
                         if let Some((spacing, offset)) = self.footprint_scale.take() {
                             self.chart.apply_synced_time_scale(spacing, offset);
                         }
@@ -1056,6 +1122,9 @@ impl DemoApp {
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        let drawings = &self.chart.drawings().drawings;
+        self.drawing_toolbar.state.lock_all =
+            !drawings.is_empty() && drawings.iter().all(|d| d.locked);
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
             .exact_size(56.0)
@@ -1136,11 +1205,14 @@ impl DemoApp {
             DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
             DrawingToolbarAction::ToggleMagnet => {
                 dm.options.magnet_mode = !dm.options.magnet_mode;
+                dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
+                    != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
             }
-            DrawingToolbarAction::SetMagnetType(_) => {
-                // Magnet strength maps to the same snap behavior; ensure on.
+            DrawingToolbarAction::SetMagnetType(kind) => {
                 dm.options.magnet_mode = true;
+                dm.options.strong_magnet =
+                    kind != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
             }
             DrawingToolbarAction::ToggleEraserMode => {
@@ -1324,15 +1396,15 @@ impl DemoApp {
                 } else {
                     chart
                         .drawings_mut()
-                        .drag_edit_drawing(id, |d| d.color = color.to_array());
+                        .drag_edit_drawing(id, |d| d.color = color.to_srgba_unmultiplied());
                     self.colour_drag = true;
                 }
             }
             ObjectTreeAction::OpenProperties(id) | ObjectTreeAction::OpenIndicatorSettings(id) => {
                 if id == MAIN_SERIES_ID {
                     self.open_series_settings_dialog();
-                } else if indicator_from_tree_id(id).is_some() {
-                    self.indicator_dialog.open();
+                } else if let Some(study) = indicator_from_tree_id(id) {
+                    self.open_indicator_settings(study);
                 } else {
                     self.open_drawing_props_for(id);
                 }
@@ -1452,6 +1524,13 @@ impl DemoApp {
         }
     }
 
+    fn restore_feed_after_footprint(&mut self) {
+        self.chart.set_feed_paused(self.replay.is_some());
+        if self.replay.is_none() {
+            self.live.set_paused(self.feed_before_footprint);
+        }
+    }
+
     fn rebuild_footprint(&mut self) {
         let bars = self.chart.bars(SeriesId::MAIN);
         let step = if bars.last().is_some_and(|bar| bar.close.abs() >= 100.0) {
@@ -1459,12 +1538,12 @@ impl DemoApp {
         } else {
             0.0001
         };
-        let mut flow = egui_charts::data::Footprint::new(
-            egui_charts::model::BarClock::new(self.state.timeframe),
-            step,
-            1,
-        )
-        .expect("fixture has a positive price step");
+        let mut clock = egui_charts::model::BarClock::new(self.state.timeframe);
+        if let Some(zone) = self.chart.chart_options().time_scale.timezone.to_tz() {
+            clock = clock.with_timezone(zone);
+        }
+        let mut flow = egui_charts::data::Footprint::new(clock, step, 1)
+            .expect("fixture has a positive price step");
         for trade in crate::sampledata::synthetic_trades(bars) {
             flow.push(&trade)
                 .expect("fixture executions are finite and chronological");
@@ -1473,10 +1552,11 @@ impl DemoApp {
             self.footprint = Some(flow);
         } else {
             self.footprint = None;
+            self.restore_feed_after_footprint();
             if let Some((spacing, offset)) = self.footprint_scale.take() {
                 self.chart.apply_synced_time_scale(spacing, offset);
             }
-            self.notify("Footprint example needs one source bar per UTC interval");
+            self.notify("Footprint example needs one source bar per selected interval");
         }
     }
 
@@ -1499,6 +1579,9 @@ impl DemoApp {
                     }
                 } else {
                     self.chart.show(ui);
+                }
+                if let Some(id) = self.chart.take_indicator_settings_request() {
+                    self.open_indicator_settings(id);
                 }
                 if self.chart.take_scale_settings_request() {
                     self.open_series_settings_dialog();
@@ -1855,6 +1938,84 @@ mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
+    /// Existing drawing settings survive opening and applying the dialog, and the toolbar
+    /// reflects locks changed through other drawing controls rather than an optimistic toggle.
+    #[test]
+    fn drawing_controls_round_trip_visibility_fill_fonts_and_locks() {
+        use egui_charts::drawings::{Drawing, DrawingToolType, LineStyle, TimeframeVisibility};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut drawing = Drawing::new(7, DrawingToolType::TextLabel);
+        drawing.line_style = LineStyle::Dotted;
+        drawing.fill_color = Some([51, 102, 153, 85]);
+        drawing.font_size = 24.0;
+        drawing.extend_left = true;
+        drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+        drawing.text = Some("Annotation".into());
+        drawing.locked = true;
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.open_drawing_props_for(7);
+        let props = app.drawing_props.props.clone();
+        assert!(!props.visible_all_timeframes);
+        assert_eq!(props.visible_timeframes, ["1h"]);
+        assert!(props.fill_enabled);
+        assert_eq!(
+            props.fill_color.unwrap().to_srgba_unmultiplied(),
+            [51, 102, 153, 85]
+        );
+        assert_eq!(props.font_size, 24.0);
+        assert!(matches!(props.line_style, DrawingLineStyle::Dotted));
+        assert!(props.extend_left);
+        app.apply_drawing_props(
+            DrawingId(7),
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            },
+        );
+        assert_eq!(app.chart.drawings().drawings[0].font_size, 24.0);
+        app.chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.locked = false);
+        app.apply_drawing_props(DrawingId(7), props);
+        let changed = DrawingProps {
+            visible_all_timeframes: false,
+            visible_timeframes: vec!["4h".into()],
+            font_size: 28.0,
+            fill_enabled: false,
+            ..app.drawing_props.props.clone()
+        };
+        app.apply_drawing_props(DrawingId(7), changed);
+        let saved = &app.chart.drawings().drawings[0];
+        assert!(saved.timeframe_visibility.is_visible_on("4h"));
+        assert!(!saved.timeframe_visibility.is_visible_on("1h"));
+        assert_eq!(saved.fill_color, None);
+        assert_eq!(saved.font_size, 28.0);
+        app.handle_object_tree(
+            ObjectTreeAction::ChangeColor(
+                7,
+                egui::Color32::from_rgba_unmultiplied(51, 102, 153, 85),
+            ),
+            &[],
+        );
+        assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
+        app.chart.drawings_mut().end_drag_handle();
+        app.chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.locked = true);
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+        })
+        .drop_without_applying_deltas();
+        assert!(app.drawing_toolbar.state.lock_all);
+        app.chart.drawings_mut().drawings[0].locked = false;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK)
+        })
+        .drop_without_applying_deltas();
+        assert!(!app.drawing_toolbar.state.lock_all);
+    }
+
     #[test]
     fn object_tree_applies_layer_bulk_and_focus_actions() {
         use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
@@ -2041,6 +2202,7 @@ mod tests {
         for kind in [ChartType::Candles, ChartType::Renko] {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.chart.set_feed_paused(true);
             app.chart.set_chart_type(kind);
             let frame = |app: &mut DemoApp, events| {
                 ctx.run_ui(
@@ -2058,7 +2220,9 @@ mod tests {
                 )
                 .drop_without_applying_deltas();
             };
-            frame(&mut app, vec![]);
+            for _ in 0..6 {
+                frame(&mut app, vec![]);
+            }
             let (start, end) = app.chart.state().visible_range();
             let index = (start + end) / 2;
             let map = app.chart.get_chart_mapping();
@@ -2108,9 +2272,7 @@ mod tests {
                     app.switch_timeframe(interval);
                     app.timeframe_toolbar.set_session(SessionType::ETH);
                     app.apply_session();
-                    if replay {
-                        app.start_replay();
-                    }
+                    app.chart.set_feed_paused(true);
                     let frame = |app: &mut DemoApp| {
                         ctx.run_ui(
                             egui::RawInput {
@@ -2124,7 +2286,13 @@ mod tests {
                         )
                         .drop_without_applying_deltas();
                     };
-                    frame(&mut app);
+                    for _ in 0..3 {
+                        frame(&mut app);
+                    }
+                    if replay {
+                        app.start_replay();
+                        frame(&mut app);
+                    }
                     for range in [DateRange::Day1, DateRange::Month1, DateRange::All] {
                         let bars = app.chart.bars(SeriesId::MAIN);
                         let end = bars.len();
@@ -2138,7 +2306,9 @@ mod tests {
                             range,
                         ));
                         frame(&mut app);
-                        assert_eq!(app.chart.state().visible_range(), (start, end), "{range:?}");
+                        let (shown_start, shown_end) = app.chart.state().visible_range();
+                        assert_eq!(shown_end, end, "{range:?}");
+                        assert!(shown_start.abs_diff(start) <= 1, "{range:?}");
                         let expected = app.chart.get_rendered_price_rect().width()
                             / ((end - start) as f32 + 0.5);
                         assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);
@@ -2147,5 +2317,103 @@ mod tests {
                 }
             }
         }
+    }
+    /// Selecting seconds must rebuild the same executions, including the current partial minute.
+    #[test]
+    fn interval_switch_rebuilds_the_same_executions() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let frame = |app: &mut DemoApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..3 {
+            frame(&mut app);
+        }
+        let tick_size = app.chart.instrument().unwrap().tick_size.unwrap();
+        for bar in app.chart.bars(SeriesId::MAIN) {
+            for price in [bar.open, bar.high, bar.low, bar.close] {
+                assert!(
+                    (price / tick_size - (price / tick_size).round()).abs() < 1e-7,
+                    "backfill and executions must share the instrument's tick size"
+                );
+            }
+        }
+        let minute = app.chart.bars(SeriesId::MAIN).last().unwrap().clone();
+        app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Sec1));
+        for _ in 0..3 {
+            frame(&mut app);
+        }
+        let clock = egui_charts::model::BarClock::new(Timeframe::Min1);
+        let seconds: Vec<_> = app
+            .chart
+            .bars(SeriesId::MAIN)
+            .iter()
+            .filter(|bar| clock.bar_open(bar.time) == minute.time)
+            .collect();
+        assert!(
+            !seconds.is_empty(),
+            "seconds must cover the same partial minute"
+        );
+        assert_eq!(seconds[0].open, minute.open);
+        assert_eq!(seconds.last().unwrap().close, minute.close);
+        assert_eq!(
+            seconds
+                .iter()
+                .map(|bar| bar.high)
+                .fold(f64::NEG_INFINITY, f64::max),
+            minute.high
+        );
+        assert_eq!(
+            seconds
+                .iter()
+                .map(|bar| bar.low)
+                .fold(f64::INFINITY, f64::min),
+            minute.low
+        );
+        assert_eq!(
+            seconds.iter().map(|bar| bar.volume).sum::<f64>(),
+            minute.volume
+        );
+        app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Min1));
+        for _ in 0..3 {
+            frame(&mut app);
+        }
+        assert_eq!(app.chart.bars(SeriesId::MAIN).last(), Some(&minute));
+        app.start_replay();
+        app.switch_timeframe(Timeframe::Sec1);
+        let expected = app.chart.bars(SeriesId::MAIN).to_vec();
+        for _ in 0..3 {
+            frame(&mut app);
+        }
+        assert_eq!(
+            app.chart.bars(SeriesId::MAIN),
+            expected,
+            "feed must not overwrite replay"
+        );
+        app.stop_replay();
+        let mut options = app.chart.chart_options().clone();
+        options.time_scale.timezone = egui_charts::config::TimezoneMode::nyse();
+        let chart = std::mem::replace(&mut app.chart, Chart::new(BarData::new()));
+        app.chart = chart.with_chart_options(options);
+        let timeframe = "45min".parse().unwrap();
+        app.switch_timeframe(timeframe);
+        for _ in 0..3 {
+            frame(&mut app);
+        }
+        let clock = egui_charts::model::BarClock::new(timeframe)
+            .with_timezone(egui_charts::config::TimezoneMode::nyse().to_tz().unwrap());
+        assert!(
+            app.chart.bars(SeriesId::MAIN).len() >= 210,
+            "coarse intervals need older bar history beyond the trade buffer"
+        );
+        let last_trade = app.chart.trades(SeriesId::MAIN).last().unwrap().ts;
+        assert_eq!(
+            app.chart.bars(SeriesId::MAIN).last().unwrap().time,
+            clock.bar_open(last_trade),
+            "feed must use the selected local calendar"
+        );
     }
 }

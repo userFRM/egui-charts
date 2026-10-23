@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Volume signed by the close against the previous close: positive, negative or zero.
 /// The first bar has no value.
 #[derive(Clone)]
 pub struct NetVolume {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -15,7 +15,7 @@ pub struct NetVolume {
 impl NetVolume {
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![Color32::from_rgb(38, 166, 154)], // Teal
             visible: true,
         }
@@ -63,7 +63,7 @@ impl Indicator for NetVolume {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

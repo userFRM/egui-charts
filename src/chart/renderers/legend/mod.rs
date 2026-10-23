@@ -3,7 +3,7 @@
 use super::{price_decimals, semibold};
 use crate::chart::renderers::StyleColors;
 use crate::model::{Bar, Instrument, Level1Quote, percent_change};
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::Indicator;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use egui::{Color32, FontId, ImageSource, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -102,6 +102,16 @@ impl<'a> Legend<'a> {
     /// Paints inside `plot`, 8 points from its edges, and reports a quote intent.
     /// Supplementary volume and study rows collapse together; quotes remain visible.
     pub fn show(&self, ui: &mut Ui, plot: Rect) -> Option<QuoteSide> {
+        self.show_with_study_actions(ui, plot).0
+    }
+
+    /// Paint the legend and report quote and study-settings intents independently.
+    /// A study intent is its zero-based index in [`studies`](Self::studies).
+    pub fn show_with_study_actions(
+        &self,
+        ui: &mut Ui,
+        plot: Rect,
+    ) -> (Option<QuoteSide>, Option<usize>) {
         let theme = ui.active_theme();
         let colors = StyleColors {
             bullish: theme.chart.candle_up,
@@ -121,11 +131,11 @@ impl<'a> Legend<'a> {
         ui: &mut Ui,
         plot: Rect,
         colors: &StyleColors,
-    ) -> Option<QuoteSide> {
+    ) -> (Option<QuoteSide>, Option<usize>) {
         let theme = ui.active_theme();
         let bounds = plot.shrink(8.0);
         if !bounds.is_positive() {
-            return None;
+            return (None, None);
         }
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
@@ -271,6 +281,7 @@ impl<'a> Legend<'a> {
             action
         });
 
+        let mut study_settings = None;
         let collapsed = ui
             .ctx()
             .data_mut(|data| data.get_temp::<bool>(id).unwrap_or(false));
@@ -316,17 +327,15 @@ impl<'a> Legend<'a> {
                         bounds.width(),
                     );
                 }
-                let values = match study.values().get(self.bar_index) {
-                    Some(IndicatorValue::Single(value)) => std::slice::from_ref(value),
-                    Some(IndicatorValue::Multiple(values)) => values,
-                    _ => &[],
-                };
                 let study_colors = study.colors();
-                for (index, value) in values
-                    .iter()
-                    .enumerate()
-                    .filter(|_| self.show_indicator_values)
+                let precision = study.precision().unwrap_or(precision);
+                for index in (0..study.line_cnt())
+                    .filter(|index| self.show_indicator_values && study.plot_style(*index).visible)
                 {
+                    let value = study
+                        .values()
+                        .value(index, self.bar_index)
+                        .unwrap_or(f64::NAN);
                     let text = if value.is_finite() {
                         format!("{value:.precision$}")
                     } else {
@@ -334,6 +343,28 @@ impl<'a> Legend<'a> {
                     };
                     let color = study_colors.get(index).copied().unwrap_or(colors.text);
                     layout.text(text, typography::MD, color, bounds.width());
+                }
+                let button = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
+                let response = ui
+                    .interact(button, id.with(("study_settings", index)), Sense::click())
+                    .on_hover_text("Study settings");
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Button, true, "Study settings")
+                });
+                #[cfg(feature = "icons")]
+                crate::icons::icons::SETTINGS
+                    .as_image_tinted(Vec2::splat(14.0), theme.ui.text_secondary)
+                    .paint_at(ui, button.shrink(3.0));
+                #[cfg(not(feature = "icons"))]
+                painter.text(
+                    button.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "...",
+                    FontId::proportional(12.0),
+                    colors.text,
+                );
+                if response.clicked() {
+                    study_settings = Some(index);
                 }
                 layout.new_row();
             }
@@ -381,7 +412,7 @@ impl<'a> Legend<'a> {
                 ui.ctx().data_mut(|data| data.insert_temp(id, !collapsed));
             }
         }
-        action
+        (action, study_settings)
     }
 
     fn title(&self) -> String {
@@ -783,9 +814,9 @@ mod tests {
             };
             // Tab through both legends, then activate each control in the second one.
             for (tabs, side) in [
-                (4, Some(QuoteSide::Sell)),
+                (5, Some(QuoteSide::Sell)),
                 (1, Some(QuoteSide::Buy)),
-                (1, None),
+                (2, None),
             ] {
                 for _ in 0..tabs {
                     frame(1, vec![key(Key::Tab, true)]);

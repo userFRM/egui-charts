@@ -21,7 +21,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -51,7 +51,7 @@ pub struct PivotPoints {
     method: PivotMethod,
     /// Number of bars to use for calculating pivot (typically daily).
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors for: Pivot, S1, S2, S3, R1, R2, R3
     colors: Vec<Color32>,
     visible: bool,
@@ -62,7 +62,7 @@ impl PivotPoints {
         Self {
             method: PivotMethod::Standard,
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
                 DESIGN_TOKENS.semantic.extended.favorite_gold, // Pivot - Amber
                 DESIGN_TOKENS.semantic.extended.success,       // S1 - Green
@@ -200,8 +200,8 @@ impl Default for PivotPoints {
 
 impl PivotPoints {
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -234,7 +234,7 @@ impl PivotPoints {
             let levels = self.calculate_pivots(high, low, close, open);
 
             // Store all 7 levels as Multiple
-            values.push(IndicatorValue::Multiple(vec![
+            values.push_lines(&[
                 levels.pivot,
                 levels.s1,
                 levels.s2,
@@ -242,7 +242,7 @@ impl PivotPoints {
                 levels.r1,
                 levels.r2,
                 levels.r3,
-            ]));
+            ]);
 
             i += 1;
         }
@@ -252,6 +252,11 @@ impl PivotPoints {
 }
 
 impl Indicator for PivotPoints {
+    crate::studies::inputs::study_inputs!(self;
+        method: choice("Method", [PivotMethod::Standard, PivotMethod::Fibonacci, PivotMethod::Woodie, PivotMethod::Camarilla, PivotMethod::DeMark]),
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Pivot Points"
     }
@@ -273,7 +278,7 @@ impl Indicator for PivotPoints {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

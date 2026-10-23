@@ -36,7 +36,7 @@
 use super::clamp_param;
 use crate::model::{Bar, Session, SessionWindow, TimezoneId};
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Offset, TimeZone, Utc};
 use chrono_tz::Tz;
@@ -105,7 +105,7 @@ fn trading_day(time: DateTime<Utc>, zone: Tz, windows: &[SessionWindow]) -> Naiv
 /// midnight in the exchange zone, or UTC midnight, stay one period.
 #[derive(Clone)]
 pub struct VolumeWeightedAvgPrice {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     stepper: Stepper<State>,
     /// First bar sharing the preceding bar's UTC date, if any.
     shared: Option<usize>,
@@ -136,7 +136,7 @@ impl VolumeWeightedAvgPrice {
     /// A VWAP restarted at each session, in UTC with no session windows, without bands.
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             stepper: Stepper::default(),
             shared: None,
             daily: true,
@@ -224,6 +224,12 @@ impl Default for VolumeWeightedAvgPrice {
 }
 
 impl Indicator for VolumeWeightedAvgPrice {
+    crate::studies::inputs::study_inputs!(self;
+        daily: toggle("Daily"),
+        anchor: choice("Anchor", [VwapAnchor::Session, VwapAnchor::Week, VwapAnchor::Month, VwapAnchor::Quarter, VwapAnchor::Year, VwapAnchor::Events]),
+        percentage_bands: toggle("Percentage bands")
+    ; {});
+
     fn name(&self) -> &str {
         "VWAP"
     }
@@ -340,7 +346,7 @@ impl Indicator for VolumeWeightedAvgPrice {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -663,7 +669,7 @@ mod tests {
             assert_eq!(study.line_names().len(), lines, "{}", case.name);
             assert_eq!(study.colors().len(), lines, "{}", case.name);
             assert_eq!(study.values().len(), case.want.len(), "{}", case.name);
-            for (i, (got, want)) in study.values().iter().zip(case.want).enumerate() {
+            for (i, (got, want)) in study.values().to_rows().iter().zip(case.want).enumerate() {
                 let got = match got {
                     IndicatorValue::Single(v) if case.bands.is_empty() => vec![*v],
                     IndicatorValue::Multiple(vs) if !case.bands.is_empty() => vs.clone(),
@@ -714,7 +720,7 @@ mod tests {
                 .map(|(t, c)| Bar::new(t, c, c, c, c, 1.0))
                 .collect();
             study.calculate(&bars);
-            for (got, want) in study.values().iter().zip([10.0, 12.0, 18.0]) {
+            for (got, want) in study.values().to_rows().iter().zip([10.0, 12.0, 18.0]) {
                 let IndicatorValue::Multiple(lines) = got else {
                     panic!("{got:?}")
                 };
@@ -760,17 +766,17 @@ mod tests {
             }
             let study = chart.indicators().next().unwrap().1;
             assert!(
-                matches!(study.values()[2], IndicatorValue::Single(v) if v == 14.0),
+                matches!(study.values().to_rows()[2], IndicatorValue::Single(v) if v == 14.0),
                 "late={late}: {:?}",
-                study.values()
+                study.values().to_rows()
             );
             chart.set_instrument(None);
             shapes(&egui::Context::default(), &mut chart, 1.0, Vec::new());
             let study = chart.indicators().next().unwrap().1;
             assert!(
-                matches!(study.values()[2], IndicatorValue::Single(v) if v == 16.0),
+                matches!(study.values().to_rows()[2], IndicatorValue::Single(v) if v == 16.0),
                 "clearing metadata must restore UTC: {:?}",
-                study.values()
+                study.values().to_rows()
             );
         }
         let mut chart = Chart::new(BarData::from_bars(bars));
@@ -780,7 +786,7 @@ mod tests {
         ));
         shapes(&egui::Context::default(), &mut chart, 0.0, Vec::new());
         assert!(matches!(
-            chart.indicators().next().unwrap().1.values()[2],
+            chart.indicators().next().unwrap().1.values().to_rows()[2],
             IndicatorValue::Single(v) if v == 14.0
         ));
     }
