@@ -51,9 +51,8 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
 use crate::ui_kit::buttons::IconButton;
-use crate::ui_kit::dialog::{centred_title, titled_window_size};
 use crate::ui_kit::modal::Modal;
-use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2, Window};
+use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2};
 
 // =============================================================================
 // Symbol Search Dialog
@@ -459,8 +458,8 @@ impl Default for CompareSymbolsConfig {
         // Colors are TRANSPARENT to signal that colors should be fetched from
         // ui.style().visuals at render time for proper theme support.
         Self {
-            width: 500.0,
-            height: 400.0,
+            width: 840.0,
+            height: 560.0,
             bg_color: Color32::TRANSPARENT,
             text_color: Color32::TRANSPARENT,
             muted_color: Color32::TRANSPARENT,
@@ -480,7 +479,7 @@ impl CompareSymbolsConfig {
             }
         };
         Self {
-            bg_color: or(self.bg_color, visuals.window_fill),
+            bg_color: or(self.bg_color, visuals.panel_fill),
             text_color: or(self.text_color, visuals.text_color()),
             muted_color: or(self.muted_color, visuals.weak_text_color()),
             hover_color: or(self.hover_color, visuals.widgets.hovered.weak_bg_fill),
@@ -611,25 +610,18 @@ impl CompareSymbolsDialog {
 
         let mut is_open = self.is_open;
         let config = self.config.resolved(&ctx.global_style().visuals);
-        let frame = egui::Frame::window(&ctx.global_style()).fill(config.bg_color);
-
-        Window::new(centred_title(ctx, "Compare symbol"))
-            .open(&mut is_open)
-            .resizable(false)
-            .collapsible(false)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(titled_window_size(
-                ctx,
-                &frame,
-                Vec2::new(config.width, config.height),
-            ))
-            .frame(frame)
-            .show(ctx, |ui| {
+        Modal::new("compare_symbols", "")
+            .width(config.width)
+            .height(config.height)
+            .rounding(20.0)
+            .fill(config.bg_color)
+            .dim_background(false)
+            .show(ctx, &mut is_open, |ui| {
                 action = self.draw_content(ui, symbols, &config);
             });
 
-        self.is_open = is_open;
-        if !is_open {
+        self.is_open = is_open && action != CompareAction::Close;
+        if !self.is_open {
             action = CompareAction::Close;
         }
 
@@ -644,18 +636,24 @@ impl CompareSymbolsDialog {
     ) -> CompareAction {
         let mut action = CompareAction::None;
 
-        // Search bar
         ui.horizontal(|ui| {
-            ui.space_lg();
-            ui.label("Search:");
+            ui.add(icons::QUICK_SEARCH.as_image_tinted(Vec2::splat(24.0), config.muted_color));
             ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("Symbol")
-                    .desired_width(config.width - 50.0),
+                    .hint_text(RichText::new("Search symbols").size(16.0))
+                    .font(egui::FontId::proportional(16.0))
+                    .frame(egui::Frame::NONE)
+                    .desired_width((ui.available_width() - 40.0).max(0.0)),
             );
+            if IconButton::new(&icons::CLOSE)
+                .tooltip("Close")
+                .show(ui)
+                .clicked()
+            {
+                action = CompareAction::Close;
+            }
         });
-
-        ui.space_lg();
+        ui.add_space(24.0);
 
         // Currently compared symbols
         if !self.compared_symbols.is_empty() {
@@ -702,20 +700,19 @@ impl CompareSymbolsDialog {
             EmptyState::new("No symbols to compare").show(ui);
         }
 
-        // Two-column layout
-        let (left, right) = symbols.split_at(symbols.len().div_ceil(2));
-        ui.horizontal(|ui| {
-            for column in [left, right] {
-                ui.vertical(|ui| {
-                    ui.set_width(config.width / 2.0 - 16.0);
-                    for symbol in column {
-                        if let Some(a) = self.draw_symbol_item(ui, symbol, config) {
-                            action = a;
-                        }
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height())
+            .show(ui, |ui| {
+                let query = self.search_query.to_lowercase();
+                for symbol in symbols.iter().filter(|symbol| {
+                    symbol.name.to_lowercase().contains(&query)
+                        || symbol.display_name.to_lowercase().contains(&query)
+                }) {
+                    if let Some(a) = self.draw_symbol_item(ui, symbol, config) {
+                        action = a;
                     }
-                });
-            }
-        });
+                }
+            });
 
         // Handle add action
         if let CompareAction::AddSymbol(ref sym) = action
@@ -756,7 +753,7 @@ impl CompareSymbolsDialog {
             .iter()
             .any(|s| s.symbol == symbol.name);
 
-        let desired_size = Vec2::new(ui.available_width(), 32.0);
+        let desired_size = Vec2::new(ui.available_width(), 56.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
 
         // Background on hover
@@ -781,19 +778,19 @@ impl CompareSymbolsDialog {
 
         // Symbol
         ui.painter().text(
-            Pos2::new(rect.min.x + 28.0, rect.center().y),
+            Pos2::new(rect.min.x + 40.0, rect.center().y - 10.0),
             egui::Align2::LEFT_CENTER,
             &symbol.name,
-            egui::FontId::proportional(typography::MD),
+            egui::FontId::proportional(16.0),
             config.text_color,
         );
 
         // Description
         ui.painter().text(
-            Pos2::new(rect.right() - 8.0, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
+            Pos2::new(rect.min.x + 40.0, rect.center().y + 10.0),
+            egui::Align2::LEFT_CENTER,
             &symbol.display_name,
-            egui::FontId::proportional(typography::XS),
+            egui::FontId::proportional(12.0),
             config.muted_color,
         );
 
@@ -899,13 +896,39 @@ mod tests {
 
     #[test]
     fn test_symbol_filtering_case_insensitive() {
-        let mut dialog = SymbolSearchDialog::new();
         let symbols = create_test_symbols();
+        for (query, expected) in [("btc", "BTCUSDT"), ("BTC", "BTCUSDT"), ("apple", "AAPL")] {
+            let mut dialog = SymbolSearchDialog::new();
+            dialog.search_query = query.to_string();
+            dialog.update_filtered_symbols(&symbols);
+            assert_eq!(dialog.filtered_symbols.len(), 1);
+            assert_eq!(dialog.filtered_symbols[0].name, expected);
 
-        dialog.search_query = "btc".to_string();
-        dialog.update_filtered_symbols(&symbols);
-
-        assert_eq!(dialog.filtered_symbols.len(), 1);
+            let ctx = Context::default();
+            let mut compare = CompareSymbolsDialog::new();
+            compare.search_query = query.to_string();
+            let config = compare.config.resolved(&ctx.global_style().visuals);
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                compare.draw_content(ui, &symbols, &config);
+            });
+            let names: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text)
+                        if symbols
+                            .iter()
+                            .any(|symbol| symbol.name == text.galley.text()) =>
+                    {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.textures_delta.clear();
+            assert_eq!(names, [expected], "compare query: {query}");
+            output.drop_without_applying_deltas();
+        }
     }
 
     #[test]

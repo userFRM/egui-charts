@@ -17,6 +17,7 @@ pub struct Modal {
     closable: bool,
     dim_background: bool,
     rounding: Option<f32>,
+    fill: Option<Color32>,
 }
 
 impl Modal {
@@ -31,6 +32,7 @@ impl Modal {
             closable: true,
             dim_background: true,
             rounding: None,
+            fill: None,
         }
     }
 
@@ -57,6 +59,12 @@ impl Modal {
     /// Set whether the modal can be closed with the close button, Escape or a backdrop click
     pub fn closable(mut self, closable: bool) -> Self {
         self.closable = closable;
+        self
+    }
+
+    /// Override the surface fill, leaving the theme's panel fill as the default.
+    pub fn fill(mut self, fill: Color32) -> Self {
+        self.fill = Some(fill);
         self
     }
 
@@ -88,6 +96,9 @@ impl Modal {
         }
 
         let mut frame = dialog_frame(&ctx.global_style());
+        if let Some(fill) = self.fill {
+            frame = frame.fill(fill);
+        }
         if let Some(rounding) = self.rounding {
             frame = frame.corner_radius(rounding);
         }

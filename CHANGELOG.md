@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The compare dialog uses the shared modal frame, a wide search header, a close control and a single list of 56 px symbol rows. Its configured fill remains supported through `Modal::fill`.
+
 - Symbol search uses the shared modal frame, a full-width search row with a close button and 56 px result rows. Escape and backdrop dismissal follow the modal; symbol filtering and keyboard selection are preserved. Empty modal titles allow a search row to serve as the header.
 
 - The Save arrow opens a compact export menu while the label keeps its existing action. Entries requiring hosted layout storage are omitted.
