@@ -53,8 +53,16 @@ pub struct ToolbarState {
     pub values_tooltip_on_long_press: bool,
     /// Whether eraser mode is currently active
     pub eraser_mode_enabled: bool,
-    /// Whether the favorites toolbar is visible
-    pub show_favorites_toolbar: bool,
+    /// Whether all drawings are locked; the lock button shows it.
+    pub lock_all: bool,
+    /// Whether the Hide menu has hidden drawings; the menu shows a check on each hidden group.
+    pub hide_drawings: bool,
+    /// Whether the Hide menu has hidden indicators.
+    pub hide_indicators: bool,
+    /// Whether the Hide menu has hidden positions.
+    pub hide_positions: bool,
+    /// Whether the Hide menu has hidden orders.
+    pub hide_orders: bool,
     /// Whether zoom history exists (for showing/hiding Zoom Out button)
     pub has_zoom_history: bool,
     /// Whether zoom-in mode is currently active (for button highlighting)
@@ -103,7 +111,11 @@ impl Default for ToolbarState {
             search_query: String::new(),
             values_tooltip_on_long_press: true, // Default: enabled
             eraser_mode_enabled: false,
-            show_favorites_toolbar: false,
+            lock_all: false,
+            hide_drawings: false,
+            hide_indicators: false,
+            hide_positions: false,
+            hide_orders: false,
             has_zoom_history: false,
             zoom_mode_active: false,
             current_cursor_type: CursorType::Arrow, // Default: Arrow
@@ -123,6 +135,7 @@ impl ToolbarState {
     /// Select a drawing tool and add to recent
     pub fn select_tool(&mut self, tool: DrawingToolType) {
         self.sel_tool = Some(tool);
+        self.zoom_mode_active = false;
         self.add_to_recent(tool);
 
         // Update last selected tool for this tool's category
@@ -146,6 +159,7 @@ impl ToolbarState {
     /// Clear tool selection (cursor mode)
     pub fn clear_selection(&mut self) {
         self.sel_tool = None;
+        self.zoom_mode_active = false;
     }
 
     /// Toggle favorite status of a tool

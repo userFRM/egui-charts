@@ -15,7 +15,7 @@ pub struct ZoomInButton;
 impl ZoomInButton {
     /// Render the zoom in button and return any action.
     pub fn show(ui: &mut Ui, is_active: bool) -> Option<DrawingToolbarAction> {
-        let response = draw_tool_button(ui, &icons::ZOOM_IN, "Zoom In", is_active);
+        let response = draw_tool_button(ui, &icons::ZOOM_IN, "Zoom in", is_active);
 
         if response.clicked() {
             Some(DrawingToolbarAction::ZoomIn)
@@ -31,7 +31,7 @@ pub struct ZoomOutButton;
 impl ZoomOutButton {
     /// Render the zoom out button and return any action.
     pub fn show(ui: &mut Ui) -> Option<DrawingToolbarAction> {
-        let response = draw_tool_button(ui, &icons::ZOOM_OUT, "Zoom Out", false);
+        let response = draw_tool_button(ui, &icons::ZOOM_OUT, "Zoom out", false);
 
         if response.clicked() {
             Some(DrawingToolbarAction::ZoomOut)

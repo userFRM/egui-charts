@@ -60,8 +60,6 @@ pub enum DrawingToolbarAction {
     ZoomOut,
     /// Toggle values tooltip on long press
     ToggleValuesTooltip,
-    /// Toggle favorites toolbar visibility
-    ToggleFavoritesToolbar,
     /// Lock all drawings
     LockAllDrawings,
     /// Save current drawing properties as a template

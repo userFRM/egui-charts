@@ -35,12 +35,8 @@ pub fn render_svg_at_rect_themed(
         ui.visuals().widgets.noninteractive.fg_stroke.color
     };
 
-    // Render icon with PERFECT SQUARE aspect ratio
-    let size = rect.size();
-    let image = icon.as_image_tinted(size, color);
-
-    // Place at exact position
-    ui.put(rect, image);
+    // `paint_at` leaves the layout cursor alone; `put` would move it back to the icon's bottom edge.
+    icon.as_image_tinted(rect.size(), color).paint_at(ui, rect);
 }
 
 /// Render SVG icon at a centered position with specified size.

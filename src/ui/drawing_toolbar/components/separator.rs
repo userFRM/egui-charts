@@ -1,5 +1,6 @@
 //! Separator component for visual dividers in the toolbar.
 
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Rect, Sense, Ui, Vec2};
 
@@ -46,7 +47,7 @@ pub fn draw_separator_with_margin(ui: &mut Ui, width: f32, margin: f32) {
 
 /// Draw a styled separator for the drawing toolbar.
 ///
-/// Creates a thin separator line with proper margins and gaps above/below.
+/// Creates a thin separator line with proper margins and a `spacing.lg` gap above and below.
 /// Uses exact dimensions: 1px height, 36px wide (52-16 margins).
 ///
 /// # Arguments
@@ -55,7 +56,7 @@ pub fn draw_separator_with_margin(ui: &mut Ui, width: f32, margin: f32) {
 /// * `toolbar_width` - Total width of the toolbar (e.g., 52px)
 pub fn draw_separator_styled(ui: &mut Ui, toolbar_width: f32) {
     let margin = DESIGN_TOKENS.sizing.toolbar.separator_margin;
-    let gap = DESIGN_TOKENS.sizing.toolbar.separator_gap;
+    let gap = ui.active_theme().spacing.lg;
 
     // Add gap above
     ui.add_space(gap);

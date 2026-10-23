@@ -1,7 +1,7 @@
 //! Keyboard shortcuts for drawing tools.
 
 use crate::drawings::DrawingToolType;
-use egui::{Context, Key, KeyboardShortcut, Modifiers};
+use egui::{Context, Key, KeyboardShortcut, ModifierNames, Modifiers};
 
 /// Keyboard shortcuts for drawing tools
 ///
@@ -102,6 +102,15 @@ impl DrawingToolShortcuts {
         None
     }
 
+    /// The shortcut that selects `tool`, written the way the platform writes it ("Alt+T"), for
+    /// the hint next to the tool in a flyout.
+    pub(super) fn hint(&self, ctx: &Context, tool: DrawingToolType) -> Option<String> {
+        self.shortcuts
+            .iter()
+            .find(|(_, bound)| *bound == tool)
+            .map(|(shortcut, _)| ctx.format_shortcut(shortcut))
+    }
+
     /// Add a custom shortcut
     ///
     /// # Examples
@@ -122,7 +131,7 @@ impl DrawingToolShortcuts {
 
     /// Get help text for shortcuts
     ///
-    /// Returns a list of (shortcut_text, tool_name) pairs.
+    /// Returns a list of (shortcut_text, tool_name) pairs, such as ("Alt+T", "Trend Line").
     ///
     /// # Examples
     ///
@@ -137,7 +146,7 @@ impl DrawingToolShortcuts {
         self.shortcuts
             .iter()
             .map(|(shortcut, tool)| {
-                let key_text = format!("{shortcut:?}");
+                let key_text = shortcut.format(&ModifierNames::NAMES, false);
                 (key_text, tool.as_str().to_string())
             })
             .collect()

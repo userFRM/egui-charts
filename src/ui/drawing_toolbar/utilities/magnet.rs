@@ -1,62 +1,56 @@
 //! Magnet mode button with dropdown menu.
 //!
 //! Provides magnetic snapping functionality for drawing tools:
+//! - Off: no snapping
 //! - Weak Magnet: Loose snapping tolerance
 //! - Strong Magnet: Tight snapping tolerance
 //! - OHLC Magnet: Snap to OHLC price values
 
 use crate::icons::icons;
-use crate::tokens::DESIGN_TOKENS;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
 use crate::ui::drawing_toolbar::components::draw_tool_button;
 use crate::ui::drawing_toolbar::state::MagnetType;
 use crate::ui::drawing_toolbar::submenu_builder::SubmenuBuilder;
-use egui::{Rect, Ui};
+use egui::{Response, Ui};
 
 /// Magnet button with dropdown component.
 pub struct MagnetButton;
 
 impl MagnetButton {
-    /// Render the magnet button and return any action.
-    ///
-    /// Returns tuple of (action, icon_clicked, arrow_clicked, arrow_rect)
-    pub fn show(ui: &mut Ui, is_active: bool) -> (Option<DrawingToolbarAction>, bool, bool, Rect) {
-        let response = draw_tool_button(ui, &icons::MAGNET, "Magnet Mode", is_active);
-
-        // Click opens dropdown to show magnet options
-        let arrow_clicked = response.clicked();
-
-        // No direct action on click - user selects from dropdown
-        (None, false, arrow_clicked, response.rect)
+    /// Render the magnet button, filled while snapping is on. A click opens the dropdown.
+    pub fn show(ui: &mut Ui, is_active: bool) -> Response {
+        draw_tool_button(ui, &icons::MAGNET, "Magnet mode", is_active)
     }
 
-    /// Render the magnet dropdown submenu.
+    /// Render the magnet dropdown rows, with a check on the current mode. "Off" returns
+    /// [`DrawingToolbarAction::ToggleMagnet`], a choice of strength [`DrawingToolbarAction::SetMagnetType`].
     pub fn show_submenu(
         ui: &mut Ui,
-        sidebar_rect: Rect,
-        category_rect: Option<Rect>,
+        magnet_on: bool,
+        magnet_type: MagnetType,
     ) -> Option<DrawingToolbarAction> {
-        let mut builder = SubmenuBuilder::new(ui, sidebar_rect)
-            .with_width(DESIGN_TOKENS.sizing.drawing_toolbar_ext.submenu_width_lg);
-
-        if let Some(cat_rect) = category_rect {
-            builder = builder.with_category_rect(cat_rect);
-        }
-
-        builder
+        let is_current = |kind| magnet_on && magnet_type == kind;
+        SubmenuBuilder::new(ui)
+            .add_text_item_with_action("Off", "Turn magnetic snapping off", || {
+                Some(DrawingToolbarAction::ToggleMagnet)
+            })
+            .checked(!magnet_on)
             .add_text_item_with_action(
-                "Weak Magnet",
+                "Weak magnet",
                 "Weak magnetic snapping with loose tolerance",
                 || Some(DrawingToolbarAction::SetMagnetType(MagnetType::Weak)),
             )
+            .checked(is_current(MagnetType::Weak))
             .add_text_item_with_action(
-                "Strong Magnet",
+                "Strong magnet",
                 "Strong magnetic snapping with tight tolerance",
                 || Some(DrawingToolbarAction::SetMagnetType(MagnetType::Strong)),
             )
-            .add_text_item_with_action("OHLC Magnet", "Snap precisely to OHLC price values", || {
+            .checked(is_current(MagnetType::Strong))
+            .add_text_item_with_action("OHLC magnet", "Snap precisely to OHLC price values", || {
                 Some(DrawingToolbarAction::SetMagnetType(MagnetType::OHLC))
             })
+            .checked(is_current(MagnetType::OHLC))
             .show()
     }
 }

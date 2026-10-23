@@ -14,11 +14,11 @@
 //! ├── icons.rs            # Icon mappings for tools
 //! ├── data.rs             # Tool data definitions
 //! ├── shortcuts.rs        # Keyboard shortcuts
-//! ├── submenu_builder.rs  # Submenu builder framework
+//! ├── submenu_builder.rs  # Flyout container, row painter and submenu builder
 //! │
 //! ├── components/         # Reusable UI components
-//! │   ├── pair_btn.rs  # Split icon+arrow button
-//! │   ├── icon_btn.rs  # Single icon btns
+//! │   ├── pair_button.rs  # Split icon+arrow button
+//! │   ├── icon_button.rs  # Single icon btns
 //! │   ├── separator.rs    # Visual separators
 //! │   └── svg_helpers.rs  # SVG rendering utilities
 //! │
@@ -29,8 +29,7 @@
 //! │   ├── patterns.rs     # Patterns, Elliott, cycles
 //! │   ├── projection.rs   # Projection, volume, measurer
 //! │   ├── shapes.rs       # Brushes, arrows, shapes
-//! │   ├── annotation.rs   # Text & annotations
-//! │   └── icons_emojis.rs # Icons/emoji picker
+//! │   └── annotation.rs   # Text & annotations
 //! │
 //! └── utilities/          # Bottom toolbar utilities
 //!     ├── measure.rs      # Measure tool
@@ -38,9 +37,9 @@
 //!     ├── magnet.rs       # Magnet mode dropdown
 //!     ├── stay_in_drawing.rs # Keep drawing toggle
 //!     ├── lock.rs         # Lock drawings toggle
+//!     ├── templates.rs    # Drawing templates dropdown
 //!     ├── hide_menu.rs    # Hide objects dropdown
-//!     ├── remove_menu.rs  # Remove objects dropdown
-//!     └── favorites.rs    # Favorites toggle
+//!     └── remove_menu.rs  # Remove objects dropdown
 //! ```
 //!
 //! # Example

@@ -12,9 +12,15 @@ use egui::Ui;
 pub struct LockButton;
 
 impl LockButton {
-    /// Render the lock button and return any action.
+    /// Render the lock button and return any action. While `is_active` (all drawings are
+    /// locked) it is filled, shows the closed padlock and offers to unlock.
     pub fn show(ui: &mut Ui, is_active: bool) -> Option<DrawingToolbarAction> {
-        let response = draw_tool_button(ui, &icons::LOCK, "Lock all drawings", is_active);
+        let (icon, tooltip) = if is_active {
+            (&icons::LOCK, "Unlock all drawings")
+        } else {
+            (&icons::UNLOCK, "Lock all drawings")
+        };
+        let response = draw_tool_button(ui, icon, tooltip, is_active);
 
         if response.clicked() {
             log::info!("Lock all drawings clicked");

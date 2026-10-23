@@ -10,45 +10,27 @@ use crate::ui::drawing_toolbar::DrawingTemplate;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
 use crate::ui::drawing_toolbar::components::draw_tool_button;
 use crate::ui::drawing_toolbar::submenu_builder::SubmenuBuilder;
-use egui::{Rect, Ui};
+use egui::{Rect, Response, Ui};
 
 /// Drawing template management button and dropdown.
 pub struct TemplatesButton;
 
 impl TemplatesButton {
-    /// Render the templates button with a save icon.
-    ///
-    /// Returns tuple of (icon_clicked, arrow_clicked, button_rect).
-    pub fn show(ui: &mut Ui) -> (bool, bool, Rect) {
-        let response = draw_tool_button(ui, &icons::SETTINGS, "Drawing Templates", false);
-
-        let arrow_clicked = response.clicked();
-
-        (false, arrow_clicked, response.rect)
+    /// Render the templates button. A click opens the dropdown.
+    pub fn show(ui: &mut Ui) -> Response {
+        draw_tool_button(ui, &icons::TEMPLATE, "Drawing templates", false)
     }
 
-    /// Render the templates dropdown submenu.
+    /// Render the templates dropdown rows.
     ///
     /// Shows save template option, followed by existing templates
-    /// that can be loaded or deleted.
+    /// that can be loaded.
     pub fn show_submenu(
         ui: &mut Ui,
-        sidebar_rect: Rect,
-        category_rect: Option<Rect>,
         templates: &[DrawingTemplate],
-        _template_name_input: &mut str,
-        _show_name_input: bool,
     ) -> Option<DrawingToolbarAction> {
-        let mut builder = SubmenuBuilder::new(ui, sidebar_rect)
-            .with_width(DESIGN_TOKENS.sizing.drawing_toolbar_ext.submenu_width_lg);
-
-        if let Some(cat_rect) = category_rect {
-            builder = builder.with_category_rect(cat_rect);
-        }
-
-        // "Save as Template..." option
-        builder = builder.add_text_item_with_action(
-            "Save as Template...",
+        let mut builder = SubmenuBuilder::new(ui).add_text_item_with_action(
+            "Save as template…",
             "Save current drawing properties as a reusable template",
             || Some(DrawingToolbarAction::OpenTemplateMenu),
         );

@@ -9,13 +9,15 @@
 use super::SubmenuBuilder;
 use super::categories::cursors::CursorType;
 use crate::drawings::DrawingToolType;
+use crate::ext::UiExt;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::responsive::LayoutContext;
 use crate::styles::{icons as icon_sizes, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
-use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use crate::ui_kit::buttons::IconButton;
+use egui::{Color32, Id, Key, Modifiers, Popup, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::collections::HashSet;
 
 /// The icons the Icons/Emojis menu offers: the glyph a drawing shows, and its name. They are
@@ -39,6 +41,22 @@ const ICONS: [(&str, &str); 10] = [
 pub struct CursorStateData {
     pub current_cursor: CursorType,
     pub eraser_mode: bool,
+    pub values_tooltip: bool,
+}
+
+impl CursorStateData {
+    /// Where the toolbar stores the state for the cursor menu.
+    pub(crate) fn id() -> Id {
+        Id::unique("drawing_toolbar_cursor_state")
+    }
+
+    /// Whether `cursor` is the mode in force: the eraser, or the cursor while the eraser is off.
+    pub(crate) fn is_active(&self, cursor: CursorType) -> bool {
+        match cursor {
+            CursorType::Eraser => self.eraser_mode,
+            _ => !self.eraser_mode && self.current_cursor == cursor,
+        }
+    }
 }
 
 /// Domain state that should be synced with AppState
@@ -55,7 +73,7 @@ pub struct DrawingToolbarDomainState {
 
 // Import from modular components
 use super::{
-    DrawingToolbarAction, DrawingToolbarConfig,
+    DrawingToolShortcuts, DrawingToolbarAction, DrawingToolbarConfig,
     categories::{
         AnnotationCategory, CursorsCategory, FibonacciCategory, PatternsCategory,
         ProjectionCategory, ShapesCategory, ToolCategory, TrendLinesCategory,
@@ -63,12 +81,12 @@ use super::{
     components::{draw_separator_styled, draw_tool_button, render_svg_at_rect_themed},
     data, icons,
     state::ToolbarState,
+    submenu_builder::{flyout_id, show_flyout},
     utilities::{
-        FavoritesButton, HideMenu, LockButton, MagnetButton, MeasureButton, RemoveMenu,
-        StayInDrawingButton, TemplatesButton, ZoomInButton, ZoomOutButton,
+        HideMenu, LockButton, MagnetButton, MeasureButton, RemoveMenu, StayInDrawingButton,
+        TemplatesButton, ZoomInButton, ZoomOutButton,
     },
 };
-use crate::ext::UiExt;
 
 /// Drawing toolbar - main UI component
 #[derive(Clone, Default)]
@@ -174,7 +192,15 @@ impl DrawingToolbar {
 
     /// Render the toolbar and return the full action
     pub fn show_with_action(&mut self, ui: &mut Ui) -> DrawingToolbarAction {
-        let mut action;
+        let mut action = DrawingToolbarAction::None;
+
+        // A tool's shortcut selects it, unless the user is typing.
+        if !ui.ctx().text_edit_focused()
+            && let Some(tool) = DrawingToolShortcuts::default().check(ui.ctx())
+        {
+            self.select_tool(tool);
+            action = DrawingToolbarAction::SelectTool(tool);
+        }
 
         // Config uses fixed desktop values
         let _layout_ctx = LayoutContext::from_egui(ui.ctx());
@@ -195,8 +221,17 @@ impl DrawingToolbar {
             );
             // Buttons and separators carry their own token gaps.
             child_ui.spacing_mut().item_spacing = Vec2::ZERO;
+            // The scroll bar floats over the 52 px column, so it never narrows the buttons.
+            child_ui.spacing_mut().scroll.floating = true;
 
-            action = self.render_toolbar_content(&mut child_ui, sidebar_rect);
+            let content = egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+                .show(&mut child_ui, |ui| self.render_toolbar_content(ui))
+                .inner;
+            if content != DrawingToolbarAction::None {
+                action = content;
+            }
         }
 
         // === COLOR PICKER POPUP (outside scroll area) ===
@@ -222,9 +257,14 @@ impl DrawingToolbar {
             }
         }
 
+        // === TOOL SEARCH ===
+        if self.state.search_open {
+            self.show_search(ui, sidebar_rect);
+        }
+
         // === SUBMENUS (outside scroll area) ===
         if let Some(ref category) = self.state.expanded_category.clone()
-            && let Some(tool_action) = self.draw_submenu(ui, category, sidebar_rect)
+            && let Some(tool_action) = self.draw_submenu(ui, category)
         {
             action = tool_action;
         }
@@ -234,55 +274,81 @@ impl DrawingToolbar {
     }
 
     /// Render the main toolbar content
-    fn render_toolbar_content(
-        &mut self,
-        child_ui: &mut Ui,
-        sidebar_rect: Rect,
-    ) -> DrawingToolbarAction {
+    fn render_toolbar_content(&mut self, ui: &mut Ui) -> DrawingToolbarAction {
         let mut action = DrawingToolbarAction::None;
 
         // Add top padding
-        child_ui.add_space(self.config.padding);
+        ui.add_space(self.config.padding);
 
-        // === QUICK_SEARCH BAR ===
-        if child_ui.input(|i| i.key_pressed(egui::Key::Slash)) && !self.state.search_open {
+        // "/" opens the tool search, unless a text field has the keyboard.
+        if !self.state.search_open
+            && !ui.ctx().text_edit_focused()
+            && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Slash))
+        {
             self.state.search_open = true;
             self.state.search_query.clear();
-        }
-
-        if self.state.search_open {
-            self.render_search_bar(child_ui);
+            ui.memory_mut(|m| m.request_focus(Self::search_id()));
         }
 
         // === CURSORS BUTTON ===
-        action = self.render_cursors_btn(child_ui, action);
+        action = self.render_cursors_btn(ui, action);
 
         // === TOOL CATEGORIES ===
-        action = self.render_tool_categories(child_ui, action);
+        action = self.render_tool_categories(ui, action);
 
         // Separator
-        draw_separator_styled(child_ui, self.config.width);
+        draw_separator_styled(ui, self.config.width);
 
         // === BOTTOM TOOLS (using utilities modules) ===
-        action = self.render_bottom_tools(child_ui, action, sidebar_rect);
-
-        action
+        self.render_bottom_tools(ui, action)
     }
 
-    /// Render search bar
-    fn render_search_bar(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            let response = ui.text_edit_singleline(&mut self.state.search_query);
-            if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.state.search_open = false;
-                self.state.search_query.clear();
-            }
-            if ui.small_button("×").clicked() {
-                self.state.search_open = false;
-                self.state.search_query.clear();
-            }
+    fn search_id() -> Id {
+        Id::unique("drawing_toolbar_search")
+    }
+
+    /// The tool search field, in a flyout beside the top of the bar. It closes with its button
+    /// or Escape.
+    fn show_search(&mut self, ui: &Ui, sidebar_rect: Rect) {
+        let anchor = Rect::from_min_size(
+            sidebar_rect.min,
+            Vec2::new(
+                self.config.width,
+                DESIGN_TOKENS.sizing.toolbar.button_height,
+            ),
+        );
+        let theme = ui.active_theme();
+        let mut open = true;
+        let mut close_clicked = false;
+        let query = &mut self.state.search_query;
+        Popup::new(
+            Id::unique("drawing_toolbar_search_flyout"),
+            ui.ctx().clone(),
+            anchor,
+            ui.layer_id(),
+        )
+        .open_bool(&mut open)
+        .align(egui::RectAlign::RIGHT_START)
+        .gap(theme.spacing.sm)
+        .frame(egui::Frame::menu(ui.style()))
+        .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+        .show(|ui| {
+            ui.horizontal(|ui| {
+                egui::TextEdit::singleline(query)
+                    .id(Self::search_id())
+                    .hint_text("Search tools")
+                    .desired_width(DESIGN_TOKENS.sizing.drawing_toolbar_ext.submenu_width_lg)
+                    .show(ui);
+                close_clicked = IconButton::new(&embedded_icons::CLOSE)
+                    .tooltip("Close search")
+                    .show(ui)
+                    .clicked();
+            });
         });
-        ui.space_lg();
+        self.state.search_open = open && !close_clicked;
+        if !self.state.search_open {
+            self.state.search_query.clear();
+        }
     }
 
     /// Render cursors button
@@ -301,23 +367,26 @@ impl DrawingToolbar {
             )
         };
 
-        let is_selected = self.state.sel_tool.is_none();
+        // Zoom is a mode of its own, so it takes the highlight from the cursor.
+        let is_selected = self.state.sel_tool.is_none() && !self.state.zoom_mode_active;
 
         // Simple button without arrow
         let response = draw_tool_button(ui, cursor_icon, cursor_tooltip, is_selected);
-
-        // Click opens dropdown menu
-        if response.clicked() {
-            let btn_rect = response.rect;
-            self.toggle_category("Cursors", btn_rect);
-        }
-
-        if self.state.expanded_category.as_deref() == Some("Cursors") {
-            self.expanded_category_rect = Some(response.rect);
-        }
+        self.menu_button(ui, "Cursors", &response);
 
         ui.add_space(self.config.padding);
         action
+    }
+
+    /// A click on `response` opens the flyout `category`, or closes it when it is open; the
+    /// flyout opens beside the button.
+    fn menu_button(&mut self, ui: &Ui, category: &str, response: &egui::Response) {
+        if response.clicked() {
+            self.toggle_category(ui.ctx(), category, response.rect);
+        }
+        if self.state.expanded_category.as_deref() == Some(category) {
+            self.expanded_category_rect = Some(response.rect);
+        }
     }
 
     /// Render tool category btns
@@ -391,15 +460,7 @@ impl DrawingToolbar {
 
             // Simple button without arrow
             let response = draw_tool_button(ui, tool_icon, tooltip, has_sel);
-
-            // Click opens dropdown menu
-            if response.clicked() {
-                self.toggle_category(category, response.rect);
-            }
-
-            if self.state.expanded_category.as_deref() == Some(category) {
-                self.expanded_category_rect = Some(response.rect);
-            }
+            self.menu_button(ui, category, &response);
 
             ui.add_space(self.config.padding);
         }
@@ -412,12 +473,8 @@ impl DrawingToolbar {
         &mut self,
         ui: &mut Ui,
         mut action: DrawingToolbarAction,
-        _sidebar_rect: Rect,
     ) -> DrawingToolbarAction {
         let width = self.config.width;
-
-        // Add spacing before bottom tools
-        ui.space_xl();
 
         // Measure tool
         let measure_active = self.state.sel_tool == Some(DrawingToolType::Measure);
@@ -425,7 +482,7 @@ impl DrawingToolbar {
             self.select_tool(DrawingToolType::Measure);
             action = a;
         }
-        ui.space_md();
+        ui.space_sm();
 
         // Zoom In
         if let Some(a) = ZoomInButton::show(ui, self.state.zoom_mode_active) {
@@ -435,155 +492,99 @@ impl DrawingToolbar {
 
         // Zoom Out (only if history)
         if self.state.has_zoom_history {
-            ui.space_md();
+            ui.space_sm();
             if let Some(a) = ZoomOutButton::show(ui) {
                 action = a;
             }
-            ui.space_md();
         }
 
         // Separator
         draw_separator_styled(ui, width);
 
         // Magnet button
-        let is_magnet_expanded = self.state.expanded_category.as_deref() == Some("Magnet");
-        let (mag_action, _icon_clicked, arrow_clicked, arrow_rect) =
-            MagnetButton::show(ui, self.state.magnet_mode);
-
-        if _icon_clicked {
-            self.state.magnet_mode = !self.state.magnet_mode;
-            action = DrawingToolbarAction::ToggleMagnet;
-        }
-        if arrow_clicked {
-            self.toggle_category("Magnet", arrow_rect);
-        }
-        if is_magnet_expanded {
-            self.expanded_category_rect = Some(arrow_rect);
-        }
-        if let Some(a) = mag_action {
-            action = a;
-        }
-
-        ui.space_md();
+        let response = MagnetButton::show(ui, self.state.magnet_mode);
+        self.menu_button(ui, "Magnet", &response);
+        ui.space_sm();
 
         // Keep Drawing
         if let Some(a) = StayInDrawingButton::show(ui, self.state.stay_in_drawing_mode) {
             self.state.stay_in_drawing_mode = !self.state.stay_in_drawing_mode;
             action = a;
         }
-        ui.space_md();
+        ui.space_sm();
 
         // Lock All Drawings
-        if let Some(a) = LockButton::show(ui, false) {
+        if let Some(a) = LockButton::show(ui, self.state.lock_all) {
+            self.state.lock_all = !self.state.lock_all;
             action = a;
         }
-        ui.space_md();
+        ui.space_sm();
 
         // Templates
         if !self.hidden.contains(&Control::Templates) {
-            let is_templates_expanded =
-                self.state.expanded_category.as_deref() == Some("Templates");
-            let (_templates_icon_clicked, templates_arrow_clicked, templates_rect) =
-                TemplatesButton::show(ui);
-
-            if templates_arrow_clicked {
-                self.toggle_category("Templates", templates_rect);
-            }
-            if is_templates_expanded {
-                self.expanded_category_rect = Some(templates_rect);
-            }
-            ui.space_md();
+            let response = TemplatesButton::show(ui);
+            self.menu_button(ui, "Templates", &response);
+            ui.space_sm();
         }
 
         // Hide dropdown
-        let is_hide_expanded = self.state.expanded_category.as_deref() == Some("Hide");
-        let (hide_icon_clicked, hide_arrow_clicked, hide_rect) = HideMenu::show(ui);
-
-        if hide_icon_clicked {
-            action = DrawingToolbarAction::HideAllDrawings;
-        }
-        if hide_arrow_clicked {
-            self.toggle_category("Hide", hide_rect);
-        }
-        if is_hide_expanded {
-            self.expanded_category_rect = Some(hide_rect);
-        }
+        let response = HideMenu::show(ui);
+        self.menu_button(ui, "Hide", &response);
 
         // Separator
         draw_separator_styled(ui, width);
 
         // Remove dropdown
-        let is_remove_expanded = self.state.expanded_category.as_deref() == Some("Remove");
-        let (remove_icon_clicked, remove_arrow_clicked, remove_rect) = RemoveMenu::show(ui);
-
-        if remove_icon_clicked {
-            action = DrawingToolbarAction::ClearAllDrawings;
-        }
-        if remove_arrow_clicked {
-            self.toggle_category("Remove", remove_rect);
-        }
-        if is_remove_expanded {
-            self.expanded_category_rect = Some(remove_rect);
-        }
-
-        // Flexible spacer to push Favorites to bottom
-        let remaining = ui.available_height();
-        if remaining > DESIGN_TOKENS.sizing.button_xxl {
-            ui.add_space(remaining - DESIGN_TOKENS.sizing.button_xxl);
-        }
-
-        // Separator before favorites
-        draw_separator_styled(ui, width);
-
-        // Favorites
-        if let Some(a) = FavoritesButton::show(ui, self.state.show_favorites_toolbar) {
-            self.state.show_favorites_toolbar = !self.state.show_favorites_toolbar;
-            action = a;
-        }
+        let response = RemoveMenu::show(ui);
+        self.menu_button(ui, "Remove", &response);
+        ui.space_sm();
 
         action
     }
 
-    /// Toggle category expansion
-    fn toggle_category(&mut self, category: &str, rect: Rect) {
+    /// Open the flyout `category` beside `rect`, or close it when it is the open one.
+    fn toggle_category(&mut self, ctx: &egui::Context, category: &str, rect: Rect) {
         if self.state.expanded_category.as_deref() == Some(category) {
-            self.state.expanded_category = None;
-            self.expanded_category_rect = None;
+            self.close_flyout(ctx);
         } else {
             self.state.expanded_category = Some(category.to_string());
             self.expanded_category_rect = Some(rect);
+            Popup::open_id(ctx, flyout_id(category));
         }
     }
 
-    /// Draw submenu for a category - delegates to category modules
-    fn draw_submenu(
-        &mut self,
-        ui: &mut Ui,
-        category: &str,
-        sidebar_rect: Rect,
-    ) -> Option<DrawingToolbarAction> {
-        // Utility submenus (bottom btns)
-        match category {
-            "Magnet" => {
-                return MagnetButton::show_submenu(ui, sidebar_rect, self.expanded_category_rect);
-            }
-            "Hide" => {
-                let trading = !self.hidden.contains(&Control::Trading);
-                return HideMenu::show_submenu(
-                    ui,
-                    sidebar_rect,
-                    self.expanded_category_rect,
-                    trading,
-                );
-            }
-            "Remove" => {
-                return RemoveMenu::show_submenu(ui, sidebar_rect, self.expanded_category_rect);
-            }
+    fn close_flyout(&mut self, ctx: &egui::Context) {
+        if let Some(category) = self.state.expanded_category.take() {
+            Popup::close_id(ctx, flyout_id(&category));
+        }
+        self.expanded_category_rect = None;
+    }
+
+    /// Show the flyout of `category`, apply what the user picked in it to the toolbar state and
+    /// return the action for the host.
+    fn draw_submenu(&mut self, ui: &mut Ui, category: &str) -> Option<DrawingToolbarAction> {
+        let anchor = self.expanded_category_rect?;
+        let ctx = ui.ctx().clone();
+        ctx.data_mut(|d| {
+            d.insert_temp(
+                CursorStateData::id(),
+                CursorStateData {
+                    current_cursor: self.state.current_cursor_type,
+                    eraser_mode: self.state.eraser_mode_enabled,
+                    values_tooltip: self.state.values_tooltip_on_long_press,
+                },
+            );
+        });
+
+        let trading = !self.hidden.contains(&Control::Trading);
+        let sel_tool = self.state.sel_tool;
+        let state = &mut self.state;
+        let action = show_flyout(ui, category, anchor, |ui| match category {
+            "Magnet" => MagnetButton::show_submenu(ui, state.magnet_mode, state.magnet_type),
+            "Hide" => HideMenu::show_submenu(ui, trading, state),
+            "Remove" => RemoveMenu::show_submenu(ui),
             "Icons/Emojis" => {
-                let mut builder = SubmenuBuilder::new(ui, sidebar_rect);
-                if let Some(rect) = self.expanded_category_rect {
-                    builder = builder.with_category_rect(rect);
-                }
+                let mut builder = SubmenuBuilder::new(ui);
                 for (icon_name, name) in ICONS {
                     builder = builder.add_text_item_with_action(
                         format!("{icon_name}  {name}"),
@@ -591,100 +592,84 @@ impl DrawingToolbar {
                         move || Some(DrawingToolbarAction::InsertEmoji { icon_name }),
                     );
                 }
-                let action = builder.show();
-                if action.is_some() {
-                    self.select_tool(DrawingToolType::FontIcon);
-                    self.state.expanded_category = None;
-                }
-                return action;
+                builder.show()
             }
-            "Templates" => {
-                let templates = self.state.templates.clone();
-                let result = TemplatesButton::show_submenu(
-                    ui,
-                    sidebar_rect,
-                    self.expanded_category_rect,
-                    &templates,
-                    &mut self.state.template_name_input,
-                    self.state.show_template_name_input,
-                );
+            "Templates" => TemplatesButton::show_submenu(ui, &state.templates),
+            _ => {
+                let favorites = &mut state.favorites;
+                let action = match category {
+                    "Cursors" => CursorsCategory.render_submenu(ui, sel_tool, favorites),
+                    "Lines" => TrendLinesCategory.render_submenu(ui, sel_tool, favorites),
+                    "Fibonacci" => FibonacciCategory.render_submenu(ui, sel_tool, favorites),
+                    "Patterns" => PatternsCategory.render_submenu(ui, sel_tool, favorites),
+                    "Projection" => ProjectionCategory.render_submenu(ui, sel_tool, favorites),
+                    "Brushes/Shapes" => ShapesCategory.render_submenu(ui, sel_tool, favorites),
+                    "Text/Annotations" => {
+                        AnnotationCategory.render_submenu(ui, sel_tool, favorites)
+                    }
+                    _ => DrawingToolbarAction::None,
+                };
+                (action != DrawingToolbarAction::None).then_some(action)
+            }
+        })
+        .flatten();
 
-                // "Save as Template..." closes the menu and opens the name dialog.
-                if matches!(result, Some(DrawingToolbarAction::OpenTemplateMenu)) {
-                    self.state.show_template_name_input = true;
-                    self.state.template_name_input.clear();
-                    self.state.expanded_category = None;
-                    return None;
-                }
+        // Escape and a click outside close the flyout through egui's popup state.
+        if !Popup::is_id_open(&ctx, flyout_id(category)) {
+            self.state.expanded_category = None;
+            self.expanded_category_rect = None;
+        }
+        let action = self.apply_pick(action?);
+        // A tool picked while keeping the drawing mode on leaves the flyout open for the next one.
+        let keeps_open = matches!(action, Some(DrawingToolbarAction::SelectTool(_)))
+            && self.state.stay_in_drawing_mode;
+        if !keeps_open {
+            self.close_flyout(&ctx);
+        }
+        action
+    }
 
-                if result.is_some() {
-                    self.state.expanded_category = None;
-                }
-
-                return result;
+    /// Mirror a pick from a flyout in the toolbar state. Returns the action for the host, or
+    /// `None` when the pick has no effect to report.
+    fn apply_pick(&mut self, action: DrawingToolbarAction) -> Option<DrawingToolbarAction> {
+        use DrawingToolbarAction as A;
+        match &action {
+            A::SelectTool(tool) => self.select_tool(*tool),
+            A::SetCursorType(cursor) => {
+                self.state.current_cursor_type = *cursor;
+                self.state.eraser_mode_enabled = false;
+                self.state.zoom_mode_active = false;
+            }
+            A::ToggleEraserMode => {
+                self.state.eraser_mode_enabled = !self.state.eraser_mode_enabled;
+                self.state.zoom_mode_active = false;
+            }
+            A::ToggleValuesTooltip => {
+                self.state.values_tooltip_on_long_press = !self.state.values_tooltip_on_long_press;
+            }
+            A::SetMagnetType(kind) => {
+                self.state.magnet_type = *kind;
+                self.state.magnet_mode = true;
+            }
+            // "Off" while the magnet is already off changes nothing, and the host's toggle would
+            // switch it on.
+            A::ToggleMagnet if !self.state.magnet_mode => return None,
+            A::ToggleMagnet => self.state.magnet_mode = false,
+            A::HideAllDrawings => self.state.hide_drawings = !self.state.hide_drawings,
+            A::HideAllIndicators => self.state.hide_indicators = !self.state.hide_indicators,
+            A::HideAllPoss => self.state.hide_positions = !self.state.hide_positions,
+            A::HideAllOrders => self.state.hide_orders = !self.state.hide_orders,
+            A::InsertEmoji { .. } => self.select_tool(DrawingToolType::FontIcon),
+            A::OpenTemplateMenu => {
+                // "Save as template" closes the menu and opens the name dialog.
+                self.state.show_template_name_input = true;
+                self.state.template_name_input.clear();
+                return None;
             }
             _ => {}
         }
-
-        // Tool category submenus - delegate to category modules
-        let anchor_rect = self.expanded_category_rect.unwrap_or(sidebar_rect);
-        let sel_tool = self.state.sel_tool;
-        let favorites = self.state.favorites.clone();
-
-        // Store cursor state in context for the cursor submenu to access
-        ui.ctx().data_mut(|d| {
-            d.insert_temp(
-                egui::Id::unique("cursor_state"),
-                CursorStateData {
-                    current_cursor: self.state.current_cursor_type,
-                    eraser_mode: self.state.eraser_mode_enabled,
-                },
-            );
-        });
-
-        let action = match category {
-            "Cursors" => CursorsCategory.render_submenu(ui, anchor_rect, sel_tool, &favorites),
-            "Lines" => TrendLinesCategory.render_submenu(ui, anchor_rect, sel_tool, &favorites),
-            "Fibonacci" => FibonacciCategory.render_submenu(ui, anchor_rect, sel_tool, &favorites),
-            "Patterns" => PatternsCategory.render_submenu(ui, anchor_rect, sel_tool, &favorites),
-            "Projection" => {
-                ProjectionCategory.render_submenu(ui, anchor_rect, sel_tool, &favorites)
-            }
-            "Brushes/Shapes" => {
-                ShapesCategory.render_submenu(ui, anchor_rect, sel_tool, &favorites)
-            }
-            "Text/Annotations" => {
-                AnnotationCategory.render_submenu(ui, anchor_rect, sel_tool, &favorites)
-            }
-            _ => DrawingToolbarAction::None,
-        };
-
-        // Handle tool selection
-        if let DrawingToolbarAction::SelectTool(tool) = action {
-            self.select_tool(tool);
-            if !self.state.stay_in_drawing_mode {
-                self.state.expanded_category = None;
-            }
-            return Some(action);
-        }
-
-        // Handle cursor actions - also close submenu
-        if matches!(
-            action,
-            DrawingToolbarAction::SetCursorType(_) | DrawingToolbarAction::ToggleEraserMode
-        ) {
-            self.state.expanded_category = None;
-            return Some(action);
-        }
-
-        if action != DrawingToolbarAction::None {
-            Some(action)
-        } else {
-            None
-        }
+        Some(action)
     }
-
-    // Submenu rendering delegated to category modules - see categories/*.rs
 
     /// Draw color picker popup
     fn draw_color_picker_popup(&mut self, ui: &mut Ui, sidebar_rect: Rect) -> Option<[u8; 4]> {
@@ -930,7 +915,7 @@ impl DrawingToolbar {
                                 );
 
                                 let bg = if is_sel {
-                                    ui.visuals().widgets.active.bg_fill
+                                    ui.active_theme().ui.accent
                                 } else if response.hovered() {
                                     ui.visuals().widgets.hovered.bg_fill
                                 } else {
@@ -965,7 +950,7 @@ impl DrawingToolbar {
                                 Sense::click(),
                             );
                             let bg = if self.state.magnet_mode {
-                                ui.visuals().widgets.active.bg_fill
+                                ui.active_theme().ui.accent
                             } else if response.hovered() {
                                 ui.visuals().widgets.hovered.bg_fill
                             } else {
@@ -1046,5 +1031,47 @@ mod tests {
             open.push(toolbar.state.show_template_name_input);
         }
         assert_eq!(open, [true, true, false]);
+    }
+
+    /// Alt+T selects the trend line tool, unless a text field has the keyboard, where it must not
+    /// switch tools while the user types.
+    #[test]
+    fn a_tool_shortcut_selects_the_tool_unless_a_text_field_has_focus() {
+        let alt_t = Event::Key {
+            key: Key::T,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::ALT,
+        };
+        let press_alt_t = |text_focused: bool| {
+            let ctx = Context::default();
+            let mut toolbar = DrawingToolbar::new();
+            let mut text = String::new();
+            let mut frame = |events: Vec<Event>| {
+                let mut action = DrawingToolbarAction::None;
+                ctx.run_ui(
+                    RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if text_focused {
+                            ui.text_edit_singleline(&mut text).request_focus();
+                        }
+                        action = toolbar.show_with_action(ui);
+                    },
+                )
+                .drop_without_applying_deltas();
+                action
+            };
+            frame(vec![]);
+            frame(vec![alt_t.clone()])
+        };
+        assert_eq!(
+            press_alt_t(false),
+            DrawingToolbarAction::SelectTool(DrawingToolType::TrendLine)
+        );
+        assert_eq!(press_alt_t(true), DrawingToolbarAction::None);
     }
 }
