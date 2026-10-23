@@ -64,6 +64,10 @@ impl Default for RateOfChange {
 }
 
 impl Indicator for RateOfChange {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "ROC"
     }

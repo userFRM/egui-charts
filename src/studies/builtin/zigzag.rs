@@ -207,6 +207,12 @@ impl Default for ZigZag {
 }
 
 impl Indicator for ZigZag {
+    crate::studies::inputs::study_inputs!(self;
+        deviation_percent: number("Deviation percent", 0.0, f64::MAX),
+        depth: length("Depth", 1, usize::MAX),
+        mode: choice("Mode", [ZigZagMode::HighLow, ZigZagMode::Close, ZigZagMode::Typical])
+    ; {});
+
     fn name(&self) -> &str {
         "ZigZag"
     }

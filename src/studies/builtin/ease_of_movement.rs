@@ -93,6 +93,11 @@ impl EaseOfMovement {
 }
 
 impl Indicator for EaseOfMovement {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        divisor: number("Divisor", f64::EPSILON, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "EoM"
     }

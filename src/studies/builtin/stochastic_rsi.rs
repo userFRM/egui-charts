@@ -218,6 +218,13 @@ impl Default for StochasticRSI {
 }
 
 impl Indicator for StochasticRSI {
+    crate::studies::inputs::study_inputs!(self;
+        rsi_period: length("RSI period", 1, usize::MAX),
+        stoch_period: length("Stoch period", 1, usize::MAX),
+        smooth_k: length("Smooth k", 1, usize::MAX),
+        smooth_d: length("Smooth d", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "StochRSI"
     }

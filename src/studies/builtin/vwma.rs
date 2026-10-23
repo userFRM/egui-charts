@@ -68,6 +68,10 @@ impl VWMA {
 }
 
 impl Indicator for VWMA {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "VWMA"
     }

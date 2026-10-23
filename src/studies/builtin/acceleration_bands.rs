@@ -50,6 +50,11 @@ impl Default for AccelerationBands {
 }
 
 impl Indicator for AccelerationBands {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        factor: number("Factor", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "AccBands"
     }

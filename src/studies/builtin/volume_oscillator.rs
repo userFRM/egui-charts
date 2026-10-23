@@ -99,6 +99,11 @@ impl Default for VolumeOscillator {
 }
 
 impl Indicator for VolumeOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        short_period: length("Short period", 1, usize::MAX),
+        long_period: length("Long period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Volume Osc"
     }

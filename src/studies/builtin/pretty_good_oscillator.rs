@@ -90,6 +90,10 @@ impl PrettyGoodOscillator {
 }
 
 impl Indicator for PrettyGoodOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "PGO"
     }

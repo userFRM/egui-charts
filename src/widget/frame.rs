@@ -1268,13 +1268,16 @@ impl Chart {
                 };
                 legend.show_volume =
                     self.chart_type.supports_volume() && self.config.show_legend_volume;
-                if let Some(action) = ui
+                let (quote_action, study_settings) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(ui, price_rect, &colors)
                     })
-                    .inner
-                {
+                    .inner;
+                if let Some(action) = quote_action {
                     self.quote_action = Some(action);
+                }
+                if let Some(index) = study_settings {
+                    self.indicator_settings_request = self.study_ids.get(index).copied();
                 }
             }
         }

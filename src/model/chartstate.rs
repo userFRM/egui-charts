@@ -352,12 +352,22 @@ impl ChartState {
             .filter(|study| study.is_visible() && study.is_overlay())
             .flat_map(|study| {
                 let (values, lines) = (study.values(), study.line_cnt());
-                values.columns().iter().take(lines).flat_map(move |line| {
-                    line.get(start..end.min(line.len()))
-                        .unwrap_or_default()
-                        .iter()
-                        .copied()
-                })
+                values
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .take(lines)
+                    .filter(|(index, _)| study.plot_style(*index).visible)
+                    .flat_map(move |(index, line)| {
+                        line.get(start..end.min(line.len()))
+                            .unwrap_or_default()
+                            .iter()
+                            .copied()
+                            .chain(std::iter::once(0.0).filter(move |_| {
+                                study.plot_style(index).plot_type
+                                    == crate::studies::PlotType::Histogram
+                            }))
+                    })
             });
         let (min, max) = visible
             .iter()

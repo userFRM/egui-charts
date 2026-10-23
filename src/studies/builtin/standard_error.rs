@@ -55,6 +55,10 @@ impl Default for StandardError {
 }
 
 impl Indicator for StandardError {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 2, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "StdErr"
     }

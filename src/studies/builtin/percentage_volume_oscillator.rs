@@ -69,6 +69,12 @@ impl Default for PercentageVolumeOscillator {
 }
 
 impl Indicator for PercentageVolumeOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        short_period: length("Short period", 1, usize::MAX),
+        long_period: length("Long period", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "PVO"
     }

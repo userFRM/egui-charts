@@ -45,6 +45,10 @@ impl Default for MarketFacilitationIndex {
 }
 
 impl Indicator for MarketFacilitationIndex {
+    crate::studies::inputs::study_inputs!(self;
+        divisor: number("Divisor", f64::EPSILON, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "MFI BW"
     }

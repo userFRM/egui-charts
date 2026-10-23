@@ -84,6 +84,10 @@ impl Default for VolProfileVisible {
 }
 
 impl Indicator for VolProfileVisible {
+    crate::studies::inputs::study_inputs!(self;
+        row_count: length("Row count", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Vol Profile VR"
     }

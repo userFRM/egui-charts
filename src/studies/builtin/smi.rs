@@ -172,6 +172,13 @@ impl Default for StochasticMomentumIndex {
 }
 
 impl Indicator for StochasticMomentumIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        smooth1: length("Smooth1", 1, usize::MAX),
+        smooth2: length("Smooth2", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "SMI"
     }

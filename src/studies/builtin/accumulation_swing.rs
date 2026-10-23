@@ -95,6 +95,10 @@ impl Default for AccumulationSwingIndex {
 }
 
 impl Indicator for AccumulationSwingIndex {
+    crate::studies::inputs::study_inputs!(self;
+        limit_move: number("Limit move", f64::EPSILON, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "ASI"
     }

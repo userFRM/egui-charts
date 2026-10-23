@@ -93,6 +93,10 @@ impl Default for VIDYA {
 }
 
 impl Indicator for VIDYA {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "VIDYA"
     }
@@ -225,6 +229,10 @@ impl Default for ZLEMA {
 }
 
 impl Indicator for ZLEMA {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "ZLEMA"
     }

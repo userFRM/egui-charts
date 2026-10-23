@@ -82,6 +82,12 @@ impl Default for ALMA {
 }
 
 impl Indicator for ALMA {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        offset: number("Offset", 0.0, 1.0),
+        sigma: number("Sigma", 0.001, 100.0)
+    ; {});
+
     fn name(&self) -> &str {
         "ALMA"
     }

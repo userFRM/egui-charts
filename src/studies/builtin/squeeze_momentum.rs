@@ -213,6 +213,14 @@ impl SqueezeMomentum {
 }
 
 impl Indicator for SqueezeMomentum {
+    crate::studies::inputs::study_inputs!(self;
+        bb_period: length("Bb period", 1, usize::MAX),
+        bb_mult: number("Bb mult", 0.0, f64::MAX),
+        kc_period: length("Kc period", 1, usize::MAX),
+        kc_mult: number("Kc mult", 0.0, f64::MAX),
+        momentum_period: length("Momentum period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Squeeze"
     }

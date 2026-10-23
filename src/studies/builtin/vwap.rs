@@ -224,6 +224,12 @@ impl Default for VolumeWeightedAvgPrice {
 }
 
 impl Indicator for VolumeWeightedAvgPrice {
+    crate::studies::inputs::study_inputs!(self;
+        daily: toggle("Daily"),
+        anchor: choice("Anchor", [VwapAnchor::Session, VwapAnchor::Week, VwapAnchor::Month, VwapAnchor::Quarter, VwapAnchor::Year, VwapAnchor::Events]),
+        percentage_bands: toggle("Percentage bands")
+    ; {});
+
     fn name(&self) -> &str {
         "VWAP"
     }

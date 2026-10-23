@@ -99,6 +99,12 @@ impl VolumeWeightedMACD {
 }
 
 impl Indicator for VolumeWeightedMACD {
+    crate::studies::inputs::study_inputs!(self;
+        fast_period: length("Fast period", 1, usize::MAX),
+        slow_period: length("Slow period", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "VW-MACD"
     }

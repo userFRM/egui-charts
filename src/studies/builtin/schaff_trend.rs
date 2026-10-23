@@ -171,6 +171,12 @@ impl Default for SchaffTrendCycle {
 }
 
 impl Indicator for SchaffTrendCycle {
+    crate::studies::inputs::study_inputs!(self;
+        macd_short: length("MACD short", 1, usize::MAX),
+        macd_long: length("MACD long", 1, usize::MAX),
+        cycle: length("Cycle", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "STC"
     }

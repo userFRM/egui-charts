@@ -92,6 +92,13 @@ impl Default for CommoditySelectionIndex {
 }
 
 impl Indicator for CommoditySelectionIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        point_value: number("Point value", 0.0, f64::MAX),
+        margin: number("Margin", f64::EPSILON, f64::MAX),
+        commission: number("Commission", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "CSI"
     }
@@ -179,6 +186,10 @@ impl Default for TrendDetectionIndex {
 }
 
 impl Indicator for TrendDetectionIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "TDI"
     }

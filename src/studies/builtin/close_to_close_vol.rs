@@ -83,6 +83,10 @@ impl CloseToCloseVol {
 }
 
 impl Indicator for CloseToCloseVol {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "C2C Vol"
     }

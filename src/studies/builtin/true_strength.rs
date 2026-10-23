@@ -121,6 +121,12 @@ impl Default for TrueStrengthIndex {
 }
 
 impl Indicator for TrueStrengthIndex {
+    crate::studies::inputs::study_inputs!(self;
+        long_period: length("Long period", 1, usize::MAX),
+        short_period: length("Short period", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "TSI"
     }

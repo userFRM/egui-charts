@@ -159,6 +159,12 @@ impl Default for KeltnerChannels {
 }
 
 impl Indicator for KeltnerChannels {
+    crate::studies::inputs::study_inputs!(self;
+        ema_period: length("EMA period", 1, usize::MAX),
+        atr_period: length("ATR period", 1, usize::MAX),
+        multiplier: number("Multiplier", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Keltner"
     }

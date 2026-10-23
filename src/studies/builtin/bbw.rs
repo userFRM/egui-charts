@@ -37,6 +37,11 @@ impl Default for BollingerBandsWidth {
 }
 
 impl Indicator for BollingerBandsWidth {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        std_dev: number("Std dev", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "BBW"
     }

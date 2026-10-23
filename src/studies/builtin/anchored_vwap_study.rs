@@ -37,6 +37,10 @@ impl Default for AnchoredVWAP {
 }
 
 impl Indicator for AnchoredVWAP {
+    crate::studies::inputs::study_inputs!(self;
+        anchor_bar: length("Anchor bar", 0, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "AVWAP"
     }

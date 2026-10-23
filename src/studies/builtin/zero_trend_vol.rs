@@ -64,6 +64,10 @@ impl ZeroTrendVol {
 }
 
 impl Indicator for ZeroTrendVol {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Zero-Trend Vol"
     }

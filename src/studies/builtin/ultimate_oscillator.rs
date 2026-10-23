@@ -138,6 +138,12 @@ impl UltimateOscillator {
 }
 
 impl Indicator for UltimateOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        period1: length("Period1", 1, usize::MAX),
+        period2: length("Period2", 1, usize::MAX),
+        period3: length("Period3", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "UO"
     }

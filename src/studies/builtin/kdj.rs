@@ -96,6 +96,12 @@ impl KDJ {
 }
 
 impl Indicator for KDJ {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        k_smooth: length("K smooth", 1, usize::MAX),
+        d_smooth: length("D smooth", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "KDJ"
     }

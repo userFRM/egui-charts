@@ -87,6 +87,10 @@ impl TrendIntensityIndex {
 }
 
 impl Indicator for TrendIntensityIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "TII"
     }
@@ -168,6 +172,10 @@ impl Default for Qstick {
 }
 
 impl Indicator for Qstick {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Qstick"
     }

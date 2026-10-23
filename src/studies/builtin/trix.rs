@@ -148,6 +148,11 @@ impl Default for TRIX {
 }
 
 impl Indicator for TRIX {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "TRIX"
     }

@@ -325,7 +325,13 @@ impl IndicatorPane {
         );
 
         // Draw y-axis labels
-        self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
+        self.draw_y_axis_labels(
+            painter,
+            (rect, chart_rect),
+            (y_min, y_max),
+            text_color,
+            indicator.precision().unwrap_or(2),
+        );
 
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
@@ -411,7 +417,13 @@ impl IndicatorPane {
         );
 
         // Draw y-axis labels
-        self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
+        self.draw_y_axis_labels(
+            painter,
+            (rect, chart_rect),
+            (y_min, y_max),
+            text_color,
+            indicator.precision().unwrap_or(2),
+        );
 
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
@@ -530,7 +542,13 @@ impl IndicatorPane {
             );
 
             // Draw y-axis labels
-            self.draw_y_axis_labels(painter, rect, chart_rect, y_min, y_max, text_color);
+            self.draw_y_axis_labels(
+                painter,
+                (rect, chart_rect),
+                (y_min, y_max),
+                text_color,
+                indicator.precision().unwrap_or(2),
+            );
         }
 
         // Reserve the legend's close "x" and make it independently clickable so
@@ -580,7 +598,12 @@ impl IndicatorPane {
         let mut min_val = f64::MAX;
         let mut max_val = f64::MIN;
 
-        for line in values.columns() {
+        for (_, line) in values
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| indicator.plot_style(*index).visible)
+        {
             for &value in line
                 .get(visible_range.start..visible_range.end.min(line.len()))
                 .unwrap_or_default()
@@ -590,6 +613,16 @@ impl IndicatorPane {
                     max_val = max_val.max(value);
                 }
             }
+        }
+
+        if min_val != f64::MAX
+            && (0..indicator.line_cnt()).any(|line| {
+                let plot = indicator.plot_style(line);
+                plot.visible && plot.plot_type == crate::studies::PlotType::Histogram
+            })
+        {
+            min_val = min_val.min(0.0);
+            max_val = max_val.max(0.0);
         }
 
         if min_val == f64::MAX {
@@ -809,7 +842,12 @@ impl IndicatorPane {
         let bar_spacing = rect.width() / visible_bars as f32;
 
         for line_idx in 0..line_cnt {
-            let color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
+            let plot = indicator.plot_style(line_idx);
+            if !plot.visible {
+                continue;
+            }
+            let mut plot = plot;
+            plot.color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
             let mut points = Vec::new();
 
             for i in visible_range.clone() {
@@ -819,6 +857,15 @@ impl IndicatorPane {
 
                 let val = values.value(line_idx, i);
 
+                if val.is_none() && !points.is_empty() {
+                    crate::chart::renderers::paint_study_plot(
+                        &painter.with_clip_rect(rect),
+                        &points,
+                        plot,
+                        self.value_to_y(0.0, rect, y_min, y_max),
+                    );
+                    points.clear();
+                }
                 if let Some(v) = val {
                     // X position based on position in visible range
                     let local_idx = i - visible_range.start;
@@ -831,14 +878,13 @@ impl IndicatorPane {
                 }
             }
 
-            // Draw connected line segments
-            if points.len() > 1 {
-                for i in 0..points.len() - 1 {
-                    painter.line_segment(
-                        [points[i], points[i + 1]],
-                        Stroke::new(DESIGN_TOKENS.stroke.medium, color),
-                    );
-                }
+            if !points.is_empty() {
+                crate::chart::renderers::paint_study_plot(
+                    &painter.with_clip_rect(rect),
+                    &points,
+                    plot,
+                    self.value_to_y(0.0, rect, y_min, y_max),
+                );
             }
         }
     }
@@ -861,7 +907,12 @@ impl IndicatorPane {
         let mapping = coords.to_mapping(rect, y_min, y_max);
 
         for line_idx in 0..line_cnt {
-            let color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
+            let plot = indicator.plot_style(line_idx);
+            if !plot.visible {
+                continue;
+            }
+            let mut plot = plot;
+            plot.color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
             let mut points = Vec::new();
 
             for i in visible_range.clone() {
@@ -871,6 +922,15 @@ impl IndicatorPane {
 
                 let val = values.value(line_idx, i);
 
+                if val.is_none() && !points.is_empty() {
+                    crate::chart::renderers::paint_study_plot(
+                        &painter.with_clip_rect(rect),
+                        &points,
+                        plot,
+                        self.value_to_y(0.0, rect, y_min, y_max),
+                    );
+                    points.clear();
+                }
                 if let Some(v) = val {
                     // Use the same coordinate formula as main chart
                     let x = mapping.idx_to_x(i);
@@ -882,14 +942,13 @@ impl IndicatorPane {
                 }
             }
 
-            // Draw connected line segments
-            if points.len() > 1 {
-                for i in 0..points.len() - 1 {
-                    painter.line_segment(
-                        [points[i], points[i + 1]],
-                        Stroke::new(DESIGN_TOKENS.stroke.medium, color),
-                    );
-                }
+            if !points.is_empty() {
+                crate::chart::renderers::paint_study_plot(
+                    &painter.with_clip_rect(rect),
+                    &points,
+                    plot,
+                    self.value_to_y(0.0, rect, y_min, y_max),
+                );
             }
         }
     }
@@ -897,12 +956,13 @@ impl IndicatorPane {
     fn draw_y_axis_labels(
         &self,
         painter: &egui::Painter,
-        full_rect: Rect,
-        chart_rect: Rect,
-        y_min: f64,
-        y_max: f64,
+        rects: (Rect, Rect),
+        range: (f64, f64),
         text_color: Color32,
+        precision: usize,
     ) {
+        let (full_rect, chart_rect) = rects;
+        let (y_min, y_max) = range;
         let range = y_max - y_min;
         let step = self.calculate_nice_step(range, 5);
         let label_x = chart_rect.max.x + DESIGN_TOKENS.spacing.sm;
@@ -911,7 +971,7 @@ impl IndicatorPane {
         while y_val <= y_max {
             let y = self.value_to_y(y_val, chart_rect, y_min, y_max);
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = format!("{y_val:.2}");
+                let label = format!("{y_val:.precision$}");
                 painter.text(
                     Pos2::new(label_x, y),
                     egui::Align2::LEFT_CENTER,
@@ -938,9 +998,11 @@ impl IndicatorPane {
         if self.config.show_values
             && let Some(bar) = values.len().checked_sub(1)
         {
-            for line in 0..indicator.line_cnt() {
+            for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
+            {
                 if let Some(value) = values.value(line, bar) {
-                    legend_parts.push(format!("{value:.2}"));
+                    let precision = indicator.precision().unwrap_or(2);
+                    legend_parts.push(format!("{value:.precision$}"));
                 }
             }
         }

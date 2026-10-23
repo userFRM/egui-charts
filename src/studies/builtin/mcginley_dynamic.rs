@@ -73,6 +73,10 @@ impl Default for McGinleyDynamic {
 }
 
 impl Indicator for McGinleyDynamic {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "MD"
     }

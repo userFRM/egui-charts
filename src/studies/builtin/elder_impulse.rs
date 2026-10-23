@@ -141,6 +141,13 @@ impl ElderImpulseSystem {
 }
 
 impl Indicator for ElderImpulseSystem {
+    crate::studies::inputs::study_inputs!(self;
+        ema_period: length("EMA period", 1, usize::MAX),
+        macd_fast: length("MACD fast", 1, usize::MAX),
+        macd_slow: length("MACD slow", 1, usize::MAX),
+        macd_signal: length("MACD signal", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Impulse"
     }

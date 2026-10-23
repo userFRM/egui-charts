@@ -194,6 +194,12 @@ impl ParabolicSAR {
 }
 
 impl Indicator for ParabolicSAR {
+    crate::studies::inputs::study_inputs!(self;
+        initial_af: number("Initial af", 0.001, 1.0),
+        af_step: number("Af step", 0.001, 1.0),
+        max_af: number("Max af", 0.001, 1.0)
+    ; { self.max_af = self.max_af.max(self.initial_af); });
+
     fn name(&self) -> &str {
         "PSAR"
     }

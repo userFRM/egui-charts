@@ -82,6 +82,11 @@ impl Default for StandardErrorBands {
 }
 
 impl Indicator for StandardErrorBands {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 2, usize::MAX),
+        multiplier: number("Multiplier", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "StdErrBands"
     }

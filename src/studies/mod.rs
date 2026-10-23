@@ -59,6 +59,10 @@ mod custom;
 #[cfg(feature = "studies")]
 pub mod factory;
 mod indicator_trait;
+mod inputs;
+pub use inputs::{InputKind, InputValue, StudyInput};
+mod settings;
+pub use settings::{ConfiguredStudy, PlotPattern, PlotStyle, PlotType, StudySettings};
 mod values;
 pub use values::IndicatorValues;
 #[cfg(any(feature = "studies", feature = "widget"))]

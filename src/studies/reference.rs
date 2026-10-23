@@ -49,6 +49,57 @@ use chrono::{TimeZone, Utc};
 const EXPECTED: &str = include_str!("reference/expected.txt");
 
 #[test]
+fn catalogue_input_schemas_round_trip_the_current_calculation() {
+    let bars = fixture();
+    let factory = crate::studies::IndicatorFactory::new();
+    for name in factory.list() {
+        let mut study = factory.create(&name).unwrap();
+        study.calculate(&bars);
+        let before = format!("{:?}", study.values());
+        for input in study.inputs() {
+            assert!(input.accepts(&input.value), "{name}: {}", input.id);
+            study
+                .set_input(&input.id, input.value)
+                .unwrap_or_else(|error| panic!("{name}: {}: {error}", input.id));
+        }
+        study.calculate(&bars);
+        assert_eq!(format!("{:?}", study.values()), before, "{name}");
+    }
+}
+
+#[test]
+fn editing_an_input_invalidates_values_and_preserves_other_inputs() {
+    use crate::studies::InputValue;
+    let bars: Vec<_> = [2.0, 4.0, 8.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), p, p, p, p, 1.0))
+        .collect();
+    let mut study = BollingerBands::new(3, 2.0);
+    study.calculate(&bars);
+    study.set_input("period", InputValue::Length(2)).unwrap();
+    assert!(study.values().is_empty());
+    study.calculate(&bars);
+    assert_eq!(study.values().value(0, 2), Some(10.0));
+    assert!(
+        study
+            .set_input("std_dev", InputValue::Number(f64::NAN))
+            .is_err()
+    );
+    assert_eq!(study.values().value(0, 2), Some(10.0));
+    assert!(study.set_input("period", InputValue::Length(0)).is_err());
+    assert_eq!(
+        study
+            .inputs()
+            .iter()
+            .find(|input| input.id == "std_dev")
+            .unwrap()
+            .value,
+        InputValue::Number(2.0)
+    );
+}
+
+#[test]
 fn bands_store_aligned_columns_through_warmup_and_corrections() {
     let mut bars: Vec<_> = [2.0, 4.0, 8.0]
         .into_iter()

@@ -92,6 +92,10 @@ impl Default for VolProfileFixed {
 }
 
 impl Indicator for VolProfileFixed {
+    crate::studies::inputs::study_inputs!(self;
+        row_count: length("Row count", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Vol Profile FR"
     }

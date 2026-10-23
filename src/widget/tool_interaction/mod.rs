@@ -101,7 +101,8 @@ impl Chart {
                     .iter()
                     .filter(|s| s.is_visible() && s.is_overlay())
                 {
-                    for line in 0..study.line_cnt() {
+                    for line in (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible)
+                    {
                         if let Some(price) = study.values().value(line, i) {
                             add_price(price);
                         }

@@ -75,6 +75,10 @@ impl Default for PriceVolumeTrendStudy {
 }
 
 impl Indicator for PriceVolumeTrendStudy {
+    crate::studies::inputs::study_inputs!(self;
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "PVT Enhanced"
     }

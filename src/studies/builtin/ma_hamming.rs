@@ -43,6 +43,10 @@ impl Default for HammingMA {
 }
 
 impl Indicator for HammingMA {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Hamming MA"
     }

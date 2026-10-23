@@ -69,6 +69,10 @@ impl Default for BalanceOfPower {
 }
 
 impl Indicator for BalanceOfPower {
+    crate::studies::inputs::study_inputs!(self;
+        smooth_period: length("Smooth period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "BoP"
     }

@@ -78,6 +78,11 @@ impl Default for ChandelierExit {
 }
 
 impl Indicator for ChandelierExit {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        multiplier: number("Multiplier", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Chandelier"
     }

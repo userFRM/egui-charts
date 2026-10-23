@@ -127,6 +127,66 @@ impl Default for IndicatorLineStyle {
 /// contain it without a value. The chart's datafeed drops such bars before they reach a
 /// study, so this matters to direct callers of [`calculate`](Indicator::calculate).
 pub trait Indicator: Send {
+    /// Whether this study stores presentation edits itself. Charts wrap other studies once.
+    fn has_settings(&self) -> bool {
+        false
+    }
+
+    /// Presentation defaults for a zero-based output line.
+    fn plot_style(&self, line: usize) -> super::PlotStyle {
+        super::PlotStyle {
+            color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
+            width: self.line_style(line).width,
+            pattern: super::PlotPattern::Solid,
+            plot_type: super::PlotType::Line,
+            visible: true,
+        }
+    }
+
+    /// Current applied presentation, initialized from the study's own defaults.
+    fn settings(&self) -> super::StudySettings {
+        super::StudySettings {
+            plots: (0..self.line_cnt())
+                .map(|line| self.plot_style(line))
+                .collect(),
+            precision: self.precision(),
+            hidden_intervals: Vec::new(),
+        }
+    }
+
+    /// Apply a complete edit atomically. Charts wrap studies in [`ConfiguredStudy`](super::ConfiguredStudy),
+    /// which validates inputs on a clone before replacing the calculation and presentation.
+    fn apply_settings(
+        &mut self,
+        inputs: &[(String, super::InputValue)],
+        settings: super::StudySettings,
+    ) -> Result<(), &'static str> {
+        let _ = (inputs, settings);
+        Err("wrap the study in ConfiguredStudy to edit its presentation")
+    }
+
+    /// The chart's current interval, supplied when added and when the interval changes.
+    fn set_timeframe(&mut self, timeframe: crate::model::Timeframe) {
+        let _ = timeframe;
+    }
+
+    /// Decimal places for study readouts, or the chart's default precision.
+    fn precision(&self) -> Option<usize> {
+        None
+    }
+
+    /// Current editable inputs. A host study can supply the same schema as built-ins.
+    fn inputs(&self) -> Vec<super::StudyInput> {
+        Vec::new()
+    }
+
+    /// Change a calculation input, rejecting unknown ids, wrong types and invalid values.
+    /// On success cached values are cleared; calculate again or let the chart refresh.
+    fn set_input(&mut self, id: &str, value: super::InputValue) -> Result<(), &'static str> {
+        let _ = (id, value);
+        Err("study has no editable inputs")
+    }
+
     /// Return the short display name of this indicator (e.g. `"SMA"`, `"RSI"`, `"MACD"`).
     fn name(&self) -> &str;
 

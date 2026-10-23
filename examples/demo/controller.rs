@@ -30,7 +30,7 @@ use egui_charts::ui::timeframe_toolbar::{
 };
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
-    IndicatorDialog, IndicatorDialogAction,
+    IndicatorDialog, IndicatorDialogAction, IndicatorSettingsDialog,
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
@@ -138,6 +138,7 @@ pub struct DemoApp {
 
     // Dialogs (each owns its open/closed state).
     indicator_dialog: IndicatorDialog,
+    indicator_settings: IndicatorSettingsDialog,
     settings_dialog: SettingsDialog,
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
@@ -252,6 +253,7 @@ impl DemoApp {
             timeframe_toolbar,
             widget_bar,
             indicator_dialog: IndicatorDialog::new(),
+            indicator_settings: IndicatorSettingsDialog::default(),
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
@@ -585,6 +587,17 @@ impl DemoApp {
         self.drawing_props.open(DrawingId(drawing_id), name, props);
     }
 
+    fn open_indicator_settings(&mut self, id: SeriesId) {
+        if let Some((_, study)) = self
+            .chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+        {
+            self.indicator_settings
+                .open(id, study, self.chart.timeframe());
+        }
+    }
+
     // --- dialog wiring -----------------------------------------------------
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
@@ -605,6 +618,46 @@ impl DemoApp {
             let inputs = self.indicator_dialog.input_summary(study.name());
             let id = self.chart.add_indicator(study);
             self.chart.set_indicator_inputs(id, inputs);
+        }
+
+        if let Some(edit) = self.indicator_settings.show(ctx, &self.theme) {
+            let result = self
+                .chart
+                .indicator_mut(edit.id)
+                .ok_or("Study was removed")
+                .and_then(|study| {
+                    study.apply_settings(&edit.inputs, edit.settings)?;
+                    Ok(study
+                        .inputs()
+                        .iter()
+                        .map(|input| match (&input.kind, &input.value) {
+                            (
+                                egui_charts::studies::InputKind::Choice(choices),
+                                egui_charts::studies::InputValue::Choice(index),
+                            ) => choices.get(*index).cloned().unwrap_or_default(),
+                            (_, egui_charts::studies::InputValue::Length(value)) => {
+                                value.to_string()
+                            }
+                            (_, egui_charts::studies::InputValue::Integer(value)) => {
+                                value.to_string()
+                            }
+                            (_, egui_charts::studies::InputValue::Number(value)) => {
+                                value.to_string()
+                            }
+                            (_, egui_charts::studies::InputValue::Toggle(value)) => {
+                                value.to_string()
+                            }
+                            _ => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "))
+                });
+            match result {
+                Ok(inputs) => {
+                    self.chart.set_indicator_inputs(edit.id, inputs);
+                }
+                Err(error) => self.notify(error),
+            }
         }
 
         // Chart settings.
@@ -1365,8 +1418,8 @@ impl DemoApp {
                 }
             }
             ObjectTreeAction::OpenProperties(id) | ObjectTreeAction::OpenIndicatorSettings(id) => {
-                if indicator_from_tree_id(id).is_some() {
-                    self.indicator_dialog.open();
+                if let Some(study) = indicator_from_tree_id(id) {
+                    self.open_indicator_settings(study);
                 } else {
                     self.open_drawing_props_for(id);
                 }
@@ -1588,6 +1641,9 @@ impl DemoApp {
                     }
                 } else {
                     self.chart.show(ui);
+                }
+                if let Some(id) = self.chart.take_indicator_settings_request() {
+                    self.open_indicator_settings(id);
                 }
                 if self.chart.take_scale_settings_request() {
                     self.open_series_settings_dialog();

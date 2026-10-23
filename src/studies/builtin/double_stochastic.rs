@@ -146,6 +146,11 @@ impl DoubleStochastic {
 }
 
 impl Indicator for DoubleStochastic {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        smooth: length("Smooth", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "DS"
     }

@@ -61,6 +61,11 @@ impl Default for RainbowOscillator {
 }
 
 impl Indicator for RainbowOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        levels: length("Levels", 1, usize::MAX),
+        base_period: length("Base period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Rainbow"
     }

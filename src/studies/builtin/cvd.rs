@@ -119,6 +119,10 @@ impl Default for CVD {
 }
 
 impl Indicator for CVD {
+    crate::studies::inputs::study_inputs!(self;
+        mode: choice("Mode", [CVDMode::ClosePosition, CVDMode::BodyRatio, CVDMode::Simple])
+    ; {});
+
     fn name(&self) -> &str {
         "CVD"
     }

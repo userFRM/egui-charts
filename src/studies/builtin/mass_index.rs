@@ -156,6 +156,11 @@ impl Default for MassIndex {
 }
 
 impl Indicator for MassIndex {
+    crate::studies::inputs::study_inputs!(self;
+        ema_period: length("EMA period", 1, usize::MAX),
+        sum_period: length("Sum period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Mass Index"
     }

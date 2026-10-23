@@ -268,6 +268,7 @@ pub struct Chart {
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    indicator_settings_request: Option<SeriesId>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,

@@ -15,7 +15,9 @@ pub mod actions;
 pub mod config;
 pub mod data;
 pub mod dialog;
+mod settings;
 pub mod templates;
+pub use settings::{IndicatorSettingsDialog, StudyEdit};
 pub mod types;
 
 // Public re-exports

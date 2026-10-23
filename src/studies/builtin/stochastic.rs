@@ -180,6 +180,12 @@ impl Stochastic {
 }
 
 impl Indicator for Stochastic {
+    crate::studies::inputs::study_inputs!(self;
+        k_period: length("K period", 1, usize::MAX),
+        k_smooth: length("K smooth", 1, usize::MAX),
+        d_period: length("D period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Stochastic"
     }

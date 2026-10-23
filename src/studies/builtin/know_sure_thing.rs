@@ -123,6 +123,18 @@ impl KnowSureThing {
 }
 
 impl Indicator for KnowSureThing {
+    crate::studies::inputs::study_inputs!(self;
+        roc_periods[0]: length("Roc periods 1", 1, usize::MAX),
+        roc_periods[1]: length("Roc periods 2", 1, usize::MAX),
+        roc_periods[2]: length("Roc periods 3", 1, usize::MAX),
+        roc_periods[3]: length("Roc periods 4", 1, usize::MAX),
+        sma_periods[0]: length("SMA periods 1", 1, usize::MAX),
+        sma_periods[1]: length("SMA periods 2", 1, usize::MAX),
+        sma_periods[2]: length("SMA periods 3", 1, usize::MAX),
+        sma_periods[3]: length("SMA periods 4", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "KST"
     }

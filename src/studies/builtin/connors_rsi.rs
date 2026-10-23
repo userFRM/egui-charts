@@ -207,6 +207,12 @@ impl ConnorsRSI {
 }
 
 impl Indicator for ConnorsRSI {
+    crate::studies::inputs::study_inputs!(self;
+        rsi_period: length("RSI period", 1, usize::MAX),
+        streak_period: length("Streak period", 1, usize::MAX),
+        rank_period: length("Rank period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Connors RSI"
     }

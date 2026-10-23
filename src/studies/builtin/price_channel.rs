@@ -75,6 +75,10 @@ impl PriceChannel {
 }
 
 impl Indicator for PriceChannel {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Price Channel"
     }

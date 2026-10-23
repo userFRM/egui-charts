@@ -252,6 +252,11 @@ impl PivotPoints {
 }
 
 impl Indicator for PivotPoints {
+    crate::studies::inputs::study_inputs!(self;
+        method: choice("Method", [PivotMethod::Standard, PivotMethod::Fibonacci, PivotMethod::Woodie, PivotMethod::Camarilla, PivotMethod::DeMark]),
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Pivot Points"
     }

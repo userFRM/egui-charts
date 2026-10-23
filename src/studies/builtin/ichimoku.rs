@@ -148,6 +148,13 @@ impl IchimokuCloud {
 }
 
 impl Indicator for IchimokuCloud {
+    crate::studies::inputs::study_inputs!(self;
+        tenkan_period: length("Tenkan period", 1, usize::MAX),
+        kijun_period: length("Kijun period", 1, usize::MAX),
+        senkou_b_period: length("Senkou b period", 1, usize::MAX),
+        displacement: length("Displacement", 0, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Ichimoku"
     }

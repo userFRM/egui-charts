@@ -122,6 +122,7 @@ impl Chart {
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,
+            indicator_settings_request: None,
             session_quote: None,
             axis_hover: None,
             scale_settings_requested: false,

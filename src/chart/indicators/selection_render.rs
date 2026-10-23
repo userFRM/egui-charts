@@ -46,6 +46,9 @@ pub fn render_indicator_selection_dots<F>(
 ) where
     F: Fn(f64) -> f32,
 {
+    if !indicator.plot_style(line_idx).visible {
+        return;
+    }
     let values = indicator.values();
 
     // Draw dots at regular intervals

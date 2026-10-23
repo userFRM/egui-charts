@@ -38,6 +38,10 @@ impl Default for LinearRegression {
 }
 
 impl Indicator for LinearRegression {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "LinReg"
     }
@@ -154,6 +158,10 @@ impl Default for LinearRegressionSlope {
 }
 
 impl Indicator for LinearRegressionSlope {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "LinReg Slope"
     }

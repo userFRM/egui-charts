@@ -46,6 +46,9 @@ where
 
     // Test each line of the indicator
     for line_idx in 0..line_cnt {
+        if !indicator.plot_style(line_idx).visible {
+            continue;
+        }
         if let Some(hit) = hit_test_indicator_line(
             click_pos,
             values,
@@ -161,6 +164,9 @@ pub fn hit_test_pane_indicator(
 
     // Test each line of the indicator
     for line_idx in 0..line_cnt {
+        if !indicator.plot_style(line_idx).visible {
+            continue;
+        }
         if let Some(hit) = hit_test_pane_indicator_line(
             click_pos,
             values,

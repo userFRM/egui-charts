@@ -70,6 +70,12 @@ impl Envelopes {
 }
 
 impl Indicator for Envelopes {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        percent: number("Percent", 0.0, f64::MAX),
+        ma_type: choice("Average", ["SMA".to_owned(), "EMA".to_owned()])
+    ; {});
+
     fn name(&self) -> &str {
         "Envelopes"
     }

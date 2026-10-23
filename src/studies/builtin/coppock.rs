@@ -99,6 +99,12 @@ impl Default for CoppockCurve {
 }
 
 impl Indicator for CoppockCurve {
+    crate::studies::inputs::study_inputs!(self;
+        long_roc: length("Long roc", 1, usize::MAX),
+        short_roc: length("Short roc", 1, usize::MAX),
+        wma_period: length("Wma period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Coppock"
     }

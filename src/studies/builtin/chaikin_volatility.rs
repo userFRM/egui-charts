@@ -98,6 +98,11 @@ impl Default for ChaikinVolatility {
 }
 
 impl Indicator for ChaikinVolatility {
+    crate::studies::inputs::study_inputs!(self;
+        ema_period: length("EMA period", 1, usize::MAX),
+        roc_period: length("Roc period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "CV"
     }
