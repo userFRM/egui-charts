@@ -592,10 +592,7 @@ impl Chart {
                 }
             }
             self.apply_visible_bars_once = false;
-        }
-
-        // lockVisibleTimeRangeOnResize
-        if self
+        } else if self
             .chart_options
             .time_scale
             .lock_visible_time_range_on_resize
@@ -709,6 +706,15 @@ mod tests {
                 };
                 assert!((chart.state.time_scale().bar_spacing() - expected).abs() < 1e-5);
                 assert_eq!(chart.state.time_scale().right_offset(), -20.0);
+                chart.set_visible_bars(80);
+                show(&mut chart, 1264.0);
+                assert!(
+                    (chart.state.time_scale().bar_spacing()
+                        - chart.last_rendered_price_rect.width() / 80.0)
+                        .abs()
+                        < 1e-5,
+                    "a pending view must take precedence over a locked resize"
+                );
             }
         }
     }

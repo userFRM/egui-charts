@@ -632,7 +632,7 @@ impl ChartBuilder {
     /// Set the number of bars visible in the initial viewport (default: 100).
     ///
     /// This controls the initial bar spacing so that approximately `count` bars
-    /// fit within the chart width.
+    /// fit within the chart width. Use zero to keep the configured bar spacing.
     #[must_use]
     pub fn with_visible_candles(mut self, count: usize) -> Self {
         self.visible_candles = count;

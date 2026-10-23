@@ -204,7 +204,7 @@ impl DemoApp {
             .with_symbol(symbol)
             .with_timeframe(timeframe)
             .with_theme(theme.clone())
-            .with_visible_candles(210)
+            .with_visible_candles(0)
             .with_chart_options(options)
             .build();
         chart.config_mut().volume_height_fraction = 0.25;
@@ -2003,6 +2003,44 @@ fn apply_settings_state(
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// A narrow first layout and later resizes retain the configured zoom and live edge.
+    #[test]
+    fn opening_view_keeps_default_spacing_across_resizes() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for scale in [1.0, 2.0] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.live.set_paused(true);
+                *app.chart.config_mut() = theme.apply_to_config(app.chart.config().clone());
+                for width in [140.0, 0.0, 80.0, 320.0, 1440.0] {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            app.chart.show(ui);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                    let time_scale = app.chart.state().time_scale();
+                    assert_eq!(
+                        time_scale.bar_spacing(),
+                        6.1,
+                        "width {width}, scale {scale}"
+                    );
+                    assert!(
+                        (time_scale.right_offset() - (65.0 - 6.1 * 0.5 - 1.0) / 6.1).abs() < 1e-5
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn opening_settings_keeps_the_charts_current_display() {
