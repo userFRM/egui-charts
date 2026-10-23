@@ -90,6 +90,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Inside pitchforks use the first leg midpoint and second anchor as their tines, with the first tine passing through the third anchor and the median halfway between the tines. All fork rays follow their direction, including leftward and vertical forks.
+
+- ABCD, XABCD and Cypher label every price ratio on its comparison chord, including C's retracement and D's placement. Undefined ratios on flat legs are omitted.
+
 - Chart settings read back current status and scale controls before opening. Choosing log or percentage scale clears the other mode; legend volume remains independent of the histogram. Custom price-line tags and axis gestures follow left placement, and long session tags stay inside the chart.
 - Enlarged modals fit narrow windows, with scrollable settings content and tabs. Indicator results use a 32 px row pitch.
 - Symbol search gives its category strip and results separate scroll identities, keeps keyboard selection under a stationary pointer and scrolls the selected result into view. ([#597](https://github.com/userFRM/egui-charts/issues/597))
@@ -109,7 +113,6 @@ All notable changes to this project are documented in this file. The format is b
 - Chart-type menu rows use a single 14 px name beside each icon, neutral selection and separators between type families.
 - The interval menu groups full interval names in 32 px rows with trailing favourite marks and neutral selection, retaining custom interval entry and model selection.
 - Top toolbar tooltips use compact dark surfaces below their controls, with platform-specific shortcut chips for alerts. Symbol, interval and chart-type triggers now identify their actions on hover.
-- ABCD, XABCD and Cypher label every price ratio on its comparison chord, including C's retracement and D's placement. Undefined ratios on flat legs are omitted.
 
 - The demo opens at one minute in Arrow mode with axis readouts. Synthetic sessions stay continuous, with shorter wicks, varying low ordinary volumes and occasional peaks. Volume peaks use a quarter of the plot height with a flush baseline, and candle bodies use 75% of the bar pitch. Hourly data remains available; session timestamps and adjustment inputs are unchanged.
 - The in-pane legend and held values keep the chart's configured candle colours. The legend title exposes a flag and copy actions on hover. The Data Window computes change from the preceding displayed element, matching the legend on both time-based and price-based charts. `ChartState::shown` exposes the series indexed by hover and selection.

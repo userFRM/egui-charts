@@ -65,7 +65,7 @@ impl Drawing {
     }
 
     pub(crate) fn render_inside_pitchfork(&self, painter: &egui::Painter, chart_rect: Rect) {
-        // Inside pitchfork uses the midpoint of the first two points as anchor
+        // Inside uses the first leg midpoint as one tine, and the second anchor as the other.
         if self.points.len() < 3 {
             for &p in &self.points {
                 painter.circle_filled(
@@ -95,19 +95,28 @@ impl Drawing {
             return None;
         };
         let mid = |a: Pos2, b: Pos2| a + (b - a) / 2.0;
-        let (origin, through, links) = match self.tool_type {
+        let (origin, through, upper, lower, links) = match self.tool_type {
             DrawingToolType::Pitchfork | DrawingToolType::SchiffPitchfork => {
                 let schiff = self.tool_type == DrawingToolType::SchiffPitchfork;
                 let (origin, through) = median_line(p0, p1, p2, schiff);
-                (origin, through, vec![[p0, p1], [p0, p2], [p1, p2]])
+                (origin, through, p1, p2, vec![[p0, p1], [p0, p2], [p1, p2]])
             }
             DrawingToolType::ModifiedSchiffPitchfork => {
-                (mid(p0, p1), mid(p1, p2), vec![[p0, p1], [p1, p2]])
+                (mid(p0, p1), mid(p1, p2), p1, p2, vec![[p0, p1], [p1, p2]])
             }
-            DrawingToolType::InsidePitchfork => (p0, mid(p1, p2), Vec::new()),
+            DrawingToolType::InsidePitchfork => {
+                let inside = mid(p0, p1);
+                (
+                    mid(inside, p1),
+                    mid(p1, p2),
+                    inside,
+                    p1,
+                    vec![[p0, p1], [p1, p2]],
+                )
+            }
             _ => return None,
         };
-        let mut lines = fork_lines(origin, through, p1, p2, rect).to_vec();
+        let mut lines = fork_lines(origin, through, upper, lower, rect).to_vec();
         lines.extend(links);
         Some(lines)
     }
@@ -218,9 +227,8 @@ pub(super) fn fork_lines(
     p2: Pos2,
     rect: Rect,
 ) -> [[Pos2; 2]; 3] {
-    let scale = (rect.max.x - origin.x) / (through.x - origin.x).max(0.001);
-    let run = (through - origin) * scale;
-    [[origin, origin + run], [p1, p1 + run], [p2, p2 + run]]
+    let direction = through - origin;
+    [origin, p1, p2].map(|start| [start, super::lines::ray_end(start, start + direction, rect)])
 }
 
 /// Origin of the median line and the point it passes through, the midpoint of the
@@ -259,6 +267,46 @@ mod tests {
                 got.0.distance(origin) < 1e-4 && got.1.distance(through) < 1e-4,
                 "schiff {is_schiff}: got {got:?}, want ({origin:?}, {through:?})"
             );
+        }
+        // Inside: I=(A+B)/2=(5,50), median from (I+B)/2=(7.5,75)
+        // through (B+C)/2=(15,25), parallel to I->C, slope -20/3.
+        for (tool, origin, slope) in [
+            (DrawingToolType::Pitchfork, Pos2::new(0.0, 0.0), 5.0 / 3.0),
+            (
+                DrawingToolType::SchiffPitchfork,
+                Pos2::new(0.0, 50.0),
+                -5.0 / 3.0,
+            ),
+            (
+                DrawingToolType::ModifiedSchiffPitchfork,
+                Pos2::new(5.0, 50.0),
+                -2.5,
+            ),
+            (
+                DrawingToolType::InsidePitchfork,
+                Pos2::new(7.5, 75.0),
+                -20.0 / 3.0,
+            ),
+        ] {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.points = anchors.to_vec();
+            let lines = drawing
+                .pitchfork_lines(Rect::from_min_max(
+                    Pos2::new(-100.0, -1000.0),
+                    Pos2::new(100.0, 1000.0),
+                ))
+                .unwrap();
+            assert!(
+                lines[0][0].distance(origin) < 1e-4,
+                "{tool:?}: {:?}",
+                lines[0]
+            );
+            for [a, b] in &lines[..3] {
+                assert!(
+                    ((b.y - a.y) / (b.x - a.x) - slope).abs() < 1e-4,
+                    "{tool:?}: {a:?} {b:?}"
+                );
+            }
         }
     }
 }
