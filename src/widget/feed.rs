@@ -40,6 +40,7 @@ pub(crate) struct FeedLink {
     wake: Arc<Mutex<Option<ViewportId>>>,
     /// The symbol or timeframe changed: the next `pump` reloads.
     reload_pending: bool,
+    paused: bool,
     next_key: u64,
     /// Requests not answered yet; an answer under any other key is stale and dropped.
     pending: Vec<(u64, Request)>,
@@ -102,6 +103,7 @@ impl Chart {
             initial_bars,
             wake: Arc::default(),
             reload_pending: true,
+            paused: false,
             next_key: 0,
             pending: Vec::new(),
             subscription: None,
@@ -111,6 +113,25 @@ impl Chart {
             order_book: None,
             paging_stopped: false,
         });
+    }
+
+    /// Suspends feed requests and unsubscribes while the host supplies replay bars by hand.
+    /// Resuming reloads the current symbol and interval, including any trades retained by the
+    /// host. Bars supplied while paused are matched by exact opening time.
+    pub fn set_feed_paused(&mut self, paused: bool) {
+        if let Some(link) = &mut self.feed_link
+            && link.paused != paused
+        {
+            link.paused = paused;
+            link.reload_pending = true;
+            if paused {
+                if let Some(id) = link.subscription.take() {
+                    link.inbox.unsubscribe(id);
+                    link.feed.unsubscribe(id);
+                }
+                link.pending.clear();
+            }
+        }
     }
 
     /// Shows `symbol` from the next [`show`](Self::show). With a feed, a changed symbol clears
@@ -208,15 +229,29 @@ impl Chart {
     pub(super) fn clock(&self) -> BarClock {
         self.feed_link
             .as_ref()
+            .filter(|link| !link.paused)
             .map_or_else(BarClock::exact, |link| link.clock.clone())
     }
 
     /// Issues what the feed must be asked and applies what it sent since the last call. Called
     /// first in [`show`](Self::show); does nothing without a feed.
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
+        if self.feed_link.as_ref().is_some_and(|link| link.paused) {
+            return;
+        }
         let Some(mut link) = self.feed_link.take() else {
             return;
         };
+        let clock = BarClock::new(self.timeframe.unwrap_or_default()).with_timezone(
+            self.chart_options
+                .time_scale
+                .timezone
+                .to_tz()
+                .unwrap_or(chrono_tz::UTC),
+        );
+        if link.clock != clock {
+            link.reload_pending = true;
+        }
         if link.reload_pending {
             self.reload(&mut link);
         }
@@ -312,7 +347,13 @@ impl Chart {
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
-        link.clock = BarClock::new(timeframe);
+        link.clock = BarClock::new(timeframe).with_timezone(
+            self.chart_options
+                .time_scale
+                .timezone
+                .to_tz()
+                .unwrap_or(chrono_tz::UTC),
+        );
         link.rebuild_bubbles();
         // Drawings stay: they belong to the chart, not to the bars of one symbol.
         self.set_data(SeriesId::MAIN, Vec::new());
@@ -326,6 +367,7 @@ impl Chart {
         let request = HistoryRequest {
             symbol: self.symbol.clone(),
             timeframe,
+            clock: link.clock.clone(),
             before: None,
             count: link.initial_bars,
         };
@@ -348,6 +390,7 @@ impl Chart {
             id: sink.id,
             symbol: self.symbol.clone(),
             timeframe: self.timeframe.unwrap_or_default(),
+            clock: link.clock.clone(),
             sink,
         };
         link.feed.subscribe(subscription);
@@ -409,6 +452,7 @@ impl Chart {
         let request = HistoryRequest {
             symbol: self.symbol.clone(),
             timeframe: self.timeframe.unwrap_or_default(),
+            clock: link.clock.clone(),
             before: Some(before),
             count: link.initial_bars.max(MIN_SCROLL_BACK_PAGE),
         };
@@ -496,6 +540,7 @@ mod tests {
                 symbol,
                 timeframe,
                 sink,
+                ..
             } = subscription;
             let call = Call::Subscribe(id, symbol, timeframe);
             self.calls.lock().unwrap().push(call);
@@ -541,6 +586,7 @@ mod tests {
         Call::History(HistoryRequest {
             symbol: symbol.into(),
             timeframe,
+            clock: BarClock::new(timeframe),
             before,
             count: 1000,
         })

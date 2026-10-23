@@ -1,6 +1,6 @@
 //! Deterministic sample-data generation and the symbol catalog.
 //!
-//! The demo ships no live feed, so every symbol gets a reproducible synthetic
+//! Historical backfill gives every symbol a reproducible synthetic
 //! price series seeded from its name. Switching symbols therefore yields a
 //! stable, distinct chart rather than random noise that changes each frame.
 
@@ -147,6 +147,9 @@ impl DemoSymbol {
 pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) -> Vec<Bar> {
     use chrono::{Datelike, TimeZone, Timelike, Utc, Weekday};
 
+    if matches!(timeframe, Timeframe::Ticks(_)) {
+        return Vec::new();
+    }
     let spec = DemoSymbol::find(symbol);
     let mut bars = Vec::with_capacity(count);
     let mut price = spec.start_price;
@@ -246,18 +249,6 @@ pub fn generate_sample_bars(symbol: &str, count: usize, timeframe: Timeframe) ->
     }
 
     bars
-}
-
-/// How many bars to synthesize for a given timeframe.
-pub fn bar_count_for_timeframe(tf: Timeframe) -> usize {
-    match tf {
-        Timeframe::Min1 | Timeframe::Min5 => 1000,
-        Timeframe::Min15 | Timeframe::Min30 => 800,
-        Timeframe::Hour1 | Timeframe::Hour4 => 600,
-        Timeframe::Day1 | Timeframe::Week1 => 500,
-        Timeframe::Month1 => 120,
-        _ => 500,
-    }
 }
 
 /// Map a top-toolbar chart-style label to a `ChartType`.
@@ -375,7 +366,7 @@ mod tests {
             let trades = synthetic_trades(&bars);
             assert_eq!(trades, synthetic_trades(&bars));
             let clock = egui_charts::model::BarClock::new(timeframe);
-            for (bar, trades) in bars.iter().zip(trades.chunks_exact(64)) {
+            for (bar, trades) in bars.iter().zip(trades.as_chunks::<64>().0) {
                 assert!(
                     trades
                         .iter()

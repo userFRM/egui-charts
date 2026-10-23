@@ -21,6 +21,41 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 /// A `Result<T, FeedError>` answering a request for `T`, or a `T` pushed through an event stream.
 pub(crate) type Answer = Box<dyn Any + Send>;
 
+/// Rebuilds bars from chronological executions using the live sink's aggregation rules.
+/// Count intervals start at the first accepted trade in `trades`; retain that grouping anchor
+/// when joining history to live data. Duplicate ids are ignored. Invalid or late trades and
+/// overflowing volumes return an error. Periods without executions are omitted.
+///
+/// ```
+/// use egui_charts::data::aggregate_trades;
+/// use egui_charts::model::Tick;
+/// use chrono::Utc;
+/// let trades = vec![Tick::new(Utc::now(), 100.0, 2.0, None)];
+/// let bars = aggregate_trades(&trades, "10t".parse::<egui_charts::model::Timeframe>().unwrap()).unwrap();
+/// assert_eq!(bars[0].volume, 2.0);
+/// ```
+pub fn aggregate_trades(
+    trades: &[Tick],
+    clock: impl Into<BarClock>,
+) -> Result<Vec<Bar>, FeedError> {
+    let Some(last) = trades.last() else {
+        return Ok(Vec::new());
+    };
+    let inbox = Arc::new(Inbox::default());
+    let sink = inbox.subscribe(String::new(), clock.into(), trades.len());
+    sink.set_server_time(last.ts);
+    for trade in trades {
+        sink.push_tick(trade.clone());
+    }
+    let (_, updates) = inbox.drain().updates.pop().expect("active subscription");
+    if updates.rejected > 0 || updates.late_ticks > 0 {
+        return Err(FeedError::InvalidData(
+            "invalid or unordered executions".into(),
+        ));
+    }
+    Ok(updates.bars.into_values().map(|(bar, _)| bar).collect())
+}
+
 /// One chart's inbox, shared with every `Reply` and `Sink` it hands out.
 #[derive(Default)]
 pub(crate) struct Inbox {
@@ -47,6 +82,8 @@ struct Live {
     offset: TimeDelta,
     count_bar: Option<(Bar, u64)>,
     last_trade: Option<DateTime<Utc>>,
+    last_close: Option<f64>,
+    empty: bool,
     book: Book,
     taken: TakenIds,
     updates: Updates,
@@ -156,6 +193,8 @@ impl Inbox {
             offset: TimeDelta::zero(),
             count_bar: None,
             last_trade: None,
+            last_close: None,
+            empty: false,
             book: Book::default(),
             taken: TakenIds {
                 order: VecDeque::new(),
@@ -327,6 +366,10 @@ impl Sink {
                 live.count_bar = None;
                 live.last_trade = Some(slot);
             }
+            if live.forming.is_none_or(|last| slot >= last) {
+                live.last_close = Some(bar.close);
+                live.empty = false;
+            }
             live.forming = live.forming.max(Some(slot));
             live.updates.bars.insert(slot, (bar, Origin::Live));
         });
@@ -412,7 +455,11 @@ impl Sink {
             } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
                 updates.repeated_ticks += 1;
             } else {
+                let replace_empty = live.empty && live.forming == Some(open);
                 match updates.bars.entry(open) {
+                    Entry::Occupied(mut pending) if replace_empty => {
+                        pending.insert((ticks, Origin::Live));
+                    }
                     Entry::Occupied(mut pending) => {
                         let (bar, origin) = pending.get_mut();
                         let Some(folded) = fold(bar, &ticks) else {
@@ -425,15 +472,62 @@ impl Sink {
                         }
                     }
                     Entry::Vacant(slot) => {
-                        slot.insert((ticks, Origin::Ticks(1)));
+                        slot.insert((
+                            ticks,
+                            if replace_empty {
+                                Origin::Live
+                            } else {
+                                Origin::Ticks(1)
+                            },
+                        ));
                     }
                 }
+                live.last_close = Some(price);
+                live.empty = false;
                 live.forming = Some(open);
                 if let Some(id) = tick.id {
                     live.taken.insert(id);
                 }
                 updates.trades.push(tick);
             }
+        });
+    }
+
+    /// Advances a time-based stream through `now`, opening an empty forming candle at the
+    /// current clock boundary when there has been no execution. Empty candles carry the last
+    /// close with zero volume; their first trade sets the real open, high and low. Count bars
+    /// never advance without trades. Call from a trusted feed heartbeat, after seeding a bar or
+    /// execution; invalid or future clock values obey the same rule as trade timestamps.
+    pub fn advance_time(&self, now: DateTime<Utc>) {
+        let system = Utc::now();
+        self.inbox.push(|state| {
+            let Some(live) = state.subscriptions.get_mut(&self.id) else {
+                return false;
+            };
+            if live
+                .clock
+                .timeframe()
+                .is_none_or(|tf| tf.duration_ms() <= 0)
+            {
+                return false;
+            }
+            let open = live.clock.bar_open(now);
+            let Some(close) = live.last_close else {
+                return false;
+            };
+            if live.forming.is_none_or(|last| open <= last) || live.ahead(open, system) {
+                return false;
+            }
+            live.updates.bars.insert(
+                open,
+                (
+                    Bar::new(open, close, close, close, close, 0.0),
+                    Origin::Ticks(0),
+                ),
+            );
+            live.forming = Some(open);
+            live.empty = true;
+            true
         });
     }
 
@@ -613,19 +707,30 @@ mod tests {
         for count in [1, 10, 100, 1000] {
             let timeframe = format!("{count}t").parse().unwrap();
             let inbox = Arc::new(Inbox::default());
-            let sink = inbox.subscribe("ES".into(), BarClock::new(timeframe), 10_000);
+            let clock = BarClock::new(timeframe);
+            let sink = inbox.subscribe("ES".into(), clock.clone(), 10_000);
             let mut bars = BTreeMap::new();
+            let mut merged = Vec::new();
+            let mut from_ticks = std::collections::BTreeSet::new();
             for i in 0..(count * 2 + 1) {
                 let trade =
                     tick(at(0, 5), 100.0 + (i % 3) as f64, (i % 4 + 1) as f64).with_id(i as u64);
                 sink.push_tick(trade.clone());
                 sink.push_tick(trade); // Replays must not consume a count.
                 sink.push_tick(tick(at(0, 5), f64::NAN, 1.0));
+                sink.advance_time(at(2, 0)); // A clock heartbeat never consumes a count.
                 let (_, updates) = inbox.drain().updates.pop().unwrap();
+                super::super::merge::merge(
+                    &mut merged,
+                    &mut from_ticks,
+                    &clock,
+                    updates.bars.values().cloned().collect(),
+                );
                 bars.extend(updates.bars.into_iter().map(|(t, (bar, _))| (t, bar)));
                 assert_eq!(updates.repeated_ticks, 1);
                 assert_eq!(updates.rejected, 1);
             }
+            assert_eq!(merged, bars.values().cloned().collect::<Vec<_>>());
             assert_eq!(bars.len(), 3, "{count}");
             for (group, bar) in bars.values().enumerate() {
                 let start = group * count;
@@ -643,6 +748,43 @@ mod tests {
                     "{count}, group {group}",
                 );
             }
+        }
+    }
+
+    /// The first trade on a boundary belongs to the next bar, and a quiet interval opens
+    /// without trades. Its first execution replaces the carried close, even across drains.
+    #[test]
+    fn clock_boundaries_and_empty_intervals() {
+        for timeframe in [Timeframe::Sec1, Timeframe::Min1, "45s".parse().unwrap()] {
+            let clock = BarClock::new(timeframe);
+            let inbox = Arc::new(Inbox::default());
+            let sink = inbox.subscribe("ES".into(), clock.clone(), 100);
+            let start = at(0, 0);
+            let boundary = start + timeframe.duration();
+            sink.push_tick(tick(start, 100.0, 2.0));
+            sink.push_tick(tick(boundary - TimeDelta::milliseconds(1), 103.0, 3.0));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            let first = &updates.bars[&start].0;
+            assert_eq!(
+                [first.open, first.high, first.low, first.close, first.volume],
+                [100.0, 103.0, 100.0, 103.0, 5.0]
+            );
+            sink.advance_time(boundary);
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            assert_eq!(
+                updates.bars[&boundary].0,
+                Bar::new(boundary, 103.0, 103.0, 103.0, 103.0, 0.0)
+            );
+            sink.push_tick(tick(boundary, 99.0, 4.0));
+            sink.push_tick(tick(boundary + TimeDelta::milliseconds(1), 101.0, 5.0));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            assert_eq!(
+                updates.bars[&boundary],
+                (
+                    Bar::new(boundary, 99.0, 101.0, 99.0, 101.0, 9.0),
+                    Origin::Live
+                )
+            );
         }
     }
 

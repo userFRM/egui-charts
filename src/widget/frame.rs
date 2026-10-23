@@ -915,11 +915,22 @@ impl Chart {
                 .as_ref()
                 .filter(|_| self.config.show_countdown)
                 .and_then(|quote| {
-                    let duration = self.timeframe?.duration_ms() / 1000;
-                    let elapsed = quote.ts.signed_duration_since(last.time).num_seconds();
-                    (elapsed >= 0 && elapsed < duration).then(|| {
-                        let remaining = duration - elapsed;
-                        format!("{:02}:{:02}", remaining / 60, remaining % 60)
+                    let clock = crate::model::BarClock::new(self.timeframe?).with_timezone(
+                        self.chart_options
+                            .time_scale
+                            .timezone
+                            .to_tz()
+                            .unwrap_or(chrono_tz::UTC),
+                    );
+                    let close = if self.feed_link.is_some() {
+                        clock.next_open(clock.bar_open(last.time))?
+                    } else {
+                        last.time.checked_add_signed(self.timeframe?.duration())?
+                    };
+                    let remaining = (close - quote.ts).num_milliseconds();
+                    (quote.ts >= last.time && remaining > 0).then(|| {
+                        let seconds = (remaining + 999) / 1000;
+                        format!("{:02}:{:02}", seconds / 60, seconds % 60)
                     })
                 });
             let quote_tags = rendering::axes::render_quote_tags_with_countdown(

@@ -1,6 +1,6 @@
 //! Timeframe (bar aggregation interval) for financial charts.
 //!
-//! A [`Timeframe`] specifies how long each bar/candle represents.  The library
+//! A [`Timeframe`] specifies the time window or execution count represented by a bar.  The library
 //! ships with standard presets from 100 ms up to 1 month, and a [`Custom`](Timeframe::Custom)
 //! variant for arbitrary intervals.
 //!
@@ -34,6 +34,7 @@ use std::str::FromStr;
 ///
 /// | Tier         | Variants                                               |
 /// |-------------|-------------------------------------------------------|
+/// | Tick count  | `Ticks(count)` -- a nonzero number of executions         |
 /// | Millisecond | `Ms100`, `Ms250`, `Ms500`                              |
 /// | Second      | `Sec1` .. `Sec30`                                      |
 /// | Minute      | `Min1`, `Min5`, `Min15`, `Min30`                       |
@@ -52,9 +53,6 @@ use std::str::FromStr;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Timeframe {
-    /// One bar per nonzero number of accepted trades, starting at subscription or replay start.
-    Ticks(NonZeroU64),
-
     // Millisecond timeframes (for high-frequency trading)
     /// 100-millisecond bars (HFT).
     Ms100,
@@ -102,6 +100,9 @@ pub enum Timeframe {
     /// Custom timeframe defined in seconds.
     /// Allows user-defined intervals (e.g., 45s, 3min, 2h). The interval is never zero.
     Custom(NonZeroU64),
+
+    /// One bar per nonzero number of accepted trades, starting at subscription or replay start.
+    Ticks(NonZeroU64),
 }
 
 impl Timeframe {

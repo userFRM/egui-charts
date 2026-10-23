@@ -630,6 +630,8 @@ mod tests {
     fn interval_pick_updates_the_trigger_and_selection() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for selected in [
+                Timeframe::new(100, TimeframeUnit::Tick),
+                Timeframe::new(45, TimeframeUnit::Second),
                 Timeframe::new(5, TimeframeUnit::Minute),
                 Timeframe::new(1, TimeframeUnit::Hour),
             ] {
