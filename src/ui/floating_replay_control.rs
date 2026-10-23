@@ -133,6 +133,8 @@ pub struct FloatingReplayControl {
     visible: bool,
     /// User explicitly dismissed the control (prevents auto-show until replay restarts)
     user_dismissed: bool,
+    /// Replay is on its last bar, where Next and Go to end do nothing
+    at_end: bool,
 }
 
 impl Default for FloatingReplayControl {
@@ -150,6 +152,7 @@ impl FloatingReplayControl {
             dock_rect: None,
             visible: false,
             user_dismissed: false,
+            at_end: false,
         }
     }
 
@@ -191,6 +194,7 @@ impl FloatingReplayControl {
 
     /// Update the state
     pub fn update_state(&mut self, state: ReplayControlState) {
+        self.at_end = state.progress_pct >= 100.0;
         self.state = state;
         // Auto-show when replay is active
         if self.state.is_playing || self.state.ticks_processed > 0 {
@@ -217,13 +221,13 @@ impl FloatingReplayControl {
         self.state.is_playing = playing;
         self.state.speed = speed;
 
-        if total_bars > 0 {
-            self.state.progress_pct = (current_bar as f32 / total_bars as f32) * 100.0;
-        } else {
-            self.state.progress_pct = 0.0;
-        }
+        // `current_bar` is zero-based, so the last bar is 100%.
+        self.state.progress_pct =
+            current_bar as f32 / total_bars.saturating_sub(1).max(1) as f32 * 100.0;
 
         self.state.ticks_processed = current_bar as u64;
+        // A one-bar replay is at its start and its end.
+        self.at_end = current_bar + 1 >= total_bars;
 
         if active {
             if !self.user_dismissed {
@@ -357,8 +361,11 @@ impl FloatingReplayControl {
 
                     ui.separator();
 
+                    let at_start = self.state.progress_pct <= 0.0;
+                    let at_end = self.at_end;
                     if IconButton::new(&icons::MEDIA_SKIP_BACK)
                         .tooltip("Go to start (Home)")
+                        .enabled(!at_start)
                         .show(ui)
                         .clicked()
                     {
@@ -367,6 +374,7 @@ impl FloatingReplayControl {
 
                     if IconButton::new(&icons::UI_ARROW_BACK)
                         .tooltip("Previous bar (Left arrow)")
+                        .enabled(!at_start)
                         .show(ui)
                         .clicked()
                     {
@@ -396,6 +404,7 @@ impl FloatingReplayControl {
 
                     if IconButton::new(&icons::UI_ARROW_FORWARD)
                         .tooltip("Next bar (Right arrow)")
+                        .enabled(!at_end)
                         .show(ui)
                         .clicked()
                     {
@@ -404,6 +413,7 @@ impl FloatingReplayControl {
 
                     if IconButton::new(&icons::MEDIA_SKIP_FORWARD)
                         .tooltip("Go to end (End)")
+                        .enabled(!at_end)
                         .show(ui)
                         .clicked()
                     {
@@ -535,6 +545,16 @@ mod tests {
         })
         .drop_without_applying_deltas();
         action
+    }
+
+    /// `current_bar` is zero-based: the first of 300 bars is 0% and the last 100%.
+    #[test]
+    fn progress_spans_first_to_last_bar() {
+        let mut bar = FloatingReplayControl::new();
+        for (current, expected) in [(0, 0.0), (299, 100.0)] {
+            bar.sync_from(true, false, 1.0, current, 300);
+            assert_eq!(bar.state.progress_pct, expected, "bar {current} of 300");
+        }
     }
 
     /// The key a shortcut reads goes to the replay only when nothing else should take it.
