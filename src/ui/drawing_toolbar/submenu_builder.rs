@@ -142,6 +142,7 @@ impl<'a> SubmenuBuilder<'a> {
     }
 
     /// Draw the item added last with `icon`.
+    #[must_use]
     pub(super) fn icon(mut self, icon: &'static Icon) -> Self {
         if let Some(item) = self.items.last_mut() {
             item.icon = Some(icon);

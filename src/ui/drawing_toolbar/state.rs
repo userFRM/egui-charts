@@ -135,6 +135,7 @@ impl ToolbarState {
     /// Select a drawing tool and add to recent
     pub fn select_tool(&mut self, tool: DrawingToolType) {
         self.sel_tool = Some(tool);
+        self.eraser_mode_enabled = false;
         self.zoom_mode_active = false;
         self.add_to_recent(tool);
 

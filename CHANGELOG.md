@@ -125,7 +125,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- `DrawingToolbarDomainState` snapshots and restores magnet strength, cursor type and eraser state alongside the active drawing tool. The demo synchronises from the chart before every toolbar frame, clearing finished tools and reflecting externally changed modes. Migration: snapshot literals supply `magnet_type`, `current_cursor_type` and `eraser_mode_enabled`; hosts call `sync_from_domain_state` before showing the toolbar. ([#519](https://github.com/userFRM/egui-charts/issues/519))
+- `DrawingToolbarDomainState` snapshots and restores magnet strength, cursor type and eraser state alongside the active drawing tool. The demo synchronises from the chart before every toolbar frame, clearing finished tools and reflecting externally changed modes without retaining a conflicting zoom highlight. Cursor, eraser and drawing picks leave the previous mode immediately. Migration: snapshot literals supply `magnet_type`, `current_cursor_type` and `eraser_mode_enabled`; hosts call `sync_from_domain_state` before showing the toolbar. ([#519](https://github.com/userFRM/egui-charts/issues/519))
 
 - The magnet flyout gives Off, Weak, Strong and OHLC modes action icons alongside their existing current-mode checks. ([#290](https://github.com/userFRM/egui-charts/issues/290))
 
