@@ -296,10 +296,10 @@ impl WidgetBar {
         let theme = ui.active_theme();
         let icon_color = theme.ui.text;
         let icon_hover_color = theme.ui.text;
-        let active_color = theme.ui.accent;
+        let active_color = theme.ui.selection_text;
         let hover_bg = theme.ui.btn_bg_hover;
         let pressed_bg = theme.ui.btn_bg_active;
-        let error_color = theme.ui.error;
+        let badge_color = theme.ui.danger_bg;
         let btn_rect = Rect::from_center_size(
             Pos2::new(center_x, y + self.config.btn_size / 2.0),
             Vec2::splat(self.config.btn_size),
@@ -325,17 +325,23 @@ impl WidgetBar {
 
         // Button background on inner rect only - with visibility check
         if ui.is_rect_visible(hover_rect) {
-            if is_active {
-                painter.rect_filled(hover_rect, self.config.hover_rounding, hover_bg);
-            } else if is_pressed {
+            if is_pressed {
                 painter.rect_filled(hover_rect, self.config.hover_rounding, pressed_bg);
+            } else if is_active {
+                painter.rect_filled(
+                    hover_rect,
+                    self.config.hover_rounding,
+                    theme.ui.selection_bg,
+                );
             } else if is_hovered {
                 painter.rect_filled(hover_rect, self.config.hover_rounding, hover_bg);
             }
         }
 
         // Icon color based on state
-        let curr_icon_color = if is_active {
+        let curr_icon_color = if is_pressed {
+            icon_hover_color
+        } else if is_active {
             active_color
         } else if is_pressed || is_hovered {
             icon_hover_color
@@ -358,7 +364,7 @@ impl WidgetBar {
             let badge_rect = Rect::from_center_size(badge_pos, Vec2::splat(badge_radius * 2.0));
 
             if ui.is_rect_visible(badge_rect) {
-                painter.circle_filled(badge_pos, badge_radius, error_color);
+                painter.circle_filled(badge_pos, badge_radius, badge_color);
 
                 let cnt_text = if count > 9 {
                     "9+".to_string()
@@ -402,7 +408,7 @@ mod tests {
     /// entry selected. Clicks stay with the pressed id, and an active entry toggles closed.
     #[test]
     fn host_widgets_share_the_grid_and_report_their_own_clicks() {
-        for theme in [Theme::light(), Theme::dark()] {
+        for theme in [Theme::light(), Theme::dark(), Theme::high_contrast()] {
             for height in [900.0, 450.0] {
                 let ctx = Context::default();
                 egui_extras::install_image_loaders(&ctx);
@@ -470,6 +476,30 @@ mod tests {
                 }
                 assert_eq!(icons[0].center().y, origin.y + 26.0);
                 assert_eq!(icons[1].center().y - icons[0].center().y, 46.0);
+                bar.active_icon = Some(RightBarIcon::Alerts);
+                bar.set_notification_cnt(RightBarIcon::Alerts, 3);
+                let pos = icons[1].center();
+                for (events, fill) in [
+                    (vec![], theme.ui.selection_bg),
+                    (vec![Event::PointerMoved(pos)], theme.ui.selection_bg),
+                    (vec![button(pos, true)], theme.ui.btn_bg_active),
+                ] {
+                    let (_, shapes, _) = frame(&mut bar, events);
+                    assert!(
+                        shapes
+                            .iter()
+                            .any(|s| matches!(&s.shape, Shape::Rect(r) if r.fill == fill)),
+                        "active/pressed rail fill"
+                    );
+                    assert!(
+                        shapes.iter().any(
+                            |s| matches!(&s.shape, Shape::Circle(c) if c.fill == theme.ui.danger_bg)
+                        ),
+                        "badge colour pair"
+                    );
+                }
+                frame(&mut bar, vec![button(pos, false)]);
+                bar.active_icon = None;
                 for (index, action, active_icon, active_widget) in [
                     (0, WidgetBarAction::WidgetClicked(42), None, Some(42)),
                     (
