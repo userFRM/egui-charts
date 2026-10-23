@@ -34,20 +34,24 @@ impl MagnetButton {
             .add_text_item_with_action("Off", "Turn magnetic snapping off", || {
                 Some(DrawingToolbarAction::ToggleMagnet)
             })
+            .icon(&icons::CLOSE)
             .checked(!magnet_on)
             .add_text_item_with_action("Weak magnet", "Snap only near chart values", || {
                 Some(DrawingToolbarAction::SetMagnetType(MagnetType::Weak))
             })
+            .icon(&icons::MAGNET)
             .checked(is_current(MagnetType::Weak))
             .add_text_item_with_action(
                 "Strong magnet",
                 "Snap to the nearest bar OHLC value",
                 || Some(DrawingToolbarAction::SetMagnetType(MagnetType::Strong)),
             )
+            .icon(&icons::DRAWING_MAGNET)
             .checked(is_current(MagnetType::Strong))
             .add_text_item_with_action("OHLC magnet", "Snap precisely to OHLC price values", || {
                 Some(DrawingToolbarAction::SetMagnetType(MagnetType::OHLC))
             })
+            .icon(&icons::CHART_BARS)
             .checked(is_current(MagnetType::OHLC))
             .show()
     }

@@ -125,6 +125,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The magnet flyout gives Off, Weak, Strong and OHLC modes action icons alongside their existing current-mode checks. ([#290](https://github.com/userFRM/egui-charts/issues/290))
+
 - The floating selection toolbar uses shared icon buttons with accessible action names and the kit’s hover, pressed and focus states. Its frame follows popup fill, border and shadow, and group separators use the full theme stroke. ([#468](https://github.com/userFRM/egui-charts/issues/468), [#587](https://github.com/userFRM/egui-charts/issues/587))
 
 - The demo alerts panel shares the panel header and New alert icon button, with a centred empty state and Create alert action. Demo notices use the shared opaque, padded toast component; screenshot completion keeps its saved-path feedback. ([#304](https://github.com/userFRM/egui-charts/issues/304))
