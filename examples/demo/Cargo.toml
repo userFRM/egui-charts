@@ -18,17 +18,16 @@ egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
 egui_extras = { version = "0.37.0", features = ["svg"] }
 chrono = "0.4.43"
 log = "0.4.29"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
-# Native gets the windowing backends winit needs, the system clipboard and PNG encoding
-# for the screenshot button. WASM uses the canvas backend and a browser download, so it
-# needs none of them.
+# Native gets the windowing backends and the system clipboard.
+# WASM uses the canvas backend and browser downloads.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "wgpu", "x11", "wayland"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.108"
 wasm-bindgen-futures = "0.4.58"
-web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
+web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "Url"] }
 console_error_panic_hook = "0.1.7"
 getrandom = { version = "0.2", features = ["js"] }
