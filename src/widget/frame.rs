@@ -786,7 +786,10 @@ impl Chart {
             );
         }
 
-        // Draw crosshair with options from chart_options
+        // Draw crosshair with options from chart_options. The pointer still hovers the chart
+        // while a context menu is open, so the crosshair, its labels and the tooltip wait until
+        // the menu closes.
+        let menu_open = std::mem::take(&mut self.menu_open);
         let mut crosshair_tags = [None; 2];
         if let Some(hover_pos) = response.hover_pos()
             && price_rect.contains(hover_pos)
@@ -794,37 +797,39 @@ impl Chart {
             // Cache the hover bar index for multi-chart sync
             self.last_hover_bar_idx = Some(coords.x_to_idx_f32(hover_pos.x) as f64);
 
-            crosshair_tags = rendering::render_crosshair_with_options(
-                &price_ctx,
-                hover_pos,
-                visible_data,
-                &price_map,
-                &coords,
-                &self.chart_options.crosshair,
-                chart_rect.max.y,
-                rect.max.x,
-                last_price_tag,
-                formatter.as_ref(),
-            );
-
-            // Draw the OHLC/value readout for the bar under the cursor, matching
-            // the bar the crosshair snaps to. Resolve via the shared coordinate
-            // mapping so the readout and the crosshair never disagree, and skip
-            // it when the cursor is in the empty scroll margin past the data.
-            let tooltip_options = &self.chart_options.tooltip;
-            if tooltip_options.enabled
-                && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
-            {
-                let candle = &visible_data[local_idx];
-                rendering::render_tooltip_with_options(
+            if !menu_open {
+                crosshair_tags = rendering::render_crosshair_with_options(
                     &price_ctx,
                     hover_pos,
-                    candle,
-                    tooltip_options,
+                    visible_data,
                     &price_map,
                     &coords,
-                    visible_data,
+                    &self.chart_options.crosshair,
+                    chart_rect.max.y,
+                    rect.max.x,
+                    last_price_tag,
+                    formatter.as_ref(),
                 );
+
+                // Draw the OHLC/value readout for the bar under the cursor, matching
+                // the bar the crosshair snaps to. Resolve via the shared coordinate
+                // mapping so the readout and the crosshair never disagree, and skip
+                // it when the cursor is in the empty scroll margin past the data.
+                let tooltip_options = &self.chart_options.tooltip;
+                if tooltip_options.enabled
+                    && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
+                {
+                    let candle = &visible_data[local_idx];
+                    rendering::render_tooltip_with_options(
+                        &price_ctx,
+                        hover_pos,
+                        candle,
+                        tooltip_options,
+                        &price_map,
+                        &coords,
+                        visible_data,
+                    );
+                }
             }
         } else {
             // Clear hover bar index when not hovering locally
@@ -832,7 +837,7 @@ impl Chart {
 
             // Render synced crosshair from other charts (if available)
             {
-                if let Some(bar_idx) = self.synced_crosshair_bar_idx {
+                if !menu_open && let Some(bar_idx) = self.synced_crosshair_bar_idx {
                     // Convert bar index to screen x coordinate
                     let x = coords.idx_to_x(bar_idx.round() as usize);
                     if coords.is_x_visible(x) {

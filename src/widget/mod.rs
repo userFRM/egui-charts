@@ -287,6 +287,9 @@ pub struct Chart {
     /// path in `TradingChart`). Holds no UI types so the core widget builds
     /// without the `ui` feature.
     pub(crate) right_click: Option<RightClickTarget>,
+    /// Set by the context menus while one is open, so the next frame draws no crosshair or
+    /// tooltip under it. Cleared by every frame.
+    pub(crate) menu_open: bool,
 }
 
 /// The object a right-click landed on, with the data needed to position and

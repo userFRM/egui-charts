@@ -5,9 +5,14 @@
 
 use std::sync::Arc;
 
+use crate::chart::selection::{ChartElementId, SeriesId};
 use crate::config::KeyboardAction;
 use crate::icons::{Icon, icons as embedded_icons};
-use crate::theme::Theme;
+use crate::theme::{Theme, ThemeExt};
+use crate::ui::dialogs::{
+    DrawingContextMenu, DrawingContextMenuAction, SeriesContextMenu, SeriesContextMenuAction,
+};
+use crate::widget::{Chart, RightClickTarget};
 
 use crate::tokens::DESIGN_TOKENS;
 use egui::text::{LayoutJob, TextWrapping};
@@ -645,8 +650,8 @@ impl ChartContextMenu {
 ///
 /// The chart opens one of three menus depending on what the right-click landed
 /// on (background, a series/indicator, or a drawing); each menu has its own
-/// action enum. [`TradingChart::take_context_action`](crate::TradingChart::take_context_action)
-/// returns this unified value so a host can match a single type.
+/// action enum. [`ChartMenus::show`] returns this unified value so a host can match a single
+/// type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChartContextAction {
     /// An action from the chart-background menu.
@@ -655,6 +660,86 @@ pub enum ChartContextAction {
     Series(crate::ui::dialogs::SeriesContextMenuAction),
     /// An action from the drawing menu.
     Drawing(crate::ui::dialogs::DrawingContextMenuAction),
+}
+
+/// The chart, series and drawing context menus of one [`Chart`].
+///
+/// Keep one next to the chart and call [`show`](Self::show) after each
+/// [`Chart::show`]: a right-click on the chart opens the menu for what it landed on, and the
+/// item the user picks comes back as a [`ChartContextAction`]. The menus follow the theme
+/// applied with [`apply_to_egui`](crate::theme::apply_to_egui).
+#[derive(Default)]
+pub struct ChartMenus {
+    chart: ChartContextMenu,
+    series: SeriesContextMenu,
+    drawing: DrawingContextMenu,
+}
+
+impl ChartMenus {
+    /// Opens the menu for the chart's last right-click, shows the open one and returns the
+    /// chosen action. While a menu is open the chart draws no crosshair or tooltip under it.
+    pub fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ChartContextAction> {
+        if let Some(target) = chart.take_right_click() {
+            // A new right-click supersedes any menu still open.
+            self.chart.close();
+            self.series.close();
+            self.drawing.close();
+            match target {
+                RightClickTarget::Element { id, pos, price, .. } => {
+                    // The series menu fronts both the price series and indicator lines: it is
+                    // the object-level menu (settings, hide, etc.).
+                    let label = match id {
+                        ChartElementId::Series(_) => chart.symbol.clone(),
+                        ChartElementId::Indicator(id) => chart
+                            .indicators()
+                            .find(|(study, _)| *study == id)
+                            .map(|(_, study)| study.name().to_string())
+                            .unwrap_or_else(|| chart.symbol.clone()),
+                    };
+                    let series_id = match id {
+                        ChartElementId::Series(sid) => sid,
+                        _ => SeriesId::MAIN,
+                    };
+                    self.series.set_context(label, price);
+                    self.series.open(pos, series_id);
+                }
+                RightClickTarget::Drawing { drawing_id, pos } => {
+                    let drawings = &chart.drawings().drawings;
+                    if let Some(drawing) = drawings.iter().find(|d| d.id == drawing_id) {
+                        let type_name = drawing.tool_type.as_str();
+                        self.drawing
+                            .set_context(type_name, drawing.locked, drawing.visible);
+                    }
+                    self.drawing.open(pos, drawing_id);
+                }
+                RightClickTarget::Background { pos, price } => {
+                    self.chart.set_indicator_cnt(chart.indicators().count());
+                    self.chart.set_symbol(chart.symbol.clone());
+                    self.chart.open(pos, price);
+                }
+            }
+        }
+
+        let theme = ctx.active_theme();
+        self.chart.show(ctx, &theme);
+        self.series.show(ctx, &theme);
+        self.drawing.show(ctx, &theme);
+        chart.menu_open = self.chart.is_open() || self.series.is_open() || self.drawing.is_open();
+
+        // At most one menu is open at a time, so at most one action resolves.
+        let chart_action = self.chart.take_action();
+        let series_action = self.series.take_action();
+        let drawing_action = self.drawing.take_action();
+        if chart_action != ContextMenuAction::None {
+            Some(ChartContextAction::Chart(chart_action))
+        } else if series_action != SeriesContextMenuAction::None {
+            Some(ChartContextAction::Series(series_action))
+        } else if drawing_action != DrawingContextMenuAction::None {
+            Some(ChartContextAction::Drawing(drawing_action))
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]

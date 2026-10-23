@@ -232,8 +232,6 @@ impl ChartBuilder {
     ///
     /// The theme is applied to the [`ChartConfig`] during [`build`](Self::build),
     /// controlling colors for background, candles, grid, axes, and overlays.
-    /// The chart's context menus use it only until a theme is applied with
-    /// [`apply_to_egui`](crate::theme::apply_to_egui); from then on they follow that theme.
     #[must_use]
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
@@ -519,9 +517,9 @@ impl ChartBuilder {
             historical_fetch_threshold: 150, // Prefetch when within 150 bars (anticipatory loading)
             has_more_historical_data: true,  // Assume more data available initially
             #[cfg(feature = "ui")]
-            theme: self.theme,
+            menus: crate::ui::context_menu::ChartMenus::default(),
             #[cfg(feature = "ui")]
-            context_menus: ContextMenus::default(),
+            context_action: None,
         }
     }
 }
@@ -575,28 +573,13 @@ pub struct TradingChart {
     historical_fetch_threshold: usize,
     /// Progressive loading: whether more historical data is available
     has_more_historical_data: bool,
-    /// Theme for the built-in right-click context menus until one is applied with
-    /// [`apply_to_egui`](crate::theme::apply_to_egui), which then takes precedence.
+    /// The built-in right-click context menus, shown by [`show`](Self::show).
     #[cfg(feature = "ui")]
-    theme: Theme,
-    /// Turnkey right-click context-menu state. Populated and shown by
-    /// [`show`](Self::show); the resolved action is drained with
+    menus: crate::ui::context_menu::ChartMenus,
+    /// Action chosen in a context menu, drained by
     /// [`take_context_action`](Self::take_context_action).
     #[cfg(feature = "ui")]
-    context_menus: ContextMenus,
-}
-
-/// Owns the three right-click menus and the action they resolve to, so the
-/// turnkey path in [`TradingChart::show`] can open, render, and surface them in
-/// one place. Gated behind the `ui` feature because the menus are.
-#[cfg(feature = "ui")]
-#[derive(Default)]
-struct ContextMenus {
-    chart: crate::ui::context_menu::ChartContextMenu,
-    series: crate::ui::dialogs::SeriesContextMenu,
-    drawing: crate::ui::dialogs::DrawingContextMenu,
-    /// Action resolved in the last frame, drained by `take_context_action`.
-    pending_action: Option<crate::ui::context_menu::ChartContextAction>,
+    context_action: Option<crate::ui::context_menu::ChartContextAction>,
 }
 
 impl TradingChart {
@@ -740,132 +723,11 @@ impl TradingChart {
     /// drawing tools, crosshair, axes, and the legend. Call [`update`](Self::update)
     /// before this method each frame.
     pub fn show(&mut self, ui: &mut egui::Ui) {
-        // The pointer still hovers the chart while a context menu is open, so hide the
-        // crosshair, its labels and the tooltip until the menu closes.
-        #[cfg(feature = "ui")]
-        let hidden = (self.context_menus.chart.is_open()
-            || self.context_menus.series.is_open()
-            || self.context_menus.drawing.is_open())
-        .then(|| {
-            let options = &mut self.chart.chart_options;
-            let saved = (options.crosshair.style, options.tooltip.enabled);
-            options.crosshair.style = crate::config::CrosshairStyle::Arrow;
-            options.tooltip.enabled = false;
-            saved
-        });
         self.chart.show(ui);
         #[cfg(feature = "ui")]
-        if let Some((style, enabled)) = hidden {
-            self.chart.chart_options.crosshair.style = style;
-            self.chart.chart_options.tooltip.enabled = enabled;
+        if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
+            self.context_action = Some(action);
         }
-
-        #[cfg(feature = "ui")]
-        self.handle_context_menus(ui.ctx());
-    }
-
-    /// Opens, renders, and resolves the built-in right-click context menus.
-    ///
-    /// A fresh right-click (drained from the chart) opens whichever menu matches
-    /// the hit object; previously-open menus are then rendered and, when an item
-    /// is chosen, the action is stored for [`take_context_action`](Self::take_context_action).
-    #[cfg(feature = "ui")]
-    fn handle_context_menus(&mut self, ctx: &egui::Context) {
-        use crate::widget::RightClickTarget;
-
-        if let Some(target) = self.chart.take_right_click() {
-            // A new right-click supersedes any menu still open.
-            self.context_menus.chart.close();
-            self.context_menus.series.close();
-            self.context_menus.drawing.close();
-
-            match target {
-                RightClickTarget::Element { id, pos, price, .. } => {
-                    self.open_element_menu(id, pos, price);
-                }
-                RightClickTarget::Drawing { drawing_id, pos } => {
-                    self.open_drawing_menu(drawing_id, pos);
-                }
-                RightClickTarget::Background { pos, price } => {
-                    self.context_menus
-                        .chart
-                        .set_indicator_cnt(self.chart.indicators().count());
-                    self.context_menus.chart.set_symbol(self.symbol.clone());
-                    self.context_menus.chart.open(pos, price);
-                }
-            }
-        }
-
-        let active = crate::theme::applied_theme(ctx);
-        let theme = active.as_ref().unwrap_or(&self.theme);
-        self.context_menus.chart.show(ctx, theme);
-        self.context_menus.series.show(ctx, theme);
-        self.context_menus.drawing.show(ctx, theme);
-
-        // At most one menu is open at a time, so at most one action resolves.
-        use crate::ui::context_menu::ChartContextAction;
-        use crate::ui::context_menu::ContextMenuAction;
-        use crate::ui::dialogs::{DrawingContextMenuAction, SeriesContextMenuAction};
-
-        let chart_action = self.context_menus.chart.take_action();
-        if chart_action != ContextMenuAction::None {
-            self.context_menus.pending_action = Some(ChartContextAction::Chart(chart_action));
-        }
-        let series_action = self.context_menus.series.take_action();
-        if series_action != SeriesContextMenuAction::None {
-            self.context_menus.pending_action = Some(ChartContextAction::Series(series_action));
-        }
-        let drawing_action = self.context_menus.drawing.take_action();
-        if drawing_action != DrawingContextMenuAction::None {
-            self.context_menus.pending_action = Some(ChartContextAction::Drawing(drawing_action));
-        }
-    }
-
-    /// Configures and opens the series/indicator context menu for a hit element.
-    #[cfg(feature = "ui")]
-    fn open_element_menu(
-        &mut self,
-        id: crate::chart::selection::ChartElementId,
-        pos: egui::Pos2,
-        price: f64,
-    ) {
-        use crate::chart::selection::ChartElementId;
-
-        // The series menu fronts both the price series and indicator lines: it
-        // is the object-level menu (settings, hide, etc.).
-        let label = match id {
-            ChartElementId::Series(_) => self.symbol.clone(),
-            ChartElementId::Indicator(id) => self
-                .chart
-                .indicators()
-                .find(|(study, _)| *study == id)
-                .map(|(_, study)| study.name().to_string())
-                .unwrap_or_else(|| self.symbol.clone()),
-        };
-        let series_id = match id {
-            ChartElementId::Series(sid) => sid,
-            _ => crate::chart::selection::SeriesId::MAIN,
-        };
-        self.context_menus.series.set_context(label, price);
-        self.context_menus.series.open(pos, series_id);
-    }
-
-    /// Configures and opens the drawing context menu for a hit drawing.
-    #[cfg(feature = "ui")]
-    fn open_drawing_menu(&mut self, drawing_id: usize, pos: egui::Pos2) {
-        if let Some(drawing) = self
-            .chart
-            .drawings()
-            .drawings
-            .iter()
-            .find(|d| d.id == drawing_id)
-        {
-            let type_name = drawing.tool_type.as_str().to_string();
-            self.context_menus
-                .drawing
-                .set_context(type_name, drawing.locked, drawing.visible);
-        }
-        self.context_menus.drawing.open(pos, drawing_id);
     }
 
     /// Drains the action chosen from a built-in right-click context menu, if any.
@@ -875,7 +737,7 @@ impl TradingChart {
     /// or drawing). Available only with the `ui` feature.
     #[cfg(feature = "ui")]
     pub fn take_context_action(&mut self) -> Option<crate::ui::context_menu::ChartContextAction> {
-        self.context_menus.pending_action.take()
+        self.context_action.take()
     }
 
     /// Returns a mutable reference to the underlying chart's visual configuration.

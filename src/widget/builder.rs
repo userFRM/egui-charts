@@ -131,6 +131,7 @@ impl Chart {
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,
+            menu_open: false,
         }
     }
 
