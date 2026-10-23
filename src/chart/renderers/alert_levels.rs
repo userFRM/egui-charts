@@ -112,13 +112,14 @@ pub fn render_alert_levels<'a>(
                     };
                     let text = format!("{name}  {}", format(value));
                     let font = FontId::proportional(12.0);
-                    let galley = painter.layout_no_wrap(text, font, color);
+                    let text_color = ui.visuals().text_color();
+                    let galley = painter.layout_no_wrap(text, font, text_color);
                     let label = Rect::from_min_size(
                         pos2(mapping.rect.left() + 8.0, y - galley.size().y - 4.0),
                         galley.size() + vec2(8.0, 2.0),
                     );
                     painter.rect_filled(label, 2.0, ui.visuals().panel_fill);
-                    painter.galley(label.min + vec2(4.0, 1.0), galley, color);
+                    painter.galley(label.min + vec2(4.0, 1.0), galley, text_color);
                 }
             }
         }
