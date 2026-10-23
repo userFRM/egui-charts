@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Price Volume Trend (Enhanced) with Signal Line
 /// PVT = prev_PVT + volume * (close - prev_close) / prev_close
@@ -25,28 +26,13 @@ impl PriceVolumeTrendStudy {
             visible: true,
         }
     }
-}
 
-impl Default for PriceVolumeTrendStudy {
-    fn default() -> Self {
-        Self::new(9)
-    }
-}
-
-impl Indicator for PriceVolumeTrendStudy {
-    fn name(&self) -> &str {
-        "PVT Enhanced"
-    }
-
-    fn desc(&self) -> &str {
-        "Price Volume Trend Enhanced - PVT with EMA signal line"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close and volume.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
 
         // Calculate PVT series
@@ -75,11 +61,37 @@ impl Indicator for PriceVolumeTrendStudy {
 
         // Output both lines
         for i in 0..data.len() {
-            self.values.push(IndicatorValue::Multiple(vec![
+            values.push(IndicatorValue::Multiple(vec![
                 pvt_values[i],
                 signal_values[i],
             ]));
         }
+
+        values
+    }
+}
+
+impl Default for PriceVolumeTrendStudy {
+    fn default() -> Self {
+        Self::new(9)
+    }
+}
+
+impl Indicator for PriceVolumeTrendStudy {
+    fn name(&self) -> &str {
+        "PVT Enhanced"
+    }
+
+    fn desc(&self) -> &str {
+        "Price Volume Trend Enhanced - PVT with EMA signal line"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.close.is_finite() && b.volume.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

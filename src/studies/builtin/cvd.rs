@@ -4,6 +4,7 @@
 //! volume. Bars do not say which trades were buys, so the delta is estimated
 //! from the bar's shape; see [`CVDMode`].
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use egui::Color32;
@@ -93,6 +94,22 @@ impl CVD {
             }
         }
     }
+
+    /// The values over `data`, every bar of which has a finite high, low, close and volume, and open outside
+    /// `ClosePosition` mode, which does not read it.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        let mut cumulative_delta = 0.0;
+        for bar in data {
+            let delta = self.estimate_delta(bar);
+            cumulative_delta += delta;
+
+            values.push(IndicatorValue::Single(cumulative_delta));
+        }
+
+        values
+    }
 }
 
 impl Default for CVD {
@@ -111,15 +128,17 @@ impl Indicator for CVD {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        let mut cumulative_delta = 0.0;
-        for bar in data {
-            let delta = self.estimate_delta(bar);
-            cumulative_delta += delta;
-
-            self.values.push(IndicatorValue::Single(cumulative_delta));
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                (self.mode == CVDMode::ClosePosition || b.open.is_finite())
+                    && b.high.is_finite()
+                    && b.low.is_finite()
+                    && b.close.is_finite()
+                    && b.volume.is_finite()
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -212,6 +231,27 @@ mod tests {
         {
             assert!(v2 < v1, "Second bar should decrease cumulative delta");
         }
+    }
+
+    #[test]
+    fn test_cvd_close_position_ignores_open() {
+        // The delta of a bar is volume * (2 * close_pos - 1) with close_pos = (close - low) / range:
+        // 1000 * 2/3, then 1000 * -2/3, then 1500 * 13/15 = 1300.
+        let mut bars = create_test_bars();
+        bars[1].open = f64::NAN;
+        let mut cvd = CVD::new();
+        cvd.calculate(&bars);
+        for (got, want) in cvd.values.iter().zip([2000.0 / 3.0, 0.0, 1300.0]) {
+            let IndicatorValue::Single(got) = got else {
+                panic!("expected a value, got {got:?}");
+            };
+            assert!((got - want).abs() < 1e-9, "{got} != {want}");
+        }
+
+        // BodyRatio reads the open, so that bar has no value.
+        let mut body = CVD::new().with_mode(CVDMode::BodyRatio);
+        body.calculate(&bars);
+        assert!(matches!(body.values[1], IndicatorValue::None));
     }
 
     #[test]

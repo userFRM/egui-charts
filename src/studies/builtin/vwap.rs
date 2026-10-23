@@ -184,6 +184,14 @@ impl Indicator for VolumeWeightedAvgPrice {
         let (mut volume, mut tp_volume, mut tp2_volume) = (0.0, 0.0, 0.0);
 
         for bar in data {
+            // A bar with a non-finite price or volume has no value and adds nothing.
+            if ![bar.high, bar.low, bar.close, bar.volume]
+                .iter()
+                .all(|x| x.is_finite())
+            {
+                self.values.push(IndicatorValue::None);
+                continue;
+            }
             let current = Some(
                 self.anchor
                     .period(trading_day(bar.time, zone, &self.windows)),

@@ -56,7 +56,13 @@ impl Indicator for AnchoredVWAP {
         let mut cum_vol = 0.0_f64;
 
         for i in 0..data.len() {
-            if i < self.anchor_bar {
+            // A bar with a non-finite price or volume has no value and adds nothing, so the
+            // anchor stays at the same bar index.
+            let b = &data[i];
+            let usable = [b.high, b.low, b.close, b.volume]
+                .iter()
+                .all(|x| x.is_finite());
+            if i < self.anchor_bar || !usable {
                 self.values.push(IndicatorValue::None);
                 continue;
             }

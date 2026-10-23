@@ -22,6 +22,7 @@
 //! ad.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -50,28 +51,13 @@ impl AccumulationDistribution {
         self.color = color;
         self
     }
-}
 
-impl Default for AccumulationDistribution {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Indicator for AccumulationDistribution {
-    fn name(&self) -> &str {
-        "A/D"
-    }
-
-    fn desc(&self) -> &str {
-        "Accumulation/Distribution Line - Measures buying/selling pressure"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite high, low, close and volume.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
 
         let mut ad = 0.0;
@@ -92,8 +78,39 @@ impl Indicator for AccumulationDistribution {
             }
             // If high == low (doji), no change to A/D
 
-            self.values.push(IndicatorValue::Single(ad));
+            values.push(IndicatorValue::Single(ad));
         }
+
+        values
+    }
+}
+
+impl Default for AccumulationDistribution {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Indicator for AccumulationDistribution {
+    fn name(&self) -> &str {
+        "A/D"
+    }
+
+    fn desc(&self) -> &str {
+        "Accumulation/Distribution Line - Measures buying/selling pressure"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.high.is_finite()
+                    && b.low.is_finite()
+                    && b.close.is_finite()
+                    && b.volume.is_finite()
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,4 +1,5 @@
 use super::clamp_param;
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Accumulation Swing Index (ASI)
 /// Developed by Welles Wilder
@@ -62,6 +63,29 @@ impl AccumulationSwingIndex {
 
         50.0 * ((c - cy) + 0.5 * (c - o) + 0.25 * (cy - oy)) / r * (k / limit)
     }
+
+    /// The values over `data`, every bar of which has a finite open, high, low and close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.len() < 2 {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        let mut cumulative = 0.0;
+        values.push(IndicatorValue::Single(0.0)); // First bar
+
+        for i in 1..data.len() {
+            let si = Self::calculate_swing_idx(&data[i], &data[i - 1], self.limit_move);
+            cumulative += si;
+            values.push(IndicatorValue::Single(cumulative));
+        }
+
+        values
+    }
 }
 
 impl Default for AccumulationSwingIndex {
@@ -80,23 +104,13 @@ impl Indicator for AccumulationSwingIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < 2 {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        let mut cumulative = 0.0;
-        self.values.push(IndicatorValue::Single(0.0)); // First bar
-
-        for i in 1..data.len() {
-            let si = Self::calculate_swing_idx(&data[i], &data[i - 1], self.limit_move);
-            cumulative += si;
-            self.values.push(IndicatorValue::Single(cumulative));
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.open.is_finite() && b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

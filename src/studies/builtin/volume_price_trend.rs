@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Volume Price Trend (VPT)
 /// Cumulative volume indicator that considers price changes
@@ -26,6 +27,30 @@ impl VolumePriceTrend {
         self.color = color;
         self
     }
+
+    /// The values over `data`, every bar of which has a finite close and volume.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        // First bar starts at 0
+        let mut cumulative = 0.0;
+        values.push(IndicatorValue::Single(cumulative));
+
+        for i in 1..data.len() {
+            let prev_close = data[i - 1].close;
+            if prev_close != 0.0 {
+                let pct_change = (data[i].close - prev_close) / prev_close;
+                cumulative += data[i].volume * pct_change;
+            }
+            values.push(IndicatorValue::Single(cumulative));
+        }
+
+        values
+    }
 }
 
 impl Default for VolumePriceTrend {
@@ -44,24 +69,11 @@ impl Indicator for VolumePriceTrend {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-
-        // First bar starts at 0
-        let mut cumulative = 0.0;
-        self.values.push(IndicatorValue::Single(cumulative));
-
-        for i in 1..data.len() {
-            let prev_close = data[i - 1].close;
-            if prev_close != 0.0 {
-                let pct_change = (data[i].close - prev_close) / prev_close;
-                cumulative += data[i].volume * pct_change;
-            }
-            self.values.push(IndicatorValue::Single(cumulative));
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.close.is_finite() && b.volume.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
@@ -105,6 +117,14 @@ const SIGNAL_LEN: f64 = 255.0;
 /// The index from 1000, moved by the close's percentage change on the bars where `counts(volume,
 /// previous volume)` holds, and its EMA signal line seeded with the first index value.
 fn volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> Vec<IndicatorValue> {
+    over_finite_bars(
+        data,
+        |b| b.close.is_finite() && b.volume.is_finite(),
+        |data| compute_volume_index(data, counts),
+    )
+}
+
+fn compute_volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> Vec<IndicatorValue> {
     let Some(first) = data.first() else {
         return Vec::new();
     };

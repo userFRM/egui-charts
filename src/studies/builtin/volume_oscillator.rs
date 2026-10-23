@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Volume Oscillator
 /// Measures the difference between two volume moving avgs
@@ -57,6 +58,37 @@ impl VolumeOscillator {
 
         ema
     }
+
+    /// The values over `data`, every bar of which has a finite volume.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.len() < self.long_period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        // Extract volumes
+        let volumes: Vec<f64> = data.iter().map(|b| b.volume).collect();
+
+        // Calculate short and long EMAs
+        let short_ema = Self::calculate_ema(&volumes, self.short_period);
+        let long_ema = Self::calculate_ema(&volumes, self.long_period);
+
+        // Calculate oscillator as percentage
+        for i in 0..data.len() {
+            if short_ema[i].is_nan() || long_ema[i].is_nan() || long_ema[i] == 0.0 {
+                values.push(IndicatorValue::None);
+            } else {
+                let osc = (short_ema[i] - long_ema[i]) / long_ema[i] * 100.0;
+                values.push(IndicatorValue::Single(osc));
+            }
+        }
+
+        values
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -76,31 +108,7 @@ impl Indicator for VolumeOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.long_period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // Extract volumes
-        let volumes: Vec<f64> = data.iter().map(|b| b.volume).collect();
-
-        // Calculate short and long EMAs
-        let short_ema = Self::calculate_ema(&volumes, self.short_period);
-        let long_ema = Self::calculate_ema(&volumes, self.long_period);
-
-        // Calculate oscillator as percentage
-        for i in 0..data.len() {
-            if short_ema[i].is_nan() || long_ema[i].is_nan() || long_ema[i] == 0.0 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let osc = (short_ema[i] - long_ema[i]) / long_ema[i] * 100.0;
-                self.values.push(IndicatorValue::Single(osc));
-            }
-        }
+        self.values = over_finite_bars(data, |b| b.volume.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -658,22 +658,7 @@ mod tests {
         // One non-finite bar must not blank the rest of the series: wherever the series without
         // it has a finite last value, the series with it has one too, whether the bar has NaN
         // prices, an infinite high, a NaN volume or a NaN open. 600 bars keep every window at
-        // the last bar clear of bar 100. Each study listed still carries the bar to the end,
-        // under the issue that tracks its fix; the list may only shrink.
-        const CARRY_NON_FINITE: &[(&str, u32)] = &[
-            ("VWAP", 647),
-            ("AVWAP", 647),
-            ("A/D", 647),
-            ("CVD", 647),
-            ("VPT", 647),
-            ("PVT Enhanced", 647),
-            ("PVI", 647),
-            ("WAD", 647),
-            ("ASI", 647),
-            ("Volume Osc", 647),
-            ("Vol Profile VR", 647),
-            ("Vol Profile FR", 647),
-        ];
+        // the last bar clear of bar 100.
         let long: Vec<Bar> = (0..600).map(bar).collect();
         let mut without = long.clone();
         without.remove(100);
@@ -700,24 +685,10 @@ mod tests {
                     .enumerate()
                     .any(|(k, c)| *c && !hostile.get(k).copied().unwrap_or(false))
             });
-            let listed = CARRY_NON_FINITE
-                .iter()
-                .find(|(name, _)| *name == study.name());
-            match (carries, listed) {
-                (true, None) => failures.push(format!(
+            if carries {
+                failures.push(format!(
                     "{} carries one non-finite bar to the end of the series",
                     study.name()
-                )),
-                (false, Some((name, issue))) => failures.push(format!(
-                    "{name} no longer carries a non-finite bar; remove it from CARRY_NON_FINITE (#{issue})"
-                )),
-                _ => {}
-            }
-        }
-        for (name, issue) in CARRY_NON_FINITE {
-            if !registered.iter().any(|r| r == name) {
-                failures.push(format!(
-                    "{name} in CARRY_NON_FINITE is not a study (#{issue})"
                 ));
             }
         }

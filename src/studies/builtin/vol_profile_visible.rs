@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Volume Profile Visible Range
 /// Distributes volume across price bins within the visible range
@@ -23,6 +24,56 @@ impl VolProfileVisible {
             visible: true,
         }
     }
+
+    /// The values over `data`, every bar of which has a finite high, low, close and volume.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.is_empty() {
+            return values;
+        }
+        if self.row_count > super::MAX_PROFILE_ROWS {
+            values.resize(data.len(), IndicatorValue::None);
+            return values;
+        }
+
+        // Find price range across all bars
+        let mut price_min = f64::MAX;
+        let mut price_max = f64::MIN;
+        for bar in data {
+            if bar.low < price_min {
+                price_min = bar.low;
+            }
+            if bar.high > price_max {
+                price_max = bar.high;
+            }
+        }
+
+        let range = price_max - price_min;
+        if range <= 0.0 {
+            for _ in data {
+                values.push(IndicatorValue::Multiple(vec![0.0; self.row_count]));
+            }
+            return values;
+        }
+
+        let bin_size = range / self.row_count as f64;
+
+        // Accumulate volume into bins incrementally
+        let mut cumulative_bins = vec![0.0_f64; self.row_count];
+
+        for bar in data {
+            // Assign bar volume to the bin closest to the bar's typical price
+            let typical = (bar.high + bar.low + bar.close) / 3.0;
+            let bin_idx = ((typical - price_min) / bin_size).floor() as usize;
+            let bin_idx = bin_idx.min(self.row_count - 1);
+            cumulative_bins[bin_idx] += bar.volume;
+
+            values.push(IndicatorValue::Multiple(cumulative_bins.clone()));
+        }
+
+        values
+    }
 }
 
 impl Default for VolProfileVisible {
@@ -41,52 +92,16 @@ impl Indicator for VolProfileVisible {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.is_empty() {
-            return;
-        }
-        if self.row_count > super::MAX_PROFILE_ROWS {
-            self.values.resize(data.len(), IndicatorValue::None);
-            return;
-        }
-
-        // Find price range across all bars
-        let mut price_min = f64::MAX;
-        let mut price_max = f64::MIN;
-        for bar in data {
-            if bar.low < price_min {
-                price_min = bar.low;
-            }
-            if bar.high > price_max {
-                price_max = bar.high;
-            }
-        }
-
-        let range = price_max - price_min;
-        if range <= 0.0 {
-            for _ in data {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![0.0; self.row_count]));
-            }
-            return;
-        }
-
-        let bin_size = range / self.row_count as f64;
-
-        // Accumulate volume into bins incrementally
-        let mut cumulative_bins = vec![0.0_f64; self.row_count];
-
-        for bar in data {
-            // Assign bar volume to the bin closest to the bar's typical price
-            let typical = (bar.high + bar.low + bar.close) / 3.0;
-            let bin_idx = ((typical - price_min) / bin_size).floor() as usize;
-            let bin_idx = bin_idx.min(self.row_count - 1);
-            cumulative_bins[bin_idx] += bar.volume;
-
-            self.values
-                .push(IndicatorValue::Multiple(cumulative_bins.clone()));
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.high.is_finite()
+                    && b.low.is_finite()
+                    && b.close.is_finite()
+                    && b.volume.is_finite()
+            },
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

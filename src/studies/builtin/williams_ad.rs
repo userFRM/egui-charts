@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Williams Accumulation/Distribution
 /// Developed by Larry Williams
@@ -26,35 +27,20 @@ impl WilliamsAD {
         self.color = color;
         self
     }
-}
 
-impl Default for WilliamsAD {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Indicator for WilliamsAD {
-    fn name(&self) -> &str {
-        "WAD"
-    }
-
-    fn desc(&self) -> &str {
-        "Williams Accumulation/Distribution - Buying/selling pressure"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite high, low and close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.len() < 2 {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         let mut cumulative = 0.0;
-        self.values.push(IndicatorValue::Single(0.0)); // First bar
+        values.push(IndicatorValue::Single(0.0)); // First bar
 
         for i in 1..data.len() {
             let current = &data[i];
@@ -73,8 +59,34 @@ impl Indicator for WilliamsAD {
             };
 
             cumulative += ad;
-            self.values.push(IndicatorValue::Single(cumulative));
+            values.push(IndicatorValue::Single(cumulative));
         }
+
+        values
+    }
+}
+
+impl Default for WilliamsAD {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Indicator for WilliamsAD {
+    fn name(&self) -> &str {
+        "WAD"
+    }
+
+    fn desc(&self) -> &str {
+        "Williams Accumulation/Distribution - Buying/selling pressure"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

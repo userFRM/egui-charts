@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Volume Profile Fixed Range
 /// Distributes volume across price bins using fixed price boundaries
@@ -23,32 +24,17 @@ impl VolProfileFixed {
             visible: true,
         }
     }
-}
 
-impl Default for VolProfileFixed {
-    fn default() -> Self {
-        Self::new(24)
-    }
-}
-
-impl Indicator for VolProfileFixed {
-    fn name(&self) -> &str {
-        "Vol Profile FR"
-    }
-
-    fn desc(&self) -> &str {
-        "Volume Profile Fixed Range - Volume distribution with fixed price boundaries"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite high, low and volume.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
         if self.row_count > super::MAX_PROFILE_ROWS {
-            self.values.resize(data.len(), IndicatorValue::None);
-            return;
+            values.resize(data.len(), IndicatorValue::None);
+            return values;
         }
 
         // Use the full dataset price range as fixed boundaries
@@ -66,10 +52,9 @@ impl Indicator for VolProfileFixed {
         let range = price_max - price_min;
         if range <= 0.0 {
             for _ in data {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![0.0; self.row_count]));
+                values.push(IndicatorValue::Multiple(vec![0.0; self.row_count]));
             }
-            return;
+            return values;
         }
 
         let bin_size = range / self.row_count as f64;
@@ -92,9 +77,34 @@ impl Indicator for VolProfileFixed {
                 cumulative_bins[bin] += vol_per_bin;
             }
 
-            self.values
-                .push(IndicatorValue::Multiple(cumulative_bins.clone()));
+            values.push(IndicatorValue::Multiple(cumulative_bins.clone()));
         }
+
+        values
+    }
+}
+
+impl Default for VolProfileFixed {
+    fn default() -> Self {
+        Self::new(24)
+    }
+}
+
+impl Indicator for VolProfileFixed {
+    fn name(&self) -> &str {
+        "Vol Profile FR"
+    }
+
+    fn desc(&self) -> &str {
+        "Volume Profile Fixed Range - Volume distribution with fixed price boundaries"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.volume.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
