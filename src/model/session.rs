@@ -975,6 +975,48 @@ mod tests {
             weekly.trading_date("2024-03-25T08:00:00Z".parse().unwrap()),
             NaiveDate::from_ymd_opt(2024, 2, 26).unwrap()
         );
+        let regular = ExchangeSessionProvider::new(
+            TimezoneId::named("America/New_York").unwrap(),
+            Some(Session::new([SessionWindow::new(
+                weekdays,
+                clock(9, 30),
+                clock(16, 0),
+            )])),
+        );
+        for (open, timeframe, expected) in [
+            (
+                "2024-03-08T00:00:00Z",
+                Timeframe::Day1,
+                Some("2024-03-08T21:00:00Z"),
+            ),
+            (
+                "2024-03-11T00:00:00Z",
+                Timeframe::Day1,
+                Some("2024-03-11T20:00:00Z"),
+            ),
+            (
+                "2024-03-11T00:00:00Z",
+                Timeframe::Week1,
+                Some("2024-03-15T20:00:00Z"),
+            ),
+            (
+                "2024-03-01T00:00:00Z",
+                Timeframe::Month1,
+                Some("2024-03-29T20:00:00Z"),
+            ),
+            (
+                "2024-03-11T19:59:00Z",
+                Timeframe::Min1,
+                Some("2024-03-11T20:00:00Z"),
+            ),
+            ("2024-03-11T20:00:00Z", Timeframe::Min1, None),
+            ("2024-03-10T00:00:00Z", Timeframe::Day1, None),
+        ] {
+            assert_eq!(
+                regular.bar_session_close(open.parse().unwrap(), timeframe, false),
+                expected.map(|time| time.parse().unwrap())
+            );
+        }
         for zone in ["America/New_York", "Europe/Zurich"] {
             let provider = ExchangeSessionProvider::new(TimezoneId::named(zone).unwrap(), None);
             for time in [DateTime::<Utc>::MIN_UTC, DateTime::<Utc>::MAX_UTC] {

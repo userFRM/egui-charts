@@ -55,3 +55,75 @@ pub fn bar_countdown(
         clock
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn countdown_uses_calendar_boundaries_and_exact_closes() {
+        for (open, timeframe, now, close, expected) in [
+            (
+                "2024-02-01T00:00:00Z",
+                Timeframe::Month1,
+                "2024-02-29T23:59:59Z",
+                None,
+                Some("00:01"),
+            ),
+            (
+                "2024-02-29T23:55:00Z",
+                "7min".parse().unwrap(),
+                "2024-02-29T23:59:00Z",
+                None,
+                Some("01:00"),
+            ),
+            (
+                "2024-03-01T00:00:00Z",
+                Timeframe::Min1,
+                "2024-03-01T00:00:59.999999999Z",
+                None,
+                Some("00:01"),
+            ),
+            (
+                "2024-03-01T00:00:00Z",
+                Timeframe::Min1,
+                "2024-03-01T00:01:00Z",
+                None,
+                None,
+            ),
+            (
+                "2024-03-01T00:00:00Z",
+                Timeframe::Min1,
+                "2024-02-29T23:59:59Z",
+                None,
+                None,
+            ),
+            (
+                "2024-03-11T00:00:00Z",
+                Timeframe::Day1,
+                "2024-03-11T19:59:00Z",
+                Some("2024-03-11T20:00:00Z"),
+                Some("01:00"),
+            ),
+            (
+                "2024-03-11T00:00:00Z",
+                Timeframe::Week1,
+                "2024-03-14T19:00:00Z",
+                Some("2024-03-15T20:00:00Z"),
+                Some("1d 01:00:00"),
+            ),
+        ] {
+            assert_eq!(
+                bar_countdown(
+                    open.parse().unwrap(),
+                    timeframe,
+                    now.parse().unwrap(),
+                    close.map(|value| value.parse().unwrap())
+                )
+                .as_deref(),
+                expected,
+                "{timeframe}: {now}"
+            );
+        }
+    }
+}

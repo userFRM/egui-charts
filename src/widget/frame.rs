@@ -282,93 +282,7 @@ impl Chart {
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         self.show_elements();
-        let map = self.last_price_map;
-        let decimals = self
-            .instrument()
-            .and_then(crate::scales::instrument_price_precision)
-            .map_or(2, usize::from);
-        let format_price = |price| {
-            map.transform()
-                .label(map.transform().to_scale(price), decimals)
-        };
-        let mut axis_labels = Vec::new();
-        if let Some(last) = self.state.data().bars.last() {
-            if self.config.show_symbol_last_val {
-                axis_labels.push(format_price(last.close));
-            }
-            if let Some(countdown) = self.current_bar_countdown() {
-                axis_labels.push(countdown);
-            }
-            if self.config.show_volume {
-                axis_labels.push(crate::scales::PriceFormatter::format(
-                    &crate::scales::VolumeFormatter {
-                        precision: self
-                            .instrument()
-                            .and_then(|instrument| instrument.volume_decimals)
-                            .map_or(2, usize::from),
-                    },
-                    last.volume,
-                ));
-            }
-            if self.config.show_high_low {
-                let visible = self.state.visible_data();
-                let high = visible
-                    .iter()
-                    .map(|bar| bar.high)
-                    .fold(f64::NEG_INFINITY, f64::max);
-                let low = visible
-                    .iter()
-                    .map(|bar| bar.low)
-                    .fold(f64::INFINITY, f64::min);
-                axis_labels.extend([
-                    format!("High {}", format_price(high)),
-                    format!("Low {}", format_price(low)),
-                ]);
-            }
-        }
-        if let Some(quote) = &self.session_quote {
-            axis_labels.push(format!("{} {}", quote.qualifier, format_price(quote.price)));
-        }
-        if self.config.show_bid_ask
-            && let Some(quote) = &self.quote
-        {
-            axis_labels.extend([
-                format!("Bid {}", format_price(quote.bid)),
-                format!("Ask {}", format_price(quote.ask)),
-            ]);
-        }
-        for study in self
-            .studies
-            .indicators()
-            .iter()
-            .filter(|study| self.config.show_indicator_last_val && study.is_visible())
-        {
-            let values = study.values();
-            let values = match values.last() {
-                Some(crate::studies::IndicatorValue::Single(value)) => std::slice::from_ref(value),
-                Some(crate::studies::IndicatorValue::Multiple(values)) => values,
-                _ => continue,
-            };
-            axis_labels.extend(
-                values
-                    .iter()
-                    .filter(|value| value.is_finite())
-                    .map(|value| {
-                        if study.is_overlay() {
-                            format_price(*value)
-                        } else {
-                            let precision = if matches!(study.name(), "RSI" | "Stochastic") {
-                                2
-                            } else {
-                                decimals
-                            };
-                            format!("{value:.precision$}")
-                        }
-                    }),
-            );
-        }
-        let refs: Vec<_> = axis_labels.iter().map(String::as_str).collect();
-        self.measured_axis_width = rendering::axes::price_axis_width(ui.painter(), &map, &refs);
+        let previous_axis_width = self.measured_axis_width;
         self.last_rendered_indicator_panes.clear();
         // Pane studies share the available height and the lowest time axis.
         let has_panes = self
@@ -376,11 +290,25 @@ impl Chart {
             .indicators()
             .iter()
             .any(|study| !study.is_overlay() && study.is_visible());
-        if has_panes && !self.chart_type.is_time_independent() {
+        let response = if has_panes && !self.chart_type.is_time_independent() {
             self.show_with_panes(ui, footprint)
         } else {
             self.show_internal(ui, None, footprint)
+        };
+        if (self.measured_axis_width - previous_axis_width).abs() > 0.5 {
+            let old_width = self.last_rendered_price_rect.width();
+            let new_width = self
+                .calculate_layout_rects(response.rect)
+                .price_rect
+                .width();
+            // Fitting the labels must not reveal a different set of bars.
+            if old_width > 0.0 && new_width > 0.0 {
+                let scale = self.state.time_scale_mut();
+                scale.set_bar_spacing(scale.bar_spacing() * new_width / old_width);
+            }
+            ui.ctx().request_discard("Chart measured its axis labels");
         }
+        response
     }
 
     /// Resolve the timeframe used to pick a session-break granularity.
@@ -1585,12 +1513,42 @@ impl Chart {
             self.event_click = Some(id);
         }
 
+        let current_price = self
+            .state
+            .data()
+            .bars
+            .last()
+            .filter(|_| self.config.show_symbol_last_val)
+            .map(|bar| {
+                price_map.transform().label(
+                    price_map.transform().to_scale(bar.close),
+                    price_map.price_precision().unwrap_or(2),
+                )
+            });
+        self.measured_axis_width = rendering::axes::price_axis_width(
+            &painter,
+            &price_map,
+            &current_price.as_deref().into_iter().collect::<Vec<_>>(),
+        );
+        for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
+            self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 8.0);
+        }
+
         if show_price_axis
             && let Some(currency) = self
                 .instrument()
                 .and_then(|instrument| instrument.currency.as_deref())
                 .filter(|code| !code.is_empty())
         {
+            let currency_width = painter
+                .layout_no_wrap(
+                    currency.to_owned(),
+                    rendering::axes::axis_font(ui.ctx()),
+                    colors.text,
+                )
+                .size()
+                .x
+                + 26.0;
             let axis = Rect::from_min_max(
                 Pos2::new(
                     if self.config.show_right_axis {
@@ -1604,6 +1562,7 @@ impl Chart {
             );
             let (button, choice) =
                 renderers::render_axis_currency(ui, axis, currency, &self.currency_choices);
+            self.measured_axis_width = self.measured_axis_width.max(currency_width);
             if choice.is_some() {
                 self.currency_choice = choice;
             }
@@ -1611,7 +1570,7 @@ impl Chart {
         }
 
         // Draw the axis labels, leaving out those the tags overlap
-        tags.extend([last_price_tag, crosshair_tags[0], crosshair_tags[1]]);
+        tags.extend(crosshair_tags);
         if self.config.show_right_axis {
             rendering::render_price_labels(&price_ctx, &price_map, &colors, &tags, price_labels);
         } else if self.config.show_left_axis {

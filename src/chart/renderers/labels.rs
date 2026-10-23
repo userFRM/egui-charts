@@ -428,21 +428,29 @@ mod tests {
     fn currency_button_reserves_ticks_and_opens_its_menu() {
         use crate::model::Instrument;
         for left in [false, true] {
-            for currency in [None, Some("USD")] {
+            for currency in [None, Some(""), Some("USD")] {
                 let ctx = Context::default();
-                let mut chart = chart(&[100.0], &[110.0]);
+                let mut chart = chart(&[1.0], &[2.0]);
+                chart.config_mut().show_volume = false;
+                chart.config_mut().right_axis_width = 0.0;
+                chart.config_mut().left_axis_width = 0.0;
                 chart.config_mut().show_right_axis = !left;
                 chart.config_mut().show_left_axis = left;
-                chart.set_instrument(
-                    currency.map(|code| Instrument::new("SAMPLE").with_currency(code)),
-                );
+                chart.set_instrument(currency.map(|code| {
+                    Instrument::new("SAMPLE")
+                        .with_currency(code)
+                        .with_price_decimals(0)
+                }));
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
                 let header = painted.iter().find_map(|shape| match shape {
                     Shape::Text(text) if text.galley.text() == "USD" => Some(text),
                     _ => None,
                 });
-                assert_eq!(header.is_some(), currency.is_some());
+                assert_eq!(
+                    header.is_some(),
+                    currency.is_some_and(|code| !code.is_empty())
+                );
                 if let Some(header) = header {
                     assert_eq!(
                         header.galley.job.sections[0].format.font_id,
@@ -469,7 +477,11 @@ mod tests {
                         if left {
                             plot.left()
                         } else {
-                            plot.right() + chart.config().right_axis_width
+                            plot.right()
+                                + chart
+                                    .config()
+                                    .right_axis_width
+                                    .max(chart.measured_axis_width)
                         }
                     );
                     for shape in &painted {
@@ -521,6 +533,7 @@ mod tests {
             let ctx = Context::default();
             let mut chart = chart(&[price], &[price]);
             chart.config_mut().show_volume = false;
+            chart.config_mut().show_indicator_last_val = false;
             #[cfg(feature = "studies")]
             chart.add_indicator(Box::new(crate::studies::MACD::default()));
             let mut instrument = Instrument::new("SAMPLE").with_tick_size(tick);
@@ -544,6 +557,30 @@ mod tests {
                 text.contains(&format!("C {expected}").as_str()),
                 "legend {expected}: {text:?}"
             );
+            #[cfg(feature = "studies")]
+            if decimals == 0 {
+                for pane in chart.get_rendered_indicator_panes() {
+                    let labels: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Text(text)
+                                if text.pos.x > pane.chart_rect.right()
+                                    && text.pos.y > pane.panel_rect.top()
+                                    && text.galley.text().parse::<f64>().is_ok() =>
+                            {
+                                Some(text.galley.text())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let unique: std::collections::HashSet<_> = labels.iter().collect();
+                    assert_eq!(
+                        unique.len(),
+                        labels.len(),
+                        "pane ticks must not repeat rounded values: {labels:?}"
+                    );
+                }
+            }
             let plot = chart.get_rendered_price_rect();
             for shape in &painted {
                 if let Shape::Text(text) = shape
@@ -643,49 +680,79 @@ mod tests {
     #[cfg(feature = "studies")]
     #[test]
     fn measured_axis_keeps_wide_tags_inside_shared_plot_insets() {
-        use crate::model::Instrument;
-        let ctx = Context::default();
-        let mut chart = chart(&[100.0], &[110.0]);
-        chart.set_instrument(Some(Instrument::new("SAMPLE").with_price_decimals(8)));
-        chart.set_session_quote(Some(crate::model::quote::SessionQuote::new(
-            105.0, "REGULAR",
-        )));
-        chart.add_indicator(Box::new(crate::studies::RSI::default()));
-        let mut widget = Rect::NOTHING;
-        let output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                ..Default::default()
-            },
-            |ui| {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    widget = chart.show(ui).rect;
-                });
-            },
-        );
-        output.drop_without_applying_deltas();
-        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
-        let plot = chart.get_rendered_price_rect();
-        assert!((plot.left() - widget.left()).abs() <= 8.0);
-        for pane in chart.get_rendered_indicator_panes() {
-            assert_eq!(pane.chart_rect.x_range(), plot.x_range());
-        }
-        let widest = painted
-            .iter()
-            .filter_map(|shape| match shape {
-                Shape::Rect(rect)
-                    if rect.rect.left() > plot.right()
-                        && rect.rect.height() < 40.0
-                        && rect.fill.a() > 0 =>
-                {
-                    Some(rect.rect)
+        use crate::model::{Instrument, PriceLine};
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [320.0, 800.0] {
+                for pane_widest in [false, true] {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut chart = chart(&[100.0], &[110.0]);
+                    chart.set_instrument(Some(Instrument::new("SAMPLE").with_price_decimals(8)));
+                    chart.config_mut().show_volume = false;
+                    chart.config_mut().show_symbol_last_val = false;
+                    chart.config_mut().show_indicator_last_val = false;
+                    if pane_widest {
+                        chart.add_indicator(Box::new(CustomIndicator::new("Wide pane", |bars| {
+                            vec![IndicatorValue::Single(12345678.0); bars.len()]
+                        })));
+                    } else {
+                        chart.set_price_lines(
+                            crate::widget::SeriesId::MAIN,
+                            vec![PriceLine::new(105.0, egui::Color32::BLUE)],
+                        );
+                        chart.add_indicator(Box::new(crate::studies::RSI::default()));
+                    }
+                    let mut widget = Rect::NOTHING;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
+                                widget = chart.show(ui).rect;
+                            });
+                        },
+                    );
+                    let plot = chart.get_rendered_price_rect();
+                    assert!((plot.left() - widget.left()).abs() <= 8.0);
+                    assert!(plot.width() > 0.0);
+                    for pane in chart.get_rendered_indicator_panes() {
+                        assert_eq!(pane.chart_rect.x_range(), plot.x_range());
+                    }
+                    for shape in &output.shapes {
+                        if let Shape::Text(text) = &shape.shape
+                            && text.pos.x > plot.right()
+                            && text.galley.text().parse::<f64>().is_ok()
+                        {
+                            assert!(
+                                text.pos.x + text.galley.size().x <= widget.right() - 8.0,
+                                "axis text must fit on its first frame"
+                            );
+                        }
+                    }
+                    if !pane_widest {
+                        let tag = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                Shape::Rect(rect) if rect.fill == egui::Color32::BLUE => {
+                                    Some(rect.rect)
+                                }
+                                _ => None,
+                            })
+                            .expect("custom price tag");
+                        assert!((tag.left() - plot.right() - 5.0).abs() < 0.1);
+                        assert!((widget.right() - tag.right() - 8.0).abs() < 0.1);
+                    }
+                    output.drop_without_applying_deltas();
                 }
-                _ => None,
-            })
-            .max_by(|a, b| a.width().total_cmp(&b.width()))
-            .expect("axis tag");
-        assert!((widest.left() - plot.right() - 5.0).abs() < 0.1);
-        assert!((widget.right() - widest.right() - 8.0).abs() < 0.1);
+            }
+        }
     }
 
     /// A narrow legend wraps whole fields before the plot's axis inset.

@@ -160,6 +160,7 @@ impl Chart {
                     None
                 },
             ) {
+                self.measured_axis_width = self.measured_axis_width.max(panel.measured_axis_width);
                 let PaneInteraction {
                     panel_rect,
                     chart_rect,
