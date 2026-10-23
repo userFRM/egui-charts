@@ -497,63 +497,8 @@ impl DemoApp {
     // --- selection / context helpers --------------------------------------
 
     fn open_chart_settings_dialog(&mut self) {
-        let config = self.chart.config();
-        let settings = &mut self.settings_state;
-        settings.timezone = self.timeframe_toolbar.state.timezone.clone();
-        settings.candle_colors.body_up = config.bullish_color;
-        settings.candle_colors.body_down = config.bearish_color;
-        settings.candle_colors.border_up =
-            config.bullish_border_color.unwrap_or(config.bullish_color);
-        settings.candle_colors.border_down =
-            config.bearish_border_color.unwrap_or(config.bearish_color);
-        settings.candle_colors.wick_up = config
-            .bullish_wick_color
-            .unwrap_or(settings.candle_colors.border_up);
-        settings.candle_colors.wick_down = config
-            .bearish_wick_color
-            .unwrap_or(settings.candle_colors.border_down);
-        settings.chart_basic_styles.background_color = config.background_color;
-        settings.grid_lines.horizontal_color = config.grid_color;
-        settings.grid_lines.vertical_color = config.grid_color;
-        settings.status_line.show_symbol = config.show_symbol_labels;
-        settings.status_line.title_as_description = config.title_as_description;
-        settings.status_line.show_quote_boxes = config.show_quote_boxes;
-        settings.status_line.show_ohlc = config.show_ohlc_info;
-        settings.status_line.show_change = config.show_ohlc_change;
-        settings.status_line.show_change_percent = config.show_ohlc_change_percent;
-        settings.status_line.show_volume = config.show_legend_volume;
-        settings.status_line.show_indicator_titles = config.show_indicator_labels;
-        settings.status_line.show_indicator_inputs = config.show_indicator_inputs;
-        settings.status_line.show_indicator_values = config.show_indicator_last_val;
-        settings.scales_and_lines.price_scale_left =
-            !config.show_right_axis && config.show_left_axis;
-        settings.scales_and_lines.show_last_price_label = config.show_symbol_last_val;
-        settings.scales_and_lines.show_price_line = config.show_price_line;
-        settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
-        settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
-        settings.scales_and_lines.show_countdown = config.show_countdown;
-        settings.scales_and_lines.show_bid_ask = config.show_bid_ask;
-        settings.scales_and_lines.show_high_low = config.show_high_low;
-        settings.margins.top_percent =
-            (self.chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
-        settings.margins.bottom_percent = (self
-            .chart
-            .state()
-            .price_scale()
-            .options()
-            .scale_margins
-            .bottom
-            * 100.0) as f32;
-        settings.margins.right_bars =
-            self.chart.chart_options().time_scale.right_offset.max(0.0) as u32;
-        let scale = self.chart.state().price_scale();
-        settings.scales_and_lines.auto_scale = !scale.is_manual();
-        settings.scales_and_lines.log_scale =
-            scale.options().mode == egui_charts::scales::PriceScaleMode::Logarithmic;
-        settings.scales_and_lines.percentage_scale =
-            scale.options().mode == egui_charts::scales::PriceScaleMode::Percentage;
-        settings.scales_and_lines.invert_scale = scale.options().invert_scale;
-        self.settings_dialog.open(settings.clone());
+        self.settings_state = ChartSettingsState::from_chart(&self.chart);
+        self.settings_dialog.open(self.settings_state.clone());
     }
 
     fn open_series_settings_dialog(&mut self) {
@@ -671,22 +616,6 @@ impl DemoApp {
             SettingsAction::Apply(state) => {
                 self.settings_state = state.clone();
                 apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
-                let scale = self.chart.price_scale_mut();
-                let mode = if state.scales_and_lines.log_scale {
-                    egui_charts::scales::PriceScaleMode::Logarithmic
-                } else if state.scales_and_lines.percentage_scale {
-                    egui_charts::scales::PriceScaleMode::Percentage
-                } else {
-                    egui_charts::scales::PriceScaleMode::Normal
-                };
-                scale.options_mut().mode = mode;
-                scale.options_mut().invert_scale = state.scales_and_lines.invert_scale;
-                if state.scales_and_lines.auto_scale {
-                    scale.reset();
-                } else {
-                    let range = scale.range();
-                    scale.set_range(range.min, range.max);
-                }
             }
             SettingsAction::Cancel => {}
             _ => {}
@@ -1963,63 +1892,8 @@ fn apply_settings_state(
     chart: &mut Chart,
     toolbar: &mut TimeframeToolbar,
 ) {
-    use egui_charts::config::NavigationButtons;
-    use egui_charts::ui::top_toolbar::components::settings_menu::types::{
-        ButtonVisibility, GridLinesMode,
-    };
-    apply_timezone(chart, toolbar, &state.timezone);
-    let config = chart.config_mut();
-
-    config.bullish_color = state.candle_colors.body_up;
-    config.bearish_color = state.candle_colors.body_down;
-    config.bullish_border_color = Some(state.candle_colors.border_up);
-    config.bearish_border_color = Some(state.candle_colors.border_down);
-    config.bullish_wick_color = Some(state.candle_colors.wick_up);
-    config.bearish_wick_color = Some(state.candle_colors.wick_down);
-
-    config.background_color = state.chart_basic_styles.background_color;
-    config.grid_color = state.grid_lines.horizontal_color;
-
-    let (h, v) = match state.grid_lines.mode {
-        GridLinesMode::None => (false, false),
-        GridLinesMode::Horizontal => (true, false),
-        GridLinesMode::Vertical => (false, true),
-        GridLinesMode::Both => (true, true),
-    };
-    config.show_horizontal_grid = h;
-    config.show_vertical_grid = v;
-    config.show_grid = h || v;
-
-    config.navigation_buttons = match state.btns.navigation {
-        ButtonVisibility::AlwaysVisible => NavigationButtons::Always,
-        ButtonVisibility::VisibleOnMouseOver => NavigationButtons::OnHover,
-        ButtonVisibility::Hidden => NavigationButtons::Never,
-    };
-    config.show_ohlc_info = state.status_line.show_ohlc;
-    config.show_symbol_labels = state.status_line.show_symbol;
-    config.title_as_description = state.status_line.title_as_description;
-    config.show_quote_boxes = state.status_line.show_quote_boxes;
-    config.show_ohlc_change = state.status_line.show_change;
-    config.show_ohlc_change_percent = state.status_line.show_change_percent;
-    config.show_legend_volume = state.status_line.show_volume;
-    config.show_indicator_labels = state.status_line.show_indicator_titles;
-    config.show_indicator_inputs = state.status_line.show_indicator_inputs;
-    config.show_indicator_last_val = state.status_line.show_indicator_values;
-    config.show_right_axis = !state.scales_and_lines.price_scale_left;
-    config.show_left_axis = state.scales_and_lines.price_scale_left;
-    config.show_symbol_last_val = state.scales_and_lines.show_last_price_label;
-    config.show_price_line = state.scales_and_lines.show_price_line;
-    config.show_symbol_prev_close = state.scales_and_lines.show_prev_close_label;
-    config.show_prev_close_line = state.scales_and_lines.show_prev_close;
-    config.show_countdown = state.scales_and_lines.show_countdown;
-    config.show_bid_ask = state.scales_and_lines.show_bid_ask;
-    config.show_high_low = state.scales_and_lines.show_high_low;
-    chart.price_scale_mut().options_mut().scale_margins = egui_charts::scales::PriceScaleMargins {
-        top: f64::from(state.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
-        bottom: f64::from(state.margins.bottom_percent.clamp(0.0, 100.0)) / 100.0,
-    };
-    if state.margins.right_bars != chart.chart_options().time_scale.right_offset.max(0.0) as u32 {
-        chart.set_right_margin(state.margins.right_bars as f32);
+    if state.apply_to_chart(chart).is_ok() {
+        toolbar.set_timezone(state.timezone.clone());
     }
 }
 
@@ -2029,6 +1903,79 @@ mod tests {
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
     /// External chart modes and completed drawings are reflected before the toolbar is painted.
+    #[test]
+    fn display_settings_apply_styles_and_read_back() {
+        use egui_charts::config::{BackgroundStyle, CrosshairLineStyle};
+        use egui_charts::ui::top_toolbar::components::settings_menu::{
+            BackgroundType, PrecisionMode, WatermarkMode,
+        };
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        let mut state = app.settings_state.clone();
+        state.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
+        state.chart_basic_styles.background_gradient_top = egui::Color32::RED;
+        state.chart_basic_styles.background_gradient_bottom = egui::Color32::BLUE;
+        state.crosshair.line_width = 3.0;
+        state.crosshair.line_style =
+            egui_charts::ui::top_toolbar::components::settings_menu::LineStyle::Solid;
+        state.crosshair.color = egui::Color32::GREEN;
+        state.precision = PrecisionMode::Decimals5;
+        state.watermark.mode = WatermarkMode::Symbol;
+        state.grid_lines.horizontal_color = egui::Color32::RED;
+        state.grid_lines.vertical_color = egui::Color32::BLUE;
+        state.margins.top_percent = 12.5;
+        state.margins.bottom_percent = 7.5;
+        apply_settings_state(&state, &mut app.chart, &mut app.timeframe_toolbar);
+        assert_eq!(
+            app.chart.config().background_style,
+            BackgroundStyle::VerticalGradient {
+                top_color: egui::Color32::RED,
+                bottom_color: egui::Color32::BLUE,
+            }
+        );
+        assert_eq!(
+            app.chart.chart_options().crosshair.line_style,
+            CrosshairLineStyle::Solid
+        );
+        assert_eq!(app.chart.chart_options().crosshair.horz_line_width, 3.0);
+        assert_eq!(
+            app.chart.chart_options().crosshair.vert_line_color,
+            egui::Color32::GREEN
+        );
+        assert!(app.chart.config().show_watermark);
+        let scale = app.chart.state().price_scale();
+        assert_eq!(
+            scale.map(Default::default(), 0.0, 1.0).price_precision(),
+            Some(5)
+        );
+        assert_eq!(scale.options().scale_margins.top, 0.125);
+        assert_eq!(scale.options().scale_margins.bottom, 0.075);
+        app.open_chart_settings_dialog();
+        assert_eq!(app.settings_state.grid_lines, state.grid_lines);
+        assert_eq!(app.settings_state.crosshair, state.crosshair);
+        assert_eq!(app.settings_state.precision, state.precision);
+        assert_eq!(app.settings_state.margins, state.margins);
+        assert_eq!(app.settings_state.watermark, state.watermark);
+        let before = app.settings_state.clone();
+        for (timezone, top, bottom, width) in [
+            ("Unknown", 10.0, 10.0, 1.0),
+            ("UTC", f32::NAN, 10.0, 1.0),
+            ("UTC", 60.0, 40.0, 1.0),
+            ("UTC", -1.0, 10.0, 1.0),
+            ("UTC", 10.0, 10.0, 0.0),
+        ] {
+            let mut invalid = state.clone();
+            invalid.timezone = timezone.into();
+            invalid.margins.top_percent = top;
+            invalid.margins.bottom_percent = bottom;
+            invalid.crosshair.line_width = width;
+            invalid.candle_colors.body_up = egui::Color32::YELLOW;
+            apply_settings_state(&invalid, &mut app.chart, &mut app.timeframe_toolbar);
+            app.open_chart_settings_dialog();
+            assert_eq!(app.settings_state, before);
+        }
+    }
+
     #[test]
     fn drawing_toolbar_follows_chart_modes_and_completed_tools() {
         use egui_charts::config::CrosshairStyle;

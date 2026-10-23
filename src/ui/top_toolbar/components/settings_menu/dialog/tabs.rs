@@ -21,7 +21,7 @@ use crate::tokens::DESIGN_TOKENS;
 impl SettingsDialog {
     pub(super) fn draw_canvas_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(30.0);
+            ui.add_space(0.0);
             ui.vertical(|ui| {
                 // LAYOUT STYLE
                 self.draw_section_header(ui, "LAYOUT STYLE", style);
@@ -191,7 +191,12 @@ impl SettingsDialog {
 
                     // Line width slider
                     let mut lw = dialog.settings.crosshair.line_width;
-                    ui.add(egui::Slider::new(&mut lw, 1.0..=4.0).show_value(false));
+                    ui.add(
+                        egui::DragValue::new(&mut lw)
+                            .range(1.0..=4.0)
+                            .speed(0.5)
+                            .suffix(" px"),
+                    );
                     dialog.settings.crosshair.line_width = lw;
                 });
 
@@ -208,7 +213,11 @@ impl SettingsDialog {
                         style.val_text,
                         dialog.settings.watermark.mode.name(),
                         |ui| {
-                            for wm in WatermarkMode::all() {
+                            for wm in &[
+                                WatermarkMode::ReplayMode,
+                                WatermarkMode::Symbol,
+                                WatermarkMode::SymbolAndDescription,
+                            ] {
                                 ui.selectable_value(
                                     &mut dialog.settings.watermark.mode,
                                     *wm,
@@ -241,18 +250,6 @@ impl SettingsDialog {
                             .inner
                     {
                         dialog.settings.scales_appearance.text_color = color;
-                    }
-                });
-
-                self.draw_setting_row_with_controls(ui, "Lines", style, |ui, dialog| {
-                    if let Some(color) = ColorPicker::new(
-                        &mut dialog.color_picker_states.scales_lines,
-                        "scales_lines",
-                    )
-                    .show(ui)
-                    .inner
-                    {
-                        dialog.settings.scales_appearance.lines_color = color;
                     }
                 });
 
@@ -333,7 +330,7 @@ impl SettingsDialog {
 
     pub(super) fn draw_symbol_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(30.0);
+            ui.add_space(0.0);
             ui.vertical(|ui| {
                 // CANDLE COLORS
                 self.draw_section_header(ui, "CANDLE COLORS", style);
@@ -439,7 +436,7 @@ impl SettingsDialog {
 
     pub(super) fn draw_status_line_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(30.0);
+            ui.add_space(0.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "INSTRUMENT", style);
                 ui.horizontal(|ui| {
@@ -532,7 +529,7 @@ impl SettingsDialog {
 
     pub(super) fn draw_scales_and_lines_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(30.0);
+            ui.add_space(0.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "PRICE SCALE", style);
                 self.draw_setting_row_with_controls(ui, "Placement", style, |ui, dialog| {
@@ -622,95 +619,16 @@ impl SettingsDialog {
         });
     }
 
-    pub(super) fn draw_trading_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
-        ui.horizontal(|ui| {
-            ui.add_space(30.0);
-            ui.vertical(|ui| {
-                self.draw_section_header(ui, "TRADING OPTIONS", style);
-
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.trading.show_poss,
-                    "Show positions",
-                    style.val_text,
-                );
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.trading.show_orders,
-                    "Show orders",
-                    style.val_text,
-                );
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.trading.show_executions,
-                    "Show executions",
-                    style.val_text,
-                );
-            });
-        });
+    pub(super) fn draw_trading_tab(&mut self, ui: &mut Ui, _style: &SettingsDialogStyle) {
+        ui.label("Trading overlays are supplied by the host application.");
     }
 
-    pub(super) fn draw_alerts_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
-        ui.horizontal(|ui| {
-            ui.add_space(30.0);
-            ui.vertical(|ui| {
-                self.draw_section_header(ui, "ALERT SETTINGS", style);
-
-                self.draw_setting_row_with_controls(ui, "Color", style, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.alert, "alert")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.alerts.alert_color = color;
-                    }
-                });
-
-                ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.section_spacing);
-                self.draw_section_header(ui, "VISIBILITY", style);
-
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.alerts.show_alerts,
-                    "Show alerts",
-                    style.val_text,
-                );
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.alerts.show_alert_labels,
-                    "Show alert labels",
-                    style.val_text,
-                );
-            });
-        });
+    pub(super) fn draw_alerts_tab(&mut self, ui: &mut Ui, _style: &SettingsDialogStyle) {
+        ui.label("Alert display is managed by the host application.");
     }
 
-    pub(super) fn draw_events_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
-        ui.horizontal(|ui| {
-            ui.add_space(30.0);
-            ui.vertical(|ui| {
-                self.draw_section_header(ui, "EVENT MARKERS", style);
-
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.events.show_dividends,
-                    "Dividends",
-                    style.val_text,
-                );
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.events.show_splits,
-                    "Splits",
-                    style.val_text,
-                );
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.events.show_earnings,
-                    "Earnings",
-                    style.val_text,
-                );
-            });
-        });
+    pub(super) fn draw_events_tab(&mut self, ui: &mut Ui, _style: &SettingsDialogStyle) {
+        ui.label("Event markers are supplied by the host application.");
     }
 
     pub(super) fn draw_section_header(
@@ -722,6 +640,7 @@ impl SettingsDialog {
         ui.label(
             RichText::new(title)
                 .size(11.0)
+                .strong()
                 .color(style.section_header_text),
         );
         ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.row_spacing);
@@ -736,14 +655,43 @@ impl SettingsDialog {
     ) where
         F: FnOnce(&mut Ui, &mut SettingsDialog),
     {
+        let label_width = [
+            "Panel layout",
+            "Background",
+            "Grid lines",
+            "Crosshair",
+            "Mode",
+            "Text",
+            "Lines",
+            "Top margin (%)",
+            "Bottom margin (%)",
+            "Right margin (bars)",
+            "Visibility",
+            "Timezone",
+            "Body",
+            "Border",
+            "Wick",
+        ]
+        .iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(
+                    (*label).into(),
+                    FontId::proportional(typography::LG),
+                    style.label_text,
+                )
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
         ui.horizontal(|ui| {
-            // Label column with fixed width
+            // All tabs share the longest label's width.
             ui.allocate_ui_with_layout(
-                egui::vec2(96.0, 42.0),
+                egui::vec2(label_width, 42.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    ui.set_min_width(96.0);
-                    ui.set_max_width(96.0);
+                    ui.set_min_width(label_width);
+                    ui.set_max_width(label_width);
                     ui.add(
                         egui::Label::new(
                             RichText::new(label)
@@ -757,7 +705,7 @@ impl SettingsDialog {
 
             // Controls column - starts at fixed offset
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
+                ui.spacing_mut().item_spacing.x = 8.0;
                 ui.spacing_mut().interact_size.y = 32.0;
                 add_content(ui, self);
             });

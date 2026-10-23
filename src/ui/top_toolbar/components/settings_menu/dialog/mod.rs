@@ -13,17 +13,18 @@ use super::{
     actions::SettingsAction, config::SettingsDialogConfig, data::ChartSettingsState,
     types::SettingsTab,
 };
-use crate::ext::UiExt;
-use crate::icons::{Icon, icons as embedded_icons};
-use crate::styles::{stroke, typography};
+use crate::icons::icons as embedded_icons;
+use crate::styles::typography;
 use crate::theme::Theme;
 use crate::theme::components::SettingsDialogStyle;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
 use crate::ui::model::{LayoutStyle, TemplateManager};
 use crate::ui_kit::ColorPickerState;
+use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::modal::Modal;
-use egui::{Color32, Context, FontId, Pos2, Rect, Response, RichText, Sense, Stroke, Ui, Vec2};
+use crate::ui_kit::sidebar_layout::{SidebarLayout, SidebarTab};
+use egui::{Color32, Context, Rect, Response, RichText, Ui, Vec2};
 use std::collections::HashSet;
 
 // ============================================================================
@@ -247,8 +248,6 @@ impl SettingsDialog {
         style.tab_bg_active = theme.ui.btn_bg_hover;
         style.tab_icon_active = theme.ui.text;
         style.label_text = theme.ui.text;
-        style.btn_primary_bg = theme.ui.text;
-        style.btn_primary_text = theme.ui.panel_bg;
         let height = if self.config.height > 0.0 {
             self.config.height
         } else {
@@ -264,13 +263,9 @@ impl SettingsDialog {
         } else {
             752.0
         };
-        Modal::new("chart_settings", "Settings")
+        Modal::new("chart_settings", "Chart settings")
             .width(width)
             .height(height)
-            .top(ctx.content_rect().top() + 24.0)
-            .rounding(8.0)
-            .fill(style.content_bg)
-            .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
                 ui.add_space(16.0);
                 action = self.draw_content(ui, &style);
@@ -309,33 +304,32 @@ impl SettingsDialog {
 
         let content_height = (ui.available_height() - 68.0).max(0.0);
 
-        // Main content area with fixed height
-        ui.allocate_ui_with_layout(
-            Vec2::new(ui.available_width(), content_height),
-            egui::Layout::left_to_right(egui::Align::TOP),
-            |ui| {
-                ui.spacing_mut().item_spacing = Vec2::ZERO;
-
-                // Left sidebar with tabs
-                self.draw_sidebar(ui, style, content_height);
-
-                // Right content area
-                ui.vertical(|ui| {
-                    ui.set_min_width((ui.available_width() - 8.0).max(0.0));
-                    ui.add_space(24.0);
-
-                    egui::ScrollArea::both()
-                        .auto_shrink([false, false])
-                        .max_height((content_height - 24.0).max(0.0))
+        let seam_top = ui.cursor().top();
+        let seam_x = ui.cursor().left()
+            + 184.0_f32.min(ui.available_width() * 0.4)
+            + ui.spacing().item_spacing.x;
+        let mut active = self.active_tab;
+        ui.allocate_ui(Vec2::new(ui.available_width(), content_height), |ui| {
+            SidebarLayout::new(184.0_f32.min(ui.available_width() * 0.4)).show(
+                ui,
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("settings_tabs")
                         .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            // Rows keep the dialog's own rhythm; controls within a row get the
-                            // standard gap instead of the zero used to butt sidebar and content.
-                            ui.spacing_mut().item_spacing = Vec2::new(
-                                DESIGN_TOKENS.spacing.lg,
-                                DESIGN_TOKENS.sizing.settings_dialog.row_spacing,
-                            );
-
+                            for tab in SettingsTab::all() {
+                                if SidebarTab::new(tab.name(), active == *tab).show(ui) {
+                                    active = *tab;
+                                }
+                            }
+                        });
+                },
+                |ui| {
+                    egui::ScrollArea::both()
+                        .id_salt("settings_content")
+                        .auto_shrink([false, false])
+                        .max_height(ui.available_height())
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
                             match self.active_tab {
                                 SettingsTab::Symbol => self.draw_symbol_tab(ui, style),
                                 SettingsTab::StatusLine => self.draw_status_line_tab(ui, style),
@@ -348,183 +342,53 @@ impl SettingsDialog {
                                 SettingsTab::Events => self.draw_events_tab(ui, style),
                             }
                         });
-                });
-            },
-        );
+                },
+            );
+        });
+        self.active_tab = active;
 
-        // Footer with btns
-        action = self.draw_footer(ui, action, style);
-
-        action
-    }
-
-    fn draw_sidebar(&mut self, ui: &mut Ui, style: &SettingsDialogStyle, height: f32) {
-        let sidebar_rect = ui.available_rect_before_wrap();
-        let sidebar_rect = Rect::from_min_size(sidebar_rect.min, Vec2::new(208.0, height));
-
-        // Sidebar background
-        ui.painter()
-            .rect_filled(sidebar_rect, DESIGN_TOKENS.rounding.none, style.sidebar_bg);
-
-        // Constrain the vertical layout to the sidebar width
-        ui.allocate_ui_with_layout(
-            Vec2::new(208.0, height),
-            egui::Layout::top_down(egui::Align::LEFT),
-            |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("settings_tabs")
-                    .max_height(height)
-                    .show(ui, |ui| {
-                        ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.tab_padding_v);
-                        for tab in SettingsTab::all() {
-                            let is_active = self.active_tab == *tab;
-                            if self.draw_tab_btn(ui, *tab, is_active, style).clicked() {
-                                self.active_tab = *tab;
-                            }
-                        }
-                    });
-            },
-        );
-
-        // Right border
         ui.painter().vline(
-            sidebar_rect.max.x,
-            sidebar_rect.min.y..=sidebar_rect.max.y,
-            Stroke::new(stroke::HAIRLINE, style.sidebar_border),
+            seam_x,
+            seam_top..=ui.cursor().top() + 8.0,
+            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
         );
-    }
-
-    fn draw_tab_btn(
-        &self,
-        ui: &mut Ui,
-        tab: SettingsTab,
-        is_active: bool,
-        style: &SettingsDialogStyle,
-    ) -> Response {
-        let desired_size = Vec2::new(
-            208.0 - DESIGN_TOKENS.sizing.settings_dialog.tab_padding_v,
-            DESIGN_TOKENS.sizing.settings_dialog.tab_height,
-        );
-        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
-
-        // Determine colors based on state (hover, active)
-        let bg_color = if is_active {
-            style.tab_bg_active
-        } else if response.hovered() {
-            style.tab_bg_hover
-        } else {
-            style.tab_bg
-        };
-
-        let text_color = if is_active {
-            style.tab_text_active
-        } else if response.hovered() {
-            style.tab_text_hover
-        } else {
-            style.tab_text
-        };
-
-        let icon_color = if is_active {
-            style.tab_icon_active
-        } else if response.hovered() {
-            style.tab_icon_hover
-        } else {
-            style.tab_icon
-        };
-
-        // Tab background with rounded corners
-        ui.painter()
-            .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg_color);
-
-        // Icon
-        let icon: &Icon = match tab {
-            SettingsTab::Symbol => &embedded_icons::SETTINGS_SYMBOL,
-            SettingsTab::StatusLine => &embedded_icons::SETTINGS_STATUS_LINE,
-            SettingsTab::ScalesAndLines => &embedded_icons::SETTINGS_SCALES_LINES,
-            SettingsTab::Canvas => &embedded_icons::SETTINGS_CANVAS,
-            SettingsTab::Trading => &embedded_icons::SETTINGS,
-            SettingsTab::Alerts => &embedded_icons::ALERTS,
-            SettingsTab::Events => &embedded_icons::SETTINGS_EVENTS,
-        };
-
-        // Pos icon centered vertically, with left padding
-        let icon_size = DESIGN_TOKENS.sizing.settings_dialog.tab_icon_size;
-        let icon_rect = Rect::from_min_size(
-            Pos2::new(
-                rect.min.x + DESIGN_TOKENS.sizing.settings_dialog.tab_padding_h,
-                rect.center().y - icon_size / 2.0,
-            ),
-            Vec2::splat(icon_size),
-        );
-
-        // Render icon with theme-aware tint color
-        icon.as_image_tinted(icon_rect.size(), icon_color)
-            .paint_at(ui, icon_rect);
-
-        // Tab name
-        let label_pos = Pos2::new(
-            rect.min.x
-                + DESIGN_TOKENS.sizing.settings_dialog.tab_padding_h
-                + DESIGN_TOKENS.sizing.settings_dialog.tab_icon_size
-                + DESIGN_TOKENS.sizing.settings_dialog.tab_icon_text_gap
-                - DESIGN_TOKENS.spacing.lg,
-            rect.center().y,
-        );
-        ui.painter().text(
-            label_pos,
-            egui::Align2::LEFT_CENTER,
-            tab.name(),
-            FontId::proportional(14.0),
-            text_color,
-        );
-
-        response
-    }
-
-    fn draw_footer(
-        &mut self,
-        ui: &mut Ui,
-        action: SettingsAction,
-        style: &SettingsDialogStyle,
-    ) -> SettingsAction {
-        ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.button_gap);
-        Self::draw_footer_separator(ui, style);
-        ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.footer_padding_v);
-
-        let result = ui
-            .horizontal(|ui| {
-                let action = if self.hidden.contains(&Control::Templates) {
-                    // Reset to defaults lives in the template menu; keep it without templates.
+        let error = self.settings.validate().err().or_else(|| {
+            (self.margin_top_str.parse::<f32>().is_err()
+                || self.margin_bottom_str.parse::<f32>().is_err()
+                || self.margin_right_str.parse::<u32>().is_err())
+            .then_some("Enter valid margins")
+        });
+        let (ok, cancel) = DialogFooter::new("Ok")
+            .secondary("Cancel")
+            .primary_enabled(error.is_none())
+            .show_with_left(ui, |ui| {
+                if let Some(error) = error {
+                    crate::ui_kit::status_message::status_message(
+                        ui,
+                        crate::ui_kit::status_message::MessageKind::Error,
+                        error,
+                    );
+                } else if self.hidden.contains(&Control::Templates) {
                     self.draw_reset_button(ui);
-                    action
                 } else {
-                    let template_btn = self.draw_template_button(ui, style);
-                    if template_btn.clicked() {
+                    let button = self.draw_template_button(ui, style);
+                    if button.clicked() {
                         self.template_menu_open = !self.template_menu_open;
                     }
                     if self.template_menu_open {
-                        self.draw_template_menu(ui, style, &template_btn, action)
-                    } else {
-                        action
+                        action = self.draw_template_menu(ui, style, &button, action.clone());
                     }
-                };
-
-                self.draw_footer_action_buttons(ui, style, action)
-            })
-            .inner;
-
-        ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.footer_padding_v);
-        result
-    }
-
-    fn draw_footer_separator(ui: &mut Ui, style: &SettingsDialogStyle) {
-        let rect = ui.available_rect_before_wrap();
-        ui.painter().hline(
-            rect.min.x..=rect.max.x,
-            rect.min.y,
-            Stroke::new(stroke::HAIRLINE, style.footer_border),
-        );
+                }
+            });
+        if ok {
+            self.settings.sync_legacy_fields();
+            action = SettingsAction::Apply(self.settings.clone());
+            self.is_open = false;
+        } else if cancel {
+            action = SettingsAction::Cancel;
+            self.is_open = false;
+        }
+        action
     }
 
     fn draw_template_button(&self, ui: &mut Ui, style: &SettingsDialogStyle) -> Response {
@@ -712,65 +576,12 @@ impl SettingsDialog {
             self.template_menu_open = false;
         }
     }
-
-    fn draw_footer_action_buttons(
-        &mut self,
-        ui: &mut Ui,
-        style: &SettingsDialogStyle,
-        mut action: SettingsAction,
-    ) -> SettingsAction {
-        ui.right_aligned(|ui| {
-            if self.draw_ok_button(ui, style) {
-                self.settings.sync_legacy_fields();
-                action = SettingsAction::Apply(self.settings.clone());
-                self.is_open = false;
-            }
-
-            ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.button_gap);
-
-            if self.draw_cancel_button(ui, style) {
-                action = SettingsAction::Cancel;
-                self.is_open = false;
-            }
-        });
-        action
-    }
-
-    fn draw_ok_button(&self, ui: &mut Ui, style: &SettingsDialogStyle) -> bool {
-        ui.add(
-            egui::Button::new(
-                RichText::new("Ok")
-                    .size(typography::LG)
-                    .color(style.btn_primary_text)
-                    .strong(),
-            )
-            .fill(style.btn_primary_bg)
-            .stroke(style.btn_secondary_border)
-            .corner_radius(DESIGN_TOKENS.rounding.md as u8)
-            .min_size(Vec2::new(44.0, 36.0)),
-        )
-        .clicked()
-    }
-
-    fn draw_cancel_button(&self, ui: &mut Ui, style: &SettingsDialogStyle) -> bool {
-        ui.add(
-            egui::Button::new(
-                RichText::new("Cancel")
-                    .size(typography::LG)
-                    .color(style.btn_secondary_text),
-            )
-            .fill(Color32::TRANSPARENT)
-            .stroke(style.btn_secondary_border)
-            .corner_radius(DESIGN_TOKENS.rounding.md as u8)
-            .min_size(Vec2::new(72.0, 36.0)),
-        )
-        .clicked()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::Pos2;
 
     #[test]
     fn settings_tracks_theme_without_changing_defaults_until_apply() {
@@ -946,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn changing_settings_tabs_keeps_the_top_edge_and_fits_the_window() {
+    fn changing_settings_tabs_stays_centered_and_fits_the_window() {
         for theme in [Theme::light(), Theme::dark()] {
             for size in [Vec2::new(1440.0, 900.0), Vec2::new(600.0, 400.0)] {
                 let ctx = Context::default();
@@ -975,7 +786,7 @@ mod tests {
                         Rect::from_min_size(Pos2::ZERO, size).contains_rect(rect),
                         "{tab:?}: {rect:?} in {size:?}"
                     );
-                    tops.push(rect.top());
+                    tops.push(rect.center().y);
                 }
                 assert!(
                     tops.iter().all(|top| (top - tops[0]).abs() < 1.0),

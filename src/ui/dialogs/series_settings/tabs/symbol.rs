@@ -6,9 +6,8 @@ use crate::model::{
     BaselineLevel, BoxSizeMethod, ChartType, LinePlotStyle, LineStyle, PriceBasedSource,
     PriceSource,
 };
-use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::FormGrid;
-use egui::{Color32, Ui};
+use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
+use egui::{Color32, RichText, Ui};
 
 /// Symbol tab renderer - shows chart type and style settings
 pub struct SymbolTab;
@@ -18,7 +17,11 @@ impl SymbolTab {
     pub fn show(ui: &mut Ui, settings: &mut SeriesSettings) {
         ui.space_md();
 
-        ui.label(settings.chart_type.name());
+        ui.label(
+            RichText::new(settings.chart_type.name())
+                .size(11.0)
+                .strong(),
+        );
         ui.space_sm();
         FormGrid::new("symbol_style_grid").show(ui, |ui| {
             if !settings.chart_type.uses_ohlc() {
@@ -58,18 +61,6 @@ impl SymbolTab {
                 }
                 _ => Self::candle_colors_section(ui, settings),
             }
-        });
-
-        ui.space_xl();
-        ui.separator();
-        ui.space_xl();
-
-        // Visibility section
-        ui.label("Visibility");
-        ui.space_sm();
-
-        FormGrid::new("symbol_visibility_grid").show(ui, |ui| {
-            Self::visibility_section(ui, settings);
         });
     }
 
@@ -212,35 +203,6 @@ impl SymbolTab {
         }
     }
 
-    fn visibility_section(ui: &mut Ui, settings: &mut SeriesSettings) {
-        // Show on all timeframes
-        ui.label("Show on all timeframes");
-        ui.checkbox(&mut settings.visible_all_timeframes, "");
-        ui.end_row();
-
-        // Individual timeframe toggles (only when not showing on all)
-        if !settings.visible_all_timeframes {
-            ui.label("Visible timeframes");
-            ui.vertical(|ui| {
-                let timeframes = ["1m", "5m", "15m", "1h", "4h", "1D", "1W", "1M"];
-                for tf in timeframes {
-                    let tf_str = tf.to_string();
-                    let mut is_visible = settings.visible_timeframes.contains(&tf_str);
-                    if ui.checkbox(&mut is_visible, tf).changed() {
-                        if is_visible {
-                            if !settings.visible_timeframes.contains(&tf_str) {
-                                settings.visible_timeframes.push(tf_str);
-                            }
-                        } else {
-                            settings.visible_timeframes.retain(|t| t != tf);
-                        }
-                    }
-                }
-            });
-            ui.end_row();
-        }
-    }
-
     fn price_source_dropdown(ui: &mut Ui, source: &mut PriceSource) {
         ui.combo_select("price_source", source, PriceSource::all(), |v| {
             v.label().to_string()
@@ -320,38 +282,27 @@ impl SymbolTab {
     }
 
     fn color_picker(ui: &mut Ui, color: &mut Color32) {
-        ui.color_edit_button_srgba(color);
+        let id = ui.next_auto_id();
+        let mut state = ui
+            .data(|data| data.get_temp::<ColorPickerState>(id))
+            .unwrap_or_else(|| ColorPickerState::new(*color));
+        if !state.is_open {
+            state.sel_color = *color;
+        }
+        if let Some(selected) = ColorPicker::new(&mut state, id).show(ui).inner {
+            *color = selected;
+        }
+        ui.data_mut(|data| data.insert_temp(id, state));
     }
 
     fn optional_color_picker(ui: &mut Ui, color: &mut Option<Color32>, default: Color32) {
         ui.horizontal(|ui| {
-            let mut use_custom = color.is_some();
-            if ui.checkbox(&mut use_custom, "").changed() {
-                *color = if use_custom { Some(default) } else { None };
-            }
-
-            if let Some(c) = color {
-                let mut color_arr = c.to_array();
-                if ui
-                    .color_edit_button_srgba_unmultiplied(&mut color_arr)
-                    .changed()
-                {
-                    *c = Color32::from_rgba_unmultiplied(
-                        color_arr[0],
-                        color_arr[1],
-                        color_arr[2],
-                        color_arr[3],
-                    );
-                }
-            } else {
-                let preview = egui::Button::new("")
-                    .fill(default)
-                    .min_size(egui::Vec2::splat(
-                        DESIGN_TOKENS.sizing.settings_dialog.checkbox_size,
-                    ));
-                ui.add_enabled(false, preview)
-                    .on_hover_text("Using body color");
-            }
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let mut custom = color.is_some();
+            ui.checkbox(&mut custom, "");
+            let mut selected = color.unwrap_or(default);
+            ui.add_enabled_ui(custom, |ui| Self::color_picker(ui, &mut selected));
+            *color = custom.then_some(selected);
         });
     }
 }

@@ -204,7 +204,7 @@ impl WatermarkMode {
 
     pub fn name(&self) -> &'static str {
         match self {
-            WatermarkMode::ReplayMode => "Replay mode",
+            WatermarkMode::ReplayMode => "Hidden",
             WatermarkMode::Symbol => "Symbol",
             WatermarkMode::SymbolAndDescription => "Symbol and desc",
             WatermarkMode::Custom => "Custom",

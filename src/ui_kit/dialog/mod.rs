@@ -120,6 +120,8 @@ impl DialogFrame {
                 let info = UiStackInfo::default().with_tag(FIXED_HEIGHT_TAG);
                 ui.scope_builder(UiBuilder::new().ui_stack_info(info), add_contents);
             }
+            let focused = ui.ctx().memory(|m| m.focused()).is_some();
+            ui.data_mut(|d| d.insert_temp(ui.layer_id().id.with("dialog_had_focus"), focused));
         });
     }
 }
@@ -128,7 +130,29 @@ impl DialogFrame {
 ///
 /// Returns `true` if the close button was clicked.
 pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
-    title_row(ui, title, true)
+    let close = title_row(ui, title, true);
+    let had_focus = ui
+        .data(|d| d.get_temp::<bool>(ui.layer_id().id.with("dialog_had_focus")))
+        .unwrap_or(false);
+    close || (!had_focus && dialog_key(ui, egui::Key::Escape))
+}
+
+fn dialog_key(ui: &Ui, key: egui::Key) -> bool {
+    if ui.ctx().any_popup_open()
+        || ui.ctx().top_layer_id() != Some(ui.layer_id())
+        || ui.ctx().memory(|m| m.focused()).is_some()
+    {
+        return false;
+    }
+    ui.input_mut(|input| {
+        let fresh = input.events.iter().any(|event| {
+            matches!(event,
+                egui::Event::Key { key: pressed, pressed: true, repeat: false, modifiers, .. }
+                if *pressed == key && modifiers.is_none()
+            )
+        });
+        fresh && input.consume_key(egui::Modifiers::NONE, key)
+    })
 }
 
 /// Title row shared with the modal dialogs, which hide the close button when not closable.
@@ -137,7 +161,7 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
     let row = Vec2::new(ui.available_width(), ButtonSize::MD.pixels());
     let close = ui
         .allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
-            ui.label(RichText::new(title).strong().size(20.0));
+            ui.label(RichText::new(title).strong().size(14.0));
             closable
                 && ui
                     .with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -282,13 +306,60 @@ impl DialogFooter {
             let height = row.response.rect.bottom() - top;
             ui.data_mut(|d| d.insert_temp(height_id, height));
         }
-        row.inner
+        let (primary, secondary) = row.inner;
+        (
+            primary || (self.primary_enabled && dialog_key(ui, egui::Key::Enter)),
+            secondary,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_keyboard_dismisses_and_activates_only_an_enabled_primary() {
+        for (key, enabled, expected) in [
+            (egui::Key::Escape, true, (true, false)),
+            (egui::Key::Enter, true, (false, true)),
+            (egui::Key::Enter, false, (false, false)),
+        ] {
+            let ctx = Context::default();
+            let frame = |events| {
+                let mut result = (false, false);
+                ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        DialogFrame::new("keys", Vec2::new(420.0, 240.0)).show(ui.ctx(), |ui| {
+                            result.0 = dialog_header(ui, "Keys");
+                            result.1 = DialogFooter::new("Apply")
+                                .primary_enabled(enabled)
+                                .show(ui)
+                                .0;
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+                result
+            };
+            frame(vec![]);
+            frame(vec![]);
+            assert_eq!(
+                frame(vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn footer_tab_order_follows_the_buttons_from_left_to_right() {

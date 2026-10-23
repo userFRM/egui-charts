@@ -639,6 +639,8 @@ impl Chart {
         self.config.bullish_wick_color = settings.bullish_wick_color;
         self.config.bearish_wick_color = settings.bearish_wick_color;
         self.config.price_source = settings.price_source;
+        self.config.show_price_line = settings.show_price_line;
+        self.config.show_prev_close_line = settings.show_prev_close_line;
         self.set_chart_type_params(settings.chart_type_params.clone());
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
@@ -663,6 +665,8 @@ impl Chart {
             bullish_wick_color: self.config.bullish_wick_color,
             bearish_wick_color: self.config.bearish_wick_color,
             price_source: self.config.price_source,
+            show_price_line: self.config.show_price_line,
+            show_prev_close_line: self.config.show_prev_close_line,
             price_scale_mode: self.state.price_scale().options().mode,
             invert_scale: self.state.price_scale().options().invert_scale,
             ..Default::default()

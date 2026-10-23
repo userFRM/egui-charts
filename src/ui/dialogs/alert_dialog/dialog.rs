@@ -1,6 +1,6 @@
 //! Alert creation dialog - modal popup for creating alerts.
 
-use egui::{Context, Ui, Vec2};
+use egui::{Context, Ui};
 
 use super::actions::{AlertData, AlertDialogAction};
 use super::config::AlertDialogConfig;
@@ -8,7 +8,8 @@ use super::fields;
 use super::tabs::AlertTab;
 use crate::ext::UiExt;
 use crate::ui_kit::FormGrid;
-use crate::ui_kit::dialog::{DialogFooter, DialogFrame, dialog_header};
+use crate::ui_kit::dialog::{DialogFooter, dialog_header};
+use crate::ui_kit::modal::Modal;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::tab_bar::TabBar;
 
@@ -112,13 +113,17 @@ impl AlertDialog {
 
         let mut action = AlertDialogAction::None;
 
-        DialogFrame::new(
-            "Create Alert",
-            Vec2::new(self.config.width, self.config.height),
-        )
-        .show(ctx, |ui| {
-            action = self.render_contents(ui);
-        });
+        let mut open = true;
+        Modal::new("create_alert", "")
+            .width(self.config.width + 32.0)
+            .height(self.config.height + 32.0)
+            .show(ctx, &mut open, |ui| {
+                action = self.render_contents(ui);
+            });
+        if !open {
+            self.is_open = false;
+            action = AlertDialogAction::Cancel;
+        }
 
         action
     }
@@ -140,7 +145,7 @@ impl AlertDialog {
         // Content area
         egui::ScrollArea::vertical()
             .max_height((ui.available_height() - 80.0).max(0.0))
-            .auto_shrink([false, true])
+            .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.space_lg();
                 match self.active_tab {
