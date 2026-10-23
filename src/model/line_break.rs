@@ -9,6 +9,7 @@
 //! - [`detect_signal`] classifies the relationship between the last two
 //!   lines as a continuation or reversal.
 
+use super::PriceBuilder;
 use super::bar::Bar;
 use chrono::{DateTime, Utc};
 
@@ -85,94 +86,118 @@ impl LineBreakLine {
 /// # Safety Limits
 /// - At most the newest 10,000 lines
 pub fn to_line_break_lines(data: &[Bar], config: &LineBreakConfig) -> Vec<LineBreakLine> {
-    if data.is_empty() {
-        return Vec::new();
+    let mut builder = LineBreakBuilder::new(config);
+    for bar in data {
+        builder.push(bar);
     }
+    builder.elements()
+}
 
-    const MAX_LINES: usize = 10_000;
-    let mut lines: Vec<LineBreakLine> = Vec::new();
+const MAX_LINES: usize = 10_000;
 
-    // Initialize with first bar
-    let first = &data[0];
-    let initial_direction = if first.close >= first.open {
-        LineDirection::Up
-    } else {
-        LineDirection::Down
-    };
+/// Builds Line Break lines bar by bar.
+#[derive(Clone)]
+pub(crate) struct LineBreakBuilder {
+    line_cnt: usize,
+    lines: Vec<LineBreakLine>,
+}
 
-    lines.push(LineBreakLine {
-        open: first.open,
-        close: first.close,
-        direction: initial_direction,
-        ts: first.time,
-    });
+impl LineBreakBuilder {
+    pub(crate) fn new(config: &LineBreakConfig) -> Self {
+        Self {
+            line_cnt: config.line_cnt,
+            lines: Vec::new(),
+        }
+    }
+}
 
-    for bar in data.iter().skip(1) {
-        let last_line = lines.last().unwrap();
+impl PriceBuilder for LineBreakBuilder {
+    type Element = LineBreakLine;
+
+    fn push(&mut self, bar: &Bar) {
+        let Some(last_line) = self.lines.last() else {
+            // The first bar is the first line
+            self.lines.push(LineBreakLine {
+                open: bar.open,
+                close: bar.close,
+                direction: if bar.close >= bar.open {
+                    LineDirection::Up
+                } else {
+                    LineDirection::Down
+                },
+                ts: bar.time,
+            });
+            return;
+        };
+        let lines = &self.lines;
         let curr_direction = last_line.direction;
 
-        match curr_direction {
+        let new_line = match curr_direction {
             LineDirection::Up => {
                 // For a continuation, close must exceed the last line's high
                 if bar.close > last_line.high() {
-                    lines.push(LineBreakLine {
+                    Some(LineBreakLine {
                         open: last_line.close,
                         close: bar.close,
                         direction: LineDirection::Up,
                         ts: bar.time,
-                    });
+                    })
                 }
                 // For a reversal, close must break below the low of the last N lines
                 else {
-                    let lookback = config.line_cnt.min(lines.len());
+                    let lookback = self.line_cnt.min(lines.len());
                     let reversal_low = lines[lines.len() - lookback..]
                         .iter()
                         .map(|l| l.low())
                         .fold(f64::INFINITY, f64::min);
 
-                    if bar.close < reversal_low {
-                        lines.push(LineBreakLine {
-                            open: last_line.open,
-                            close: bar.close,
-                            direction: LineDirection::Down,
-                            ts: bar.time,
-                        });
-                    }
+                    (bar.close < reversal_low).then_some(LineBreakLine {
+                        open: last_line.open,
+                        close: bar.close,
+                        direction: LineDirection::Down,
+                        ts: bar.time,
+                    })
                 }
             }
             LineDirection::Down => {
                 // For a continuation, close must break below the last line's low
                 if bar.close < last_line.low() {
-                    lines.push(LineBreakLine {
+                    Some(LineBreakLine {
                         open: last_line.close,
                         close: bar.close,
                         direction: LineDirection::Down,
                         ts: bar.time,
-                    });
+                    })
                 }
                 // For a reversal, close must exceed the high of the last N lines
                 else {
-                    let lookback = config.line_cnt.min(lines.len());
+                    let lookback = self.line_cnt.min(lines.len());
                     let reversal_high = lines[lines.len() - lookback..]
                         .iter()
                         .map(|l| l.high())
                         .fold(f64::NEG_INFINITY, f64::max);
 
-                    if bar.close > reversal_high {
-                        lines.push(LineBreakLine {
-                            open: last_line.open,
-                            close: bar.close,
-                            direction: LineDirection::Up,
-                            ts: bar.time,
-                        });
-                    }
+                    (bar.close > reversal_high).then_some(LineBreakLine {
+                        open: last_line.open,
+                        close: bar.close,
+                        direction: LineDirection::Up,
+                        ts: bar.time,
+                    })
                 }
             }
+        };
+        self.lines.extend(new_line);
+
+        // Bound memory by dropping the oldest lines; only the last `line_cnt` are read.
+        let keep = MAX_LINES.max(self.line_cnt);
+        if self.lines.len() >= 2 * keep {
+            self.lines.drain(..self.lines.len() - keep);
         }
     }
 
-    lines.drain(..lines.len().saturating_sub(MAX_LINES));
-    lines
+    fn elements(&self) -> Vec<LineBreakLine> {
+        self.lines[self.lines.len().saturating_sub(MAX_LINES)..].to_vec()
+    }
 }
 
 /// Signal generated from the last two lines of a Line Break chart.

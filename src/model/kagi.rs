@@ -14,7 +14,7 @@
 //!
 //! Use [`to_kagi_lines`] to transform a slice of [`Bar`]s.
 
-use crate::model::Bar;
+use crate::model::{Bar, PriceBuilder};
 use chrono::{DateTime, Utc};
 
 /// A single vertical segment in a Kagi chart.
@@ -110,110 +110,146 @@ pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
         return Vec::new();
     }
 
-    let mut lines = Vec::new();
-    const MAX_LINES: usize = 10_000;
-
-    // Track current line state
-    let mut curr_price = bars[0].close;
-    let mut line_start_price = bars[0].close;
-    let mut line_direction_up = true;
-    let mut last_ts = bars[0].time;
-
-    // Track significant highs and lows for thickness changes
-    let mut significant_high = curr_price;
-    let mut significant_low = curr_price;
-    let mut is_thick = curr_price > line_start_price;
-
-    for bar in bars.iter().skip(1) {
-        last_ts = bar.time;
-        let price = bar.close;
-
-        // Check for continuation or reversal
-        if line_direction_up {
-            // Currently moving up
-            if price > curr_price {
-                // Continue up
-                curr_price = price;
-                if price > significant_high {
-                    significant_high = price;
-                }
-            } else if price < (curr_price - reversal) {
-                // Reversal down
-                // Save current line
-                lines.push(KagiLine {
-                    ts: last_ts,
-                    start_price: line_start_price,
-                    end_price: curr_price,
-                    thickness: if is_thick {
-                        KagiThickness::Thick
-                    } else {
-                        KagiThickness::Thin
-                    },
-                });
-
-                // Start new line going down
-                line_start_price = curr_price;
-                curr_price = price;
-                line_direction_up = false;
-
-                // Check thickness change
-                if price < significant_low {
-                    is_thick = false; // Switch to thin (downtrend)
-                    significant_low = price;
-                }
-            }
-        } else {
-            // Currently moving down
-            if price < curr_price {
-                // Continue down
-                curr_price = price;
-                if price < significant_low {
-                    significant_low = price;
-                }
-            } else if price > (curr_price + reversal) {
-                // Reversal up
-                // Save current line
-                lines.push(KagiLine {
-                    ts: last_ts,
-                    start_price: line_start_price,
-                    end_price: curr_price,
-                    thickness: if is_thick {
-                        KagiThickness::Thick
-                    } else {
-                        KagiThickness::Thin
-                    },
-                });
-
-                // Start new line going up
-                line_start_price = curr_price;
-                curr_price = price;
-                line_direction_up = true;
-
-                // Check thickness change
-                if price > significant_high {
-                    is_thick = true; // Switch to thick (uptrend)
-                    significant_high = price;
-                }
-            }
-        }
+    let mut builder = KagiBuilder::new(reversal);
+    for bar in bars {
+        builder.push(bar);
     }
+    builder.elements()
+}
 
-    // Add final line
-    if line_start_price != curr_price {
-        lines.push(KagiLine {
-            ts: last_ts,
-            start_price: line_start_price,
-            end_price: curr_price,
-            thickness: if is_thick {
+const MAX_LINES: usize = 10_000;
+
+/// The line in progress and the trend state.
+#[derive(Clone)]
+struct KagiState {
+    curr_price: f64,
+    line_start_price: f64,
+    line_direction_up: bool,
+    last_ts: DateTime<Utc>,
+    /// Significant highs and lows decide when the thickness changes.
+    significant_high: f64,
+    significant_low: f64,
+    is_thick: bool,
+}
+
+impl KagiState {
+    fn line(&self) -> KagiLine {
+        KagiLine {
+            ts: self.last_ts,
+            start_price: self.line_start_price,
+            end_price: self.curr_price,
+            thickness: if self.is_thick {
                 KagiThickness::Thick
             } else {
                 KagiThickness::Thin
             },
-        });
+        }
+    }
+}
+
+/// Builds Kagi lines bar by bar; `reversal` must be a positive finite number. The line in
+/// progress is kept apart from the closed lines and added by `elements`.
+#[derive(Clone)]
+pub(crate) struct KagiBuilder {
+    reversal: f64,
+    state: Option<KagiState>,
+    lines: Vec<KagiLine>,
+}
+
+impl KagiBuilder {
+    pub(crate) fn new(reversal: f64) -> Self {
+        Self {
+            reversal,
+            state: None,
+            lines: Vec::new(),
+        }
+    }
+}
+
+impl PriceBuilder for KagiBuilder {
+    type Element = KagiLine;
+
+    fn push(&mut self, bar: &Bar) {
+        let reversal = self.reversal;
+        let Some(st) = self.state.as_mut() else {
+            self.state = Some(KagiState {
+                curr_price: bar.close,
+                line_start_price: bar.close,
+                line_direction_up: true,
+                last_ts: bar.time,
+                significant_high: bar.close,
+                significant_low: bar.close,
+                is_thick: false,
+            });
+            return;
+        };
+        st.last_ts = bar.time;
+        let price = bar.close;
+
+        // Check for continuation or reversal
+        if st.line_direction_up {
+            // Currently moving up
+            if price > st.curr_price {
+                // Continue up
+                st.curr_price = price;
+                if price > st.significant_high {
+                    st.significant_high = price;
+                }
+            } else if price < (st.curr_price - reversal) {
+                // Reversal down: save the current line and start a new one going down
+                self.lines.push(st.line());
+                st.line_start_price = st.curr_price;
+                st.curr_price = price;
+                st.line_direction_up = false;
+
+                // Check thickness change
+                if price < st.significant_low {
+                    st.is_thick = false; // Switch to thin (downtrend)
+                    st.significant_low = price;
+                }
+            }
+        } else {
+            // Currently moving down
+            if price < st.curr_price {
+                // Continue down
+                st.curr_price = price;
+                if price < st.significant_low {
+                    st.significant_low = price;
+                }
+            } else if price > (st.curr_price + reversal) {
+                // Reversal up: save the current line and start a new one going up
+                self.lines.push(st.line());
+                st.line_start_price = st.curr_price;
+                st.curr_price = price;
+                st.line_direction_up = true;
+
+                // Check thickness change
+                if price > st.significant_high {
+                    st.is_thick = true; // Switch to thick (uptrend)
+                    st.significant_high = price;
+                }
+            }
+        }
+
+        // Bound memory by dropping the oldest lines; the state never reads them.
+        if self.lines.len() == 2 * MAX_LINES {
+            self.lines.drain(..MAX_LINES);
+        }
     }
 
-    lines.drain(..lines.len().saturating_sub(MAX_LINES));
-    lines
+    fn elements(&self) -> Vec<KagiLine> {
+        let mut lines = self.lines.clone();
+        // The line in progress, unless it has not moved
+        if let Some(st) = self
+            .state
+            .as_ref()
+            .filter(|st| st.line_start_price != st.curr_price)
+        {
+            lines.push(st.line());
+        }
+        lines.drain(..lines.len().saturating_sub(MAX_LINES));
+        lines
+    }
 }
 
 /// Calculate Avg True Range for automatic reversal sizing

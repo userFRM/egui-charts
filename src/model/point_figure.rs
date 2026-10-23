@@ -6,6 +6,7 @@
 //!
 //! Use [`to_pnf_columns`] to transform OHLCV bars into P&F columns.
 
+use super::PriceBuilder;
 use super::bar::Bar;
 use chrono::{DateTime, Utc};
 
@@ -140,30 +141,60 @@ pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn
         return Vec::new();
     }
 
-    let reversal_amount = box_size * config.reversal_boxes as f64;
-    let mut columns: Vec<PnfColumn> = Vec::new();
-    const MAX_COLUMNS: usize = 5_000;
+    let mut builder = PnfBuilder::new(box_size, config);
+    for bar in data {
+        builder.push(bar);
+    }
+    builder.elements()
+}
 
-    // Initialize with first bar
-    let first = &data[0];
-    let initial_price = if config.use_close {
-        first.close
-    } else {
-        first.high
-    };
+const MAX_COLUMNS: usize = 5_000;
 
-    let mut curr_column = PnfColumn {
-        start_price: snap_to_box(initial_price, box_size),
-        end_price: snap_to_box(initial_price, box_size),
-        direction: ColumnDirection::Up,
-        start_time: first.time,
-        end_time: first.time,
-        box_size,
-        box_cnt: 1,
-    };
+/// Builds Point and Figure columns bar by bar; `box_size` must be a positive finite number and
+/// the reversal at least one box. The column in progress is kept apart from the closed columns
+/// and added by `elements`.
+#[derive(Clone)]
+pub(crate) struct PnfBuilder {
+    box_size: f64,
+    reversal_amount: f64,
+    use_close: bool,
+    /// The column in progress; `None` until the first bar.
+    curr_column: Option<PnfColumn>,
+    columns: Vec<PnfColumn>,
+}
 
-    for bar in data.iter().skip(1) {
-        let (high_price, low_price) = if config.use_close {
+impl PnfBuilder {
+    pub(crate) fn new(box_size: f64, config: &PointFigureConfig) -> Self {
+        Self {
+            box_size,
+            reversal_amount: box_size * config.reversal_boxes as f64,
+            use_close: config.use_close,
+            curr_column: None,
+            columns: Vec::new(),
+        }
+    }
+}
+
+impl PriceBuilder for PnfBuilder {
+    type Element = PnfColumn;
+
+    fn push(&mut self, bar: &Bar) {
+        let (box_size, reversal_amount) = (self.box_size, self.reversal_amount);
+        let Some(mut curr_column) = self.curr_column.take() else {
+            // The first bar starts an up column of one box
+            let initial_price = if self.use_close { bar.close } else { bar.high };
+            self.curr_column = Some(PnfColumn {
+                start_price: snap_to_box(initial_price, box_size),
+                end_price: snap_to_box(initial_price, box_size),
+                direction: ColumnDirection::Up,
+                start_time: bar.time,
+                end_time: bar.time,
+                box_size,
+                box_cnt: 1,
+            });
+            return;
+        };
+        let (high_price, low_price) = if self.use_close {
             (bar.close, bar.close)
         } else {
             (bar.high, bar.low)
@@ -186,9 +217,7 @@ pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn
                 let new_low = snap_to_box(low_price, box_size);
                 if curr_column.end_price - new_low >= reversal_amount {
                     // Complete current column and start new one
-                    columns.push(curr_column.clone());
-
-                    curr_column = PnfColumn {
+                    let reversed = PnfColumn {
                         start_price: curr_column.end_price - box_size,
                         end_price: new_low,
                         direction: ColumnDirection::Down,
@@ -199,6 +228,8 @@ pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn
                             as usize
                             + 1,
                     };
+                    self.columns
+                        .push(std::mem::replace(&mut curr_column, reversed));
                 }
             }
             ColumnDirection::Down => {
@@ -217,9 +248,7 @@ pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn
                 let new_high = snap_to_box(high_price, box_size);
                 if new_high - curr_column.end_price >= reversal_amount {
                     // Complete current column and start new one
-                    columns.push(curr_column.clone());
-
-                    curr_column = PnfColumn {
+                    let reversed = PnfColumn {
                         start_price: curr_column.end_price + box_size,
                         end_price: new_high,
                         direction: ColumnDirection::Up,
@@ -230,16 +259,25 @@ pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn
                             as usize
                             + 1,
                     };
+                    self.columns
+                        .push(std::mem::replace(&mut curr_column, reversed));
                 }
             }
         }
+        self.curr_column = Some(curr_column);
+
+        // Bound memory by dropping the oldest columns; the builder never reads them.
+        if self.columns.len() == 2 * MAX_COLUMNS {
+            self.columns.drain(..MAX_COLUMNS);
+        }
     }
 
-    // Add the final column
-    columns.push(curr_column);
-
-    columns.drain(..columns.len().saturating_sub(MAX_COLUMNS));
-    columns
+    fn elements(&self) -> Vec<PnfColumn> {
+        let mut columns = self.columns.clone();
+        columns.extend(self.curr_column.clone());
+        columns.drain(..columns.len().saturating_sub(MAX_COLUMNS));
+        columns
+    }
 }
 
 /// Snap price to nearest box boundary

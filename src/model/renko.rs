@@ -9,7 +9,7 @@
 //!
 //! Use [`to_renko_bricks`] to transform OHLCV bars into Renko bricks.
 
-use crate::model::Bar;
+use crate::model::{Bar, PriceBuilder};
 use chrono::{DateTime, Utc};
 
 /// A single Renko brick representing a fixed-size price movement.
@@ -98,26 +98,54 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
     if bars.is_empty() || !(brick_size > 0.0 && brick_size.is_finite()) {
         return Vec::new();
     }
-    let bars = &bars[work_start(bars, brick_size)..];
+    let mut builder = RenkoBuilder::new(brick_size);
+    for bar in &bars[work_start(bars, brick_size)..] {
+        builder.push(bar);
+    }
+    builder.elements()
+}
 
-    let mut bricks = Vec::new();
-    const MAX_BRICKS: usize = 10_000;
+const MAX_BRICKS: usize = 10_000;
 
-    // Start with the first bar's close price, aligned to brick boundary
-    let start = (bars[0].close / brick_size).floor() * brick_size;
-    // Open and close of the last brick, or the start price before the first brick.
-    let mut last = (start, start);
+/// Builds Renko bricks bar by bar; `size` must be a positive finite number.
+#[derive(Clone)]
+pub(crate) struct RenkoBuilder {
+    size: f64,
+    /// Open and close of the last brick, or the start price before the first brick; `None`
+    /// until the first bar.
+    last: Option<(f64, f64)>,
+    bricks: Vec<RenkoBrick>,
+}
 
-    for bar in bars.iter() {
+impl RenkoBuilder {
+    pub(crate) fn new(size: f64) -> Self {
+        Self {
+            size,
+            last: None,
+            bricks: Vec::new(),
+        }
+    }
+}
+
+impl PriceBuilder for RenkoBuilder {
+    type Element = RenkoBrick;
+
+    fn push(&mut self, bar: &Bar) {
+        let size = self.size;
+        // The first close, aligned down to a multiple of the brick size.
+        let mut last = self.last.unwrap_or_else(|| {
+            let start = (bar.close / size).floor() * size;
+            (start, start)
+        });
         let price = bar.close;
         loop {
             let (open, close) = last;
             let (low, high) = (open.min(close), open.max(close));
             // Before the first brick both ends are the start, so either direction needs one brick.
-            let (brick_open, brick_close) = if price >= high + brick_size {
-                (high, high + brick_size)
-            } else if price <= low - brick_size {
-                (low, low - brick_size)
+            let (brick_open, brick_close) = if price >= high + size {
+                (high, high + size)
+            } else if price <= low - size {
+                (low, low - size)
             } else {
                 break;
             };
@@ -127,7 +155,7 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
             }
             let up = brick_close > brick_open;
 
-            bricks.push(RenkoBrick {
+            self.bricks.push(RenkoBrick {
                 ts: bar.time,
                 open: brick_open,
                 close: brick_close,
@@ -140,14 +168,16 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
             last = (brick_open, brick_close);
 
             // Bound memory by dropping the oldest bricks; `last` never reads them.
-            if bricks.len() == 2 * MAX_BRICKS {
-                bricks.drain(..MAX_BRICKS);
+            if self.bricks.len() == 2 * MAX_BRICKS {
+                self.bricks.drain(..MAX_BRICKS);
             }
         }
+        self.last = Some(last);
     }
 
-    bricks.drain(..bricks.len().saturating_sub(MAX_BRICKS));
-    bricks
+    fn elements(&self) -> Vec<RenkoBrick> {
+        self.bricks[self.bricks.len().saturating_sub(MAX_BRICKS)..].to_vec()
+    }
 }
 
 /// Index of the bar to build from so that the bricks move at most `MAX_WORK` brick sizes. Bar

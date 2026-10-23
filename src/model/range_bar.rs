@@ -8,6 +8,7 @@
 //! - [`to_range_bars_from_ticks`] -- build from tick data (exact).
 //! - [`to_range_bars_from_ohlc`] -- approximate from OHLCV bars.
 
+use super::PriceBuilder;
 use super::bar::Bar;
 use chrono::{DateTime, Utc};
 
@@ -225,25 +226,55 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
     if data.is_empty() || !(range_size > 0.0 && range_size.is_finite()) {
         return Vec::new();
     }
-    let data = &data[work_start(data, range_size)..];
+    let mut builder = RangeBarBuilder::new(range_size);
+    for bar in &data[work_start(data, range_size)..] {
+        builder.push(bar);
+    }
+    builder.elements()
+}
 
-    let mut bars: Vec<RangeBar> = Vec::new();
-    const MAX_BARS: usize = 5_000;
+const MAX_BARS: usize = 5_000;
 
-    let first = &data[0];
-    let mut curr_bar = RangeBar {
-        open: first.open,
-        high: first.high,
-        low: first.low,
-        close: first.close,
-        volume: add_volume(0.0, first.volume),
-        start_time: first.time,
-        end_time: first.time,
-        range_size,
-        tick_cnt: 1,
-    };
+/// Builds range bars from OHLC bars one at a time; `range_size` must be a positive finite
+/// number. The range bar in progress is kept apart from the closed bars and added by `elements`.
+#[derive(Clone)]
+pub(crate) struct RangeBarBuilder {
+    range_size: f64,
+    /// The range bar in progress; `None` until the first bar.
+    curr_bar: Option<RangeBar>,
+    bars: Vec<RangeBar>,
+}
 
-    for bar in data.iter().skip(1) {
+impl RangeBarBuilder {
+    pub(crate) fn new(range_size: f64) -> Self {
+        Self {
+            range_size,
+            curr_bar: None,
+            bars: Vec::new(),
+        }
+    }
+}
+
+impl PriceBuilder for RangeBarBuilder {
+    type Element = RangeBar;
+
+    fn push(&mut self, bar: &Bar) {
+        let range_size = self.range_size;
+        let Some(mut curr_bar) = self.curr_bar.take() else {
+            self.curr_bar = Some(RangeBar {
+                open: bar.open,
+                high: bar.high,
+                low: bar.low,
+                close: bar.close,
+                volume: add_volume(0.0, bar.volume),
+                start_time: bar.time,
+                end_time: bar.time,
+                range_size,
+                tick_cnt: 1,
+            });
+            return;
+        };
+
         // Simulate processing this bar's range
         let prices = [bar.open, bar.high, bar.low, bar.close];
 
@@ -271,11 +302,11 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
                 }
 
                 curr_bar.end_time = bar.time;
-                bars.push(curr_bar.clone());
+                self.bars.push(curr_bar.clone());
 
                 // Bound memory by dropping the oldest bars; `curr_bar` never reads them.
-                if bars.len() == 2 * MAX_BARS {
-                    bars.drain(..MAX_BARS);
+                if self.bars.len() == 2 * MAX_BARS {
+                    self.bars.drain(..MAX_BARS);
                 }
 
                 // Start new bar
@@ -297,15 +328,16 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
         curr_bar.volume = add_volume(curr_bar.volume, bar.volume);
         curr_bar.end_time = bar.time;
         curr_bar.tick_cnt += 1;
+        self.curr_bar = Some(curr_bar);
     }
 
-    // Add incomplete bar
-    if curr_bar.tick_cnt > 0 {
-        bars.push(curr_bar);
+    fn elements(&self) -> Vec<RangeBar> {
+        let mut bars = self.bars.clone();
+        // The incomplete bar, if it has any ticks
+        bars.extend(self.curr_bar.clone().filter(|b| b.tick_cnt > 0));
+        bars.drain(..bars.len().saturating_sub(MAX_BARS));
+        bars
     }
-
-    bars.drain(..bars.len().saturating_sub(MAX_BARS));
-    bars
 }
 
 /// `volume` plus `added`, or `volume` alone when the sum is not finite: two valid volumes can add

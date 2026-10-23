@@ -15,6 +15,15 @@
 /// on a longer history is built from a later bar; see `renko::work_start`.
 pub(crate) const MAX_WORK: f64 = 2_000_000.0;
 
+/// A price-based chart built one bar at a time, so a cached build can be extended by the newest
+/// bar instead of rebuilt. The first `push` seeds the state. `elements` returns the newest
+/// elements up to the type's limit, including the one still forming.
+pub(crate) trait PriceBuilder {
+    type Element: Clone;
+    fn push(&mut self, bar: &Bar);
+    fn elements(&self) -> Vec<Self::Element>;
+}
+
 mod alert;
 mod annotations;
 pub mod bar;
