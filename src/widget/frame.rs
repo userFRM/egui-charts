@@ -451,7 +451,14 @@ impl Chart {
         let is_drawing_interaction = time_based
             && (self.drawings.active_tool.is_some()
                 || self.drawings.dragging_handle.is_some()
-                || self.drawings.curr_drawing.is_some());
+                || self.drawings.curr_drawing.is_some()
+                || self.drawings.sel_drawing().is_some_and(|id| {
+                    ui.input(|i| i.pointer.press_origin())
+                        .is_some_and(|origin| {
+                            self.drawings.hit_test_handle_by_id(origin, id).is_some()
+                                || self.drawings.hit_test(origin) == Some(id)
+                        })
+                }));
         let pending_price_zoom = self.handle_mouse_wheel(
             ui,
             &response,

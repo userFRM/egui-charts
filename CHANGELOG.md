@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Selected drawings move from a body grab while retaining the pointer offset. Every anchor moves by the same bar and price delta, including on logarithmic scales, with one undo step and one host update per gesture. Rectangles also have a centre handle, and body grabs suppress chart panning. ([#741](https://github.com/userFRM/egui-charts/issues/741))
+
 - KST and RVI use running means of complete windows, STC shares the linear rolling extrema, and RankCorr reuses its sorting buffers and computes Pearson correlation of average ranks for ties. Migration: KST first appears at `max(roc_period + sma_period - 1)`, with its signal `signal_period - 1` bars later; RVI starts at bar `period + 2`, its signal at `period + 5`. These indices are zero-based; at default lengths KST starts at 44 and its signal at 52, RVI at 12 and its signal at 15. Incomplete windows no longer produce averages. Callers must handle `IndicatorValue::None` before the main line and `NaN` for a pending signal, and load enough history before consuming either line. RankCorr values on tied prices follow the rank correlation definition; flat windows have no value. ([#179](https://github.com/userFRM/egui-charts/issues/179))
 - KAMA keeps a running sum of its last `period` absolute price changes and resumes last-bar updates and appends through the shared study driver. Full calculations are linear in history length and no longer allocate a price window for every bar. Its SMA seed, efficiency ratio, smoothing and handling of non-finite closes are unchanged. ([#179](https://github.com/userFRM/egui-charts/issues/179))
 

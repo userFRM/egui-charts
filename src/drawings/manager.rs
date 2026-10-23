@@ -168,6 +168,8 @@ pub struct DrawingManager {
     pub dragging_handle: Option<(usize, HandlePos)>,
     /// Snapshot of the drawing state before the current drag began (for undo).
     drag_old_state: Option<Drawing>,
+    /// Pointer origin of a body or centre-handle translation.
+    drag_origin: Option<Pos2>,
 
     /// Whether to stay in drawing mode after completing a drawing.
     pub stay_in_drawing_mode: bool,
@@ -209,6 +211,7 @@ impl DrawingManager {
             options: DrawingManagerOptions::default(),
             dragging_handle: None,
             drag_old_state: None,
+            drag_origin: None,
             stay_in_drawing_mode: false,
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
@@ -377,6 +380,23 @@ impl DrawingManager {
         {
             self.dragging_handle = Some((drawing_id, handle));
             self.drag_old_state = Some(drawing.clone());
+            self.drag_origin = (handle == HandlePos::Middle)
+                .then(|| {
+                    HandleService::get_handles(drawing)
+                        .into_iter()
+                        .find(|(h, _)| *h == handle)
+                        .map(|(_, p)| p)
+                })
+                .flatten();
+        }
+    }
+
+    /// Begins moving every anchor from a body grab at `origin`, retaining the grab offset.
+    /// Locked drawings ignore the grab. The move shares the handle drag's undo and sync lifecycle.
+    pub fn start_drag_body(&mut self, drawing_id: usize, origin: Pos2) {
+        self.start_drag_handle(drawing_id, HandlePos::Middle);
+        if self.dragging_handle == Some((drawing_id, HandlePos::Middle)) {
+            self.drag_origin = Some(origin);
         }
     }
 
@@ -390,8 +410,19 @@ impl DrawingManager {
         if let Some((id, handle)) = self.dragging_handle {
             // Compute snapped position before mutable borrow
             let snapped = self.snap_point(new_pos, &self.drawings);
-            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
-                HandleService::update_handle(drawing, handle, snapped, x_to_bar, y_to_price);
+            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
+                if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
+                    let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
+                    let price = y_to_price(snapped.y) - y_to_price(origin.y);
+                    for (point, before) in drawing.chart_points.iter_mut().zip(&old.chart_points) {
+                        *point = ChartPoint::new(before.bar_idx + bars, before.price + price);
+                    }
+                    for (point, before) in drawing.points.iter_mut().zip(&old.points) {
+                        *point = *before + (snapped - origin);
+                    }
+                } else {
+                    HandleService::update_handle(drawing, handle, snapped, x_to_bar, y_to_price);
+                }
             }
         }
     }
@@ -405,6 +436,7 @@ impl DrawingManager {
             self.queue(DrawingSyncAction::UpdateDrawing(drawing_id));
         }
         self.dragging_handle = None;
+        self.drag_origin = None;
     }
 
     /// Renders selection handles for a drawing, highlighting the currently
