@@ -3,6 +3,7 @@
 use egui::{Color32, Response, Role, Ui, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::ButtonVariant;
 
@@ -119,22 +120,9 @@ impl<'a> ButtonContent<'a> {
     fn get_colors(&self, ui: &Ui, hovered: bool, active: bool) -> (Color32, Color32, Color32) {
         let visuals = &ui.style().visuals;
 
-        if self.disabled {
-            return (
-                visuals.widgets.noninteractive.bg_fill,
-                visuals
-                    .widgets
-                    .noninteractive
-                    .fg_stroke
-                    .color
-                    .gamma_multiply(0.5),
-                visuals
-                    .widgets
-                    .noninteractive
-                    .fg_stroke
-                    .color
-                    .gamma_multiply(0.5),
-            );
+        if self.disabled || !ui.is_enabled() {
+            let text = ui.active_theme().ui.text_disabled;
+            return (Color32::TRANSPARENT, text, text);
         }
 
         match self.style {
@@ -165,8 +153,17 @@ impl<'a> ButtonContent<'a> {
                 } else {
                     ButtonVariant::Danger
                 };
-                let text = variant.fg_color(ui);
-                (variant.bg_color(ui, hovered, active), text, text)
+                if active || hovered {
+                    let text = variant.fg_color(ui);
+                    (variant.bg_color(ui, hovered, active), text, text)
+                } else {
+                    let text = if self.style == ButtonStyle::Danger {
+                        ui.active_theme().ui.error
+                    } else {
+                        visuals.text_color()
+                    };
+                    (Color32::TRANSPARENT, text, text)
+                }
             }
             ButtonStyle::Subtle => {
                 if active {
@@ -247,5 +244,64 @@ impl<'a> ListItemContent for ButtonContent<'a> {
 
     fn interactive(&self) -> bool {
         !self.disabled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::icons::icons;
+    use crate::theme::{apply_to_egui, contrast, presets};
+
+    #[test]
+    fn action_rows_are_transparent_at_rest_and_use_readable_state_colours() {
+        for (name, theme) in presets() {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &theme);
+            ctx.run_ui(Default::default(), |ui| {
+                for style in [
+                    ButtonStyle::Default,
+                    ButtonStyle::Primary,
+                    ButtonStyle::Danger,
+                    ButtonStyle::Subtle,
+                ] {
+                    let row = ButtonContent::new(&icons::PLUS, "Action").style(style);
+                    let (fill, icon, text) = row.get_colors(ui, false, false);
+                    assert_eq!(fill, Color32::TRANSPARENT, "{name}: {style:?}");
+                    assert_eq!(icon, text);
+                    assert!(
+                        contrast(text, theme.ui.panel_bg) >= 4.5,
+                        "{name}: {style:?}"
+                    );
+                    let disabled = row.disabled(true).get_colors(ui, true, true);
+                    assert_eq!(
+                        disabled,
+                        (
+                            Color32::TRANSPARENT,
+                            theme.ui.text_disabled,
+                            theme.ui.text_disabled
+                        )
+                    );
+                }
+                for (row, hover, active, text) in [
+                    (
+                        ButtonContent::new(&icons::PLUS, "Add").primary(),
+                        theme.ui.accent_hover,
+                        theme.ui.accent_active,
+                        theme.ui.accent_text,
+                    ),
+                    (
+                        ButtonContent::new(&icons::CLOSE, "Delete").danger(),
+                        theme.ui.danger_bg_hover,
+                        theme.ui.danger_bg_active,
+                        theme.ui.danger_text,
+                    ),
+                ] {
+                    assert_eq!(row.get_colors(ui, true, false), (hover, text, text));
+                    assert_eq!(row.get_colors(ui, true, true), (active, text, text));
+                }
+            })
+            .drop_without_applying_deltas();
+        }
     }
 }

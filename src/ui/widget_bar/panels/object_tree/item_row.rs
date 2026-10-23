@@ -44,6 +44,7 @@ pub fn render_item_row(
     if ui.is_rect_visible(rect) {
         render_row_content(ui, &response, item, config, state, indent, &mut action);
     }
+    crate::styles::focus::draw_focus_ring(ui, &response, 0.0);
 
     if config.enable_context_menu {
         response.context_menu(|ui| {
@@ -242,7 +243,8 @@ fn render_row_content(
     // Expand/collapse button
     if config.show_expand_chevron && item.source_type == SourceType::Drawing {
         let chevron_rect = Rect::from_center_size(egui::pos2(x + 6.0, center_y), vec2(14.0, 14.0));
-        let chevron_response = ui.put(chevron_rect, egui::Label::new("").sense(Sense::click()));
+        let chevron_response = ui.allocate_rect(chevron_rect, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &chevron_response, 0.0);
         if chevron_response.clicked() {
             state.toggle_item(item.id);
         }
@@ -257,6 +259,7 @@ fn render_row_content(
         &embedded_icons::EYE_HIDE
     };
     let vis_response = ui.allocate_rect(vis_rect, Sense::click());
+    crate::styles::focus::draw_focus_ring(ui, &vis_response, 0.0);
     if ui.is_rect_visible(vis_rect) {
         let icon_color = if is_selected {
             ui.visuals().selection.stroke.color
@@ -284,6 +287,7 @@ fn render_row_content(
             &embedded_icons::UNLOCK
         };
         let lock_response = ui.allocate_rect(lock_rect, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &lock_response, 0.0);
         if ui.is_rect_visible(lock_rect) {
             let icon_color = if is_selected {
                 ui.visuals().selection.stroke.color
@@ -302,21 +306,40 @@ fn render_row_content(
         lock_response.on_hover_text(if item.locked { "Unlock" } else { "Lock" });
     }
 
-    // Right-side buttons
-    let mut right_x = rect.right() - DESIGN_TOKENS.spacing.sm;
-
-    // Delete button
-    let del_rect = Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
+    // Right-side buttons, registered in visual order for keyboard navigation.
+    let right_x = rect.right() - DESIGN_TOKENS.spacing.sm;
     let button_color = if is_selected {
         ui.visuals().selection.stroke.color
     } else {
         ui.visuals().text_color()
     };
+
+    // Settings/Properties button
+    let settings_rect =
+        Rect::from_center_size(egui::pos2(right_x - 28.0, center_y), vec2(16.0, 16.0));
+    let settings_response = ui.put(
+        settings_rect,
+        egui::Label::new(egui::RichText::new("S").color(button_color)).sense(Sense::click()),
+    );
+    crate::styles::focus::draw_focus_ring(ui, &settings_response, 0.0);
+    if settings_response.clicked() {
+        *action = if item.source_type == SourceType::Indicator {
+            ObjectTreeAction::OpenIndicatorSettings(item.id)
+        } else {
+            ObjectTreeAction::OpenProperties(item.id)
+        };
+    }
+    settings_response.on_hover_text("Settings");
+
+    // Delete button
     if item.source_type != SourceType::DataSource {
+        let del_rect =
+            Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
         let del_response = ui.put(
             del_rect,
             egui::Label::new(egui::RichText::new("X").color(button_color)).sense(Sense::click()),
         );
+        crate::styles::focus::draw_focus_ring(ui, &del_response, 0.0);
         if del_response.clicked() {
             *action = if item.source_type == SourceType::Indicator {
                 ObjectTreeAction::RemoveIndicator(item.id)
@@ -326,23 +349,6 @@ fn render_row_content(
         }
         del_response.on_hover_text("Remove");
     }
-    right_x -= 20.0;
-
-    // Settings/Properties button
-    let settings_rect =
-        Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-    let settings_response = ui.put(
-        settings_rect,
-        egui::Label::new(egui::RichText::new("S").color(button_color)).sense(Sense::click()),
-    );
-    if settings_response.clicked() {
-        *action = if item.source_type == SourceType::Indicator {
-            ObjectTreeAction::OpenIndicatorSettings(item.id)
-        } else {
-            ObjectTreeAction::OpenProperties(item.id)
-        };
-    }
-    settings_response.on_hover_text("Settings");
 }
 
 /// Render expandable properties for a drawing
@@ -467,6 +473,61 @@ mod tests {
                         <= row.right() - DESIGN_TOKENS.spacing.sm - 40.0
                 );
                 output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    #[test]
+    fn tab_visits_the_row_and_its_actions_in_visual_order_with_visible_focus() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut item = SourceItem::drawing(1, DrawingToolType::TrendLine, Color32::RED);
+            let mut state = ObjectTreeState::default();
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(400.0, 200.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        render_item_row(ui, &mut item, &ObjectTreeConfig::default(), &mut state, 0);
+                    },
+                );
+                let rings: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.stroke.width == 2.0 => Some(rect.rect),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                let focused = ctx
+                    .memory(|m| m.focused())
+                    .and_then(|id| ctx.read_response(id));
+                (rings, focused)
+            };
+            assert!(frame(vec![]).0.is_empty());
+            let mut right = 0.0;
+            for index in 0..6 {
+                let (rings, focused) = frame(vec![egui::Event::Key {
+                    key: egui::Key::Tab,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+                let focused = focused.unwrap();
+                assert_eq!(rings, vec![focused.rect.expand(2.0)]);
+                if index > 1 {
+                    assert!(focused.rect.left() >= right, "Tab moved backwards");
+                }
+                right = focused.rect.right();
             }
         }
     }

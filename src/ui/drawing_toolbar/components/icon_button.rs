@@ -39,7 +39,7 @@ pub fn draw_icon_btn(
     size: f32,
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    crate::styles::focus::draw_focus_ring(ui, &response);
+    crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
 
     let bg_color = if is_active && response.hovered() {
         super::active_hover_color(ui)
@@ -114,7 +114,7 @@ pub fn draw_icon_button_padded(
     // Full rect for allocation
     let size = Vec2::splat(icon_size + padding * 2.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    crate::styles::focus::draw_focus_ring(ui, &response);
+    crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
 
     // Add pressed state for click feedback
     let bg_color = if is_active {

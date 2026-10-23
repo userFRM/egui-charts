@@ -94,10 +94,11 @@ impl TemplatesButton {
 
                         let text_response = ui.text_edit_singleline(name_input);
 
-                        // Auto-focus the text input
-                        if text_response.gained_focus()
-                            || ui.memory(|m| !m.has_focus(text_response.id))
-                        {
+                        let focus_in_dialog = ui
+                            .memory(|m| m.focused())
+                            .and_then(|id| ui.ctx().read_response(id))
+                            .is_some_and(|response| response.layer_id == ui.layer_id());
+                        if !focus_in_dialog && !text_response.lost_focus() {
                             text_response.request_focus();
                         }
 
@@ -123,6 +124,8 @@ impl TemplatesButton {
 
                         // Enter key to confirm
                         if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            && (text_response.has_focus()
+                                || ui.memory(|m| m.had_focus_last_frame(text_response.id)))
                             && !name_input.trim().is_empty()
                         {
                             action = Some(DrawingToolbarAction::SaveTemplate {
@@ -141,5 +144,53 @@ impl TemplatesButton {
             });
 
         action
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keyboard_focus_reaches_cancel_without_saving_the_template() {
+        let ctx = egui::Context::default();
+        let mut name = "Example".to_owned();
+        let mut frame = |key: Option<egui::Key>| {
+            let mut action = None;
+            ctx.run_ui(
+                egui::RawInput {
+                    events: key
+                        .map(|key| egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        })
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+                |ui| {
+                    action = TemplatesButton::show_name_dialog(
+                        ui,
+                        Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(48.0, 200.0)),
+                        &mut name,
+                    );
+                },
+            )
+            .drop_without_applying_deltas();
+            (action, ctx.memory(|m| m.focused()))
+        };
+        frame(None);
+        let name_field = frame(None).1;
+        let save = frame(Some(egui::Key::Tab)).1;
+        assert_ne!(save, name_field);
+        frame(Some(egui::Key::Tab));
+        assert!(matches!(
+            frame(Some(egui::Key::Enter)).0,
+            Some(DrawingToolbarAction::None)
+        ));
+        assert!(name.is_empty());
     }
 }

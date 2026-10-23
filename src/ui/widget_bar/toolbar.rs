@@ -321,7 +321,7 @@ impl WidgetBar {
 
         // Check for clicks
         let btn_res = ui.interact(btn_rect, id, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &btn_res);
+        crate::styles::focus::draw_focus_ring(ui, &btn_res, self.config.hover_rounding);
         let is_hovered = btn_res.hovered();
         let is_pressed = btn_res.is_pointer_button_down_on();
 

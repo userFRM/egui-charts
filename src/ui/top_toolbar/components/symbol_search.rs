@@ -159,6 +159,7 @@ impl Default for SymbolSearchConfig {
 /// ```
 pub struct SymbolSearchDialog {
     is_open: bool,
+    focus_search: bool,
     search_query: String,
     sel_idx: usize,
     filtered_symbols: Vec<Symbol>,
@@ -178,6 +179,7 @@ impl SymbolSearchDialog {
     pub fn new() -> Self {
         Self {
             is_open: false,
+            focus_search: true,
             search_query: String::new(),
             sel_idx: 0,
             filtered_symbols: Vec::new(),
@@ -216,6 +218,7 @@ impl SymbolSearchDialog {
     /// Clears any previous search state and shows the dialog.
     pub fn open(&mut self) {
         self.is_open = true;
+        self.focus_search = true;
         self.search_query.clear();
         self.sel_idx = 0;
         self.category = Category(None);
@@ -277,10 +280,12 @@ impl SymbolSearchDialog {
         self.update_filtered_symbols(all_symbols);
         let mut sel_symbol = None;
         let mut should_close = false;
+        let search_id = egui::Id::unique("symbol_search_input");
+        let search_focused = ctx.memory(|m| m.has_focus(search_id));
         let (up, down) = ctx.input(|input| {
             (
-                input.key_pressed(egui::Key::ArrowUp),
-                input.key_pressed(egui::Key::ArrowDown),
+                search_focused && input.key_pressed(egui::Key::ArrowUp),
+                search_focused && input.key_pressed(egui::Key::ArrowDown),
             )
         });
         let keyboard_move = up || down;
@@ -309,6 +314,7 @@ impl SymbolSearchDialog {
                     );
                     let response = ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
+                            .id(search_id)
                             .font(egui::FontId::proportional(16.0))
                             .hint_text(RichText::new("Search symbols").size(16.0))
                             .frame(egui::Frame::NONE)
@@ -325,7 +331,7 @@ impl SymbolSearchDialog {
                         self.sel_idx = 0;
                         self.update_filtered_symbols(all_symbols);
                     }
-                    if self.search_query.is_empty() && !response.has_focus() {
+                    if std::mem::take(&mut self.focus_search) {
                         response.request_focus();
                     }
                 });
@@ -400,7 +406,10 @@ impl SymbolSearchDialog {
 
                 // Keyboard navigation
                 ui.input(|i| {
-                    if i.key_pressed(egui::Key::Enter) && !self.filtered_symbols.is_empty() {
+                    if search_focused
+                        && i.key_pressed(egui::Key::Enter)
+                        && !self.filtered_symbols.is_empty()
+                    {
                         sel_symbol = Some(self.filtered_symbols[self.sel_idx].clone());
                         should_close = true;
                     }
@@ -453,6 +462,7 @@ impl SymbolSearchDialog {
         let theme = ui.active_theme();
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 56.0), Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, 4.0);
         response.widget_info(|| {
             egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_sel, &symbol.name)
         });
@@ -891,6 +901,7 @@ impl CompareSymbolsDialog {
 
         let desired_size = Vec2::new(ui.available_width(), 56.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
 
         // Background on hover
         if response.hovered() && !is_compared {
@@ -965,44 +976,67 @@ mod tests {
     #[test]
     fn test_symbol_search_open_close() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            let ctx = Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            let mut dialog = SymbolSearchDialog::new();
-            assert!(!dialog.is_open());
-            dialog.open();
-            let mut frame = |events| {
-                ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            Pos2::ZERO,
-                            Vec2::new(1440.0, 900.0),
-                        )),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        let _ = dialog.show(ui.ctx(), &create_test_symbols());
-                    },
-                )
-                .drop_without_applying_deltas();
-            };
-            frame(vec![]);
-            frame(vec![]);
-            let pos = egui::pos2(10.0, 850.0);
-            frame(vec![egui::Event::PointerMoved(pos)]);
-            for pressed in [true, false] {
-                frame(vec![egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: Default::default(),
-                }]);
+            for keyboard in [false, true] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut dialog = SymbolSearchDialog::new();
+                assert!(!dialog.is_open());
+                dialog.open();
+                let mut frame = |events| {
+                    let mut picked = None;
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(1440.0, 900.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            picked = dialog.show(ui.ctx(), &create_test_symbols());
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                    picked
+                };
+                frame(vec![]);
+                frame(vec![]);
+                if keyboard {
+                    for key in [egui::Key::Tab, egui::Key::Enter] {
+                        assert!(
+                            frame(vec![egui::Event::Key {
+                                key,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            }])
+                            .is_none(),
+                            "closing must not pick a symbol"
+                        );
+                    }
+                } else {
+                    let pos = egui::pos2(10.0, 850.0);
+                    frame(vec![egui::Event::PointerMoved(pos)]);
+                    for pressed in [true, false] {
+                        frame(vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }]);
+                    }
+                }
+                assert!(
+                    !dialog.is_open(),
+                    "backdrop and keyboard dismissal close symbol search"
+                );
+                dialog.open();
+                assert!(dialog.is_open());
+                dialog.close();
+                assert!(!dialog.is_open());
             }
-            assert!(!dialog.is_open(), "a backdrop click closes symbol search");
-            dialog.open();
-            assert!(dialog.is_open());
-            dialog.close();
-            assert!(!dialog.is_open());
         }
     }
 

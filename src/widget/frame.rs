@@ -1412,7 +1412,7 @@ impl Chart {
         }
 
         // Focus ring for keyboard accessibility
-        crate::styles::focus::draw_focus_ring(ui, &shown);
+        crate::styles::focus::draw_focus_ring(ui, &shown, 0.0);
 
         shown
     }

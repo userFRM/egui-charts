@@ -78,6 +78,7 @@ impl SettingsMenu {
         let btn_id = ui.scope_id().with("settings_btn");
 
         let response = ui.interact(btn_rect, btn_id, egui::Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
 
         let visuals = ui.style().interact(&response);
         let bg_color = if response.hovered() {

@@ -404,7 +404,7 @@ impl IndicatorDialog {
         let star_res = Self::draw_favorite_star(ui, config, rect, is_favorite);
         let text_right = Self::draw_item_badges(ui, theme, rect, indicator, secondary);
         Self::draw_item_text(ui, rect, text_right, indicator, text);
-        draw_focus_ring(ui, &response);
+        draw_focus_ring(ui, &response, theme.radius.md);
 
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
         self.handle_item_clicks(indicator, is_favorite, enter, &response, &star_res, rect)
@@ -443,7 +443,7 @@ impl IndicatorDialog {
         let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
         icon.as_image_tinted(size, tint)
             .paint_at(ui, Rect::from_center_size(star_rect.center(), size));
-        draw_focus_ring(ui, &star_res);
+        draw_focus_ring(ui, &star_res, 0.0);
         star_res.on_hover_text(tooltip)
     }
 
