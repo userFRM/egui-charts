@@ -79,16 +79,30 @@ impl Chart {
         {
             let distance = drawing_manager.options.magnet_distance;
             let bars = &self.state.data().bars;
-            let first = x_to_bar_precise(pointer.x - distance).floor().max(0.0) as usize;
-            let end = ((x_to_bar_precise(pointer.x + distance).ceil().max(0.0) as usize)
-                .saturating_add(1))
-            .min(bars.len());
+            let strong = drawing_manager.options.strong_magnet;
+            let index = x_to_bar_snapped(pointer.x);
+            let first = if strong {
+                index.max(0.0) as usize
+            } else {
+                x_to_bar_precise(pointer.x - distance).floor().max(0.0) as usize
+            };
+            let end = if strong {
+                if index < 0.0 {
+                    0
+                } else {
+                    first.saturating_add(1).min(bars.len())
+                }
+            } else {
+                ((x_to_bar_precise(pointer.x + distance).ceil().max(0.0) as usize)
+                    .saturating_add(1))
+                .min(bars.len())
+            };
             for (i, bar) in bars.iter().enumerate().take(end).skip(first) {
                 let x = bar_to_x(i as f32);
                 let mut add_price = |price: f64| {
                     if price.is_finite() {
                         let point = Pos2::new(x, price_to_y(price));
-                        if price_rect.contains(point) {
+                        if point.is_finite() && (strong || price_rect.contains(point)) {
                             drawing_manager.snap_targets.push(point);
                         }
                     }
@@ -100,7 +114,7 @@ impl Chart {
                     .studies
                     .indicators()
                     .iter()
-                    .filter(|s| s.is_visible() && s.is_overlay())
+                    .filter(|s| !strong && s.is_visible() && s.is_overlay())
                 {
                     match study.values().get(i) {
                         Some(IndicatorValue::Single(price)) => add_price(*price),
@@ -200,14 +214,17 @@ mod tests {
         use crate::studies::{CustomIndicator, IndicatorValue};
         use egui::{Pos2, vec2};
 
-        for (magnet, price, overlay_visible, snaps) in [
-            (true, 10.0, true, true),
-            (true, 20.0, true, true),
-            (true, 12.0, true, true),
-            (true, 15.0, true, true),
-            (true, 17.0, true, true),
-            (false, 15.0, true, false),
-            (true, 15.0, false, false),
+        for (magnet, strong, price, overlay_visible, snaps, offset) in [
+            (true, false, 10.0, true, true, 3.0),
+            (true, false, 20.0, true, true, 3.0),
+            (true, false, 12.0, true, true, 3.0),
+            (true, false, 15.0, true, true, 3.0),
+            (true, false, 17.0, true, true, 3.0),
+            (false, false, 15.0, true, false, 3.0),
+            (true, false, 15.0, false, false, 3.0),
+            (true, true, 20.0, false, true, 40.0),
+            (true, false, 20.0, false, false, 40.0),
+            (true, true, 10.0, false, true, 40.0),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
@@ -230,6 +247,7 @@ mod tests {
                 chart.set_visible_bars(visible);
                 chart.set_start_idx(start);
                 chart.drawings_mut().options.magnet_mode = magnet;
+                chart.drawings_mut().options.strong_magnet = strong;
                 chart.drawings_mut().update_snap_options();
                 time += 0.1;
                 frame(&ctx, &mut chart, time, vec![]);
@@ -238,7 +256,7 @@ mod tests {
                 let middle = (first + last) / 2;
                 let bar = middle + (4 - middle % 3) % 3;
                 let target = Pos2::new(map.idx_to_x(bar), map.price_to_y(price));
-                let near = target + vec2(2.0, if price == 10.0 { -3.0 } else { 3.0 });
+                let near = target + vec2(2.0, if price == 10.0 { -offset } else { offset });
                 let expected_price = if snaps { price } else { map.y_to_price(near.y) };
                 let button = |pos, pressed| Event::PointerButton {
                     pos,
@@ -283,7 +301,7 @@ mod tests {
                 let before = drawing.chart_points[0];
                 chart.drawings_mut().select(id);
                 let to = Pos2::new(map.idx_to_x(bar + 3), map.price_to_y(price))
-                    + vec2(2.0, if price == 20.0 { 3.0 } else { -3.0 });
+                    + vec2(2.0, if price == 20.0 { offset } else { -offset });
                 step(&mut chart, vec![Event::PointerMoved(from)]);
                 step(&mut chart, vec![button(from, true)]);
                 step(&mut chart, vec![Event::PointerMoved(from + vec2(7.0, 0.0))]);

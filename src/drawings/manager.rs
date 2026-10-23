@@ -85,6 +85,9 @@ pub struct DrawingManagerOptions {
     pub magnet_mode: bool,
     /// Magnet snap distance threshold in screen pixels.
     pub magnet_distance: f32,
+    /// Snap to the nearest OHLC value of the bar under the pointer regardless of distance.
+    /// Requires `magnet_mode`; `false` retains the pixel threshold and nearby overlay targets.
+    pub strong_magnet: bool,
     /// Configuration for selection handle appearance and hit testing.
     pub handle_config: HandleConfig,
 }
@@ -98,6 +101,7 @@ impl Default for DrawingManagerOptions {
             snap_distance: DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs,
             magnet_mode: false,
             magnet_distance: DESIGN_TOKENS.sizing.drawing.magnet_distance,
+            strong_magnet: false,
             handle_config: HandleConfig::default(),
         }
     }
@@ -340,6 +344,16 @@ impl DrawingManager {
     /// Targets keep their time and price paired. A dragged drawing cannot snap to itself.
     /// Drawing anchors are borrowed without flattening or cloning their geometry.
     pub fn snap_point(&self, point: Pos2, drawings: &[Drawing]) -> Pos2 {
+        if self.options.magnet_mode
+            && self.options.strong_magnet
+            && let Some(target) = self
+                .snap_targets
+                .iter()
+                .filter(|p| p.is_finite())
+                .min_by(|a, b| (a.y - point.y).abs().total_cmp(&(b.y - point.y).abs()))
+        {
+            return *target;
+        }
         self.snap_service.snap_point_with_drawing_points(
             point,
             &[],
