@@ -50,7 +50,7 @@ pub(crate) fn draw_dashed_polyline(
     }
 }
 
-fn draw_dashed_segment(
+pub(super) fn draw_dashed_segment(
     painter: &egui::Painter,
     start: Pos2,
     end: Pos2,

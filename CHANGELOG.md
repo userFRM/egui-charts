@@ -119,6 +119,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Baseline dashes keep their spacing across short segments and base crossings. ([#562](https://github.com/userFRM/egui-charts/issues/562))
+- Renko wicks retain unfinished price moves beyond the last completed brick when the next brick reverses direction. ([#633](https://github.com/userFRM/egui-charts/issues/633))
+
 - Resetting series settings keeps the active chart type in the dialog, so its style controls remain visible.
 
 - Dashed and dotted series retain their pattern when zooming out makes individual segments shorter than one point.

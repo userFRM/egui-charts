@@ -301,6 +301,7 @@ fn draw_baseline_segments(
             coords.price_to_y(value),
         )
     };
+    let mut distance = 0.0;
     for i in 1..data.len() {
         let (prev, curr) = (point(i - 1), point(i));
         // A segment that crosses the base line is split there, in screen space, where the
@@ -310,11 +311,20 @@ fn draw_baseline_segments(
         if crossing {
             let t = (baseline_y - prev.y) / (curr.y - prev.y);
             let cross = Pos2::new(prev.x + (curr.x - prev.x) * t, baseline_y);
-            draw_baseline_part(painter, coords, prev, cross, baseline_y, style);
-            draw_baseline_part(painter, coords, cross, curr, baseline_y, style);
+            draw_baseline_part(painter, coords, prev, cross, baseline_y, style, distance);
+            draw_baseline_part(
+                painter,
+                coords,
+                cross,
+                curr,
+                baseline_y,
+                style,
+                distance + f64::from(prev.distance(cross)),
+            );
         } else {
-            draw_baseline_part(painter, coords, prev, curr, baseline_y, style);
+            draw_baseline_part(painter, coords, prev, curr, baseline_y, style, distance);
         }
+        distance += f64::from(prev.distance(curr));
     }
 }
 
@@ -326,6 +336,7 @@ fn draw_baseline_part(
     b: Pos2,
     baseline_y: f32,
     style: &BaselineStyle,
+    distance: f64,
 ) {
     // The side is decided by value, so an inverted price scale keeps its colours; a part that
     // only touches the base line takes its other side.
@@ -337,13 +348,96 @@ fn draw_baseline_part(
         };
     let fill_points = vec![a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)];
     painter.add(Shape::convex_polygon(fill_points, fill, Stroke::NONE));
-    draw_styled_line(painter, vec![a, b], line);
+    if !line.width.is_finite() || line.width <= 0.0 {
+        return;
+    }
+    let stroke = Stroke::new(line.width, line.color);
+    if let Some((dash, gap)) = line.style.dash_pattern() {
+        crate::chart::rendering::dashed_line::draw_dashed_segment(
+            painter,
+            a,
+            b,
+            stroke,
+            dash,
+            gap,
+            distance.rem_euclid(f64::from(dash + gap)),
+        );
+    } else {
+        painter.line_segment([a, b], stroke);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui::{Context, LayerId, RawInput, pos2, vec2};
+
+    #[test]
+    fn baseline_dashes_keep_phase_across_short_segments_and_crossings() {
+        use crate::model::LineStyle;
+        use crate::scales::{PriceRange, PriceTransform};
+        for (first, last) in [(105.0, 105.0), (95.0, 95.0), (103.0, 97.0)] {
+            for inverted in [false, true] {
+                let ctx = Context::default();
+                let map = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(90.0, 110.0),
+                    0.0,
+                    100.0,
+                    inverted,
+                );
+                let bars: Vec<_> = (0..=60)
+                    .map(|i| {
+                        let price = first + (last - first) * f64::from(i) / 60.0;
+                        Bar::new(
+                            chrono::DateTime::UNIX_EPOCH,
+                            price,
+                            price,
+                            price,
+                            price,
+                            0.0,
+                        )
+                    })
+                    .collect();
+                let mut style = BaselineStyle::default();
+                style.above.style = LineStyle::Dashed;
+                style.below.style = LineStyle::Dashed;
+                let output = ctx.run_ui(RawInput::default(), |_| {
+                    let painter = Painter::new(
+                        ctx.clone(),
+                        LayerId::background(),
+                        Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)),
+                    );
+                    draw_baseline_segments(
+                        &painter,
+                        &bars,
+                        0,
+                        &map,
+                        map.price_to_y(100.0),
+                        0.0,
+                        |i, _| 10.0 + i as f32 / 2.0,
+                        &style,
+                        PriceSource::Close,
+                    );
+                });
+                let ink: f32 = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::LineSegment { points, .. } => Some(points[0].distance(points[1])),
+                        _ => None,
+                    })
+                    .sum();
+                let length = 30.0_f32.hypot(map.price_to_y(last) - map.price_to_y(first));
+                let expected = (length / 12.0).floor() * 8.0 + (length % 12.0).min(8.0);
+                output.drop_without_applying_deltas();
+                assert!(
+                    (ink - expected).abs() < 0.001,
+                    "{first} -> {last}, inverted={inverted}: {ink} != {expected}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn area_gradient_uses_visible_high_and_reaches_the_plot_bottom() {

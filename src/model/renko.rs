@@ -228,7 +228,8 @@ impl PriceBuilder for RenkoBuilder {
             }
         }
         self.last = Some(last);
-        self.extremes = Some((wick_low, wick_high));
+        // Keep the unfinished move beyond the last brick for the next wick.
+        self.extremes = Some((wick_low.min(price), wick_high.max(price)));
     }
 
     fn elements(&self) -> Vec<RenkoBrick> {

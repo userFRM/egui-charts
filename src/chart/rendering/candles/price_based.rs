@@ -427,6 +427,16 @@ mod tests {
         let (updated, _) = elements(ChartType::Renko, &params, &tick, 0).unwrap();
         assert_eq!((updated[3].high, updated[3].low), (104.0, 101.5));
         assert_eq!((updated[4].high, updated[4].low), (105.0, 104.0));
+        // A partial move beyond the last completed brick belongs to the next wick.
+        for (closes, high, low) in [
+            ([100.0, 103.8, 101.0], 103.8, 101.0),
+            ([100.0, 96.2, 99.0], 99.0, 96.2),
+        ] {
+            let data = bars(20, &closes, None);
+            let (built, _) = elements(ChartType::Renko, &params, &data, 0).unwrap();
+            let last = built.last().unwrap();
+            assert_eq!((last.high, last.low), (high, low));
+        }
     }
 
     #[test]
