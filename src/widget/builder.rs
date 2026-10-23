@@ -106,6 +106,7 @@ impl Chart {
             studies: IndicatorRegistry::new(),
             study_ids: Vec::new(),
             pending_from: Vec::new(),
+            last_refresh: Vec::new(),
             // 0 and 1 are the main and volume series.
             next_series: 2,
             drawings: DrawingManager::new(),

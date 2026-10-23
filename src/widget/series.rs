@@ -36,6 +36,8 @@ impl Chart {
         self.drawings
             .shift_bar_indices(f32::NEG_INFINITY, prepended as f32);
         self.bars_changed(before, first_changed);
+        // A replaced series is shown at once, however recently the studies were refreshed.
+        self.last_refresh.fill(f64::NEG_INFINITY);
     }
 
     /// Merges `bar` into the bars of `series` as [`Sink::push_bar`](crate::data::Sink::push_bar)
@@ -118,6 +120,7 @@ impl Chart {
         self.studies.add(indicator);
         self.study_ids.push(id);
         self.pending_from.push(None);
+        self.last_refresh.push(f64::NEG_INFINITY);
         id
     }
 
@@ -130,6 +133,7 @@ impl Chart {
         self.studies.remove_indicator(at);
         self.study_ids.remove(at);
         self.pending_from.remove(at);
+        self.last_refresh.remove(at);
         if self.selection.selected_id() == Some(ChartElementId::Indicator(id)) {
             self.selection.deselect();
         }
@@ -148,7 +152,8 @@ impl Chart {
 
     /// The chart's studies with their ids, in the order they were added. Their values reflect the
     /// bars as of the last [`show`](Self::show), or of the call to
-    /// [`add_indicator`](Self::add_indicator).
+    /// [`add_indicator`](Self::add_indicator). While bars stream, a study that does not update
+    /// incrementally can lag them by up to 0.25 s.
     pub fn indicators(&self) -> impl Iterator<Item = (SeriesId, &dyn Indicator)> {
         let studies = self.studies.indicators().iter().map(|study| study.as_ref());
         self.study_ids.iter().copied().zip(studies)
@@ -159,18 +164,33 @@ impl Chart {
     pub fn indicator_mut(&mut self, id: SeriesId) -> Option<&mut (dyn Indicator + 'static)> {
         let at = self.study_ids.iter().position(|study| *study == id)?;
         self.pending_from[at] = Some(0);
+        self.last_refresh[at] = f64::NEG_INFINITY;
         Some(self.studies.indicators_mut()[at].as_mut())
     }
 
-    /// Updates every study with a pending change from the first bar it must be updated from.
-    pub(super) fn refresh_studies(&mut self) {
+    /// Updates every study with a pending change from the first bar it must be updated from, as
+    /// of `now` in seconds. A study that does not update incrementally waits until
+    /// [`REFRESH_INTERVAL`] has passed since its last refresh, unless the series was replaced.
+    /// Returns how long the first waiting study still waits.
+    pub(super) fn refresh_studies(&mut self, now: f64) -> Option<f64> {
         let bars = &self.state.data().bars;
         let studies = self.studies.indicators_mut().iter_mut();
-        for (study, from) in studies.zip(&mut self.pending_from) {
-            if let Some(from) = from.take() {
-                study.update(bars, from);
+        let pending = self.pending_from.iter_mut().zip(&mut self.last_refresh);
+        let mut wait = None::<f64>;
+        for (study, (from, last)) in studies.zip(pending) {
+            let Some(start) = *from else {
+                continue;
+            };
+            let due = *last + REFRESH_INTERVAL;
+            if study.is_incremental() || now >= due {
+                study.update(bars, start);
+                *from = None;
+                *last = now;
+            } else {
+                wait = Some(wait.map_or(due - now, |wait| wait.min(due - now)));
             }
         }
+        wait
     }
 
     /// Keeps studies and the view in step after the main bars changed. `first_changed` is the
@@ -224,6 +244,10 @@ impl Chart {
     }
 }
 
+/// Seconds a study that does not update incrementally waits between two refreshes while bars
+/// stream, so a full recompute costs at most four frames a second.
+const REFRESH_INTERVAL: f64 = 0.25;
+
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
 struct Edge {
     first: Option<DateTime<Utc>>,
@@ -260,8 +284,10 @@ mod tests {
     use super::super::test_frames::frame;
     use super::*;
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
-    use crate::studies::{IndicatorValue, SMA};
+    use crate::studies::{IndicatorValue, RSI, SMA};
     use chrono::TimeDelta;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A flat bar at `close`, stamped `seconds` after 10:00.
     fn bar(seconds: i64, close: f64) -> Bar {
@@ -392,6 +418,102 @@ mod tests {
             let feed = chart.feed_state(SeriesId::MAIN).unwrap();
             assert_eq!(feed.rejected_bars, rejected, "{name}: rejected");
         }
+    }
+
+    /// RSI, counting the calls that recompute it.
+    struct Counted(RSI, Arc<AtomicUsize>);
+
+    impl Indicator for Counted {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        fn calculate(&mut self, data: &[Bar]) {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            self.0.calculate(data);
+        }
+        fn update(&mut self, data: &[Bar], from: usize) {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            self.0.update(data, from);
+        }
+        fn values(&self) -> &[IndicatorValue] {
+            self.0.values()
+        }
+        fn colors(&self) -> Vec<egui::Color32> {
+            self.0.colors()
+        }
+        fn set_colors(&mut self, colors: Vec<egui::Color32>) {
+            self.0.set_colors(colors);
+        }
+        fn is_overlay(&self) -> bool {
+            self.0.is_overlay()
+        }
+        fn set_visible(&mut self, visible: bool) {
+            self.0.set_visible(visible);
+        }
+        fn clone_box(&self) -> Box<dyn Indicator> {
+            Box::new(Counted(self.0.clone(), Arc::clone(&self.1)))
+        }
+    }
+
+    /// Guards the cost and the freshness of studies while bars stream: a study that does not
+    /// update incrementally is refreshed at most four times a second and once more after the
+    /// stream stops, an incremental one on every frame, and both end equal to a fresh
+    /// calculation. A refresh on every frame, a pending change lost after the last update, or
+    /// the wait applied to an incremental study fails it.
+    #[test]
+    fn slow_studies_refresh_four_times_a_second_and_end_current() {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..100).map(|i| bar(i * 60, i as f64)).collect(),
+        ));
+        let sma = chart.add_indicator(Box::new(SMA::new(5)));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rsi = chart.add_indicator(Box::new(Counted(RSI::new(14), Arc::clone(&calls))));
+        let values = |chart: &Chart, id| {
+            let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
+            format!("{:?}", study.values())
+        };
+        let fresh = |chart: &Chart, mut study: Box<dyn Indicator>| {
+            study.calculate(chart.bars(SeriesId::MAIN));
+            format!("{:?}", study.values())
+        };
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        calls.store(0, Ordering::Relaxed);
+        let mut time = 0.0;
+        for i in 0..60 {
+            time += 1.0 / 60.0;
+            // Alternately a new close of the last bar and a new bar.
+            chart.update(
+                SeriesId::MAIN,
+                bar((100 + i / 2) * 60, 50.0 + (i * 7 % 13) as f64),
+            );
+            frame(&ctx, &mut chart, time, Vec::new());
+            assert_eq!(
+                values(&chart, sma),
+                fresh(&chart, Box::new(SMA::new(5))),
+                "SMA at {i}"
+            );
+        }
+        assert!(
+            calls.load(Ordering::Relaxed) <= 4,
+            "{calls:?} refreshes while streaming"
+        );
+        let streamed = calls.load(Ordering::Relaxed);
+        let stop = time;
+        while time < stop + 0.25 {
+            time += 1.0 / 60.0;
+            frame(&ctx, &mut chart, time, Vec::new());
+        }
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            streamed + 1,
+            "one refresh after the stream"
+        );
+        assert_eq!(
+            values(&chart, rsi),
+            fresh(&chart, Box::new(RSI::new(14))),
+            "RSI"
+        );
     }
 
     /// Guards the drawing shift of a merge: a point moves by the number of bars inserted in front

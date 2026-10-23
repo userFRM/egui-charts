@@ -239,6 +239,8 @@ pub struct Chart {
     pub(crate) study_ids: Vec<SeriesId>,
     /// For each study in `studies`, the first bar it must be updated from on the next frame.
     pub(crate) pending_from: Vec<Option<usize>>,
+    /// For each study in `studies`, the input time of its last refresh, in seconds.
+    pub(crate) last_refresh: Vec<f64>,
     /// Id of the next study added.
     pub(crate) next_series: usize,
     /// The chart's drawings and the active drawing tool.

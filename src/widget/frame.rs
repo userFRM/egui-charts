@@ -142,12 +142,16 @@ impl Chart {
     /// pane, any other visible study (RSI, MACD) in a pane below it with its
     /// x-axis aligned to the main pane; [`Chart::get_rendered_indicator_panes`]
     /// returns their layout. A chart built with a feed first asks it for what it needs and
-    /// applies what it sent; studies are then brought up to date.
+    /// applies what it sent; studies are then brought up to date. While bars stream, a study
+    /// that does not update incrementally is refreshed at most four times a second.
     ///
     /// Returns an [`egui::Response`] for additional interaction handling.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
         self.pump(ui.ctx());
-        self.refresh_studies();
+        if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
         self.last_rendered_indicator_panes.clear();
         // Only pane studies need the pane layout, which gives the main pane at
         // least 200 points; without one the chart keeps the space it is given.
