@@ -3,6 +3,7 @@
 //! A floating toolbar for controlling bar replay.
 //! Displays play/pause, step controls, and speed selector.
 
+use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
@@ -435,25 +436,16 @@ impl FloatingReplayControl {
                         + spacing.icon_spacing
                         + spacing.icon_width
                         + 2.0 * spacing.button_padding.x;
-                    let current_speed = ReplaySpeed::from_multiplier(self.state.speed);
-                    egui::ComboBox::from_id_salt("replay_speed_selector")
-                        .selected_text(
-                            RichText::new(current_speed.label())
-                                .font(font.clone())
-                                .color(theme.ui.text),
-                        )
-                        .width(combo_width)
-                        .show_ui(ui, |ui| {
-                            for speed in ReplaySpeed::all() {
-                                let is_selected = *speed == current_speed;
-                                let response = ui.selectable_label(is_selected, speed.label());
-                                if response.clicked() && !is_selected {
-                                    action = ReplayControlAction::SetSpeed(speed.multiplier());
-                                }
-                            }
-                        })
-                        .response
-                        .on_hover_text("Playback speed");
+                    let mut speed = ReplaySpeed::from_multiplier(self.state.speed);
+                    if ui.combo_select_width(
+                        "replay_speed_selector",
+                        &mut speed,
+                        ReplaySpeed::all().iter().copied(),
+                        |speed| speed.label().to_owned(),
+                        combo_width,
+                    ) {
+                        action = ReplayControlAction::SetSpeed(speed.multiplier());
+                    }
 
                     ui.separator();
 
@@ -477,17 +469,28 @@ impl FloatingReplayControl {
 
                     ui.separator();
 
-                    if Button::new("Exit replay")
-                        .secondary()
-                        .size(ButtonSize::MD)
-                        .show(ui)
-                        .clicked()
-                    {
+                    let exit = ui
+                        .scope(|ui| {
+                            let widgets = &mut ui.visuals_mut().widgets;
+                            for visuals in [
+                                &mut widgets.inactive,
+                                &mut widgets.hovered,
+                                &mut widgets.active,
+                            ] {
+                                visuals.fg_stroke.color = theme.ui.error;
+                            }
+                            Button::new("Exit replay")
+                                .secondary()
+                                .size(ButtonSize::MD)
+                                .show(ui)
+                        })
+                        .inner;
+                    if exit.clicked() {
                         action = ReplayControlAction::Stop;
                     }
 
                     if IconButton::new(&icons::CLOSE)
-                        .size(ButtonSize::SM)
+                        .size(ButtonSize::MD)
                         .tooltip("Hide replay controls")
                         .show(ui)
                         .clicked()
