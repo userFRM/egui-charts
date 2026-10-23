@@ -65,6 +65,7 @@ fn indicator_from_tree_id(id: usize) -> Option<SeriesId> {
 enum SidePanel {
     ObjectTree,
     Alerts,
+    DataWindow,
 }
 
 /// Export formats the demo can perform, with browser downloads on the web.
@@ -142,6 +143,7 @@ pub struct DemoApp {
     // Right-hand side panel.
     object_tree: ObjectTreePanel,
     open_panel: Option<SidePanel>,
+    data_window_expanded: bool,
 
     // In-memory alert store. `AlertManager` exposes no mutators, so the demo
     // owns its alerts for the session (no fake persistence).
@@ -206,6 +208,12 @@ impl DemoApp {
             );
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
+        widget_bar.widgets.push(egui_charts::ui::widget_bar::WidgetBarWidget {
+            id: 1,
+            icon: egui_charts::icons::icons::WATCHLIST,
+            tooltip: "Data Window".into(),
+            section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
+        });
         let mut timeframe_toolbar = TimeframeToolbar::default();
         timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
         timeframe_toolbar.state.timeframe = timeframe;
@@ -239,6 +247,7 @@ impl DemoApp {
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
             open_panel: None,
+            data_window_expanded: true,
             alerts: Vec::new(),
             next_alert_id: 1,
             replay: None,
@@ -932,8 +941,16 @@ impl DemoApp {
             }))
             .show(ui, |ui| {
                 let action = self.widget_bar.show(ui);
-                if let WidgetBarAction::Clicked(icon) = action {
-                    self.toggle_panel(icon);
+                match action {
+                    WidgetBarAction::Clicked(icon) => self.toggle_panel(icon),
+                    WidgetBarAction::WidgetClicked(1) => {
+                        self.open_panel = if self.open_panel == Some(SidePanel::DataWindow) {
+                            None
+                        } else {
+                            Some(SidePanel::DataWindow)
+                        };
+                    }
+                    _ => {}
                 }
             });
     }
@@ -967,6 +984,11 @@ impl DemoApp {
             .show(ui, |ui| match which {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
+                SidePanel::DataWindow => {
+                    self.data_window_expanded = egui_charts::ui::widget_bar::panels::object_tree::show_data_window(
+                        ui, &self.build_data_window(), self.data_window_expanded,
+                    );
+                }
             });
     }
 
@@ -1007,7 +1029,10 @@ impl DemoApp {
     }
 
     fn build_data_window(&self) -> DataWindowInfo {
-        let last = self.chart.bars(SeriesId::MAIN).last();
+        let bars = self.chart.bars(SeriesId::MAIN);
+        let last = self.chart.get_hover_bar_idx()
+            .and_then(|index| bars.get(index.round() as usize))
+            .or_else(|| bars.last());
         let mut info = DataWindowInfo::new(self.state.symbol.clone())
             .with_timeframe(self.state.timeframe.as_str().to_string());
         if let Some(b) = last {

@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The demo exposes the existing Data Window as a host entry in the right rail and reads the hovered bar. `show_data_window` is exported for hosts that display it independently of the object tree.
+
 - `Chart::set_session_quote` and `set_events` connect independent session prices and event badges to the chart. `take_event_click` and `take_scale_settings_request` route clicks to the host; the price-tag add cell opens the existing context menu. Current close tags include a countdown when a supplied quote belongs to that bar, and volume has its own tag at the pane bottom.
 
 - `CrosshairStyle::Demonstration` and `CursorType::Demonstration` draw a fading pointer trail. The demo starts in Arrow mode, with following axis tags, and dispatches cursor picks to the chart. `TooltipOptions::on_long_press` restricts values to a held pointer, waiting half a second for touch; the floating panel includes absolute and percentage change from the previous close and marks series points while held. `Chart::set_tooltip_enabled` connects the values switch without resetting the viewport. Migration: exhaustive cursor matches need a Demonstration arm; tooltip struct literals need `on_long_press` or the default.
