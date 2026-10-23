@@ -17,7 +17,7 @@
 //! |--------|---------|
 //! | [`coords`] | Unified coordinate system: the one mapping between bar index or price and the screen |
 //! | [`series`] | Series hit testing, selection and display settings |
-//! | [`overlays`] | Visual overlays: order lines, heatmap strips, volume bubbles |
+//! | [`overlays`] | Visual overlays: heatmap strips, volume bubbles |
 //!
 //! # Internal Modules (crate-only)
 //!

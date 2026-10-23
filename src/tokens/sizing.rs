@@ -320,8 +320,6 @@ pub struct PositionToolSizingTokens {
 pub struct ChartsExtSizingTokens {
     pub volume_bubbles_max_diameter: f32,
     pub heatmap_strip_height: f32,
-    pub order_line_label_width: f32,
-    pub order_line_label_height: f32,
     pub realtime_button_width: f32,
 }
 
