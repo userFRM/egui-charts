@@ -45,7 +45,7 @@
 //! # }
 //! ```
 //!
-//! Feature-complete object tree panel.
+//! Drawing and study operations are applied with `ObjectTreePanel::apply_to_chart`.
 
 mod actions;
 mod chart_actions;

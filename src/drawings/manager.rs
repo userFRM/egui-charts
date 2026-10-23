@@ -250,6 +250,15 @@ impl DrawingManager {
         self.selection.select(id);
     }
 
+    /// Replace the selected drawings with the supplied live ids.
+    pub fn select_drawings(&mut self, ids: impl IntoIterator<Item = usize>) {
+        self.selection.deselect_all();
+        self.selection.select_all(
+            ids.into_iter()
+                .filter(|id| self.drawings.iter().any(|d| d.id == *id)),
+        );
+    }
+
     /// Deselects all drawings.
     pub fn deselect(&mut self) {
         self.selection.deselect_all();
@@ -286,14 +295,28 @@ impl DrawingManager {
         &mut self,
         step: fn(&mut HistoryService, &mut Vec<Drawing>) -> Option<usize>,
     ) -> bool {
-        let before: Vec<_> = self.drawings.iter().map(|d| (d.id, sync_id(d))).collect();
+        let before: Vec<_> = self
+            .drawings
+            .iter()
+            .map(|d| (d.id, sync_id(d), d.z_order))
+            .collect();
         let Some(id) = step(&mut self.history, &mut self.drawings) else {
             return false;
         };
-        let was = before.into_iter().find(|&(i, _)| i == id);
+        for &(changed_id, _, old_layer) in &before {
+            if changed_id != id
+                && self
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == changed_id && d.z_order != old_layer)
+            {
+                self.queue(DrawingSyncAction::UpdateDrawing(changed_id));
+            }
+        }
+        let was = before.into_iter().find(|&(i, _, _)| i == id);
         match (was, self.drawings.iter().any(|d| d.id == id)) {
             (Some(_), true) => self.queue(DrawingSyncAction::UpdateDrawing(id)),
-            (Some((_, stored_id)), false) => self.queue(DrawingSyncAction::Delete(stored_id)),
+            (Some((_, stored_id, _)), false) => self.queue(DrawingSyncAction::Delete(stored_id)),
             (None, true) => self.queue(DrawingSyncAction::SaveDrawing(id)),
             (None, false) => {}
         }
@@ -633,14 +656,13 @@ impl DrawingManager {
             self.queue(DrawingSyncAction::Delete(sync_id(&drawing)));
             self.history.push_delete(drawing);
         }
-        if self.selection.primary() == Some(id) {
-            self.selection.deselect_all();
-        }
+        self.selection.deselect(id);
     }
 
-    /// Deletes the currently selected drawing (if any).
+    /// Deletes the selected drawings, keeping any locked ones.
     pub fn delete_selected(&mut self) {
-        if let Some(id) = self.selection.primary() {
+        let ids: Vec<_> = self.selection.selected_ids().collect();
+        for id in ids {
             self.delete_drawing(id);
         }
     }
@@ -674,6 +696,37 @@ impl DrawingManager {
     pub fn send_to_back(&mut self, id: usize) {
         ZOrderService::send_to_back(&mut self.drawings, id);
         self.queue_update(id);
+    }
+
+    /// Apply a layer move as one undo step, saving each changed drawing.
+    pub fn reorder_drawings(&mut self, id: usize, layers: &[(usize, i32)]) {
+        let mut previous = Vec::new();
+        for &(id, layer) in layers {
+            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id)
+                && drawing.z_order != layer
+            {
+                previous.push((id, drawing.z_order));
+                drawing.z_order = layer;
+                self.queue(DrawingSyncAction::UpdateDrawing(id));
+            }
+        }
+        if !previous.is_empty() {
+            self.history.push_reorder(id, previous);
+        }
+    }
+
+    /// Duplicate a drawing three bars to the right, recording its creation for undo and saving.
+    pub fn duplicate_drawing(&mut self, id: usize) {
+        let Some(mut copy) = self.drawings.iter().find(|d| d.id == id).cloned() else {
+            return;
+        };
+        copy.stored_id = None;
+        copy.created_at = None;
+        for point in &mut copy.chart_points {
+            point.bar_idx += 3.0;
+        }
+        self.add_synced_drawing(copy);
+        self.history.push_add(self.drawings.last().unwrap().clone());
     }
 
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
@@ -913,10 +966,10 @@ impl DrawingManager {
             drawing.render(painter, price_rect, view);
         }
 
-        // Render handles for selected drawing
-        if let Some(sel_id) = self.selection.primary()
-            && let Some(drawing) = self.drawings.iter().find(|d| d.id == sel_id)
-        {
+        // Render handles for every visible selected drawing.
+        for drawing in self.drawings.iter().filter(|d| {
+            self.selection.is_selected(d.id) && d.is_visible_on_timeframe(&self.curr_timeframe)
+        }) {
             self.render_handles(painter, drawing);
         }
     }
@@ -1076,7 +1129,32 @@ mod tests {
     #[test]
     fn every_edit_queues_one_sync_action() {
         type Edit = fn(&mut DrawingManager);
-        let cases: [(Edit, &[&str]); 11] = [
+        let cases: [(Edit, &[&str]); 13] = [
+            (
+                |m| {
+                    m.duplicate_drawing(0);
+                    m.undo();
+                    m.redo();
+                },
+                &["Save(1)", "Delete(1)", "Save(1)"],
+            ),
+            (
+                |m| {
+                    m.add_synced_drawing(Drawing::new(1, DrawingToolType::HorizontalLine));
+                    m.reorder_drawings(0, &[(0, 1), (1, 2)]);
+                    m.undo();
+                    m.redo();
+                },
+                &[
+                    "Save(1)",
+                    "Update(0)",
+                    "Update(1)",
+                    "Update(1)",
+                    "Update(0)",
+                    "Update(1)",
+                    "Update(0)",
+                ],
+            ),
             (|m| m.clear_all(), &["Delete(a1b2)"]),
             (|m| m.toggle_visibility_all(), &["Update(0)"]),
             (|m| m.toggle_lock_all(), &["Update(0)"]),
@@ -1179,6 +1257,17 @@ mod tests {
         manager.select(1);
         assert_eq!(manager.sel_drawing(), Some(1));
         manager.deselect();
+        assert_eq!(manager.sel_drawing(), None);
+        manager.drawings = (1..=3)
+            .map(|id| Drawing::new(id, DrawingToolType::TrendLine))
+            .collect();
+        manager.select_drawings([1, 2, 99]);
+        assert_eq!(manager.selection.selection_count(), 2);
+        manager.delete_selected();
+        assert_eq!(
+            manager.drawings.iter().map(|d| d.id).collect::<Vec<_>>(),
+            [3]
+        );
         assert_eq!(manager.sel_drawing(), None);
     }
 

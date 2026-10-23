@@ -28,7 +28,7 @@ pub(super) fn render_item_menu(
     }
 
     // Rename
-    if ui.selectable_label(false, "Rename…").clicked() {
+    if item.is_drawing() && ui.selectable_label(false, "Rename…").clicked() {
         state.start_rename(id, item.display_name());
         ui.close();
     }
@@ -36,7 +36,8 @@ pub(super) fn render_item_menu(
     ui.separator();
 
     // Duplicate (drawings and indicators)
-    if item.source_type != SourceType::Template && ui.selectable_label(false, "Duplicate").clicked()
+    if (item.is_drawing() || item.is_indicator())
+        && ui.selectable_label(false, "Duplicate").clicked()
     {
         action = ObjectTreeAction::Duplicate(id);
         ui.close();
@@ -85,7 +86,7 @@ pub(super) fn render_item_menu(
     ui.separator();
 
     // Zoom to
-    if ui.selectable_label(false, "Zoom to object").clicked() {
+    if item.is_drawing() && ui.selectable_label(false, "Zoom to object").clicked() {
         action = ObjectTreeAction::ZoomTo(id);
         ui.close();
     }
@@ -98,7 +99,9 @@ pub(super) fn render_item_menu(
     } else {
         "Delete"
     };
-    if ui.selectable_label(false, delete_label).clicked() {
+    if item.source_type != SourceType::DataSource
+        && ui.selectable_label(false, delete_label).clicked()
+    {
         action = if item.source_type == SourceType::Indicator {
             ObjectTreeAction::RemoveIndicator(id)
         } else {
@@ -149,8 +152,8 @@ pub fn handle_keyboard_shortcuts(
             return ObjectTreeAction::Rename(id, name);
         }
         if let Some(&id) = state.selected_ids.iter().next()
+            && let Some(source) = sources.iter().find(|s| s.id == id && s.is_drawing())
             && i.consume_key(modifiers, Key::F2)
-            && let Some(source) = sources.iter().find(|s| s.id == id)
         {
             state.start_rename(id, source.display_name());
         }

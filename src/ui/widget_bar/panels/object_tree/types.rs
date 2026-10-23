@@ -118,7 +118,7 @@ impl Default for DrawingProperties {
 pub struct SourceItem {
     /// Unique identifier
     pub id: usize,
-    /// Chart study id used by `ObjectTreePanel::apply_to_chart`; drawing rows use `id`.
+    /// Chart series id used by `ObjectTreePanel::apply_to_chart`; drawing rows use `id`.
     pub series_id: Option<crate::widget::SeriesId>,
     /// Source type (indicator, drawing, template)
     pub source_type: SourceType,
@@ -266,7 +266,7 @@ impl SourceItem {
         }
     }
 
-    /// Bind an indicator row to its chart study without overloading the tree's id namespace.
+    /// Bind a data-source or indicator row to its chart series without overloading the tree's ids.
     pub fn with_series_id(mut self, id: crate::widget::SeriesId) -> Self {
         self.series_id = Some(id);
         self

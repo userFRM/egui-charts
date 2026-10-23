@@ -312,18 +312,20 @@ fn render_row_content(
     } else {
         ui.visuals().text_color()
     };
-    let del_response = ui.put(
-        del_rect,
-        egui::Label::new(egui::RichText::new("X").color(button_color)).sense(Sense::click()),
-    );
-    if del_response.clicked() {
-        *action = if item.source_type == SourceType::Indicator {
-            ObjectTreeAction::RemoveIndicator(item.id)
-        } else {
-            ObjectTreeAction::Delete(item.id)
-        };
+    if item.source_type != SourceType::DataSource {
+        let del_response = ui.put(
+            del_rect,
+            egui::Label::new(egui::RichText::new("X").color(button_color)).sense(Sense::click()),
+        );
+        if del_response.clicked() {
+            *action = if item.source_type == SourceType::Indicator {
+                ObjectTreeAction::RemoveIndicator(item.id)
+            } else {
+                ObjectTreeAction::Delete(item.id)
+            };
+        }
+        del_response.on_hover_text("Remove");
     }
-    del_response.on_hover_text("Remove");
     right_x -= 20.0;
 
     // Settings/Properties button

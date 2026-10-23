@@ -173,10 +173,6 @@ pub struct DemoApp {
     // egui's capture callback sends each screenshot here; the next frame delivers it.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
-    // Transient status notice (text, time shown). Controls whose backing is a
-    // stub/network/broker surface an honest message here rather than silently
-    // doing nothing, since the library toolbar renders them unconditionally.
-    notice: Option<(String, f64)>,
     toasts: Toasts,
 }
 
@@ -286,7 +282,6 @@ impl DemoApp {
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
             screenshots: mpsc::channel(),
-            notice: None,
             toasts: Toasts::new(),
         };
         app.alerts
@@ -297,7 +292,7 @@ impl DemoApp {
 
     /// Surface a short-lived, honest status message in the UI.
     fn notify(&mut self, msg: impl Into<String>) {
-        self.notice = Some((msg.into(), 0.0));
+        self.toasts.info(msg);
     }
 
     // --- data helpers ------------------------------------------------------
@@ -706,14 +701,7 @@ impl DemoApp {
     }
 
     fn clone_drawing(&mut self, id: usize) {
-        let dm = self.chart.drawings_mut();
-        if let Some(src) = dm.drawings.iter().find(|d| d.id == id).cloned() {
-            let mut copy = src;
-            for cp in &mut copy.chart_points {
-                cp.bar_idx += 3.0; // offset so the clone is visible
-            }
-            dm.add_synced_drawing(copy);
-        }
+        self.chart.drawings_mut().duplicate_drawing(id);
     }
 
     fn go_to_date(&mut self, date: chrono::NaiveDate) {
@@ -742,7 +730,7 @@ impl DemoApp {
         };
         // Capture the next frame after the dialog and any previous notice are gone.
         self.export_dialog.close();
-        self.notice = None;
+        self.toasts.clear();
         self.screenshot_requested = Some(target);
         ctx.request_repaint();
     }
@@ -777,13 +765,13 @@ impl DemoApp {
                 if from_dialog {
                     self.export_dialog.mark_success();
                 }
-                self.notice = Some((format!("Export successful: {}", path.display()), 0.0));
+                self.notify(format!("Export successful: {}", path.display()));
             }
             Err(error) => {
                 if from_dialog {
                     self.export_dialog.mark_error(error.clone());
                 }
-                self.notice = Some((format!("Export failed: {error}"), 0.0));
+                self.notify(format!("Export failed: {error}"));
             }
         }
     }
@@ -802,7 +790,7 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
-        self.alerts.poll(&ctx);
+        self.alerts.poll(&ctx, &mut self.toasts);
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
@@ -984,7 +972,7 @@ impl DemoApp {
             }
             TopToolbarAction::TakeScreenshot => {
                 self.export_dialog.close();
-                self.notice = None;
+                self.toasts.clear();
                 self.screenshot_requested = Some(ScreenshotTarget::File(None));
                 ctx.request_repaint();
             }
@@ -1269,10 +1257,11 @@ impl DemoApp {
 
         // Main data source row.
         let tf = self.state.timeframe.as_str();
-        items.push(SourceItem::data_source(
-            MAIN_SERIES_ID,
-            format!("{} · {}", self.state.symbol, tf),
-        ));
+        let mut main =
+            SourceItem::data_source(MAIN_SERIES_ID, format!("{} · {}", self.state.symbol, tf))
+                .with_series_id(SeriesId::MAIN);
+        main.visible = self.chart.is_main_series_visible();
+        items.push(main);
 
         // Live indicators.
         for (id, ind) in self.chart.indicators() {
@@ -1289,6 +1278,7 @@ impl DemoApp {
             item.visible = d.visible;
             item.locked = d.locked;
             item.z_index = d.z_order;
+            item.label = d.label.clone();
             items.push(item);
         }
         items
@@ -1678,7 +1668,7 @@ impl DemoApp {
             match target {
                 ScreenshotTarget::Clipboard => {
                     ctx.copy_image((*image).clone());
-                    self.notice = Some(("Image sent to clipboard".into(), 0.0));
+                    self.notify("Image sent to clipboard");
                 }
                 ScreenshotTarget::File(path) => self.save_screenshot(&image, path),
             }
@@ -1686,9 +1676,6 @@ impl DemoApp {
     }
 
     fn show_notice(&mut self, ctx: &egui::Context) {
-        if let Some((message, _)) = self.notice.take() {
-            self.toasts.info(message);
-        }
         NotificationPanel::new()
             .width(340.0)
             .show_with_toasts(ctx, &mut self.toasts);
@@ -1724,10 +1711,10 @@ impl DemoApp {
             });
         match result {
             Ok(()) => {
-                self.notice = Some((format!("Export successful: {}", path.display()), 0.0));
+                self.notify(format!("Export successful: {}", path.display()));
             }
             Err(error) => {
-                self.notice = Some((format!("Export failed: {error}"), 0.0));
+                self.notify(format!("Export failed: {error}"));
             }
         }
     }
@@ -1889,6 +1876,13 @@ mod tests {
                 .len(),
             sources.len()
         );
+        app.handle_object_tree(ObjectTreeAction::ToggleVisibility(MAIN_SERIES_ID), &sources);
+        assert!(!app.chart.is_main_series_visible());
+        assert!(!app.build_source_items()[0].visible);
+        assert!(app.chart.drawings().drawings[0].visible);
+        let sources = app.build_source_items();
+        app.handle_object_tree(ObjectTreeAction::ToggleVisibility(MAIN_SERIES_ID), &sources);
+        assert!(app.chart.is_main_series_visible());
         app.handle_object_tree(ObjectTreeAction::ToggleVisibility(ids[0]), &sources);
         assert!(!app.chart.drawings().drawings[0].visible);
         let sources = app.build_source_items();
@@ -1911,7 +1905,41 @@ mod tests {
             (ObjectTreeAction::SendToBack(ids[0]), ids.clone()),
         ] {
             let sources = app.build_source_items();
+            let before: Vec<_> = app
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.z_order)
+                .collect();
             app.handle_object_tree(action, &sources);
+            let after: Vec<_> = app
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.z_order)
+                .collect();
+            assert!(app.chart.drawings_mut().undo());
+            assert_eq!(
+                app.chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.z_order)
+                    .collect::<Vec<_>>(),
+                before
+            );
+            assert!(app.chart.drawings_mut().redo());
+            assert_eq!(
+                app.chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.z_order)
+                    .collect::<Vec<_>>(),
+                after
+            );
             let mut actual: Vec<_> = app
                 .chart
                 .drawings()
@@ -1926,6 +1954,21 @@ mod tests {
             );
         }
         let sources = app.build_source_items();
+        app.handle_object_tree(ObjectTreeAction::Rename(ids[0], "Support".into()), &sources);
+        assert_eq!(
+            app.chart.drawings().drawings[0].label.as_deref(),
+            Some("Support")
+        );
+        assert!(app.chart.drawings_mut().undo());
+        assert_eq!(app.chart.drawings().drawings[0].label, None);
+        assert!(app.chart.drawings_mut().redo());
+        app.handle_object_tree(ObjectTreeAction::Duplicate(ids[0]), &sources);
+        assert_eq!(app.chart.drawings().drawings.len(), 4);
+        assert!(app.chart.drawings_mut().undo());
+        assert_eq!(app.chart.drawings().drawings.len(), 3);
+        assert!(app.chart.drawings_mut().redo());
+        assert_eq!(app.chart.drawings().drawings.len(), 4);
+        assert!(app.chart.drawings_mut().undo());
         app.handle_object_tree(ObjectTreeAction::ZoomTo(ids[0]), &sources);
         // Prices 100..200 with ten percent on either side give 90..210.
         assert_eq!(app.chart.state().price_scale().range().min, 90.0);

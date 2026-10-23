@@ -195,6 +195,25 @@ impl Chart {
         true
     }
 
+    /// Show or hide the main price series, its volume and its legend without unloading its bars.
+    /// Studies and drawings remain visible and continue to receive data.
+    pub fn set_main_series_visible(&mut self, visible: bool) {
+        self.main_series_visible = visible;
+        if !visible
+            && matches!(
+                self.selection.selected_id(),
+                Some(ChartElementId::Series(_))
+            )
+        {
+            self.selection.deselect();
+        }
+    }
+
+    /// Whether the main price series is visible.
+    pub fn is_main_series_visible(&self) -> bool {
+        self.main_series_visible
+    }
+
     /// Includes or excludes study `id` from the main price auto-scale, without hiding it.
     /// Defaults to `true`; only visible overlay studies contribute. Returns `false` for an id
     /// that is not a study of the chart.

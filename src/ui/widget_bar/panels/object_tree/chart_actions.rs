@@ -9,11 +9,10 @@ impl ObjectTreePanel {
     /// Apply a tree action to a chart. Drawing rows use drawing ids; study rows bind their
     /// chart series through [`SourceItem::with_series_id`]. Call this after [`Self::show`].
     ///
-    /// Returns `false` for host-owned property dialogs, colour gestures, templates and main-series
-    /// operations. Display-name edits live in the panel's `state().labels`; a host can keep those
-    /// alongside its layout. Bulk actions skip the main series. Multi-selection is maintained by
-    /// the tree, and bulk operations apply
-    /// to every selected drawing and study, independently of the chart's single selection.
+    /// Bind the main data source with `with_series_id(SeriesId::MAIN)` to control its visibility.
+    /// Returns `false` for host-owned property dialogs, colour gestures, templates, main-series
+    /// removal and renaming non-drawing rows. Drawing names are saved and undone with the drawing.
+    /// Bulk actions apply to every selected drawing and study, and visibility includes the main series.
     pub fn apply_to_chart(
         &mut self,
         chart: &mut Chart,
@@ -27,11 +26,17 @@ impl ObjectTreePanel {
         match action {
             ObjectTreeAction::None => {}
             ObjectTreeAction::Rename(id, name) => {
+                if !sources.iter().any(|s| s.id == *id && s.is_drawing()) {
+                    return false;
+                }
                 if !name.trim().is_empty() {
-                    self.state_mut().labels.insert(*id, name.clone());
+                    chart
+                        .drawings_mut()
+                        .edit_drawing(*id, |d| d.label = Some(name.clone()));
                 }
             }
             ObjectTreeAction::Select(id) => {
+                chart.clear_selection();
                 if sources.iter().any(|s| s.id == *id && s.is_drawing()) {
                     chart.drawings_mut().select(*id);
                 } else {
@@ -44,7 +49,12 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::AddToSelection(_)
             | ObjectTreeAction::RangeSelect(_)
-            | ObjectTreeAction::SelectAll => {}
+            | ObjectTreeAction::SelectAll => {
+                chart.clear_selection();
+                chart
+                    .drawings_mut()
+                    .select_drawings(selected.iter().filter(|s| s.is_drawing()).map(|s| s.id));
+            }
             ObjectTreeAction::ShowAll | ObjectTreeAction::HideAll => {
                 let visible = matches!(action, ObjectTreeAction::ShowAll);
                 for source in sources {
@@ -96,6 +106,7 @@ impl ObjectTreePanel {
                     delete(chart, source);
                 }
                 self.state_mut().clear_selection();
+                chart.drawings_mut().deselect();
             }
             ObjectTreeAction::Duplicate(id) => {
                 let Some(source) = sources.iter().find(|s| s.id == *id) else {
@@ -137,13 +148,12 @@ impl ObjectTreePanel {
                     let target = order.remove(index);
                     order.insert(other, target);
                     // Normalise tied layers so exactly one neighbour is crossed.
-                    for (z, (id, old_z)) in order.into_iter().enumerate() {
-                        if let Ok(z) = i32::try_from(z)
-                            && z != old_z
-                        {
-                            chart.drawings_mut().edit_drawing(id, |d| d.z_order = z);
-                        }
-                    }
+                    let layers: Vec<_> = order
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(z, (id, _))| i32::try_from(z).ok().map(|z| (id, z)))
+                        .collect();
+                    chart.drawings_mut().reorder_drawings(*id, &layers);
                 }
             }
             ObjectTreeAction::ZoomTo(id) => {
@@ -218,7 +228,10 @@ impl ObjectTreePanel {
 }
 
 fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
-    if source.is_indicator() {
+    if source.source_type == SourceType::DataSource && source.series_id == Some(SeriesId::MAIN) {
+        chart.set_main_series_visible(visible);
+        true
+    } else if source.is_indicator() {
         source
             .series_id
             .is_some_and(|id| chart.set_indicator_visible(id, visible))
@@ -251,17 +264,7 @@ fn duplicate(chart: &mut Chart, source: &SourceItem) {
         if let Some(copy) = copy {
             chart.add_indicator(copy);
         }
-    } else if source.is_drawing()
-        && let Some(mut copy) = chart
-            .drawings()
-            .drawings
-            .iter()
-            .find(|d| d.id == source.id)
-            .cloned()
-    {
-        for point in &mut copy.chart_points {
-            point.bar_idx += 3.0;
-        }
-        chart.drawings_mut().add_synced_drawing(copy);
+    } else if source.is_drawing() {
+        chart.drawings_mut().duplicate_drawing(source.id);
     }
 }

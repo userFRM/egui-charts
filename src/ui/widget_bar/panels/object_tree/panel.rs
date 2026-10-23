@@ -98,11 +98,6 @@ impl ObjectTreePanel {
         sources: &mut [SourceItem],
     ) -> ObjectTreeAction {
         let mut action = ObjectTreeAction::None;
-        for source in sources.iter_mut() {
-            if let Some(label) = self.state.labels.get(&source.id) {
-                source.label = Some(label.clone());
-            }
-        }
 
         if self.config.group_by_type {
             sources.sort_by_key(|s| {
@@ -129,7 +124,7 @@ impl ObjectTreePanel {
         // Main panel frame
         Frame::new().fill(ui.visuals().panel_fill).show(ui, |ui| {
             // Header
-            self.show_header(ui, sources, &mut action);
+            self.show_header(ui, &mut action);
 
             ui.separator();
 
@@ -147,20 +142,19 @@ impl ObjectTreePanel {
 
             ui.space_sm();
 
-            // Source tree
-            let mut tree_config = self.config.clone();
-            tree_config.max_height = tree_config
-                .max_height
-                .min((ui.available_height() - 42.0).max(0.0));
-            let tree_action = render_source_tree(ui, sources, &tree_config, &mut self.state);
-            if !tree_action.is_none() {
-                action = tree_action;
-            }
-
-            // Keep the footer at the panel bottom even when the tree has a height cap.
-            ui.add_space((ui.available_height() - 42.0).max(0.0));
-            ui.separator();
-            self.show_footer(ui, sources);
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                self.show_footer(ui, sources);
+                ui.separator();
+                let mut tree_config = self.config.clone();
+                tree_config.max_height = tree_config.max_height.min(ui.available_height());
+                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    let tree_action =
+                        render_source_tree(ui, sources, &tree_config, &mut self.state);
+                    if !tree_action.is_none() {
+                        action = tree_action;
+                    }
+                });
+            });
         });
 
         if let Some(id) = self.state.renaming_id {
@@ -171,7 +165,6 @@ impl ObjectTreePanel {
                 .show(ui.ctx(), &mut open)
             {
                 PromptResult::Submitted(name) if !name.trim().is_empty() => {
-                    self.state.labels.insert(id, name.clone());
                     self.state.cancel_rename();
                     action = ObjectTreeAction::Rename(id, name);
                 }
@@ -187,7 +180,7 @@ impl ObjectTreePanel {
     }
 
     /// Render header with title and controls
-    fn show_header(&mut self, ui: &mut Ui, _sources: &[SourceItem], action: &mut ObjectTreeAction) {
+    fn show_header(&mut self, ui: &mut Ui, action: &mut ObjectTreeAction) {
         PanelHeader::new("Objects")
             .strong()
             .no_separator()
@@ -259,7 +252,7 @@ impl ObjectTreePanel {
             let field_width =
                 (ui.available_width() - combo_width - ui.spacing().item_spacing.x).max(0.0);
             ui.allocate_ui(vec2(field_width, 28.0), |ui| {
-                ui.spacing_mut().interact_size.y = 24.0;
+                ui.spacing_mut().interact_size.y = 28.0;
                 filter_input(ui, &mut self.state.filter_text);
             });
             ui.spacing_mut().interact_size.y = 28.0;
@@ -289,44 +282,47 @@ impl ObjectTreePanel {
 
     /// Render footer with stats
     fn show_footer(&self, ui: &mut Ui, sources: &[SourceItem]) {
-        ui.horizontal(|ui| {
-            let total = sources.len();
-            let visible = sources.iter().filter(|s| s.visible).count();
-            let selected = self.state.selection_count();
-            let indicators = sources
-                .iter()
-                .filter(|s| s.source_type == SourceType::Indicator)
-                .count();
-            let drawings = sources
-                .iter()
-                .filter(|s| s.source_type == SourceType::Drawing)
-                .count();
+        let total = sources.len();
+        let visible = sources.iter().filter(|s| s.visible).count();
+        let selected = self.state.selection_count();
+        let indicators = sources
+            .iter()
+            .filter(|s| s.source_type == SourceType::Indicator)
+            .count();
+        let drawings = sources
+            .iter()
+            .filter(|s| s.source_type == SourceType::Drawing)
+            .count();
 
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
-                        "{} objects • {} indicators • {} drawings • {} visible{}",
-                        total,
-                        indicators,
-                        drawings,
-                        visible,
-                        if selected > 0 {
-                            format!(" • {selected} selected")
-                        } else {
-                            String::new()
-                        }
-                    ))
-                    .color(ui.visuals().weak_text_color())
-                    .size(11.0),
-                )
-                .wrap(),
-            );
-        });
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "{} objects • {} indicators • {} drawings • {} visible{}",
+                    total,
+                    indicators,
+                    drawings,
+                    visible,
+                    if selected > 0 {
+                        format!(" • {selected} selected")
+                    } else {
+                        String::new()
+                    }
+                ))
+                .color(ui.visuals().weak_text_color())
+                .size(11.0),
+            )
+            .wrap(),
+        );
     }
 
     /// Handle selection state updates based on action
     fn handle_selection_action(&mut self, action: &ObjectTreeAction, sources: &[SourceItem]) {
-        let source_ids: Vec<usize> = sources.iter().map(|s| s.id).collect();
+        let filter = self.state.filter_text.to_lowercase();
+        let source_ids: Vec<usize> = sources
+            .iter()
+            .filter(|s| super::source_tree::matches_filter(s, &filter, &self.state))
+            .map(|s| s.id)
+            .collect();
 
         match action {
             ObjectTreeAction::Select(id) => {
@@ -356,5 +352,90 @@ impl ObjectTreePanel {
     /// Clear all state
     pub fn reset(&mut self) {
         self.state = ObjectTreeState::new();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_all_and_range_selection_respect_the_filter() {
+        let mut panel = ObjectTreePanel::new();
+        let sources = [
+            SourceItem::indicator(1, "Fast", egui::Color32::BLUE),
+            SourceItem::data_source(2, "Other"),
+            SourceItem::indicator(3, "Slow", egui::Color32::BLUE),
+        ];
+        panel.state.filter_type = Some(SourceType::Indicator);
+        for action in [
+            ObjectTreeAction::SelectAll,
+            ObjectTreeAction::RangeSelect(3),
+        ] {
+            panel.state.select(1);
+            panel.handle_selection_action(&action, &sources);
+            assert!(panel.state.is_selected(1));
+            assert!(panel.state.is_selected(3));
+            assert!(!panel.state.is_selected(2));
+        }
+    }
+
+    #[test]
+    fn filter_controls_have_equal_height_and_footer_stays_inside_a_narrow_panel() {
+        for width in [220.0, 280.0] {
+            let ctx = egui::Context::default();
+            let mut panel = ObjectTreePanel::new();
+            let mut sources: Vec<_> = (0..30)
+                .map(|id| SourceItem::indicator(id, "SMA", egui::Color32::BLUE))
+                .collect();
+            panel.state.select_all(&(0..30).collect::<Vec<_>>());
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(width, 360.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        panel.show(ui, None, &mut sources);
+                    },
+                );
+                output.textures_delta.clear();
+                let controls: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.width() > 70.0
+                                && (20.0..32.0).contains(&rect.rect.height()) =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(controls.len() >= 2, "{controls:?}");
+                assert_eq!(controls[0].height(), 28.0, "filter at {width}");
+                assert_eq!(controls[1].height(), 28.0, "combo at {width}");
+                let footer = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().starts_with("30 objects") => {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(
+                    footer.pos.y + footer.galley.rect.bottom() <= 360.0,
+                    "footer at {width}: bottom {}",
+                    footer.pos.y + footer.galley.rect.bottom()
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
     }
 }

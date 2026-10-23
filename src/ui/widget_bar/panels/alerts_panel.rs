@@ -11,7 +11,7 @@ use crate::icons::icons;
 use crate::model::{Alert, AlertCondition, AlertId, AlertStatus};
 use crate::services::{AlertEvent, Alerts, Listener};
 use crate::theme::ThemeExt;
-use crate::ui_kit::notifications::{NotificationPanel, Toasts};
+use crate::ui_kit::notifications::Toasts;
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
 
 /// Configuration for the alerts panel.
@@ -68,7 +68,6 @@ pub struct AlertsPanel {
     log: VecDeque<AlertTrigger>,
     error: Option<FeedError>,
     show_log: bool,
-    toasts: Toasts,
 }
 
 impl Default for AlertsPanel {
@@ -90,7 +89,6 @@ impl AlertsPanel {
             log: VecDeque::new(),
             error: None,
             show_log: false,
-            toasts: Toasts::new(),
         }
     }
 
@@ -101,12 +99,12 @@ impl AlertsPanel {
         self.alerts.clear();
         self.log.clear();
         self.error = None;
-        self.toasts.clear();
+        self.inbox = Arc::default();
         self.watch();
     }
 
     fn watch(&mut self) {
-        self.generation += 2;
+        self.generation += 1;
         let (listener, events) = Listener::new(&self.inbox, self.generation);
         self.listener = Some(listener);
         if let Some(service) = &self.service {
@@ -134,18 +132,21 @@ impl AlertsPanel {
             | AlertCondition::Below(v) => v,
         };
         if alert.symbol.trim().is_empty() || !level.is_finite() {
-            self.toasts.error("Alert needs a symbol and a finite price");
+            self.error = Some(FeedError::InvalidData(
+                "Alert needs a symbol and a finite price".into(),
+            ));
             return;
         }
         if let Some(service) = &self.service {
-            service.save(alert, self.inbox.reply(self.generation + 1));
+            service.save(alert, self.inbox.reply(0));
         } else {
             self.error = Some(FeedError::NotSupported);
         }
     }
 
-    /// Drain service pushes and replies, recover a lagged stream, and show trigger notifications.
-    pub fn poll(&mut self, ctx: &egui::Context) {
+    /// Drain service pushes and replies, recover a lagged stream, and append trigger notifications.
+    /// Render `toasts` once per frame with the host's other notifications.
+    pub fn poll(&mut self, ctx: &egui::Context, toasts: &mut Toasts) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
         if self.listener.as_ref().is_some_and(|l| !l.is_active()) {
@@ -156,9 +157,9 @@ impl AlertsPanel {
         for (key, answer) in self.inbox.drain().answers {
             if key == self.generation {
                 if let Ok(event) = answer.downcast::<AlertEvent>() {
-                    self.apply_event(*event);
+                    self.apply_event(*event, toasts);
                 }
-            } else if key == self.generation + 1
+            } else if key == 0
                 && let Ok(result) = answer.downcast::<Result<(), FeedError>>()
             {
                 match *result {
@@ -167,10 +168,9 @@ impl AlertsPanel {
                 }
             }
         }
-        NotificationPanel::new().show_with_toasts(ctx, &mut self.toasts);
     }
 
-    fn apply_event(&mut self, event: AlertEvent) {
+    fn apply_event(&mut self, event: AlertEvent, toasts: &mut Toasts) {
         match event {
             AlertEvent::Upsert(alert) => {
                 if alert.id.is_none() {
@@ -191,12 +191,12 @@ impl AlertsPanel {
                     .find(|a| a.id.as_ref() == Some(&id))
                     .map(|a| a.symbol.clone())
                     .unwrap_or_default();
-                self.toasts.info(format!(
+                toasts.info(format!(
                     "Alert triggered: {}",
                     if symbol.is_empty() { &id.0 } else { &symbol }
                 ));
-                let extra = self.toasts.len().saturating_sub(5);
-                self.toasts.toasts_mut().drain(..extra);
+                let extra = toasts.len().saturating_sub(5);
+                toasts.toasts_mut().drain(..extra);
                 self.log.push_back(AlertTrigger {
                     id,
                     symbol,
@@ -346,7 +346,7 @@ impl AlertsPanel {
             if let Some(id) = remove
                 && let Some(service) = &self.service
             {
-                service.remove(id, self.inbox.reply(self.generation + 1));
+                service.remove(id, self.inbox.reply(0));
             }
         }
         action
@@ -359,12 +359,11 @@ mod tests {
     use crate::data::Reply;
     use crate::services::Events;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[derive(Default)]
     struct Host {
         events: Mutex<Option<Events<AlertEvent>>>,
-        fail: AtomicBool,
+        reply: Mutex<Option<Reply<()>>>,
     }
 
     impl Alerts for Host {
@@ -372,11 +371,7 @@ mod tests {
             *self.events.lock().unwrap() = Some(events);
         }
         fn save(&self, _: Alert, reply: Reply<()>) {
-            reply.send(if self.fail.load(Ordering::Relaxed) {
-                Err(FeedError::NotSupported)
-            } else {
-                Ok(())
-            });
+            *self.reply.lock().unwrap() = Some(reply);
         }
         fn remove(&self, _: AlertId, reply: Reply<()>) {
             reply.send(Ok(()));
@@ -390,13 +385,17 @@ mod tests {
         panel.set_service(host.clone());
         let events = host.events.lock().unwrap().clone().unwrap();
         let ctx = egui::Context::default();
-        let frame = |panel: &mut AlertsPanel| {
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| panel.poll(ui.ctx()));
+        let mut toasts = Toasts::new();
+        let mut frame = |panel: &mut AlertsPanel| {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                panel.poll(ui.ctx(), &mut toasts)
+            });
             output.drop_without_applying_deltas();
         };
         let mut alert = Alert::new("S\"IM", AlertCondition::CrossingUp(12.5));
         alert.id = Some(AlertId("host,\"1".into()));
         panel.save(alert.clone());
+        host.reply.lock().unwrap().take().unwrap().send(Ok(()));
         frame(&mut panel);
         assert!(panel.alerts().is_empty());
         events.push(AlertEvent::Upsert(alert.clone()));
@@ -417,14 +416,20 @@ mod tests {
         events.push(AlertEvent::Upsert(alert.clone()));
         frame(&mut panel);
         assert_eq!(panel.alerts(), &[alert.clone()]);
-        host.fail.store(true, Ordering::Relaxed);
         panel.save(alert.clone());
+        host.reply
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .send(Err(FeedError::NotSupported));
         frame(&mut panel);
         assert_eq!(panel.error, Some(FeedError::NotSupported));
-        events.push(AlertEvent::Remove(alert.id.unwrap()));
+        events.push(AlertEvent::Remove(alert.id.clone().unwrap()));
         frame(&mut panel);
         assert!(panel.alerts().is_empty());
         assert_eq!(panel.log().len(), 1);
+        panel.save(alert);
         for _ in 0..10_001 {
             events.push(AlertEvent::Clear);
         }
@@ -432,6 +437,14 @@ mod tests {
         assert!(!events.is_active());
         let renewed = host.events.lock().unwrap().clone().unwrap();
         assert!(renewed.is_active());
+        host.reply
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .send(Err(FeedError::Unanswered));
+        frame(&mut panel);
+        assert_eq!(panel.error, Some(FeedError::Unanswered));
         assert_eq!(panel.log().len(), 1);
         drop(panel);
         assert!(!renewed.is_active());

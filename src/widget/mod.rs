@@ -199,6 +199,8 @@ pub struct Chart {
     pub(crate) state: ChartState,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
     pub(crate) config: ChartConfig,
+    /// Whether the main price series and its volume are drawn.
+    pub(crate) main_series_visible: bool,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
     /// Starting index of visible range (for backward compatibility)
@@ -525,7 +527,10 @@ impl Chart {
         } else {
             Rect::NOTHING
         };
-        let volume_rect = if self.config.show_volume && self.chart_type.supports_volume() {
+        let volume_rect = if self.main_series_visible
+            && self.config.show_volume
+            && self.chart_type.supports_volume()
+        {
             let inset = self
                 .config
                 .volume_baseline_inset

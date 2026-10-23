@@ -247,7 +247,7 @@ fn render_flat_tree(
 }
 
 /// Check if item matches current filter
-fn matches_filter(item: &SourceItem, filter: &str, state: &ObjectTreeState) -> bool {
+pub(super) fn matches_filter(item: &SourceItem, filter: &str, state: &ObjectTreeState) -> bool {
     // Type filter
     if let Some(filter_type) = state.filter_type
         && item.source_type != filter_type
