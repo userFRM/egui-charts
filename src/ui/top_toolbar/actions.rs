@@ -17,8 +17,10 @@ pub enum TopToolbarAction {
     ChartStyleSelected(String),
     /// Open indicators dialog
     OpenIndicators,
-    /// Open indicator templates panel
-    OpenIndicatorTemplates,
+    /// Ask the host to save the current indicator set.
+    SaveIndicatorTemplate,
+    /// Ask the host to apply the saved indicator set with this id.
+    ApplyIndicatorTemplate(String),
     /// Create a new price alert
     CreateAlert,
     /// Toggle replay mode on/off

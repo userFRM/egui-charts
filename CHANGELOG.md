@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `TopToolbar::indicator_templates` accepts host-owned saved study names and ids. Its anchored menu emits save/apply intents; the demo keeps cloned study sets in memory for the session. Exhaustive `TopToolbarAction` matches need `SaveIndicatorTemplate` and `ApplyIndicatorTemplate` arms.
+
 - `Symbol::with_market` supplies an exchange and optional instrument kind for symbol search. Empty queries list the host catalog, with host-supplied recents first, category chips for available kinds and kind/exchange metadata in each row. Migration: `Symbol` struct literals need `exchange` and `symbol_type`, or use `Symbol::new`.
 
 - `TabBar::pills` renders rounded tab chips through the shared tab component; the indicator browser uses them.

@@ -3,8 +3,8 @@
 //!
 //! The chart engine is pure: widgets return `Action` enums and never touch the
 //! chart themselves. This controller is the host half that consumes those
-//! actions. Controls that need a trading account or template storage show a
-//! notice instead, and the context menu entries it does not model do nothing.
+//! actions. Indicator templates live in host memory. Controls that need a trading
+//! account show a notice, and the context menu entries it does not model do nothing.
 
 use eframe::egui;
 use egui_charts::Chart;
@@ -30,7 +30,7 @@ use egui_charts::ui::timeframe_toolbar::{
 };
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
-    IndicatorDialog, IndicatorDialogAction, IndicatorTab,
+    IndicatorDialog, IndicatorDialogAction,
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
@@ -133,6 +133,7 @@ pub struct DemoApp {
     settings_dialog: SettingsDialog,
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
+    indicator_templates: Vec<(String, Vec<Box<dyn egui_charts::studies::Indicator>>)>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
     series_settings: SeriesSettingsDialog,
@@ -244,6 +245,7 @@ impl DemoApp {
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
+            indicator_templates: Vec::new(),
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
                 [
                     ("symbols", "Symbol search"),
@@ -908,9 +910,30 @@ impl DemoApp {
             TopToolbarAction::Redo => {
                 self.chart.drawings_mut().redo();
             }
-            // Indicator templates live in the indicator dialog's Profiles tab.
-            TopToolbarAction::OpenIndicatorTemplates => {
-                self.indicator_dialog.open_tab(IndicatorTab::Profiles)
+            TopToolbarAction::SaveIndicatorTemplate => {
+                let name = format!("Study set {}", self.indicator_templates.len() + 1);
+                let studies = self
+                    .chart
+                    .indicators()
+                    .map(|(_, study)| study.clone_box())
+                    .collect();
+                self.indicator_templates.push((name.clone(), studies));
+                self.top_toolbar
+                    .indicator_templates
+                    .push((name.clone(), name));
+            }
+            TopToolbarAction::ApplyIndicatorTemplate(id) => {
+                if let Some((_, studies)) = self
+                    .indicator_templates
+                    .iter()
+                    .find(|(name, _)| *name == id)
+                {
+                    let studies = studies.clone();
+                    self.remove_all_indicators();
+                    for study in studies {
+                        self.chart.add_indicator(study);
+                    }
+                }
             }
             // Save routes through the export dialog (PNG / CSV of the view).
             TopToolbarAction::Save => self.export_dialog.open(),
