@@ -71,6 +71,31 @@ impl LiveFeed {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    pub(super) fn fork(&self) -> Self {
+        let sim = self.state();
+        Self(Mutex::new(Simulation {
+            symbol: sim.symbol.clone(),
+            tick_size: sim.tick_size,
+            price_ticks: sim.price_ticks,
+            random: sim.random,
+            id: sim.id,
+            trades: sim.trades.clone(),
+            history: sim.history.clone(),
+            next_trade: sim.next_trade,
+            retain_from: sim.retain_from,
+            now: sim.now,
+            paused: sim.paused,
+            continuous: sim.continuous,
+            adjusted: sim.adjusted,
+            subscription: None,
+        }))
+    }
+
+    pub(super) fn view(&self, extended_hours: bool) -> (SessionType, bool) {
+        let sim = self.state();
+        (sim.session(extended_hours), sim.adjusted)
+    }
+
     pub(super) fn set_symbol(&self, symbol: &str) {
         let mut sim = self.state();
         if sim.symbol != symbol {
