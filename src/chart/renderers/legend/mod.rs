@@ -119,7 +119,8 @@ impl<'a> Legend<'a> {
                     + 16.0
             })
             .sum::<f32>();
-        let title_width = (bounds.right() - layout.pos.x - status_width).max(0.0);
+        let title_start = layout.pos;
+        let title_width = (bounds.right() - layout.pos.x - status_width - 48.0).max(0.0);
         layout.text(title, typography::XXL, colors.text, title_width);
         for status in self.statuses {
             let galley = painter.layout_no_wrap(
@@ -131,6 +132,36 @@ impl<'a> Legend<'a> {
             painter.rect_filled(rect, 4.0, status.background);
             painter.galley(rect.center() - galley.size() / 2.0, galley, status.color);
         }
+        #[cfg(feature = "icons")]
+        {
+            let title_rect = Rect::from_min_max(title_start, Pos2::new((layout.pos.x + 48.0).min(bounds.right()), title_start.y + 24.0));
+            let hovered = ui.rect_contains_pointer(title_rect);
+            let flagged = ui.ctx().data(|data| data.get_temp::<bool>(id.with("flag")).unwrap_or(false));
+            if hovered || flagged || egui::Popup::is_id_open(ui.ctx(), id.with("more").with("popup")) {
+                let flag = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
+                let more = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
+                painter.rect_stroke(title_rect, 3, Stroke::new(1.0, theme.ui.border_control), egui::StrokeKind::Inside);
+                let flag_response = ui.interact(flag, id.with("flag"), Sense::click());
+                crate::icons::icons::FLAG_MARK.as_image_tinted(Vec2::splat(16.0), if flagged { theme.ui.accent } else { theme.ui.text }).paint_at(ui, flag.shrink(2.0));
+                if flag_response.on_hover_text("Flag instrument").clicked() {
+                    ui.ctx().data_mut(|data| data.insert_temp(id.with("flag"), !flagged));
+                }
+                let more_response = ui.interact(more, id.with("more"), Sense::click()).on_hover_text("Series actions");
+                crate::icons::icons::UI_MORE_HORIZONTAL.as_image_tinted(Vec2::splat(16.0), theme.ui.text).paint_at(ui, more.shrink(2.0));
+                egui::Popup::menu(&more_response).show(|ui| {
+                    if ui.button("Copy symbol").clicked() {
+                        ui.ctx().copy_text(self.symbol.to_owned());
+                        ui.close();
+                    }
+                    if ui.button("Copy values").clicked() {
+                        ui.ctx().copy_text(format!("Open {} High {} Low {} Close {} Vol {}", self.bar.open, self.bar.high, self.bar.low, self.bar.close, self.bar.volume));
+                        ui.close();
+                    }
+                });
+            }
+        }
+        #[cfg(not(feature = "icons"))]
+        let _ = title_start;
         let precision = self.price_precision(self.bar.close);
         layout.ohlc(self.bar, self.previous_close, precision);
         layout.new_row();
