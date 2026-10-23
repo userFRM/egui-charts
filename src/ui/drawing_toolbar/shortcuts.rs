@@ -86,7 +86,7 @@ impl DrawingToolShortcuts {
                     .map(|(key, tool)| (*key, KeyboardAction::DrawingTool(*tool)))
                     .collect(),
             });
-        match map.consume(ctx, |action| {
+        match map.consume(ctx, true, |action, _| {
             matches!(action, KeyboardAction::DrawingTool(_))
         }) {
             Some((KeyboardAction::DrawingTool(tool), _)) => Some(tool),

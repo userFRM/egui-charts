@@ -121,6 +121,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- A bound character key also consumes its text event, so a restored F binding fits the chart without opening symbol search. Typing `?` in a text field edits the field; command search and F1 help remain available there. Opening a host dialog hands subsequent input to it, and typed symbol and interval entry focus their fields before processing queued editing keys. ([#113](https://github.com/userFRM/egui-charts/issues/113))
+
 - Drawing tool shortcuts use the shared exact-modifier matcher, including when the toolbar is used without a chart. An extra Shift no longer selects a tool bound only with Alt. ([#113](https://github.com/userFRM/egui-charts/issues/113))
 
 - Disabling chart keyboard shortcuts retains native arrow-key focus navigation and does not emit chart-focus commands for Tab. Enabled charts continue to keep repeated arrow pans on the chart. ([#113](https://github.com/userFRM/egui-charts/issues/113))

@@ -37,31 +37,50 @@ impl ShortcutMap {
     pub(crate) fn consume(
         &self,
         ctx: &Context,
-        accepts: impl Fn(KeyboardAction) -> bool,
+        stop_at_text: bool,
+        accepts: impl Fn(KeyboardAction, KeyboardShortcut) -> bool,
     ) -> Option<(KeyboardAction, Event)> {
         ctx.input_mut(|input| {
-            let (index, action) = input.events.iter().enumerate().find_map(|(index, event)| {
-                let (key, modifiers) = match event {
-                    Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => (*key, *modifiers),
-                    Event::Copy => (egui::Key::C, egui::Modifiers::COMMAND),
-                    Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
-                    _ => return None,
-                };
-                self.bindings.iter().find_map(|(shortcut, action)| {
-                    let matches = modifiers.matches_exact(shortcut.modifiers)
-                        || (matches!(key, egui::Key::Plus | egui::Key::Questionmark)
-                            && modifiers.matches_logically(shortcut.modifiers)
-                            && modifiers.alt == shortcut.modifiers.alt);
-                    (accepts(*action) && key == shortcut.logical_key && matches)
-                        .then_some((index, *action))
+            let (index, action) = input
+                .events
+                .iter()
+                .enumerate()
+                .take_while(|(_, event)| {
+                    !stop_at_text || !matches!(event, Event::Text(text) if starts_entry(text))
                 })
-            })?;
+                .find_map(|(index, event)| {
+                    let (key, modifiers) = match event {
+                        Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } => (*key, *modifiers),
+                        Event::Copy => (egui::Key::C, egui::Modifiers::COMMAND),
+                        Event::Paste(_) => (egui::Key::V, egui::Modifiers::COMMAND),
+                        _ => return None,
+                    };
+                    self.bindings.iter().find_map(|(shortcut, action)| {
+                        let matches = modifiers.matches_exact(shortcut.modifiers)
+                            || (matches!(key, egui::Key::Plus | egui::Key::Questionmark)
+                                && modifiers.matches_logically(shortcut.modifiers)
+                                && modifiers.alt == shortcut.modifiers.alt);
+                        (accepts(*action, *shortcut) && key == shortcut.logical_key && matches)
+                            .then_some((index, *action))
+                    })
+                })?;
             let event = input.events.remove(index);
+            if let Event::Key { key, .. } = &event {
+                let symbol = key.symbol_or_name();
+                if symbol.len() == 1
+                    && input
+                        .events
+                        .get(index)
+                        .is_some_and(|next| matches!(next, Event::Text(_)))
+                {
+                    input.events.remove(index);
+                }
+            }
             Some((action, event))
         })
     }
@@ -88,6 +107,12 @@ impl ShortcutMap {
         categories.retain(|(_, actions)| !actions.is_empty());
         categories
     }
+}
+
+fn starts_entry(text: &str) -> bool {
+    text.chars()
+        .next()
+        .is_some_and(|c| !c.is_control() && !c.is_whitespace())
 }
 
 /// A shortcut that needs the host's dialogs, layout or clipboard.
@@ -162,12 +187,19 @@ impl super::Chart {
         let focused = ctx.memory(|memory| memory.focused());
         let elsewhere = focused.is_some() && focused != self.keyboard.chart_id;
         if elsewhere && self.chart_options.keyboard.enabled && !egui::Popup::is_any_open(ctx) {
-            while let Some((action, _)) = self.keyboard.map.consume(ctx, |action| {
-                matches!(
-                    action,
-                    KeyboardAction::OpenQuickSearch | KeyboardAction::ShowKeyboardHelp
-                )
-            }) {
+            let text_focused = ctx.text_edit_focused();
+            while let Some((action, _)) =
+                self.keyboard.map.consume(ctx, false, |action, shortcut| {
+                    matches!(
+                        action,
+                        KeyboardAction::OpenQuickSearch | KeyboardAction::ShowKeyboardHelp
+                    ) && (!text_focused
+                        || shortcut.modifiers.command
+                        || shortcut.modifiers.ctrl
+                        || shortcut.modifiers.alt
+                        || shortcut.logical_key == egui::Key::F1)
+                })
+            {
                 self.keyboard.requests.push(ShortcutRequest::Action(action));
             }
         }
@@ -177,7 +209,7 @@ impl super::Chart {
                 .chart_id
                 .is_some_and(|id| ctx.memory(|memory| memory.had_focus_last_frame(id)))
         {
-            while let Some((action, _)) = self.keyboard.map.consume(ctx, |action| {
+            while let Some((action, _)) = self.keyboard.map.consume(ctx, false, |action, _| {
                 matches!(
                     action,
                     KeyboardAction::CycleChartFocus | KeyboardAction::CycleChartFocusBack
@@ -195,7 +227,7 @@ impl super::Chart {
         {
             return;
         }
-        while let Some((action, event)) = self.keyboard.map.consume(ctx, |_| true) {
+        while let Some((action, event)) = self.keyboard.map.consume(ctx, true, |_, _| true) {
             if action == KeyboardAction::PasteDrawing
                 && let Event::Paste(text) = event
             {
@@ -211,25 +243,23 @@ impl super::Chart {
             } else {
                 ctx.content_rect()
             };
+            let pending = self.keyboard.requests.len();
             self.apply_keyboard_action(action, rect);
+            if self.keyboard.requests.len() != pending {
+                return;
+            }
         }
         let text = ctx.input_mut(|input| {
-            if input.modifiers.ctrl || input.modifiers.command || input.modifiers.alt {
+            let Some(index) = input
+                .events
+                .iter()
+                .position(|event| matches!(event, Event::Text(text) if starts_entry(text)))
+            else {
                 return String::new();
-            }
-            let mut text = String::new();
-            input.events.retain(|event| {
-                if let Event::Text(value) = event
-                    && value
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_alphanumeric())
-                {
-                    text.push_str(value);
-                    return false;
-                }
-                true
-            });
+            };
+            let Event::Text(text) = input.events.remove(index) else {
+                unreachable!()
+            };
             text
         });
         if !text.is_empty() {
@@ -491,5 +521,167 @@ mod tests {
                 assert_eq!(chart.take_shortcut_requests(), vec![request]);
             }
         }
+        chart.shortcuts_mut().bindings.push((
+            KeyboardShortcut::new(Modifiers::NONE, Key::F),
+            KeyboardAction::FitContent,
+        ));
+        ctx.run_ui(
+            RawInput {
+                events: vec![
+                    Event::Key {
+                        key: Key::F,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    },
+                    Event::Text("f".into()),
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+            },
+        )
+        .drop_without_applying_deltas();
+        assert!(
+            chart.take_shortcut_requests().is_empty(),
+            "a bound character must not also open symbol search"
+        );
+
+        let ctx = Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+        let mut text = "label".to_owned();
+        for pass in 0..4 {
+            let events = match pass {
+                2 => vec![
+                    Event::Key {
+                        key: Key::Questionmark,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::SHIFT,
+                    },
+                    Event::Text("?".into()),
+                ],
+                3 => vec![Event::Key {
+                    key: Key::K,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::COMMAND,
+                }],
+                _ => vec![],
+            };
+            ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.dispatch_shortcuts(ui.ctx());
+                    let field = ui.text_edit_singleline(&mut text);
+                    chart.show(ui);
+                    if pass < 2 {
+                        field.request_focus();
+                    }
+                },
+            )
+            .drop_without_applying_deltas();
+            let expected = if pass == 3 {
+                vec![ShortcutRequest::Action(KeyboardAction::OpenQuickSearch)]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                chart.take_shortcut_requests(),
+                expected,
+                "field pass {pass}"
+            );
+        }
+        assert_eq!(text, "label?");
+        let ctx = Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+        chart
+            .drawings_mut()
+            .drawings
+            .push(crate::drawings::Drawing::new(
+                7,
+                crate::drawings::DrawingToolType::TrendLine,
+            ));
+        chart.drawings_mut().select(7);
+        for pass in 0..2 {
+            ctx.run_ui(
+                RawInput {
+                    events: if pass == 1 {
+                        vec![
+                            Event::Text("AB".into()),
+                            Event::Key {
+                                key: Key::Backspace,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: Modifiers::NONE,
+                            },
+                        ]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui).request_focus();
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(
+            chart.drawings().drawings.len(),
+            1,
+            "text entry owns subsequent keys in the same input batch"
+        );
+        assert_eq!(
+            chart.take_shortcut_requests(),
+            vec![ShortcutRequest::SymbolSearch("AB".into())]
+        );
+        assert!(
+            ctx.input(|input| input.key_pressed(Key::Backspace)),
+            "the host entry field keeps the following edit key"
+        );
+
+        let ctx = Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+        ctx.run_ui(
+            RawInput {
+                events: vec![
+                    Event::Key {
+                        key: Key::K,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::COMMAND,
+                    },
+                    Event::Key {
+                        key: Key::K,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: Modifiers::COMMAND,
+                    },
+                    Event::Text("RSI".into()),
+                ],
+                ..Default::default()
+            },
+            |ui| chart.dispatch_shortcuts(ui.ctx()),
+        )
+        .drop_without_applying_deltas();
+        assert_eq!(
+            chart.take_shortcut_requests(),
+            vec![ShortcutRequest::Action(KeyboardAction::OpenQuickSearch)]
+        );
+        assert!(
+            ctx.input(|input| input.events.contains(&Event::Text("RSI".into()))),
+            "opening a host dialog hands the remaining text to it"
+        );
     }
 }

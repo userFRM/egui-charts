@@ -15,11 +15,11 @@ impl super::DemoApp {
             .width(320.0)
             .show(ctx, &mut open, |ui| {
                 ui.label("Minutes, or an interval such as 30s, 2h, 1D or 10T");
-                let response = ui.text_edit_singleline(&mut text);
-                if self.interval_focus {
-                    response.request_focus();
-                    self.interval_focus = false;
+                let input_id = egui::Id::unique("interval_entry_input");
+                if std::mem::take(&mut self.interval_focus) {
+                    ui.memory_mut(|memory| memory.request_focus(input_id));
                 }
+                ui.add(egui::TextEdit::singleline(&mut text).id(input_id));
                 apply = ui.button("Apply").clicked()
                     || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             });

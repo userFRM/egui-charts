@@ -866,22 +866,11 @@ impl eframe::App for DemoApp {
             .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
         // Dialogs consume their keys before chart commands and the replay transport.
-        let dialog_open = self.keyboard_shortcuts.is_open
-            || self.quick_search.is_open()
-            || self.symbol_search.is_open()
-            || self.indicator_dialog.is_open()
-            || self.settings_dialog.is_open
-            || self.drawing_props.is_open
-            || self.export_dialog.is_open()
-            || self.alert_dialog.is_open
-            || self.series_settings.is_open
-            || self.indicator_settings.is_open()
-            || self.interval_entry.is_some()
-            || self.date_picker.is_open;
-        if dialog_open {
-            self.chart.suppress_shortcuts(&ctx);
-        } else {
+        if !self.keyboard_dialog_open() {
             self.handle_keyboard(&ctx);
+        }
+        if self.keyboard_dialog_open() {
+            self.chart.suppress_shortcuts(&ctx);
         }
         self.show_top_toolbar(ui, panel_bg);
         self.show_drawing_toolbar(ui, panel_bg);
@@ -1795,6 +1784,21 @@ impl DemoApp {
         }
     }
 
+    fn keyboard_dialog_open(&self) -> bool {
+        self.keyboard_shortcuts.is_open
+            || self.quick_search.is_open()
+            || self.symbol_search.is_open()
+            || self.indicator_dialog.is_open()
+            || self.settings_dialog.is_open
+            || self.drawing_props.is_open
+            || self.export_dialog.is_open()
+            || self.alert_dialog.is_open
+            || self.series_settings.is_open
+            || self.indicator_settings.is_open()
+            || self.interval_entry.is_some()
+            || self.date_picker.is_open
+    }
+
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
         use egui_charts::config::KeyboardAction as A;
         use egui_charts::widget::ShortcutRequest;
@@ -2157,6 +2161,58 @@ mod tests {
         assert_eq!(
             app.chart.drawings().drawings[0].chart_points[0],
             ChartPoint::new(10.0, 100.0)
+        );
+    }
+
+    /// Typed search owns subsequent editing keys, including in the opening frame.
+    #[test]
+    fn typed_symbol_search_keeps_queued_editing_keys() {
+        use eframe::App;
+        use egui_charts::drawings::{Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart
+            .drawings_mut()
+            .drawings
+            .push(Drawing::new(7, DrawingToolType::TrendLine));
+        app.chart.drawings_mut().select(7);
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![
+                egui::Event::Text("SAMX".into()),
+                key(egui::Key::Backspace),
+                egui::Event::Text("PLE".into()),
+            ],
+            vec![key(egui::Key::Enter)],
+        ] {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(
+            !app.symbol_search.is_open(),
+            "Enter selects the edited SAMPLE query"
+        );
+        assert_eq!(
+            app.chart.drawings().drawings.len(),
+            1,
+            "search editing must not delete drawings"
         );
     }
 

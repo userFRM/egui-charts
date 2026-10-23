@@ -159,6 +159,7 @@ impl Default for SymbolSearchConfig {
 /// ```
 pub struct SymbolSearchDialog {
     is_open: bool,
+    focus_search: bool,
     search_query: String,
     sel_idx: usize,
     filtered_symbols: Vec<Symbol>,
@@ -178,6 +179,7 @@ impl SymbolSearchDialog {
     pub fn new() -> Self {
         Self {
             is_open: false,
+            focus_search: true,
             search_query: String::new(),
             sel_idx: 0,
             filtered_symbols: Vec::new(),
@@ -216,6 +218,7 @@ impl SymbolSearchDialog {
     /// Clears any previous search state and shows the dialog.
     pub fn open(&mut self) {
         self.is_open = true;
+        self.focus_search = true;
         self.search_query.clear();
         self.sel_idx = 0;
         self.category = Category(None);
@@ -313,8 +316,13 @@ impl SymbolSearchDialog {
                         icons::QUICK_SEARCH
                             .as_image_tinted(Vec2::splat(24.0), theme.ui.text_secondary),
                     );
+                    let search_id = egui::Id::unique("symbol_search_input");
+                    if std::mem::take(&mut self.focus_search) {
+                        ui.memory_mut(|memory| memory.request_focus(search_id));
+                    }
                     let response = ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
+                            .id(search_id)
                             .font(egui::FontId::proportional(16.0))
                             .hint_text(RichText::new("Search symbols").size(16.0))
                             .frame(egui::Frame::NONE)
@@ -330,9 +338,6 @@ impl SymbolSearchDialog {
                     if response.changed() {
                         self.sel_idx = 0;
                         self.update_filtered_symbols(all_symbols);
-                    }
-                    if self.search_query.is_empty() && !response.has_focus() {
-                        response.request_focus();
                     }
                 });
                 ui.add_space(16.0);
