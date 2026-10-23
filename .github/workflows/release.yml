@@ -37,4 +37,12 @@ jobs:
       - name: Publish egui-charts
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish || echo "Already published, skipping"
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "egui-charts") | .version')
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"; exit 1; }
+          status=$(curl -s -o /dev/null -w '%{http_code}' -A "egui-charts-release (https://github.com/userFRM/egui-charts)" "https://crates.io/api/v1/crates/egui-charts/$version")
+          case "$status" in
+            200) echo "egui-charts $version is already on crates.io, skipping" ;;
+            404) cargo publish ;;
+            *) echo "::error::crates.io answered $status for egui-charts $version"; exit 1 ;;
+          esac
