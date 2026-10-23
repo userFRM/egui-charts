@@ -82,15 +82,10 @@
 //!
 //! ```rust
 //! # fn example(chart_a: &egui_charts::Chart, chart_b: &mut egui_charts::Chart) {
-//! // Emit crosshair position from chart A
-//! let hover_idx = chart_a.get_hover_bar_idx();
-//!
-//! // Apply to chart B
-//! chart_b.set_synced_crosshair_bar_idx(hover_idx);
-//!
-//! // Sync time scales
-//! let (spacing, offset) = chart_a.get_time_scale_state();
-//! chart_b.apply_synced_time_scale(spacing, offset);
+//! chart_b.set_synced_crosshair_time(chart_a.hover_time());
+//! if let Some(range) = chart_a.visible_time_range() {
+//!     chart_b.apply_synced_time_range(range);
+//! }
 //! # }
 //! ```
 //!
@@ -129,13 +124,16 @@ pub mod builder;
 mod feed;
 mod frame;
 pub(crate) mod interaction;
+pub mod layout;
 mod navigation;
 pub(crate) mod pan_zoom;
 mod panes;
 mod selection;
 mod series;
+pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 mod sync;
 use feed::FeedLink;
+pub use sync::VisibleTimeRange;
 pub(crate) mod tool_interaction;
 
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
