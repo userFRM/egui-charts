@@ -269,7 +269,72 @@ fn staple_studies_match_published_definitions() {
         .enumerate()
         .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
         .collect();
+    use crate::studies::{AverageLine, AverageType, MACombination};
+    let combination_bars: Vec<_> = [2.0, 4.0, 8.0, 6.0, 10.0, 5.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| {
+            Bar::new(
+                bars[i].time,
+                c - 1.0,
+                c + 1.0,
+                c - 1.0,
+                c,
+                if i % 2 == 0 { 1.0 } else { 2.0 },
+            )
+        })
+        .collect();
+    let combo = |types: &[(AverageType, usize, crate::model::PriceSource)]| -> Box<dyn Indicator> {
+        Box::new(
+            MACombination::new(
+                types
+                    .iter()
+                    .map(|&(kind, period, source)| {
+                        AverageLine::new(kind, period, egui::Color32::BLUE).with_source(source)
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+        )
+    };
     studies.extend([
+        (
+            "MA-combination-a",
+            combo(&[
+                (AverageType::Simple, 2, crate::model::PriceSource::Close),
+                (
+                    AverageType::Exponential,
+                    2,
+                    crate::model::PriceSource::Close,
+                ),
+                (AverageType::Weighted, 2, crate::model::PriceSource::Close),
+            ]),
+            combination_bars.clone(),
+        ),
+        (
+            "MA-combination-b",
+            combo(&[
+                (AverageType::Smoothed, 2, crate::model::PriceSource::Close),
+                (
+                    AverageType::VolumeWeighted,
+                    2,
+                    crate::model::PriceSource::Close,
+                ),
+                (AverageType::Hull, 4, crate::model::PriceSource::Open),
+            ]),
+            combination_bars,
+        ),
+        (
+            "LinRegChannel-hand",
+            Box::new(crate::studies::LinearRegressionChannel::new(3, 2.0)) as Box<dyn Indicator>,
+            {
+                let mut series = ties.clone();
+                for (bar, c) in series.iter_mut().zip([1.0, 4.0, 2.0, 4.0]) {
+                    bar.close = c;
+                }
+                series
+            },
+        ),
         (
             "KST-hand",
             Box::new(KnowSureThing::new().with_params([1; 4], [2; 4], 2)) as Box<dyn Indicator>,
@@ -383,4 +448,118 @@ fn staple_studies_match_published_definitions() {
         assert!(*lines > 0, "{name} is built but has no expected values");
     }
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+/// A refit drops the expired bar and replaces all three lines on an append or correction.
+#[test]
+fn regression_channel_refits_the_last_n_bars_on_update() {
+    use crate::studies::LinearRegressionChannel;
+    let mut bars: Vec<_> = [1.0, 2.0, 4.0, 2.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), c, c, c, c, 1.0))
+        .collect();
+    let mut study = LinearRegressionChannel::new(3, 2.0);
+    assert!(
+        study.is_incremental(),
+        "the trailing channel must refit on every live update"
+    );
+    study.calculate(&bars[..2]);
+    assert!(
+        study
+            .values()
+            .iter()
+            .all(|v| matches!(v, IndicatorValue::None))
+    );
+    // OLS of [1,2,4]: intercept 5/6, slope 3/2, SSE 1/6, offset 2*sqrt(SSE/2).
+    // OLS of [2,4,2]: intercept 8/3, slope 0, SSE 8/3.
+    for (len, edit, intercept, slope, offset) in [
+        (3, None, 5.0 / 6.0, 1.5, 1.0 / 3.0_f64.sqrt()),
+        (4, None, 8.0 / 3.0, 0.0, 4.0 / 3.0_f64.sqrt()),
+        (4, Some(6.0), 2.0, 2.0, 0.0),
+    ] {
+        if let Some(close) = edit {
+            bars[3].close = close;
+        }
+        study.update(&bars[..len], len - 1);
+        assert_eq!(study.values().len(), len);
+        for (i, value) in study.values().iter().enumerate() {
+            if i < len - 3 {
+                assert!(matches!(value, IndicatorValue::None));
+                continue;
+            }
+            let IndicatorValue::Multiple(lines) = value else {
+                panic!("{value:?}")
+            };
+            let middle = intercept + slope * (i - (len - 3)) as f64;
+            for (got, want) in lines.iter().zip([middle + offset, middle, middle - offset]) {
+                assert!((got - want).abs() < 1e-12, "{value:?}: {want}");
+            }
+        }
+    }
+    assert_eq!(study.correlation(), Some(1.0));
+    assert_eq!(study.r_squared(), Some(1.0));
+    let mut open =
+        LinearRegressionChannel::new(3, 2.0).with_source(crate::model::PriceSource::Open);
+    open.calculate(&bars);
+    // Opens remain [2,4,2] in the trailing window after the close was corrected to 6.
+    let IndicatorValue::Multiple(lines) = &open.values()[3] else {
+        panic!("missing open fit")
+    };
+    assert!((lines[1] - 8.0 / 3.0).abs() < 1e-12);
+    assert_eq!(open.correlation(), Some(0.0));
+}
+
+/// The configurable cross, triple and ribbon presets are reachable by their catalogue names.
+#[test]
+fn moving_average_combinations_mark_only_actual_crossings() {
+    let factory = super::IndicatorFactory::new();
+    for name in ["SMA/EMA Cross", "Triple MA", "MA Ribbon"] {
+        assert!(factory.create(name).is_some(), "missing {name}");
+    }
+    use crate::studies::{AverageLine, AverageType, CrossDirection, MACombination};
+    let mut bars: Vec<_> = [2.0, 1.0, 1.0, 0.0, 2.0, 2.0, 3.0, 1.0, 1.0, 0.0, 2.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), c, c, c, c, 1.0))
+        .collect();
+    let lines = vec![
+        AverageLine::new(AverageType::Simple, 1, egui::Color32::BLUE),
+        AverageLine::new(AverageType::Simple, 2, egui::Color32::RED),
+    ];
+    let mut study = MACombination::new(lines.clone()).unwrap();
+    study.calculate(&bars);
+    let crossings = |s: &MACombination| {
+        s.markers()
+            .iter()
+            .map(|m| (m.bar, m.direction))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        crossings(&study),
+        vec![
+            (4, CrossDirection::Up),
+            (7, CrossDirection::Down),
+            (10, CrossDirection::Up)
+        ]
+    );
+    // Revising the last bar removes the now-unconfirmed crossing.
+    bars[10].close = 0.0;
+    study.update(&bars, 10);
+    assert_eq!(
+        crossings(&study),
+        vec![(4, CrossDirection::Up), (7, CrossDirection::Down)]
+    );
+    bars[6].close = f64::NAN;
+    study.update(&bars, 6);
+    assert_eq!(crossings(&study), vec![(4, CrossDirection::Up)]);
+    for count in [0, 1, 15] {
+        assert!(MACombination::new(vec![lines[0].clone(); count]).is_err());
+    }
+    assert!(
+        MACombination::new(lines)
+            .unwrap()
+            .with_crossing_pair(0, 2)
+            .is_err()
+    );
 }

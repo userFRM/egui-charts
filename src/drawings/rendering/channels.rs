@@ -5,6 +5,7 @@
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::model::{Bar, SpanCache};
+use crate::studies::math::{LinearFit, Moments};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -477,35 +478,6 @@ impl Drawing {
     }
 }
 
-/// Least-squares line through the closes of a span of bars, against their
-/// position in the span.
-#[derive(Clone, Copy)]
-struct LinearFit {
-    /// Price change per bar.
-    slope: f64,
-    /// Fitted price at the first bar.
-    intercept: f64,
-    /// Standard deviation of the closes around the line (n - 1 denominator).
-    sigma: f64,
-    /// Share of the closes' variance the line explains.
-    r_squared: f64,
-    /// Pearson correlation of the closes with their position; `None` when
-    /// the closes are flat.
-    correlation: Option<f64>,
-}
-
-/// Means of the closes of a span of bars and of their positions in it, and
-/// the sums of the products of their deviations from those means.
-#[derive(Clone, Copy, Default)]
-struct Moments {
-    n: f64,
-    mean_x: f64,
-    mean_y: f64,
-    sxx: f64,
-    sxy: f64,
-    syy: f64,
-}
-
 /// Moments of `bars`, the span that starts at bar `first`. A tick on the
 /// forming bar, or a new bar, adds one bar to the moments of the bars before
 /// it instead of refitting the span.
@@ -515,69 +487,6 @@ fn span_moments(view: &ChartView, first: usize, bars: &[Bar]) -> Rc<Moments> {
             Some(moments.with(bar.close))
         })
     })
-}
-
-impl Moments {
-    /// Moments of the closes of `bars`: the mean, corrected for rounding, then the centred sums.
-    fn of(bars: &[Bar]) -> Self {
-        let n = bars.len() as f64;
-        if bars.is_empty() {
-            return Self::default();
-        }
-        let mean_x = (n - 1.0) / 2.0;
-        let mean_y = bars.iter().map(|bar| bar.close).sum::<f64>() / n;
-        // Correct the rounding of the sum, so equal closes give their close as the mean.
-        let mean_y = mean_y + bars.iter().map(|bar| bar.close - mean_y).sum::<f64>() / n;
-        let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
-        for (i, bar) in bars.iter().enumerate() {
-            let (dx, dy) = (i as f64 - mean_x, bar.close - mean_y);
-            sxx += dx * dx;
-            sxy += dx * dy;
-            syy += dy * dy;
-        }
-        Self {
-            n,
-            mean_x,
-            mean_y,
-            sxx,
-            sxy,
-            syy,
-        }
-    }
-
-    /// These moments with the close `y` of the next bar added (Welford's update).
-    fn with(&self, y: f64) -> Self {
-        let n = self.n + 1.0;
-        let (dx, dy) = (self.n - self.mean_x, y - self.mean_y);
-        let (mean_x, mean_y) = (self.mean_x + dx / n, self.mean_y + dy / n);
-        Self {
-            n,
-            mean_x,
-            mean_y,
-            sxx: self.sxx + dx * (self.n - mean_x),
-            sxy: self.sxy + dx * (y - mean_y),
-            syy: self.syy + dy * (y - mean_y),
-        }
-    }
-
-    /// The least-squares line; `None` for fewer than two bars.
-    fn fit(&self) -> Option<LinearFit> {
-        if self.n < 2.0 {
-            return None;
-        }
-        let slope = self.sxy / self.sxx;
-        let residual = (self.syy - slope * self.sxy).max(0.0);
-        // Closes are flat when they vary by no more than the rounding of their mean.
-        let flat = self.syy <= 16.0 * self.n * (self.mean_y * f64::EPSILON).powi(2);
-        Some(LinearFit {
-            slope,
-            intercept: self.mean_y - slope * self.mean_x,
-            sigma: (residual / (self.n - 1.0)).sqrt(),
-            // Flat closes are fitted exactly.
-            r_squared: if flat { 1.0 } else { 1.0 - residual / self.syy },
-            correlation: (!flat).then(|| self.sxy / (self.sxx * self.syy).sqrt()),
-        })
-    }
 }
 
 /// The flat top/bottom's horizontal line at `p3`, run past both ends of the
