@@ -21,7 +21,7 @@ use crate::tokens::DESIGN_TOKENS;
 impl SettingsDialog {
     pub(super) fn draw_canvas_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.content_padding_h);
+            ui.add_space(30.0);
             ui.vertical(|ui| {
                 // LAYOUT STYLE
                 self.draw_section_header(ui, "LAYOUT STYLE", style);
@@ -324,7 +324,7 @@ impl SettingsDialog {
 
     pub(super) fn draw_symbol_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.content_padding_h);
+            ui.add_space(30.0);
             ui.vertical(|ui| {
                 // CANDLE COLORS
                 self.draw_section_header(ui, "CANDLE COLORS", style);
@@ -399,7 +399,7 @@ impl SettingsDialog {
                 // TIMEZONE
                 self.draw_section_header(ui, "TIMEZONE", style);
 
-                self.draw_setting_row_with_controls(ui, "Chart timezone", style, |ui, dialog| {
+                self.draw_setting_row_with_controls(ui, "Timezone", style, |ui, dialog| {
                     let curr_tz = dialog.settings.timezone.clone();
                     styled_dropdown(
                         ui,
@@ -424,7 +424,7 @@ impl SettingsDialog {
 
     pub(super) fn draw_status_line_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.content_padding_h);
+            ui.add_space(30.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "VISIBILITY", style);
 
@@ -458,7 +458,7 @@ impl SettingsDialog {
 
     pub(super) fn draw_scales_and_lines_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.content_padding_h);
+            ui.add_space(30.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "SCALE MODES", style);
 
@@ -520,7 +520,7 @@ impl SettingsDialog {
 
     pub(super) fn draw_trading_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.content_padding_h);
+            ui.add_space(30.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "TRADING OPTIONS", style);
 
@@ -548,7 +548,7 @@ impl SettingsDialog {
 
     pub(super) fn draw_alerts_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.content_padding_h);
+            ui.add_space(30.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "ALERT SETTINGS", style);
 
@@ -581,7 +581,7 @@ impl SettingsDialog {
 
     pub(super) fn draw_events_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
-            ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.content_padding_h);
+            ui.add_space(30.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "EVENT MARKERS", style);
 
@@ -615,7 +615,7 @@ impl SettingsDialog {
     ) {
         ui.label(
             RichText::new(title)
-                .size(typography::SM)
+                .size(11.0)
                 .color(style.section_header_text),
         );
         ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.row_spacing);
@@ -633,22 +633,26 @@ impl SettingsDialog {
         ui.horizontal(|ui| {
             // Label column with fixed width
             ui.allocate_ui_with_layout(
-                egui::vec2(
-                    DESIGN_TOKENS.sizing.settings_dialog.label_width,
-                    DESIGN_TOKENS.sizing.settings_dialog.row_height,
-                ),
+                egui::vec2(96.0, 42.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    ui.label(
-                        RichText::new(label)
-                            .size(typography::LG)
-                            .color(style.label_text),
+                    ui.set_min_width(96.0);
+                    ui.set_max_width(96.0);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(label)
+                                .size(typography::LG)
+                                .color(style.label_text),
+                        )
+                        .wrap(),
                     );
                 },
             );
 
             // Controls column - starts at fixed offset
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                ui.spacing_mut().interact_size.y = 32.0;
                 add_content(ui, self);
             });
         });
@@ -686,7 +690,7 @@ pub(super) fn configure_dialog_visuals(ui: &mut Ui, style: &SettingsDialogStyle)
 
     // Selection colors for dropdowns
     visuals.selection.bg_fill = style.tab_bg_active;
-    visuals.selection.stroke = Stroke::NONE;
+    visuals.selection.stroke = Stroke::new(1.0, style.val_text);
 
     // Text input (TextEdit)
     visuals.extreme_bg_color = style.input_bg;
@@ -721,12 +725,36 @@ fn styled_dropdown<R>(
 }
 
 fn styled_checkbox(ui: &mut Ui, checked: &mut bool, label: &str, text_color: Color32) {
-    ui.horizontal(|ui| {
-        ui.checkbox(
-            checked,
-            RichText::new(label).size(typography::LG).color(text_color),
-        );
-    });
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 46.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_min_height(46.0);
+            ui.spacing_mut().icon_width = 18.0;
+            ui.spacing_mut().icon_width_inner = 12.0;
+            let background = ui.visuals().panel_fill;
+            let hover = ui.visuals().widgets.hovered.bg_fill;
+            let widgets = &mut ui.visuals_mut().widgets;
+            for (visuals, hovered) in [
+                (&mut widgets.inactive, false),
+                (&mut widgets.hovered, true),
+                (&mut widgets.active, true),
+            ] {
+                visuals.bg_fill = if *checked {
+                    text_color
+                } else if hovered {
+                    hover
+                } else {
+                    background
+                };
+                visuals.fg_stroke =
+                    Stroke::new(1.5, if *checked { background } else { text_color });
+                visuals.bg_stroke = Stroke::new(1.0, text_color);
+                visuals.corner_radius = egui::CornerRadius::same(3);
+            }
+            ui.checkbox(checked, RichText::new(label).size(14.0).color(text_color));
+        },
+    );
     ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.row_spacing);
 }
 

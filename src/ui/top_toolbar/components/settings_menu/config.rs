@@ -11,6 +11,7 @@ use egui::Color32;
 /// Dialog layout configuration (width, height, colors)
 pub struct SettingsDialogConfig {
     pub width: f32,
+    /// Outer height override; zero sizes the dialog for the active tab.
     pub height: f32,
     pub bg_color: Color32,
     pub tab_bg_color: Color32,
@@ -24,8 +25,8 @@ impl Default for SettingsDialogConfig {
         // Colors are TRANSPARENT to signal that colors should be fetched from
         // ui.style().visuals at render time for proper theme support.
         Self {
-            width: 450.0,
-            height: 500.0,
+            width: 752.0,
+            height: 0.0,
             bg_color: Color32::TRANSPARENT,
             tab_bg_color: Color32::TRANSPARENT,
             tab_active_color: Color32::TRANSPARENT,
