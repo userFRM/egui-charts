@@ -48,5 +48,6 @@ pub use symbol_search::{
 
 // From timeframe_selector
 pub use timeframe_selector::{
-    Timeframe, TimeframeAction, TimeframeSelector, TimeframeSelectorConfig, TimeframeUnit,
+    Timeframe, TimeframeAction, TimeframePreferences, TimeframeSelector, TimeframeSelectorConfig,
+    TimeframeUnit,
 };

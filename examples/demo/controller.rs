@@ -234,6 +234,9 @@ impl DemoApp {
                 tooltip: "Data Window".into(),
                 section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
             });
+        if let Some(preferences) = cc.storage.and_then(|storage| eframe::get_value(storage, "interval_preferences")) {
+            top_toolbar.timeframe_selector.set_preferences(preferences);
+        }
         let mut timeframe_toolbar = TimeframeToolbar::default();
         timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
         timeframe_toolbar.state.timeframe = timeframe;
@@ -821,6 +824,10 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 
 impl eframe::App for DemoApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, "interval_preferences", &self.top_toolbar.timeframe_selector.preferences());
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);

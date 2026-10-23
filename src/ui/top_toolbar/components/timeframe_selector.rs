@@ -19,7 +19,7 @@ const ROW_H: f32 = 32.0;
 const CUSTOM_FORM_W: f32 = 232.0;
 
 /// Timeframe unit
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TimeframeUnit {
     /// A fixed number of executions per bar.
     Tick,
@@ -58,7 +58,7 @@ impl TimeframeUnit {
 }
 
 /// Timeframe definition
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Timeframe {
     pub value: u32,
     pub unit: TimeframeUnit,
@@ -347,6 +347,18 @@ impl CustomTimeframeDialog {
     }
 }
 
+/// Host-owned interval settings. Save with the user's settings and restore with
+/// [`TimeframeSelector::set_preferences`]. The selector owns no storage.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TimeframePreferences {
+    /// Pinned intervals, including those temporarily unavailable from a source.
+    #[serde(default)]
+    pub favorites: Vec<Timeframe>,
+    /// User-created intervals in menu order.
+    #[serde(default)]
+    pub custom_timeframes: Vec<Timeframe>,
+}
+
 /// Timeframe selector
 pub struct TimeframeSelector {
     /// Currently selected timeframe
@@ -390,6 +402,34 @@ impl TimeframeSelector {
             config: TimeframeSelectorConfig::default(),
             show_custom_input: false,
             custom_dialog: CustomTimeframeDialog::default(),
+        }
+    }
+
+    /// Export the interval lists for the host's persisted user settings.
+    pub fn preferences(&self) -> TimeframePreferences {
+        let mut favorites: Vec<_> = self.favorites.iter().copied().collect();
+        favorites.sort_by_key(|tf| (tf.unit as u8, tf.value));
+        TimeframePreferences {
+            favorites,
+            custom_timeframes: self.custom_timeframes.clone(),
+        }
+    }
+
+    /// Restore saved lists, discarding zero intervals and duplicate custom entries.
+    pub fn set_preferences(&mut self, preferences: TimeframePreferences) {
+        self.favorites = preferences
+            .favorites
+            .into_iter()
+            .filter(|tf| tf.value > 0)
+            .collect();
+        self.custom_timeframes.clear();
+        for tf in preferences.custom_timeframes {
+            if tf.value > 0
+                && !self.custom_timeframes.contains(&tf)
+                && !Timeframe::all_presets().contains(&tf)
+            {
+                self.custom_timeframes.push(tf);
+            }
         }
     }
 
@@ -470,16 +510,24 @@ impl TimeframeSelector {
         ui.set_max_height(max_height);
 
         let row = |ui: &mut Ui, tf: Timeframe, favorite: bool, current: Timeframe| {
+            let mut toggle_favorite = false;
             let content = TimeframeRow {
                 tf,
                 favorite,
                 theme,
+                toggle_favorite: &mut toggle_favorite,
             };
-            ListItem::new()
+            let response = ListItem::new()
                 .selected(current == tf)
                 .height(ROW_H)
-                .show(ui, content)
-                .clicked()
+                .show(ui, content);
+            if toggle_favorite {
+                TimeframeAction::ToggleFavorite(tf)
+            } else if response.clicked() {
+                TimeframeAction::Select(tf)
+            } else {
+                TimeframeAction::None
+            }
         };
 
         let current = self.current;
@@ -498,16 +546,18 @@ impl TimeframeSelector {
                 ] {
                     section_header(ui, theme, header);
                     for tf in Timeframe::by_unit(unit) {
-                        if row(ui, tf, self.favorites.contains(&tf), current) {
-                            action = TimeframeAction::Select(tf);
+                        let picked = row(ui, tf, self.favorites.contains(&tf), current);
+                        if picked != TimeframeAction::None {
+                            action = picked;
                         }
                     }
                 }
                 if !self.custom_timeframes.is_empty() {
                     section_header(ui, theme, "Custom");
                     for tf in &self.custom_timeframes {
-                        if row(ui, *tf, false, current) {
-                            action = TimeframeAction::Select(*tf);
+                        let picked = row(ui, *tf, self.favorites.contains(tf), current);
+                        if picked != TimeframeAction::None {
+                            action = picked;
                         }
                     }
                 }
@@ -522,10 +572,20 @@ impl TimeframeSelector {
                 if self.show_custom_input
                     && let Some(tf) = self.custom_dialog.show(ui)
                 {
+                    if !Timeframe::all_presets().contains(&tf)
+                        && !self.custom_timeframes.contains(&tf)
+                    {
+                        self.custom_timeframes.push(tf);
+                    }
                     action = TimeframeAction::Select(tf);
                 }
             });
 
+        if let TimeframeAction::ToggleFavorite(tf) = action {
+            if !self.favorites.remove(&tf) {
+                self.favorites.insert(tf);
+            }
+        }
         if let TimeframeAction::Select(timeframe) = action {
             self.current = timeframe;
             self.show_custom_input = false;
@@ -591,6 +651,7 @@ struct TimeframeRow<'a> {
     tf: Timeframe,
     favorite: bool,
     theme: &'a Theme,
+    toggle_favorite: &'a mut bool,
 }
 
 impl ListItemContent for TimeframeRow<'_> {
@@ -611,18 +672,36 @@ impl ListItemContent for TimeframeRow<'_> {
             )
         });
 
-        if self.favorite {
-            let star_rect = Rect::from_min_size(
-                pos2(
-                    rect.max.x - icon_sizes::SM,
-                    rect.center().y - icon_sizes::SM / 2.0,
-                ),
-                vec2(icon_sizes::SM, icon_sizes::SM),
+        let star_rect = Rect::from_center_size(
+            pos2(rect.right() - icon_sizes::SM / 2.0, rect.center().y),
+            vec2(28.0, ROW_H),
+        );
+        let star = ui.interact(
+            star_rect,
+            context.response.id.with("favorite"),
+            egui::Sense::click(),
+        );
+        let tooltip = if self.favorite {
+            "Remove from favorites"
+        } else {
+            "Add to favorites"
+        };
+        star.widget_info(|| {
+            WidgetInfo::selected(Role::Button, ui.is_enabled(), self.favorite, tooltip)
+        });
+        *self.toggle_favorite = star.clicked();
+        let icon = if self.favorite {
+            &embedded_icons::STAR_FILLED
+        } else {
+            &embedded_icons::STAR_EMPTY
+        };
+        icon.as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), text)
+            .paint_at(
+                ui,
+                Rect::from_center_size(star_rect.center(), vec2(icon_sizes::SM, icon_sizes::SM)),
             );
-            embedded_icons::STAR_FILLED
-                .as_image_tinted(star_rect.size(), text)
-                .paint_at(ui, star_rect);
-        }
+        menu_row_focus(ui, &star);
+        star.on_hover_text(tooltip);
         ui.painter().text(
             pos2(rect.min.x, rect.center().y),
             egui::Align2::LEFT_CENTER,
@@ -639,6 +718,90 @@ impl ListItemContent for TimeframeRow<'_> {
 mod tests {
     use super::*;
     use crate::model::Timeframe as Model;
+
+    #[test]
+    fn custom_intervals_and_stars_survive_saved_preferences() {
+        let ctx = egui::Context::default();
+        let theme = Theme::light();
+        crate::theme::apply_to_egui(&ctx, &theme);
+        let custom = Timeframe::new(7, TimeframeUnit::Minute);
+        let mut selector = TimeframeSelector::default();
+        selector.show_custom_input = true;
+        selector.custom_dialog.value_input = "7".to_owned();
+        let frame = |selector: &mut TimeframeSelector, events| {
+            let mut action = TimeframeAction::None;
+            let mut right = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 2000.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    action = selector.menu_ui(ui, &theme, 1900.0);
+                    right = ui.min_rect().right();
+                },
+            );
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.textures_delta.clear();
+            output.drop_without_applying_deltas();
+            (action, labels, right)
+        };
+        let click = |selector: &mut TimeframeSelector, pos| {
+            frame(selector, vec![egui::Event::PointerMoved(pos)]);
+            let event = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(selector, vec![event(true)]);
+            frame(selector, vec![event(false)]).0
+        };
+        frame(&mut selector, vec![]);
+        let (_, labels, _) = frame(&mut selector, vec![]);
+        let add = labels.iter().find(|(label, _)| label == "Add").unwrap().1;
+        assert_eq!(click(&mut selector, add), TimeframeAction::Select(custom));
+        assert_eq!(selector.custom_timeframes, vec![custom]);
+        // Adding the same custom interval again must not duplicate its row.
+        selector.show_custom_input = true;
+        frame(&mut selector, vec![]);
+        let (_, labels, _) = frame(&mut selector, vec![]);
+        let add = labels.iter().find(|(label, _)| label == "Add").unwrap().1;
+        click(&mut selector, add);
+        assert_eq!(selector.custom_timeframes, vec![custom]);
+        let selected = selector.current;
+        for favorite in [true, false, true] {
+            let (_, labels, right) = frame(&mut selector, vec![]);
+            let y = labels
+                .iter()
+                .find(|(label, _)| *label == custom.display_long())
+                .unwrap()
+                .1
+                .y;
+            let action = click(
+                &mut selector,
+                pos2(right - theme.spacing.lg - icon_sizes::SM / 2.0, y),
+            );
+            assert_eq!(action, TimeframeAction::ToggleFavorite(custom));
+            assert_eq!(selector.favorites.contains(&custom), favorite);
+            assert_eq!(selector.current, selected);
+        }
+        let saved = serde_json::to_string(&selector.preferences()).unwrap();
+        let mut restored = TimeframeSelector::default();
+        restored.set_preferences(serde_json::from_str(&saved).unwrap());
+        assert_eq!(restored.preferences(), selector.preferences());
+    }
 
     #[test]
     fn custom_interval_tabs_from_value_to_unit_to_add() {
