@@ -617,10 +617,10 @@ impl TimeframeSelector {
                 }
             });
 
-        if let TimeframeAction::ToggleFavorite(tf) = action {
-            if !self.favorites.remove(&tf) {
-                self.favorites.insert(tf);
-            }
+        if let TimeframeAction::ToggleFavorite(tf) = action
+            && !self.favorites.remove(&tf)
+        {
+            self.favorites.insert(tf);
         }
         if let TimeframeAction::Select(timeframe) = action {
             self.current = timeframe;
@@ -761,9 +761,14 @@ mod tests {
         let theme = Theme::light();
         crate::theme::apply_to_egui(&ctx, &theme);
         let custom = Timeframe::new(7, TimeframeUnit::Minute);
-        let mut selector = TimeframeSelector::default();
-        selector.show_custom_input = true;
-        selector.custom_dialog.value_input = "7".to_owned();
+        let mut selector = TimeframeSelector {
+            show_custom_input: true,
+            custom_dialog: CustomTimeframeDialog {
+                value_input: "7".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let frame = |selector: &mut TimeframeSelector, events| {
             let mut action = TimeframeAction::None;
             let mut right = 0.0;
