@@ -71,6 +71,8 @@ pub struct UiColors {
     pub panel_bg_secondary: Color32,
     /// Windows, menus, popups and tooltips.
     pub panel_bg_floating: Color32,
+    /// Scrim behind modal dialogs; transparent when the border alone separates them.
+    pub modal_overlay: Color32,
     /// Primary text.
     pub text: Color32,
     /// Secondary labels.
