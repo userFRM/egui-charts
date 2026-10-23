@@ -1,6 +1,6 @@
 //! The dashed-line painter and the clip bound its loops use, shared by the chart and the drawing tools.
 
-use egui::{Pos2, Rect, Stroke};
+use egui::{Mesh, Pos2, Rect, Stroke, emath::GuiRounding};
 
 /// The painter's clip rect, bounded by the viewport when it is unbounded, or `None` when neither is
 /// finite.
@@ -79,7 +79,25 @@ pub(crate) fn draw_dashed_line(
         let dash_start = (k as f64 * period).max(from);
         let dash_end = (k as f64 * period + f64::from(dash_len)).min(to);
         if dash_start < dash_end {
-            painter.line_segment([at(dash_start), at(dash_end)], stroke);
+            let (start, end) = (at(dash_start), at(dash_end));
+            if dash_len == 1.0 && stroke.width == 1.0 && (dx == 0.0 || dy == 0.0) {
+                // A mesh keeps one-point dots square; thin rectangles are tessellated as lines.
+                let half_width = if dx == 0.0 {
+                    egui::vec2(stroke.width / 2.0, 0.0)
+                } else {
+                    egui::vec2(0.0, stroke.width / 2.0)
+                };
+                let rect = Rect::from_two_pos(start, end).expand2(half_width);
+                let rect = Rect::from_min_size(
+                    rect.min.round_to_pixels(painter.pixels_per_point()),
+                    rect.size(),
+                );
+                let mut dot = Mesh::default();
+                dot.add_colored_rect(rect, stroke.color);
+                painter.add(dot);
+            } else {
+                painter.line_segment([start, end], stroke);
+            }
         }
     }
 }

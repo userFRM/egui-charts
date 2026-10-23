@@ -1004,7 +1004,7 @@ mod tests {
         custom.ui.accent_text = Color32::YELLOW;
         for (theme, text) in [
             (crate::theme::Theme::dark(), Color32::from_gray(219)),
-            (crate::theme::Theme::light(), Color32::from_rgb(19, 23, 34)),
+            (crate::theme::Theme::light(), Color32::from_gray(26)),
             (custom, Color32::GREEN),
         ] {
             for selected in [None, Some(DrawingToolType::TrendLine)] {
