@@ -1065,7 +1065,7 @@ mod tests {
                     assert_eq!(
                         icons[i],
                         (
-                            Rect::from_center_size(origin + vec2(26.0, y), vec2(28.0, 28.0)),
+                            Rect::from_center_size(origin + vec2(26.0, y), vec2(24.0, 24.0)),
                             colour
                         ),
                         "icon {i}, selected {selected:?}"

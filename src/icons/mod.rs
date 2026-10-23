@@ -62,6 +62,8 @@ pub mod icons {
     pub const CROSSHAIR: Icon = crate::icon_from_path!("lines/cursor-cross.svg");
     pub const DOT: Icon = crate::icon_from_path!("lines/cursor-dot.svg");
     pub const ARROW: Icon = crate::icon_from_path!("lines/cursor-arrow.svg");
+    /// Pointer with a halo for presenting a position on the chart.
+    pub const DEMONSTRATION: Icon = crate::icon_from_path!("lines/cursor-demonstration.svg");
     pub const ERASER: Icon = crate::icon_from_path!("lines/eraser.svg");
 
     // Lines and channels

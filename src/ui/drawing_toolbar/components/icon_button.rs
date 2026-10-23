@@ -4,7 +4,6 @@
 //! toggles, and actions.
 
 use crate::icons::Icon;
-use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use egui::{
     Color32, Rect, RectAlign, Response, Role, Sense, Stroke, StrokeKind, Tooltip, Ui, Vec2,
@@ -156,7 +155,7 @@ pub fn draw_icon_button_padded(
 /// - Outer rect: 52×38px
 /// - Inner hover rect: 8.5px horizontal margin, 1.5px vertical margin
 /// - Inner rounding: 5px
-/// - Icon: 28×28 centered in outer rect
+/// - Icon: 24×24 centered in outer rect
 ///
 /// A selected tool has a neutral fill; a latched utility uses contrasting ink and fill.
 /// The tooltip opens to the right of the bar, so it never covers the next button.
@@ -245,7 +244,7 @@ fn draw_rail_button(
         }
 
         // Icon centered in OUTER rect
-        let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(icon_sizes::TOOLBAR));
+        let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(tokens.icon_size));
         let icon_color = if !ui.is_enabled() {
             theme.ui.text_disabled
         } else if is_selected {
