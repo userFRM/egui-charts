@@ -7,7 +7,7 @@
 //! significant boundaries (year, month changes) always remain visible.
 
 use super::time_formatter::{DefaultTimeFormatter, TimeFormatter};
-use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Months, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Type of tick mark on the time scale
@@ -207,6 +207,9 @@ impl TickMarkGenerator {
             marks = self.reduce_marks_cnt(marks, self.config.max_marks);
         }
 
+        for mark in &mut marks {
+            mark.label = self.format_time_label(mark.time, mark.mark_type);
+        }
         marks
     }
 
@@ -294,7 +297,13 @@ impl TickMarkGenerator {
             }
         };
 
-        Duration::milliseconds((seconds * 1000.0) as i64)
+        // Beyond a budget of candidates, step by whole years to bound the work.
+        let candidate_budget = (target_marks * 8.0).ceil().max(256.0) as i64;
+        let interval = Duration::milliseconds((seconds * 1000.0) as i64);
+        if time_span.num_milliseconds() / candidate_budget < interval.num_milliseconds() {
+            return interval;
+        }
+        Duration::days(365 * ((seconds_per_mark / 31_536_000.0) as i64 + 1))
     }
 
     /// Determine mark type and min weight threshold based on interval
@@ -327,17 +336,35 @@ impl TickMarkGenerator {
         primary_type: TickMarkType,
     ) -> Vec<TickMark> {
         let mut marks = Vec::new();
+        // Multi-year intervals step by calendar years so every mark is a year boundary.
+        let years = interval.num_days() / 365;
+        if years > 1 {
+            let first = start_time.year() - start_time.year().rem_euclid(years as i32);
+            let mut current = Utc.with_ymd_and_hms(first, 1, 1, 0, 0, 0).single();
+            while let Some(time) = current.filter(|time| *time <= end_time) {
+                if time >= start_time {
+                    marks.push(TickMark {
+                        time,
+                        mark_type: TickMarkType::Year,
+                        weight: TickMarkWeight::YEAR,
+                        label: String::new(),
+                        index: 0, // Will be set later
+                    });
+                }
+                current = time.checked_add_months(Months::new(12 * years as u32));
+            }
+            return marks;
+        }
         let mut current = self.round_time_to_boundary(start_time, interval);
 
         while current <= end_time {
             let (mark_type, weight) = self.classify_time_boundary(current, primary_type);
-            let label = self.format_time_label(current, mark_type);
 
             marks.push(TickMark {
                 time: current,
                 mark_type,
                 weight,
-                label,
+                label: String::new(),
                 index: 0, // Will be set later
             });
 
@@ -597,15 +624,112 @@ mod tests {
     fn test_optimal_interval_calculation() {
         let generator = TickMarkGenerator::new();
 
-        // 1 hour span, 1000 pixels -> should get minute-level marks
-        let span = Duration::hours(1);
-        let interval = generator.calculate_optimal_interval(span, 1000.0);
-        assert!(interval.num_seconds() >= 60 && interval.num_seconds() <= 600);
+        let start = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap();
+        // 1000 px give 20 target marks and a budget of 256 candidates; beyond it the
+        // interval is the whole number of years per target mark, plus one.
+        for (span, expected_interval) in [
+            (Duration::hours(1), Duration::minutes(2)),
+            (Duration::days(1), Duration::hours(1)),
+            (Duration::days(365 * 310), Duration::days(365 * 16)),
+            (Duration::days(365 * 100_010), Duration::days(365 * 5001)),
+        ] {
+            let interval = generator.calculate_optimal_interval(span, 1000.0);
+            assert_eq!(interval, expected_interval);
+            let candidates = generator.generate_candidate_marks(
+                start,
+                start + span,
+                interval,
+                TickMarkType::Year,
+            );
+            assert!(candidates.len() <= 257, "{} candidates", candidates.len());
+            if interval > Duration::days(365) {
+                let bars = [(start, 0), (start + span, 1)];
+                let marks = generator.generate_marks(start, start + span, 1000.0, &bars);
+                let years: Vec<_> = marks.iter().map(|mark| mark.time.year()).collect();
+                let step = years[1] - years[0];
+                assert!(
+                    years.windows(2).all(|pair| pair[1] - pair[0] == step),
+                    "{years:?}"
+                );
+            }
+        }
+    }
 
-        // 1 day span, 1000 pixels -> should get hour-level marks
-        let span = Duration::days(1);
-        let interval = generator.calculate_optimal_interval(span, 1000.0);
-        assert!(interval.num_seconds() >= 3600);
+    #[test]
+    fn ordinary_marks_are_unchanged_and_only_survivors_are_formatted() {
+        use super::super::time_formatter::CustomTimeFormatter;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        use TickMarkType::{DayOfMonth, Time, Year};
+        let mut formatting_counts = Vec::new();
+        for (span, expected) in [
+            (
+                Duration::minutes(10),
+                vec![
+                    (0, Year, 100, "2024", 0),
+                    (300, Time, 25, "00:05", 10),
+                    (600, Time, 25, "00:10", 20),
+                ],
+            ),
+            (
+                Duration::hours(1),
+                vec![
+                    (0, Year, 100, "2024", 0),
+                    (1800, Time, 35, "00:30", 60),
+                    (3600, Time, 40, "01:00", 120),
+                ],
+            ),
+            (
+                Duration::days(1),
+                vec![
+                    (0, Year, 100, "2024", 0),
+                    (14400, Time, 50, "04:00", 480),
+                    (86400, DayOfMonth, 60, "Jan 02", 2880),
+                ],
+            ),
+        ] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let seen = Arc::clone(&calls);
+            let formatter = CustomTimeFormatter::new(move |time, kind| {
+                seen.fetch_add(1, Ordering::Relaxed);
+                DefaultTimeFormatter::default().format(time, kind)
+            });
+            let generator = TickMarkGenerator::with_formatter(
+                TickMarkGeneratorConfig {
+                    max_marks: 3,
+                    ..Default::default()
+                },
+                Box::new(formatter),
+            );
+            let bars: Vec<_> = (0..=span.num_seconds())
+                .step_by(30)
+                .enumerate()
+                .map(|(i, seconds)| (start + Duration::seconds(seconds), i))
+                .collect();
+            let marks = generator.generate_marks(start, start + span, 1000.0, &bars);
+            let actual: Vec<_> = marks
+                .iter()
+                .map(|mark| {
+                    (
+                        (mark.time - start).num_seconds(),
+                        mark.mark_type,
+                        mark.weight.value(),
+                        mark.label.as_str(),
+                        mark.index,
+                    )
+                })
+                .collect();
+            assert_eq!(actual, expected);
+            formatting_counts.push((calls.load(Ordering::Relaxed), marks.len()));
+        }
+        assert!(
+            formatting_counts.iter().all(|(calls, kept)| calls == kept),
+            "format only surviving marks: {formatting_counts:?}"
+        );
     }
 
     #[test]

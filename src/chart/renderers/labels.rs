@@ -145,7 +145,12 @@ fn generate_time_marks(
     // Extend range in BOTH directions to ensure grid lines outside visible data
     // still get correct indices (prevents async movement when panning)
     let extra_left = (coords.start_idx as i64).min(10); // Extend left up to 10 bars or to index 0
-    let extra_right = coords.right_offset.ceil().max(0.0) as i64 + 2;
+    let extra_right = coords
+        .right_offset
+        .ceil()
+        .max(0.0)
+        .min((context.rect.width() / coords.bar_spacing).ceil()) as i64
+        + 2;
 
     // Extrapolation stops where chrono's range ends, so a bar near it cannot panic.
     let step = |i: i64| Duration::milliseconds(bar_duration_ms.saturating_mul(i));
