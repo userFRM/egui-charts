@@ -70,6 +70,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The demo shell has a 38 px top strip, 52 px drawing rail, visible 45 px widget rail, 4 px gutters and a 39 px bottom strip. The opening view keeps a 6.1 px bar pitch and a 65 px margin from the latest bar centre across window sizes.
 - The demo opens in the light theme with a labelled synthetic hourly series, session gaps and volume. Studies remain available from the indicator dialog, and a single in-pane header replaces the duplicate symbol strip.
 - The export dialog stays open to show success with the file path or an error, and prevents duplicate requests while an export is pending. The demo reports file write results and offers PNG and CSV downloads in the browser. Image exports capture a frame after closing the dialog and report the result in a notice.
 - The drawing bar uses a 28 px icon grid and a 38 px button pitch, with 33 by 1 px #4a4a4a separators inset 9 px left and 10 px right. Resting icons use the theme's primary text colour, now #dbdbdb in the dark preset. Hover and selected fills stay 34 by 34 px.

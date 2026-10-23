@@ -171,24 +171,34 @@ impl DemoApp {
         let theme = Theme::light();
         let timeframe = Timeframe::Hour1;
         let symbol = "SAMPLE";
+        let mut options = egui_charts::config::ChartOptions::default();
+        options.time_scale.bar_spacing = 6.1;
+        // The scale reserves half a slot and one pixel after the last centre.
+        options.time_scale.right_offset_pixels = Some(65.0 - 6.1 * 0.5 - 1.0);
+        options.time_scale.time_visible = true;
+        options.time_scale.seconds_visible = false;
         let mut chart = Chart::with_config(
             BarData::new(),
             theme.apply_to_config(egui_charts::config::ChartConfig::default()),
-        );
+        )
+        .with_chart_options(options);
         chart.set_symbol("SAMPLE (synthetic)");
         chart.set_timeframe(timeframe);
 
         let source_bars =
             generate_sample_bars(symbol, bar_count_for_timeframe(timeframe), timeframe);
-        let mut top_toolbar = TopToolbar::new();
+        let mut top_toolbar = TopToolbar::new().with_config(
+            egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
+        );
         top_toolbar.timeframe_selector.current =
             egui_charts::ui::top_toolbar::components::timeframe_selector::Timeframe::new(
                 1,
                 egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Hour,
             );
         let mut widget_bar = WidgetBar::default();
-        widget_bar.config.width = 52.0;
+        widget_bar.config.width = 45.0;
         let mut timeframe_toolbar = TimeframeToolbar::default();
+        timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
         timeframe_toolbar.state.timeframe = timeframe;
 
         let mut app = Self {
@@ -626,6 +636,8 @@ impl eframe::App for DemoApp {
         }
 
         let panel_bg = ui.style().visuals.panel_fill;
+        ui.painter()
+            .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
         self.show_top_toolbar(ui, panel_bg);
         self.show_drawing_toolbar(ui, panel_bg);
@@ -668,9 +680,12 @@ impl DemoApp {
         self.top_toolbar.state.can_undo = drawings.can_undo();
         self.top_toolbar.state.can_redo = drawings.can_redo();
         egui::Panel::top("toolbar")
-            .exact_size(egui_charts::ui::top_toolbar::config::TOOLBAR_HEIGHT)
+            .exact_size(42.0)
             .show_separator_line(false)
-            .frame(panel_frame(bg))
+            .frame(panel_frame(bg).outer_margin(egui::Margin {
+                bottom: 4,
+                ..egui::Margin::ZERO
+            }))
             .show(ui, |ui| {
                 let action = self.top_toolbar.show_with_state(ui, &self.state);
                 self.handle_top_toolbar(ui.ctx(), action);
@@ -747,9 +762,19 @@ impl DemoApp {
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
-            .default_size(52.0)
-            .show_separator_line(true)
-            .frame(panel_frame(bg))
+            .exact_size(56.0)
+            .show_separator_line(false)
+            .frame(
+                panel_frame(bg)
+                    .corner_radius(egui::CornerRadius {
+                        ne: 4,
+                        ..egui::CornerRadius::ZERO
+                    })
+                    .outer_margin(egui::Margin {
+                        right: 4,
+                        ..egui::Margin::ZERO
+                    }),
+            )
             .show(ui, |ui| {
                 let action = self.drawing_toolbar.show_with_action(ui);
                 self.handle_drawing_toolbar(action);
@@ -834,9 +859,12 @@ impl DemoApp {
     fn show_widget_bar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::Panel::right("widget_bar")
             .resizable(false)
-            .exact_size(52.0)
-            .show_separator_line(true)
-            .frame(panel_frame(bg))
+            .exact_size(49.0)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).outer_margin(egui::Margin {
+                left: 4,
+                ..egui::Margin::ZERO
+            }))
             .show(ui, |ui| {
                 let action = self.widget_bar.show(ui);
                 if let WidgetBarAction::Clicked(icon) = action {
@@ -1043,9 +1071,12 @@ impl DemoApp {
 
     fn show_bottom_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::Panel::bottom("bottom")
-            .exact_size(38.0)
-            .show_separator_line(true)
-            .frame(panel_frame(bg))
+            .exact_size(39.0)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
+                top: 1,
+                ..egui::Margin::ZERO
+            }))
             .show(ui, |ui| {
                 let action = self.timeframe_toolbar.show(ui);
                 self.handle_timeframe_toolbar(action);
@@ -1067,7 +1098,7 @@ impl DemoApp {
 
     fn show_chart(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         let chart = egui::CentralPanel::default()
-            .frame(panel_frame(bg))
+            .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
                 self.chart.show(ui);
             });
@@ -1096,7 +1127,8 @@ impl DemoApp {
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::ResetChart => {
-                self.chart.set_visible_bars(100);
+                self.chart.apply_synced_time_scale(6.1, 64.0 / 6.1 - 0.5);
+                self.chart.enable_tracking_mode();
             }
             ContextMenuAction::ExportCsv => self.export_csv(None),
             ContextMenuAction::CopyPrice(price) => {
