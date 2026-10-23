@@ -1,9 +1,8 @@
 //! Staple studies compared bar by bar with series computed independently from their published
 //! definitions.
 //!
-//! `reference/expected.txt` holds one line per compared output line (the ADX line of ADX(14) is
-//! left out: adx.rs seeds it with 13 DX values over 14): the row name, the line index and one token
-//! per fixture bar, `-` where the study has no value. The values were computed once in exact
+//! `reference/expected.txt` holds one line per compared output line: the row name, the line index and one
+//! token per fixture bar, `-` where the study has no value. The values were computed once in exact
 //! rational arithmetic, with square roots to 40 digits, from the published definitions (Wilder 1978
 //! for RSI, ATR, the directional indicators and Parabolic SAR; Appel for MACD; Bollinger; Lambert
 //! 1980 for CCI; Quong and Soudack for MFI; Chande 1995 for Aroon; Hull; Chaikin; Lane; Williams;

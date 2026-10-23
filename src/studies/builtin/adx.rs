@@ -182,7 +182,7 @@ impl Indicator for ADX {
 
         if adx_start < data.len() {
             // Initial ADX is avg of first period DX values
-            let initial_sum: f64 = dx[self.period..adx_start].iter().sum();
+            let initial_sum: f64 = dx[self.period..=adx_start].iter().sum();
             adx[adx_start] = initial_sum / self.period as f64;
 
             // Subsequent ADX values
