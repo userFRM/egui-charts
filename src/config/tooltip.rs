@@ -71,11 +71,11 @@ pub struct TooltipOptions {
     /// Show indicator values (if indicators are present)
     pub show_indicators: bool,
 
-    /// Magnifier zoom level (2.0 = 2x zoom, 3.0 = 3x zoom)
+    /// Magnifier zoom level (2.0 = 2x zoom, 3.0 = 3x zoom), drawn within 0.1 to 100 (NaN as 0.1)
     /// Only applies when mode is Magnifier
     pub magnifier_zoom: f32,
 
-    /// Magnifier lens diameter in pixels
+    /// Magnifier lens diameter in pixels, drawn no larger than the plot's smaller side
     /// Only applies when mode is Magnifier
     pub magnifier_size: f32,
 

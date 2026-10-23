@@ -245,8 +245,16 @@ pub fn render_magnifier_tooltip(
     visible_data: &[Bar],
 ) {
     let chart = context.painter.ctx().active_theme().chart;
-    let zoom = options.magnifier_zoom;
-    let size = options.magnifier_size;
+    // A zoom or size of 0, NaN or infinity would make the lens span unboundedly many bars or none.
+    let zoom = if options.magnifier_zoom.is_nan() {
+        0.1
+    } else {
+        options.magnifier_zoom.clamp(0.1, 100.0)
+    };
+    let size = options
+        .magnifier_size
+        .max(0.0)
+        .min(context.rect.width().min(context.rect.height()));
     let radius = size / 2.0;
 
     // Pos magnifier (centered on cursor, but kept in bounds)
@@ -304,7 +312,13 @@ pub fn render_magnifier_tooltip(
     let zoomed_bar_spacing = coords.bar_spacing * zoom;
     let candle_width = zoomed_bar_spacing * 0.7;
 
-    for i in -half_bars..=half_bars {
+    // Only bars of `visible_data` can be drawn, so the loop never visits more than that many.
+    let last = (coords.base_idx as f32 - center_bars_from_right - coords.start_idx as f32).floor()
+        as isize;
+    let first = last
+        .saturating_add(1)
+        .saturating_sub(visible_data.len() as isize);
+    for i in (-half_bars).max(first)..=half_bars.min(last) {
         let bar_offset = center_bars_from_right + i as f32;
         let global_idx = (coords.base_idx as f32 - bar_offset).floor() as isize;
 
@@ -400,10 +414,10 @@ mod tests {
     use crate::scales::{PriceRange, PriceScaleMode, PriceTransform};
     use chrono::{TimeZone, Utc};
 
-    /// The lens magnifies the chart about the cursor: on a logarithmic scale a wick
-    /// from half to twice the price under the cursor is centred on the lens.
-    #[test]
-    fn magnifier_centres_the_cursor_price_on_a_log_scale() {
+    const HOVER: Pos2 = Pos2::new(400.0, 250.0);
+
+    /// The shapes the lens paints over 80 bars on a logarithmic scale, cursor at `HOVER`.
+    fn lens_shapes(options: &TooltipOptions) -> Vec<egui::epaint::ClippedShape> {
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
         let transform = PriceTransform {
             mode: PriceScaleMode::Logarithmic,
@@ -411,27 +425,34 @@ mod tests {
         };
         let range = PriceRange::new(10f64.ln(), 10_000f64.ln());
         let map = PriceMap::new(transform, range, 0.0, 500.0, false);
-        let hover = Pos2::new(400.0, 250.0);
-        let p = map.y_to_price(hover.y);
+        let p = map.y_to_price(HOVER.y);
         let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
         let bars = vec![Bar::new(t, p, p * 2.0, p / 2.0, p, 1.0); 80];
         let coords = ChartMapping::new(rect, 10.0, 0, 79, 0.0, map);
-        let options = TooltipOptions::default();
         let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
             let painter = Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
             render_magnifier_tooltip(
                 &RenderContext::new(&painter, rect),
-                hover,
+                HOVER,
                 &bars[0],
-                &options,
+                options,
                 &map,
                 &coords,
                 &bars,
             );
         });
+        let shapes = output.shapes.clone();
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// The lens magnifies the chart about the cursor: on a logarithmic scale a wick
+    /// from half to twice the price under the cursor is centred on the lens.
+    #[test]
+    fn magnifier_centres_the_cursor_price_on_a_log_scale() {
+        let shapes = lens_shapes(&TooltipOptions::default());
         // Longer than the lens crosshair, so only a candle wick matches.
-        let wick = output
-            .shapes
+        let wick = shapes
             .iter()
             .find_map(|c| match &c.shape {
                 egui::Shape::LineSegment { points, .. }
@@ -442,8 +463,22 @@ mod tests {
                 _ => None,
             })
             .expect("a wick in the lens");
-        output.drop_without_applying_deltas();
         let mid = (wick[0].y + wick[1].y) / 2.0;
-        assert!((mid - hover.y).abs() < 0.5, "wick {wick:?}");
+        assert!((mid - HOVER.y).abs() < 0.5, "wick {wick:?}");
+    }
+
+    /// A zoom of 0 or NaN neither hangs the frame nor paints non-finite geometry.
+    #[test]
+    fn degenerate_magnifier_zoom_draws_finite_lens() {
+        for zoom in [f32::NAN, 0.0] {
+            for c in lens_shapes(&TooltipOptions::magnifier_with_zoom(zoom)) {
+                if let egui::Shape::LineSegment { points, .. } = &c.shape {
+                    assert!(
+                        points.iter().all(|p| p.is_finite()),
+                        "zoom {zoom}: {points:?}"
+                    );
+                }
+            }
+        }
     }
 }
