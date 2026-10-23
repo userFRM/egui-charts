@@ -3,10 +3,10 @@
 //! Includes: retracement, extension, arc, time zones, channel, circles,
 //! speed fan, spiral, wedge, and trend-based fib time.
 
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{Drawing, FibonacciConfig};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke};
+use egui::{Color32, Pos2, Rangef, Rect, Stroke};
 
 impl Drawing {
     pub(crate) fn render_fibonacci(&self, painter: &egui::Painter, chart_rect: Rect) {
@@ -16,9 +16,6 @@ impl Drawing {
         let Some((config, prices)) = self.fib_levels() else {
             return;
         };
-
-        let start = self.points[0];
-        let end = self.points[1];
 
         // Each level sits at the price it is labelled with, on whatever scale the chart uses
         let visible_levels: Vec<_> = config.visible_levels().collect();
@@ -47,17 +44,8 @@ impl Drawing {
             }
         }
 
-        // Calculate x range based on extend settings
-        let x_start = if config.extend_left {
-            chart_rect.min.x
-        } else {
-            start.x.min(end.x)
-        };
-        let x_end = if config.extend_right {
-            chart_rect.max.x
-        } else {
-            start.x.max(end.x)
-        };
+        let x_range = self.fib_level_x_range(&config, chart_rect);
+        let (x_start, x_end) = (x_range.min, x_range.max);
 
         // Draw lines and labels for visible levels
         for ((level, &y), &price_at_lvl) in visible_levels.iter().zip(ys).zip(&prices) {
@@ -99,9 +87,6 @@ impl Drawing {
             return;
         };
 
-        let start = self.points[0];
-        let end = self.points[1];
-
         // Each level sits at the price it is labelled with, on whatever scale the chart uses
         let visible_levels: Vec<_> = config.visible_levels().collect();
         let ys = &self.level_ys;
@@ -133,17 +118,8 @@ impl Drawing {
             }
         }
 
-        // Calculate x range based on extend settings
-        let x_start = if config.extend_left {
-            chart_rect.min.x
-        } else {
-            start.x.min(end.x)
-        };
-        let x_end = if config.extend_right {
-            chart_rect.max.x
-        } else {
-            start.x.max(end.x)
-        };
+        let x_range = self.fib_level_x_range(&config, chart_rect);
+        let (x_start, x_end) = (x_range.min, x_range.max);
 
         for ((level, &y), &price_at_lvl) in visible_levels.iter().zip(ys).zip(&prices) {
             let lvl_color = Color32::from_rgba_unmultiplied(
@@ -321,16 +297,11 @@ impl Drawing {
 
     /// Render Fibonacci Channel - Parallel channel with Fibonacci level lines
     pub(crate) fn render_fibonacci_channel(&self, painter: &egui::Painter, _chart_rect: Rect) {
-        if self.points.len() < 2 {
+        let Some((config, lines)) = self.fib_channel_level_lines() else {
             return;
-        }
-
-        let start = self.points[0];
-        let end = self.points[1];
-
-        // Use configurable levels if available
-        let config = self.fib_config.as_ref().cloned().unwrap_or_default();
-        let visible_levels: Vec<_> = config.levels.iter().filter(|l| l.visible).collect();
+        };
+        let (start, end) = (self.points[0], self.points[1]);
+        let visible_levels: Vec<_> = config.visible_levels().collect();
 
         let color = Color32::from_rgba_unmultiplied(
             self.color[0],
@@ -339,30 +310,12 @@ impl Drawing {
             self.color[3],
         );
 
-        let dx = end.x - start.x;
-        let dy = end.y - start.y;
-        let line_length = (dx * dx + dy * dy).sqrt();
-
-        if line_length < 1.0 {
-            return;
-        }
-
-        // Channel width from third point if available, otherwise use 50% of line length
-        let width_point = self
-            .points
-            .get(2)
-            .copied()
-            .unwrap_or_else(|| start + egui::vec2(-dy, dx) * 0.5);
-        let level_line = |value: f32| fib_channel_level_line(start, end, width_point, value);
-
         // Draw filled zones between levels
         if config.show_background && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
                 let level1 = visible_levels[i];
-                let level2 = visible_levels[i + 1];
-
-                let [p1_l1, p2_l1] = level_line(level1.value);
-                let [p1_l2, p2_l2] = level_line(level2.value);
+                let [p1_l1, p2_l1] = lines[i];
+                let [p1_l2, p2_l2] = lines[i + 1];
 
                 let fill_color = Color32::from_rgba_unmultiplied(
                     level1.color[0],
@@ -380,29 +333,13 @@ impl Drawing {
         }
 
         // Draw channel level lines
-        for level in &visible_levels {
+        for (level, &[draw_start, draw_end]) in visible_levels.iter().zip(&lines) {
             let lvl_color = Color32::from_rgba_unmultiplied(
                 level.color[0],
                 level.color[1],
                 level.color[2],
                 level.color[3],
             );
-
-            let [p1, p2] = level_line(level.value);
-
-            // Extend lines if configured
-            let (draw_start, draw_end) = if config.extend_left || config.extend_right {
-                let dir_x = dx / line_length;
-                let dir_y = dy / line_length;
-                let extend_left = if config.extend_left { 500.0 } else { 0.0 };
-                let extend_right = if config.extend_right { 500.0 } else { 0.0 };
-
-                let new_start = Pos2::new(p1.x - dir_x * extend_left, p1.y - dir_y * extend_left);
-                let new_end = Pos2::new(p2.x + dir_x * extend_right, p2.y + dir_y * extend_right);
-                (new_start, new_end)
-            } else {
-                (p1, p2)
-            };
 
             let stroke_width = if level.value == 0.0 || level.value == 1.0 {
                 self.stroke_width
@@ -703,6 +640,62 @@ impl Drawing {
                 color,
             );
         }
+    }
+}
+
+impl Drawing {
+    /// The x extent of a Fibonacci retracement's or extension's level lines:
+    /// between the anchors, or on to the edge of `chart_rect` on each side the
+    /// config extends.
+    pub(crate) fn fib_level_x_range(&self, config: &FibonacciConfig, chart_rect: Rect) -> Rangef {
+        let (a, b) = (self.points[0].x, self.points[1].x);
+        Rangef::new(
+            if config.extend_left {
+                chart_rect.min.x
+            } else {
+                a.min(b)
+            },
+            if config.extend_right {
+                chart_rect.max.x
+            } else {
+                a.max(b)
+            },
+        )
+    }
+
+    /// The Fibonacci channel's config and the line of each visible level as
+    /// drawn, run on 500 px past the anchors on each side the config extends;
+    /// `None` below two anchors or when they nearly coincide. Without a third
+    /// anchor the channel is half as wide as the base line is long.
+    pub(crate) fn fib_channel_level_lines(&self) -> Option<(FibonacciConfig, Vec<[Pos2; 2]>)> {
+        let &[start, end, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let d = end - start;
+        if d.length() < 1.0 {
+            return None;
+        }
+        let config = self.fib_config.clone().unwrap_or_default();
+        let width_point = self
+            .points
+            .get(2)
+            .copied()
+            .unwrap_or_else(|| start + egui::vec2(-d.y, d.x) * 0.5);
+        let run = |extend: bool| {
+            if extend {
+                d.normalized() * 500.0
+            } else {
+                egui::Vec2::ZERO
+            }
+        };
+        let lines = config
+            .visible_levels()
+            .map(|level| {
+                let [a, b] = fib_channel_level_line(start, end, width_point, level.value);
+                [a - run(config.extend_left), b + run(config.extend_right)]
+            })
+            .collect();
+        Some((config, lines))
     }
 }
 

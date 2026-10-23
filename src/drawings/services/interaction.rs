@@ -292,71 +292,28 @@ impl DrawingInteraction {
                     }
                 }
                 // Fibonacci tools
-                DrawingToolType::FibonacciRetracement => {
-                    if drawing.points.len() >= 2 {
-                        let p1 = drawing.points[0];
-                        let p2 = drawing.points[1];
-
-                        // Check main diagonal line
-                        if point_to_line_distance(point, p1, p2) <= hit_distance {
-                            return Some(drawing.id);
-                        }
-
-                        // Check the drawn levels, at the y the renderer draws them at
-                        let in_x_range = point.x >= p1.x.min(p2.x) && point.x <= p1.x.max(p2.x);
-                        let on_level = drawing
+                // The level lines the renderer draws, over the extent it draws them
+                DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
+                    if let Some((config, _)) = drawing.fib_levels()
+                        && drawing.points.len() >= 2
+                        && drawing
+                            .fib_level_x_range(&config, Rect::EVERYTHING)
+                            .contains(point.x)
+                        && drawing
                             .level_ys
                             .iter()
-                            .any(|y| (point.y - y).abs() <= hit_distance);
-                        if in_x_range && on_level {
-                            return Some(drawing.id);
-                        }
-                    }
-                }
-                DrawingToolType::FibonacciExtension => {
-                    if drawing.points.len() >= 2 {
-                        let p1 = drawing.points[0];
-                        let p2 = drawing.points[1];
-
-                        // Check main diagonal line
-                        if point_to_line_distance(point, p1, p2) <= hit_distance {
-                            return Some(drawing.id);
-                        }
-
-                        // Check the drawn levels, at the y the renderer draws them at
-                        let in_x_range = point.x >= p1.x.min(p2.x) && point.x <= p1.x.max(p2.x);
-                        let on_level = drawing
-                            .level_ys
-                            .iter()
-                            .any(|y| (point.y - y).abs() <= hit_distance);
-                        if in_x_range && on_level {
-                            return Some(drawing.id);
-                        }
+                            .any(|y| (point.y - y).abs() <= hit_distance)
+                    {
+                        return Some(drawing.id);
                     }
                 }
                 DrawingToolType::FibonacciChannel => {
-                    if drawing.points.len() >= 2 {
-                        let p1 = drawing.points[0];
-                        let p2 = drawing.points[1];
-
-                        // Check main diagonal line
-                        let dist = point_to_line_distance(point, p1, p2);
-                        if dist <= hit_distance {
-                            return Some(drawing.id);
-                        }
-
-                        // Check horizontal Fibonacci levels
-                        let levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
-                        for &level in &levels {
-                            let y = p1.y + (p2.y - p1.y) * level;
-                            if (point.y - y).abs() <= hit_distance {
-                                let min_x = p1.x.min(p2.x);
-                                let max_x = p1.x.max(p2.x);
-                                if point.x >= min_x && point.x <= max_x {
-                                    return Some(drawing.id);
-                                }
-                            }
-                        }
+                    if drawing.fib_channel_level_lines().is_some_and(|(_, lines)| {
+                        lines
+                            .iter()
+                            .any(|&[a, b]| point_to_line_distance(point, a, b) <= hit_distance)
+                    }) {
+                        return Some(drawing.id);
                     }
                 }
                 // Gann tools
@@ -512,6 +469,109 @@ mod tests {
             let hit = interaction.hit_test(Pos2::new(150.0, y), std::slice::from_ref(&fib), "1D");
             assert_eq!(hit, Some(7), "{tool:?}");
         }
+    }
+
+    /// Anchors at bars 0 and 10, prices 100 and 400, on x = 30 per bar and y = 500 - price: the
+    /// first anchor is at (0, 400) and the second at (300, 100). A retracement level price is
+    /// 400 - 300 * level, at y = 100 + 300 * level; with `extend_right` its lines run on past
+    /// x = 300. The point (90, 310) lies on the diagonal between the anchors, which is not drawn,
+    /// and 24.6 px from the nearest level (78.6% at 335.8 is 25.8 px away; 61.8% at 285.4).
+    /// A channel with its third anchor at bar 5, price 150, (150, 350), moves the base line
+    /// 100 px straight down: level 0.5 runs from (0, 450) to (300, 150), so y = 450 - x, and
+    /// with `extend_right` on to x = 400 at y = 50. Its drawn levels cross x = 150 between
+    /// y = 250 and 350, far from (150, 214.6), where the 61.8% level of a horizontal channel was.
+    #[test]
+    fn fib_drawings_are_hit_along_the_levels_they_draw() {
+        use crate::drawings::FibonacciConfig;
+        let interaction = DrawingInteraction::new();
+        let extended = || {
+            Some(FibonacciConfig {
+                extend_right: true,
+                ..Default::default()
+            })
+        };
+        let cases = [
+            (
+                DrawingToolType::FibonacciRetracement,
+                None,
+                (450.0, 170.8),
+                None,
+            ),
+            (
+                DrawingToolType::FibonacciRetracement,
+                extended(),
+                (450.0, 170.8),
+                Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciRetracement,
+                None,
+                (90.0, 310.0),
+                None,
+            ),
+            (
+                DrawingToolType::FibonacciExtension,
+                None,
+                (90.0, 310.0),
+                None,
+            ),
+            (
+                DrawingToolType::FibonacciChannel,
+                None,
+                (150.0, 300.0),
+                Some(7),
+            ),
+            (
+                DrawingToolType::FibonacciChannel,
+                None,
+                (150.0, 214.6),
+                None,
+            ),
+            (
+                DrawingToolType::FibonacciChannel,
+                extended(),
+                (400.0, 50.0),
+                Some(7),
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (tool, config, (x, y), want) in cases {
+            let mut fib = Drawing::new(7, tool);
+            fib.fib_config = config;
+            fib.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 400.0)];
+            if tool == DrawingToolType::FibonacciChannel {
+                fib.chart_points.push(ChartPoint::new(5.0, 150.0));
+            }
+            fib.update_screen_coords(|bar| bar * 30.0, |price| 500.0 - price as f32);
+            let extend = fib.fib_config.as_ref().is_some_and(|c| c.extend_right);
+            let got = interaction.hit_test(Pos2::new(x, y), std::slice::from_ref(&fib), "1D");
+            if got != want {
+                wrong.push(format!(
+                    "{tool:?} extend_right {extend} at ({x}, {y}): got {got:?}, want {want:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// A stored drawing has its chart anchors but no screen points until the next
+    /// `update_screen_coords`; until then no tool is hit, and none panics.
+    #[test]
+    fn drawings_without_screen_points_are_not_hit() {
+        let interaction = DrawingInteraction::new();
+        let hit: Vec<_> = DrawingToolType::all()
+            .iter()
+            .filter(|&&tool| {
+                let mut drawing = Drawing::new(7, tool);
+                drawing.chart_points = (0..5)
+                    .map(|i| ChartPoint::new(i as f32, 100.0 + f64::from(i)))
+                    .collect();
+                interaction
+                    .hit_test(Pos2::new(1.0, 1.0), std::slice::from_ref(&drawing), "1D")
+                    .is_some()
+            })
+            .collect();
+        assert!(hit.is_empty(), "hit without screen points: {hit:?}");
     }
 
     #[test]
