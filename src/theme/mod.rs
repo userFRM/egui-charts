@@ -322,34 +322,62 @@ impl Default for Radii {
 impl Theme {
     /// This theme with `accent` as its accent colour.
     ///
-    /// Also sets the colours derived from it: black or white `accent_text`, whichever
-    /// reads better on `accent`; hover and pressed shades 10% and 20% further from that
-    /// text colour; and the selection. Dark themes select with `accent` and white text
-    /// when white reads on it, else with `accent` darkened; light themes with a pale
-    /// `accent` over `panel_bg`. Text on the accent and the selection reads at 4.5:1 or
-    /// better, not the 7:1 of [`Theme::high_contrast`].
+    /// Also derives opaque hover and pressed shades at least 1.2:1 apart, black or
+    /// white text reading at 4.5:1 on every shade, a selection at least 1.3:1 from
+    /// the panel, and a light theme's focus ring. These overrides promise 4.5:1
+    /// text contrast rather than the high-contrast preset's 7:1.
     pub fn with_accent(mut self, accent: Color32) -> Self {
-        let white_text = contrast(Color32::WHITE, accent) >= contrast(Color32::BLACK, accent);
-        let (on_accent, away) = if white_text {
-            (Color32::WHITE, Color32::BLACK)
-        } else {
-            (Color32::BLACK, Color32::WHITE)
-        };
         let ui = &mut self.ui;
-        ui.accent = accent;
-        ui.accent_hover = accent.lerp_to_gamma(away, 0.1);
-        ui.accent_active = accent.lerp_to_gamma(away, 0.2);
-        ui.accent_text = on_accent;
-        (ui.selection_bg, ui.selection_text) = match (self.dark, white_text) {
-            (true, true) => (accent, Color32::WHITE),
-            // egui outlines a focused text input with the selection text, so it stays light.
-            (true, false) => (accent.lerp_to_gamma(Color32::BLACK, 0.6), Color32::WHITE),
-            (false, true) => (
-                ui.panel_bg.lerp_to_gamma(accent, 1.0 / 6.0),
-                ui.accent_active,
-            ),
-            (false, false) => (ui.panel_bg.lerp_to_gamma(accent, 1.0 / 6.0), ui.text),
+        let accent = ui.panel_bg.blend(accent);
+        let (on_accent, away) =
+            if contrast(Color32::WHITE, accent) >= contrast(Color32::BLACK, accent) {
+                (Color32::WHITE, Color32::BLACK)
+            } else {
+                (Color32::BLACK, Color32::WHITE)
+            };
+        // Near black or white, move towards the text instead so both steps have room.
+        let towards = if contrast(accent, away) >= 1.5 {
+            away
+        } else {
+            on_accent
         };
+        let shade = |fill: Color32| {
+            (1..=255)
+                .map(|step| fill.lerp_to_gamma(towards, step as f32 / 255.0))
+                .find(|&next| contrast(next, fill) >= 1.2 && contrast(on_accent, next) >= 4.5)
+                .unwrap_or(fill)
+        };
+        ui.accent = accent;
+        ui.accent_hover = shade(accent);
+        ui.accent_active = shade(ui.accent_hover);
+        ui.accent_text = on_accent;
+        ui.selection_text = if self.dark && ui.text == Color32::WHITE {
+            ui.text_secondary
+        } else if self.dark {
+            Color32::WHITE
+        } else {
+            Color32::BLACK
+        };
+        let selection = if self.dark {
+            accent
+        } else {
+            ui.panel_bg.lerp_to_gamma(accent, 1.0 / 6.0)
+        };
+        let selection = readable_color(selection, ui.text, &[ui.panel_bg], 1.3);
+        ui.selection_bg = readable_color(selection, ui.panel_bg, &[ui.selection_text], 4.5);
+        if !self.dark {
+            ui.focus = readable_color(
+                accent,
+                ui.text,
+                &[
+                    ui.panel_bg,
+                    ui.panel_bg_secondary,
+                    ui.panel_bg_floating,
+                    ui.btn_bg_hover,
+                ],
+                3.0,
+            );
+        }
         self
     }
 
@@ -379,6 +407,19 @@ pub(crate) fn contrast(fg: Color32, bg: Color32) -> f32 {
     };
     let (a, b) = (luminance(bg.blend(fg)), luminance(bg));
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Move `color` towards `text` only as far as needed to read on every background.
+pub(crate) fn readable_color(
+    color: Color32,
+    text: Color32,
+    backgrounds: &[Color32],
+    min: f32,
+) -> Color32 {
+    (0..=255)
+        .map(|step| color.lerp_to_gamma(text, step as f32 / 255.0))
+        .find(|&candidate| backgrounds.iter().all(|&bg| contrast(candidate, bg) >= min))
+        .unwrap_or(text)
 }
 
 /// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
@@ -457,7 +498,17 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     visuals.warn_fg_color = ui.warning;
 
     // Hyperlinks
-    visuals.hyperlink_color = ui.accent;
+    visuals.hyperlink_color = readable_color(
+        ui.accent,
+        ui.text,
+        &[
+            ui.panel_bg,
+            ui.panel_bg_floating,
+            ui.panel_bg_secondary,
+            ui.btn_bg_hover,
+        ],
+        7.0,
+    );
 
     // Floating chrome: hairline border, small radius and a tight shadow that stays close to
     // the surface instead of smearing over neighbouring toolbars.
@@ -649,6 +700,20 @@ mod tests {
                 Theme::light().with_accent(purple),
             ),
         ]);
+        for (name, base) in presets() {
+            for (accent_name, accent) in [
+                ("white", Color32::WHITE),
+                ("black", Color32::BLACK),
+                ("yellow", Color32::YELLOW),
+                ("blue", Color32::BLUE),
+                ("navy", Color32::from_rgb(10, 10, 30)),
+            ] {
+                themes.push((
+                    format!("{name}, {accent_name} accent"),
+                    base.clone().with_accent(accent),
+                ));
+            }
+        }
         let focus_ring_of = |ctx: &egui::Context| {
             let mut focus_ring = Color32::TRANSPARENT;
             ctx.run_ui(Default::default(), |ui| {
@@ -782,6 +847,18 @@ mod tests {
             ] {
                 check(role, stroke.color, "panels", panel, outline_min);
             }
+            if name.contains("accent") {
+                check("selection fill", ui.selection_bg, "panels", panel, 1.3);
+                check("accent hover", ui.accent_hover, "accent", ui.accent, 1.2);
+                check(
+                    "accent pressed",
+                    ui.accent_active,
+                    "accent hover",
+                    ui.accent_hover,
+                    1.2,
+                );
+                assert_ne!(ui.selection_text, ui.text, "{name}: selected glyphs");
+            }
             // egui outlines a focused text input with the selection stroke.
             check(
                 "focused input outline",
@@ -796,6 +873,7 @@ mod tests {
                 ("secondary panels", ui.panel_bg_secondary),
                 ("hover fill", ui.btn_bg_hover),
             ] {
+                check("links", visuals.hyperlink_color, surface, bg, 7.0);
                 check("text", ui.text, surface, bg, text_min);
                 check("label text", visuals.text_color(), surface, bg, text_min);
                 {
