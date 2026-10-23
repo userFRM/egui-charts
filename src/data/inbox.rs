@@ -13,7 +13,7 @@ use crate::model::{Bar, BarClock, OrderBook, Tick};
 use chrono::{DateTime, Utc};
 use std::any::Any;
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -43,7 +43,29 @@ struct Live {
     /// Open of the newest slot pushed, kept across drains: trades of older slots are late.
     forming: Option<DateTime<Utc>>,
     book: Book,
+    taken: TakenIds,
     updates: Updates,
+}
+
+/// Ids of the trades folded into bars, as many as the trade store holds, the oldest forgotten
+/// first: a feed that replays its last trades after a reconnect must not count them twice.
+struct TakenIds {
+    order: VecDeque<u64>,
+    ids: HashSet<u64>,
+    capacity: usize,
+}
+
+impl TakenIds {
+    fn insert(&mut self, id: u64) {
+        if self.ids.insert(id) {
+            self.order.push_back(id);
+            if self.order.len() > self.capacity
+                && let Some(oldest) = self.order.pop_front()
+            {
+                self.ids.remove(&oldest);
+            }
+        }
+    }
 }
 
 /// What arrived since the last drain.
@@ -67,6 +89,8 @@ pub(crate) struct Updates {
     pub(crate) error: Option<FeedError>,
     /// Trades older than the forming bar, dropped.
     pub(crate) late_ticks: u64,
+    /// Trades whose id is among those the subscription remembers, dropped.
+    pub(crate) repeated_ticks: u64,
     /// Bars and ticks that failed validation, dropped.
     pub(crate) rejected: u64,
     /// Depth snapshots and deltas that failed validation, dropped.
@@ -83,6 +107,7 @@ impl Updates {
             status: None,
             error: None,
             late_ticks: 0,
+            repeated_ticks: 0,
             rejected: 0,
             rejected_depth: 0,
         }
@@ -114,6 +139,11 @@ impl Inbox {
             clock,
             forming: None,
             book: Book::default(),
+            taken: TakenIds {
+                order: VecDeque::new(),
+                ids: HashSet::new(),
+                capacity: trade_capacity,
+            },
             updates: Updates::new(Trades::new(trade_capacity)),
         };
         self.state().subscriptions.insert(id, live);
@@ -276,7 +306,9 @@ impl Sink {
     /// A trade, folded into the bar of its slot and kept for order flow, the oldest trades making
     /// room for new ones. Its size is added to that bar's volume, also when the bar came from a
     /// history page. A feed must therefore not push trades that its history already counts; a feed
-    /// that cannot tell pushes bars instead. Trades older than the forming bar are dropped.
+    /// that cannot tell pushes bars instead. Trades older than the forming bar are dropped, and so is
+    /// a trade whose id is among those of the last trades the subscription folded, as many as its
+    /// trade store holds.
     pub fn push_tick(&self, tick: Tick) {
         self.update(|live| {
             let (open, price) = (live.clock.bar_open(tick.ts), tick.price);
@@ -286,6 +318,8 @@ impl Sink {
                 updates.rejected += 1;
             } else if live.forming.is_some_and(|forming| open < forming) {
                 updates.late_ticks += 1;
+            } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
+                updates.repeated_ticks += 1;
             } else {
                 live.forming = Some(open);
                 match updates.bars.entry(open) {
@@ -303,6 +337,9 @@ impl Sink {
                     Entry::Vacant(slot) => {
                         slot.insert((ticks, Origin::Ticks(1)));
                     }
+                }
+                if let Some(id) = tick.id {
+                    live.taken.insert(id);
                 }
                 updates.trades.push(tick);
             }
@@ -492,6 +529,43 @@ mod tests {
         );
         sink.push_tick(tick(at(0, 59), 100.0, 1.0));
         assert_eq!(wakes.load(Ordering::Relaxed), 2);
+    }
+
+    /// Guards the trade id contract: a feed replaying its last trades after a reconnect must not
+    /// count them twice in a bar, within one drain or across drains.
+    #[test]
+    fn a_trade_id_is_folded_once() {
+        let inbox = Arc::new(Inbox::default());
+        let sink = subscribe(&inbox);
+        let trade = tick(at(0, 5), 100.0, 1.0).with_id(7);
+        sink.push_tick(trade.clone());
+        sink.push_tick(trade.clone());
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert_eq!(
+            Vec::from_iter(updates.bars.into_values()),
+            [(bar(0, [100.0, 100.0, 100.0, 100.0, 1.0]), Origin::Ticks(1))]
+        );
+        assert_eq!(updates.trades.iter().count(), 1);
+        assert_eq!(updates.repeated_ticks, 1);
+
+        sink.push_tick(trade);
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert_eq!(updates.bars, BTreeMap::new());
+        assert_eq!(updates.trades.iter().count(), 0);
+        assert_eq!(updates.repeated_ticks, 1);
+
+        // A store of two trades remembers the last two ids: 1 is forgotten once 3 is folded.
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe(BarClock::new(Timeframe::Min1), 2);
+        for (second, id) in [(1, 1), (2, 2), (3, 3), (4, 1), (5, 3)] {
+            sink.push_tick(tick(at(0, second), 100.0, 1.0).with_id(id));
+        }
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert_eq!(
+            Vec::from_iter(updates.bars.into_values()),
+            [(bar(0, [100.0, 100.0, 100.0, 100.0, 4.0]), Origin::Ticks(4))]
+        );
+        assert_eq!(updates.repeated_ticks, 1);
     }
 
     /// Guards against updates of a replaced subscription (an older symbol or timeframe) leaking

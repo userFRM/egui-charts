@@ -621,6 +621,9 @@ pub struct FeedState {
     pub rejected_bars: u64,
     /// Trades older than the forming bar, dropped.
     pub late_ticks: u64,
+    /// Trades whose id is among those of the last trades the subscription folded, as many as its
+    /// trade store holds, dropped: a feed replaying its last trades after a reconnect.
+    pub repeated_ticks: u64,
     /// Order book snapshots and deltas dropped by validation: a non-finite price or size, a
     /// negative size. Each one clears the book until the feed pushes a new snapshot.
     pub rejected_depth: u64,

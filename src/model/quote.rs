@@ -32,8 +32,10 @@ pub struct Tick {
     pub size: f64,
     /// Side of the trade (if available)
     pub side: Option<TradeSide>,
-    /// Exchange trade id or sequence number, unique per symbol. With it, history and live trades
-    /// join without losing or repeating a trade.
+    /// Exchange trade id or sequence number, unique per symbol and never reused: a number that
+    /// restarts each session, such as a daily sequence number, is not an id unless combined with
+    /// the session date. With it, history and live trades join without losing or repeating a
+    /// trade, and a live trade whose id was already taken is dropped.
     #[serde(default)]
     pub id: Option<u64>,
 }
