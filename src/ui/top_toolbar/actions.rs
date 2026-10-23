@@ -13,8 +13,8 @@ pub enum TopToolbarAction {
     OpenCompare,
     /// Chart interval chosen in the interval menu, a preset or a custom interval
     IntervalSelected(crate::model::Timeframe),
-    /// Chart style changed (e.g. "Candles", "Line")
-    ChartStyleSelected(String),
+    /// Chart style chosen in the chart-type menu.
+    ChartStyleSelected(crate::model::ChartType),
     /// Open indicators dialog
     OpenIndicators,
     /// Ask the host to save the current indicator set.

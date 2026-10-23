@@ -474,7 +474,7 @@ impl TopToolbar {
             }
             S::ChartType => {
                 if let ChartTypeAction::Select(ct) = self.chart_type_selector.show(ui) {
-                    *action = TopToolbarAction::ChartStyleSelected(ct.name().to_string());
+                    *action = TopToolbarAction::ChartStyleSelected(ct);
                 }
                 return;
             }
