@@ -704,7 +704,7 @@ mod tests {
                         chart.add_indicator(Box::new(crate::studies::RSI::default()));
                     }
                     let mut widget = Rect::NOTHING;
-                    let output = ctx.run_ui(
+                    let mut output = ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(Rect::from_min_size(
                                 Pos2::ZERO,
@@ -718,13 +718,15 @@ mod tests {
                             });
                         },
                     );
+                    let painted = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
                     let plot = chart.get_rendered_price_rect();
                     assert!((plot.left() - widget.left()).abs() <= 8.0);
                     assert!(plot.width() > 0.0);
                     for pane in chart.get_rendered_indicator_panes() {
                         assert_eq!(pane.chart_rect.x_range(), plot.x_range());
                     }
-                    for shape in &output.shapes {
+                    for shape in &painted {
                         if let Shape::Text(text) = &shape.shape
                             && text.pos.x > plot.right()
                             && text.galley.text().parse::<f64>().is_ok()
@@ -736,8 +738,7 @@ mod tests {
                         }
                     }
                     if !pane_widest {
-                        let tag = output
-                            .shapes
+                        let tag = painted
                             .iter()
                             .find_map(|shape| match &shape.shape {
                                 Shape::Rect(rect) if rect.fill == egui::Color32::BLUE => {
@@ -749,7 +750,6 @@ mod tests {
                         assert!((tag.left() - plot.right() - 5.0).abs() < 0.1);
                         assert!((widget.right() - tag.right() - 8.0).abs() < 0.1);
                     }
-                    output.drop_without_applying_deltas();
                 }
             }
         }
