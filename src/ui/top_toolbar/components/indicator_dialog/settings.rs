@@ -87,7 +87,7 @@ impl IndicatorSettingsDialog {
                 .show(ui);
                 ui.separator();
                 egui::ScrollArea::vertical()
-                    .max_height(360.0)
+                    .max_height((ui.available_height() - 72.0).max(0.0))
                     .show(ui, |ui| match self.tab {
                         Tab::Inputs => {
                             if self.inputs.is_empty() {
@@ -145,7 +145,7 @@ impl IndicatorSettingsDialog {
                         Tab::Style => {
                             for (line, plot) in edit.settings.plots.iter_mut().enumerate() {
                                 ui.push_id(line, |ui| {
-                                    ui.horizontal(|ui| {
+                                    ui.horizontal_wrapped(|ui| {
                                         ui.checkbox(
                                             &mut plot.visible,
                                             self.line_names
@@ -159,7 +159,7 @@ impl IndicatorSettingsDialog {
                                                 .suffix(" px"),
                                         );
                                     });
-                                    ui.horizontal(|ui| {
+                                    ui.horizontal_wrapped(|ui| {
                                         egui::ComboBox::from_id_salt("pattern")
                                             .selected_text(format!("{:?}", plot.pattern))
                                             .show_ui(ui, |ui| {
@@ -194,7 +194,7 @@ impl IndicatorSettingsDialog {
                                     ui.separator();
                                 });
                             }
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label("Precision");
                                 let mut automatic = edit.settings.precision.is_none();
                                 if ui.checkbox(&mut automatic, "Automatic").changed() {
@@ -259,6 +259,73 @@ impl IndicatorSettingsDialog {
 mod tests {
     use super::*;
     use crate::studies::{ConfiguredStudy, SMA};
+
+    #[test]
+    fn dialog_follows_the_window_when_it_shrinks() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for tab in [
+                None,
+                Some(Tab::Inputs),
+                Some(Tab::Style),
+                Some(Tab::Visibility),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let study = crate::studies::IndicatorFactory::new()
+                    .create("MA Ribbon")
+                    .unwrap();
+                let mut dialog = IndicatorSettingsDialog::default();
+                dialog.open(SeriesId(2), study.as_ref(), Some(Timeframe::Min1));
+                let mut browser = super::super::IndicatorDialog::new();
+                browser.open();
+                if let Some(tab) = tab {
+                    dialog.tab = tab;
+                }
+                for size in [
+                    egui::vec2(1440.0, 900.0),
+                    egui::vec2(320.0, 360.0),
+                    egui::vec2(600.0, 300.0),
+                ] {
+                    let size = if tab.is_none() {
+                        egui::vec2(size.x.max(600.0), size.y.max(500.0))
+                    } else {
+                        size
+                    };
+                    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                    for _ in 0..4 {
+                        ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                if tab.is_some() {
+                                    dialog.show(ui.ctx(), &theme);
+                                } else {
+                                    browser.show(ui.ctx(), &theme);
+                                }
+                            },
+                        )
+                        .drop_without_applying_deltas();
+                    }
+                    let shown = ctx
+                        .memory(|m| {
+                            m.area_rect(egui::Id::unique(if tab.is_some() {
+                                "indicator_settings"
+                            } else {
+                                "indicator_dialog"
+                            }))
+                        })
+                        .unwrap();
+                    assert!(
+                        screen.contains_rect(shown),
+                        "tab {}: {shown:?} outside {screen:?}",
+                        tab.map(|tab| tab as u8).unwrap_or(3)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn escape_discards_staged_inputs_and_presentation() {

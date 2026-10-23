@@ -880,37 +880,6 @@ mod tests {
     }
 
     #[test]
-    fn dialog_follows_the_window_when_it_shrinks() {
-        let ctx = egui::Context::default();
-        let theme = Theme::dark();
-        let mut dialog = IndicatorDialog::new();
-        dialog.open();
-        let mut frame = |size: Vec2| {
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
-                ..Default::default()
-            };
-            ctx.run_ui(input, |ui| {
-                dialog.show(ui.ctx(), &theme);
-            })
-            .drop_without_applying_deltas();
-            ctx.memory(|m| m.area_rect(egui::Id::unique("indicator_dialog")))
-                .expect("the dialog is shown")
-        };
-        for _ in 0..3 {
-            frame(Vec2::new(1440.0, 900.0));
-        }
-        let mut shown = frame(Vec2::new(600.0, 500.0));
-        for _ in 0..3 {
-            shown = frame(Vec2::new(600.0, 500.0));
-        }
-        assert!(
-            Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 500.0)).contains_rect(shown),
-            "the dialog spans {shown:?} in a 500 px window"
-        );
-    }
-
-    #[test]
     fn show_keeps_the_configuration_a_caller_sets() {
         let custom = IndicatorDialogConfig {
             width: 900.0,

@@ -333,12 +333,37 @@ mod tests {
             output.drop_without_applying_deltas();
             match plot_type {
                 PlotType::Histogram => {
-                    let rects: Vec<_> = painted.iter().filter_map(|s| match s { Shape::Rect(r) if r.fill == color => Some(r.rect), _ => None }).collect();
-                    assert_eq!(rects, [Rect::from_min_max(Pos2::new(8.0, 15.0), Pos2::new(12.0, 20.0)), Rect::from_min_max(Pos2::new(18.0, 5.0), Pos2::new(22.0, 20.0))]);
+                    let rects: Vec<_> = painted
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::Rect(r) if r.fill == color => Some(r.rect),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        rects,
+                        [
+                            Rect::from_min_max(Pos2::new(8.0, 15.0), Pos2::new(12.0, 20.0)),
+                            Rect::from_min_max(Pos2::new(18.0, 5.0), Pos2::new(22.0, 20.0)),
+                        ]
+                    );
                 }
-                PlotType::Circles => assert_eq!(painted.iter().filter(|s| matches!(s, Shape::Circle(c) if c.fill == color && c.radius == 4.0)).count(), 2),
-                PlotType::Line if pattern == PlotPattern::Dashed => assert!(painted.iter().any(|s| matches!(s, Shape::LineSegment {stroke, ..} if stroke.color == color && stroke.width == 4.0))),
-                PlotType::Line => assert!(painted.iter().any(|s| matches!(s, Shape::Circle(c) if c.fill == color && c.radius == 2.0))),
+                PlotType::Circles => {
+                    let circles = painted.iter().filter(
+                        |s| matches!(s, Shape::Circle(c) if c.fill == color && c.radius == 4.0),
+                    );
+                    assert_eq!(circles.count(), 2);
+                }
+                PlotType::Line if pattern == PlotPattern::Dashed => {
+                    assert!(painted.iter().any(|s| {
+                        matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color && stroke.width == 4.0)
+                    }));
+                }
+                PlotType::Line => {
+                    assert!(painted.iter().any(|s| {
+                        matches!(s, Shape::Circle(c) if c.fill == color && c.radius == 2.0)
+                    }));
+                }
             }
         }
     }
