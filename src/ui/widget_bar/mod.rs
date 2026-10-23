@@ -14,7 +14,9 @@ pub use state::RightToolbarState;
 
 // Toolbar and tabs exports
 pub use tabs::{RightPanelAction, RightPanelTab, RightPanelTabs, RightPanelTabsConfig};
-pub use toolbar::{RightBarIcon, WidgetBar, WidgetBarAction, WidgetBarConfig};
+pub use toolbar::{
+    RightBarIcon, WidgetBar, WidgetBarAction, WidgetBarConfig, WidgetBarSection, WidgetBarWidget,
+};
 
 // Panel exports
 pub use panels::*;

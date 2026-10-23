@@ -158,6 +158,8 @@ pub struct DrawingManager {
     selection: SelectionService,
     history: HistoryService,
     snap_service: SnapService,
+    /// Nearby bar and overlay points, refreshed by the chart before pointer handling.
+    pub(crate) snap_targets: Vec<Pos2>,
 
     /// Manager configuration (colors, snapping, handles).
     pub options: DrawingManagerOptions,
@@ -203,6 +205,7 @@ impl DrawingManager {
             selection: SelectionService::new(),
             history: HistoryService::new(),
             snap_service: SnapService::new(),
+            snap_targets: Vec::new(),
             options: DrawingManagerOptions::default(),
             dragging_handle: None,
             drag_old_state: None,
@@ -330,19 +333,23 @@ impl DrawingManager {
 
     /// Applies snap behavior to a screen point, returning the snapped position.
     ///
-    /// Snaps to the anchor points of `drawings` when magnet mode is on. Price
-    /// and time targets are not supplied yet, and the only caller (handle
-    /// dragging) passes no drawings, so no snapping happens today. Magnet
-    /// targets are borrowed directly from `drawings`, so no per-pointer-move
-    /// allocation of the flattened point set occurs during a drag.
+    /// With magnet mode on, snaps to nearby chart values and visible anchors of `drawings`.
+    /// Targets keep their time and price paired. A dragged drawing cannot snap to itself.
+    /// Drawing anchors are borrowed without flattening or cloning their geometry.
     pub fn snap_point(&self, point: Pos2, drawings: &[Drawing]) -> Pos2 {
-        // Prices/times would be populated from the chart; magnet points are
-        // borrowed from the live drawings without cloning.
         self.snap_service.snap_point_with_drawing_points(
             point,
             &[],
             &[],
-            drawings.iter().flat_map(|d| d.points.iter().copied()),
+            self.snap_targets.iter().copied().chain(
+                drawings
+                    .iter()
+                    .filter(|d| {
+                        d.is_visible_on_timeframe(&self.curr_timeframe)
+                            && self.dragging_handle.is_none_or(|(id, _)| id != d.id)
+                    })
+                    .flat_map(|d| d.points.iter().copied()),
+            ),
         )
     }
 
@@ -382,7 +389,7 @@ impl DrawingManager {
     {
         if let Some((id, handle)) = self.dragging_handle {
             // Compute snapped position before mutable borrow
-            let snapped = self.snap_point(new_pos, &[]);
+            let snapped = self.snap_point(new_pos, &self.drawings);
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
                 HandleService::update_handle(drawing, handle, snapped, x_to_bar, y_to_price);
             }
@@ -483,6 +490,7 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
+        let point = self.snap_point(point, &self.drawings);
         // A drawing prepared before its first anchor, such as a picked icon, starts here.
         let mut drawing = match self.curr_drawing.take() {
             Some(prepared) if prepared.tool_type == tool_type && prepared.points.is_empty() => {
@@ -511,6 +519,7 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
+        let point = self.snap_point(point, &self.drawings);
         if let Some(ref mut drawing) = self.curr_drawing {
             // The click takes the place of the pointer preview.
             if std::mem::take(&mut self.preview_point) {
@@ -532,6 +541,7 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
+        let point = self.snap_point(point, &self.drawings);
         if let Some(ref mut drawing) = self.curr_drawing
             && !drawing.points.is_empty()
             && !drawing.completed

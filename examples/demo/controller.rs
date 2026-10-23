@@ -10,7 +10,7 @@ use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
 use egui_charts::chart::series::SeriesSettings;
-use egui_charts::model::{Bar, ChartType, RenkoConfig, Timeframe};
+use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
@@ -25,9 +25,8 @@ use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
 use egui_charts::ui::model::{AlertCondition, AlertStatus, PriceAlert};
 use egui_charts::ui::replay::{ReplayAction, ReplayController};
-use egui_charts::ui::symbol_header::{OhlcData, SymbolHeader, SymbolInfo};
 use egui_charts::ui::timeframe_toolbar::{
-    DatePicker, DatePickerAction, TimeframeToolbar, TimeframeToolbarAction,
+    DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
 };
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
@@ -43,7 +42,7 @@ use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use std::sync::{Arc, mpsc};
 
 use crate::sampledata::{
-    DemoSymbol, bar_count_for_timeframe, chart_type_from_name, generate_sample_bars,
+    DemoSymbol, bar_count_for_timeframe, chart_type_from_name, generate_sample_bars, session_bars,
     visible_bars_for_range,
 };
 
@@ -118,14 +117,15 @@ pub struct DemoApp {
     menus: ChartMenus,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
+    // Immutable generated history; session and adjustment choices derive `bars` from it.
+    source_bars: Vec<Bar>,
     pub theme: Theme,
 
-    // Persistent toolbars / header.
+    // Persistent toolbars.
     top_toolbar: TopToolbar,
     drawing_toolbar: DrawingToolbar,
     timeframe_toolbar: TimeframeToolbar,
     widget_bar: WidgetBar,
-    symbol_header: SymbolHeader,
 
     // Dialogs (each owns its open/closed state).
     indicator_dialog: IndicatorDialog,
@@ -168,46 +168,42 @@ impl DemoApp {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let theme = Theme::dark();
-        let timeframe = Timeframe::Day1;
-        let symbol = "BTCUSD";
+        let theme = Theme::light();
+        let timeframe = Timeframe::Hour1;
+        let symbol = "SAMPLE";
+        let mut options = egui_charts::config::ChartOptions::default();
+        options.time_scale.bar_spacing = 6.1;
+        // A full-history range must also fit in a narrow window.
+        options.time_scale.min_bar_spacing = 0.01;
+        // The scale reserves half a slot and one pixel after the last centre.
+        options.time_scale.right_offset_pixels = Some(65.0 - 6.1 * 0.5 - 1.0);
+        options.time_scale.time_visible = true;
+        options.time_scale.seconds_visible = false;
+        let mut chart = Chart::with_config(
+            BarData::new(),
+            theme.apply_to_config(egui_charts::config::ChartConfig::default()),
+        )
+        .with_chart_options(options);
+        chart.set_symbol("SAMPLE (synthetic)");
+        chart.set_timeframe(timeframe);
 
-        let mut chart = egui_charts::ChartBuilder::new()
-            .with_symbol(symbol)
-            .with_timeframe(timeframe)
-            .with_theme(theme.clone())
-            .with_chart_type(ChartType::Candles)
-            .with_indicators(default_indicators())
-            .with_visible_candles(100)
-            .build();
+        let source_bars =
+            generate_sample_bars(symbol, bar_count_for_timeframe(timeframe), timeframe);
+        let mut top_toolbar = TopToolbar::new().with_config(
+            egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
+        );
+        top_toolbar.timeframe_selector.current =
+            egui_charts::ui::top_toolbar::components::timeframe_selector::Timeframe::new(
+                1,
+                egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Hour,
+            );
+        let mut widget_bar = WidgetBar::default();
+        widget_bar.config.width = 45.0;
+        let mut timeframe_toolbar = TimeframeToolbar::default();
+        timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
+        timeframe_toolbar.state.timeframe = timeframe;
 
-        let bars = generate_sample_bars(symbol, 500, timeframe);
-        chart.set_data(SeriesId::MAIN, bars.clone());
-
-        let spec = DemoSymbol::find(symbol);
-        let last = bars.last().cloned().unwrap_or_else(|| Bar {
-            time: chrono::Utc::now(),
-            open: spec.start_price,
-            high: spec.start_price,
-            low: spec.start_price,
-            close: spec.start_price,
-            volume: 0.0,
-        });
-        let symbol_header = SymbolHeader::new(SymbolInfo {
-            symbol: symbol.into(),
-            company_name: spec.company_name.into(),
-            exchange: spec.exchange.into(),
-            timeframe: timeframe.as_str().to_string(),
-        })
-        .with_ohlc(OhlcData::new(
-            last.open,
-            last.high,
-            last.low,
-            last.close,
-            last.volume,
-        ));
-
-        Self {
+        let mut app = Self {
             chart,
             colour_drag: false,
             menus: ChartMenus::default(),
@@ -217,13 +213,13 @@ impl DemoApp {
                 chart_type: ChartType::Candles,
                 replay_active: false,
             },
-            bars,
+            bars: Vec::new(),
+            source_bars,
             theme,
-            top_toolbar: TopToolbar::new(),
+            top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
-            timeframe_toolbar: TimeframeToolbar::default(),
-            widget_bar: WidgetBar::default(),
-            symbol_header,
+            timeframe_toolbar,
+            widget_bar,
             indicator_dialog: IndicatorDialog::new(),
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
@@ -243,7 +239,9 @@ impl DemoApp {
             screenshot_requested: None,
             screenshots: mpsc::channel(),
             notice: None,
-        }
+        };
+        app.apply_session();
+        app
     }
 
     /// Surface a short-lived, honest status message in the UI.
@@ -258,7 +256,7 @@ impl DemoApp {
         self.chart.set_timeframe(tf);
         let count = bar_count_for_timeframe(tf);
         self.regenerate_bars(count, tf);
-        self.symbol_header.symbol_info.timeframe = tf.as_str().to_string();
+        self.timeframe_toolbar.state.timeframe = tf;
         // A replay continues at its current time on the new interval.
         if let Some(replay) = self.replay.as_mut() {
             let ts = self.bars.iter().map(|b| b.time).collect();
@@ -269,11 +267,23 @@ impl DemoApp {
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
         let spec = DemoSymbol::find(symbol);
+        self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
-        self.chart.set_symbol(spec.symbol);
-        self.symbol_header.symbol_info.symbol = spec.symbol.to_string();
-        self.symbol_header.symbol_info.company_name = spec.company_name.to_string();
-        self.symbol_header.symbol_info.exchange = spec.exchange.to_string();
+        self.chart
+            .set_symbol(format!("{} (synthetic) · {}", spec.symbol, spec.exchange));
+        for control in [
+            egui_charts::ui::Control::Session,
+            egui_charts::ui::Control::DividendAdjustment,
+        ] {
+            self.timeframe_toolbar
+                .set_control_visible(control, spec.symbol == "SAMPLE");
+        }
+        self.timeframe_toolbar
+            .set_session(if matches!(spec.exchange, "Crypto" | "Forex") {
+                SessionType::Full24x7
+            } else {
+                SessionType::RTH
+            });
         let count = bar_count_for_timeframe(self.state.timeframe);
         self.regenerate_bars(count, self.state.timeframe);
         // A symbol change invalidates an in-flight replay.
@@ -281,10 +291,9 @@ impl DemoApp {
     }
 
     fn regenerate_bars(&mut self, count: usize, tf: Timeframe) {
-        self.bars = generate_sample_bars(&self.state.symbol, count, tf);
-        self.chart.set_data(SeriesId::MAIN, self.bars.clone());
+        self.source_bars = generate_sample_bars(&self.state.symbol, count, tf);
+        self.apply_session();
         self.size_price_based_charts();
-        self.update_symbol_header();
     }
 
     /// The sizes of the price-based charts are in price units: take them from the bars on show.
@@ -301,11 +310,24 @@ impl DemoApp {
         }
     }
 
-    fn update_symbol_header(&mut self) {
-        if let Some(last) = self.bars.last() {
-            self.symbol_header.ohlc =
-                OhlcData::new(last.open, last.high, last.low, last.close, last.volume);
-        }
+    fn apply_session(&mut self) {
+        self.chart.config_mut().session_config =
+            (self.state.symbol == "SAMPLE").then(|| egui_charts::config::SessionConfig {
+                session_start: "14:30".into(),
+                session_end: "21:00".into(),
+                timezone: "UTC".into(),
+                show_premarket: self.timeframe_toolbar.state.session_type != SessionType::RTH,
+                show_postmarket: false,
+                premarket_start: Some("08:30".into()),
+                postmarket_end: None,
+            });
+        self.bars = session_bars(
+            &self.state.symbol,
+            &self.source_bars,
+            self.timeframe_toolbar.state.session_type,
+            self.timeframe_toolbar.state.adjust_for_dividends,
+        );
+        self.chart.set_data(SeriesId::MAIN, self.bars.clone());
     }
 
     // --- replay ------------------------------------------------------------
@@ -527,8 +549,14 @@ impl DemoApp {
     }
 
     fn go_to_date(&mut self, date: chrono::NaiveDate) {
-        self.chart
-            .scroll_to_time(date.and_hms_opt(0, 0, 0).unwrap().and_utc());
+        let start = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let target = self
+            .bars
+            .iter()
+            .find(|bar| bar.time >= start)
+            .or_else(|| self.bars.last())
+            .map_or(start, |bar| bar.time);
+        self.chart.scroll_to_time(target);
     }
 
     fn run_export(
@@ -617,9 +645,10 @@ impl eframe::App for DemoApp {
         }
 
         let panel_bg = ui.style().visuals.panel_fill;
+        ui.painter()
+            .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
         self.show_top_toolbar(ui, panel_bg);
-        self.show_symbol_header(ui, panel_bg);
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.show_side_panel(ui);
@@ -637,12 +666,6 @@ impl eframe::App for DemoApp {
 
         // Transient status notice.
         self.show_notice(&ctx);
-
-        // Keep the header OHLC in sync with whatever the chart last rendered.
-        if let Some(last) = self.chart.bars(SeriesId::MAIN).last() {
-            self.symbol_header.ohlc =
-                OhlcData::new(last.open, last.high, last.low, last.close, last.volume);
-        }
 
         // Repaint continuously while replay is playing.
         if self
@@ -666,9 +689,12 @@ impl DemoApp {
         self.top_toolbar.state.can_undo = drawings.can_undo();
         self.top_toolbar.state.can_redo = drawings.can_redo();
         egui::Panel::top("toolbar")
-            .exact_size(egui_charts::ui::top_toolbar::config::TOOLBAR_HEIGHT)
+            .exact_size(42.0)
             .show_separator_line(false)
-            .frame(panel_frame(bg))
+            .frame(panel_frame(bg).outer_margin(egui::Margin {
+                bottom: 4,
+                ..egui::Margin::ZERO
+            }))
             .show(ui, |ui| {
                 let action = self.top_toolbar.show_with_state(ui, &self.state);
                 self.handle_top_toolbar(ui.ctx(), action);
@@ -742,22 +768,22 @@ impl DemoApp {
         cfg.grid_color = self.theme.chart.grid_line;
     }
 
-    fn show_symbol_header(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        egui::Panel::top("symbol_header")
-            .exact_size(38.0)
-            .show_separator_line(true)
-            .frame(panel_frame(bg))
-            .show(ui, |ui| {
-                self.symbol_header.show(ui);
-            });
-    }
-
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
-            .default_size(52.0)
-            .show_separator_line(true)
-            .frame(panel_frame(bg))
+            .exact_size(56.0)
+            .show_separator_line(false)
+            .frame(
+                panel_frame(bg)
+                    .corner_radius(egui::CornerRadius {
+                        ne: 4,
+                        ..egui::CornerRadius::ZERO
+                    })
+                    .outer_margin(egui::Margin {
+                        right: 4,
+                        ..egui::Margin::ZERO
+                    }),
+            )
             .show(ui, |ui| {
                 let action = self.drawing_toolbar.show_with_action(ui);
                 self.handle_drawing_toolbar(action);
@@ -842,9 +868,12 @@ impl DemoApp {
     fn show_widget_bar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::Panel::right("widget_bar")
             .resizable(false)
-            .exact_size(52.0)
-            .show_separator_line(true)
-            .frame(panel_frame(bg))
+            .exact_size(49.0)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).outer_margin(egui::Margin {
+                left: 4,
+                ..egui::Margin::ZERO
+            }))
             .show(ui, |ui| {
                 let action = self.widget_bar.show(ui);
                 if let WidgetBarAction::Clicked(icon) = action {
@@ -1051,31 +1080,113 @@ impl DemoApp {
 
     fn show_bottom_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::Panel::bottom("bottom")
-            .exact_size(38.0)
-            .show_separator_line(true)
-            .frame(panel_frame(bg))
+            .exact_size(39.0)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
+                top: 1,
+                ..egui::Margin::ZERO
+            }))
             .show(ui, |ui| {
                 let action = self.timeframe_toolbar.show(ui);
                 self.handle_timeframe_toolbar(action);
+                self.show_timeframe_menus(ui.ctx());
             });
     }
 
     fn handle_timeframe_toolbar(&mut self, action: TimeframeToolbarAction) {
         match action {
             TimeframeToolbarAction::DateRangeChanged(range) => {
-                let visible = visible_bars_for_range(range, self.bars.len());
-                self.chart.set_visible_bars(visible);
+                let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
+                let width = self.chart.get_rendered_price_rect().width();
+                // Include the latest slot in the scale's exclusive data range.
+                let spacing = width.max(1.0) / (visible.max(1) as f32 + 0.5);
+                self.chart.disable_tracking_mode();
+                self.chart.apply_synced_time_scale(spacing, 0.5);
             }
             TimeframeToolbarAction::OpenDatePicker => self.date_picker.open(),
-            // Time zone, session and dividend adjustment have no backing in the
-            // demo's synthetic single-session UTC series.
-            _ => {}
+            TimeframeToolbarAction::OpenTimezoneMenu => {
+                self.timeframe_toolbar.state.timezone_menu_open = true;
+            }
+            TimeframeToolbarAction::OpenSessionMenu => {
+                self.timeframe_toolbar.state.session_menu_open = true;
+            }
+            TimeframeToolbarAction::AdjustDividendsToggled(adjusted) => {
+                self.timeframe_toolbar.state.adjust_for_dividends = adjusted;
+                self.stop_replay();
+                self.apply_session();
+            }
+            TimeframeToolbarAction::None => {}
+        }
+    }
+
+    fn show_timeframe_menus(&mut self, ctx: &egui::Context) {
+        if self.timeframe_toolbar.state.session_menu_open {
+            let mut open = true;
+            egui::Window::new("Synthetic session")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    for session in [SessionType::RTH, SessionType::ETH] {
+                        if ui
+                            .selectable_label(
+                                self.timeframe_toolbar.state.session_type == session,
+                                session.tooltip(),
+                            )
+                            .clicked()
+                        {
+                            self.timeframe_toolbar.set_session(session);
+                            self.timeframe_toolbar.state.session_menu_open = false;
+                            self.stop_replay();
+                            self.apply_session();
+                        }
+                    }
+                    ui.label(
+                        "SAMPLE: weekdays, regular 14:30–21:00 UTC; extended 08:30–21:00 UTC.",
+                    );
+                });
+            self.timeframe_toolbar.state.session_menu_open &= open;
+        }
+        if self.timeframe_toolbar.state.timezone_menu_open {
+            let mut open = true;
+            egui::Window::new("Chart timezone")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    for (label, timezone) in [
+                        ("UTC", egui_charts::config::TimezoneMode::Utc),
+                        (
+                            "America/New_York",
+                            egui_charts::config::TimezoneMode::nyse(),
+                        ),
+                    ] {
+                        if ui
+                            .selectable_label(
+                                self.chart.chart_options().time_scale.timezone == timezone,
+                                label,
+                            )
+                            .clicked()
+                        {
+                            let mut options = self.chart.chart_options().clone();
+                            options.time_scale.timezone = timezone;
+                            // Preserve the current pan and zoom when applying display options.
+                            let (spacing, offset) = self.chart.get_time_scale_state();
+                            let chart =
+                                std::mem::replace(&mut self.chart, Chart::new(BarData::new()));
+                            self.chart = chart.with_chart_options(options);
+                            self.chart.apply_synced_time_scale(spacing, offset);
+                            self.timeframe_toolbar.state.timezone_menu_open = false;
+                        }
+                    }
+                });
+            self.timeframe_toolbar.state.timezone_menu_open &= open;
         }
     }
 
     fn show_chart(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         let chart = egui::CentralPanel::default()
-            .frame(panel_frame(bg))
+            .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
                 self.chart.show(ui);
             });
@@ -1104,7 +1215,8 @@ impl DemoApp {
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::ResetChart => {
-                self.chart.set_visible_bars(100);
+                self.chart.apply_synced_time_scale(6.1, 64.0 / 6.1 - 0.5);
+                self.chart.enable_tracking_mode();
             }
             ContextMenuAction::ExportCsv => self.export_csv(None),
             ContextMenuAction::CopyPrice(price) => {
@@ -1343,17 +1455,6 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .inner_margin(egui::Margin::ZERO)
 }
 
-fn default_indicators() -> egui_charts::studies::IndicatorRegistry {
-    use egui_charts::studies::{BollingerBands, EMA, IndicatorRegistry, MACD, RSI, SMA};
-    let mut registry = IndicatorRegistry::new();
-    registry.add(Box::new(SMA::new(20)));
-    registry.add(Box::new(EMA::new(50)));
-    registry.add(Box::new(BollingerBands::new(20, 2.0)));
-    registry.add(Box::new(RSI::new(14)));
-    registry.add(Box::new(MACD::new(12, 26, 9)));
-    registry
-}
-
 fn condition_from_label(label: &str) -> AlertCondition {
     match label.to_lowercase().as_str() {
         l if l.contains("below") && l.contains("cross") => AlertCondition::CrossesBelow,
@@ -1408,4 +1509,65 @@ fn apply_settings_state(state: &ChartSettingsState, config: &mut egui_charts::co
     };
     config.show_ohlc_info = state.status_line.show_ohlc;
     config.show_volume = state.status_line.show_volume;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn ranges_fit_displayed_history_in_both_themes_and_window_sizes() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for size in [egui::vec2(1316.0, 871.0), egui::vec2(640.0, 450.0)] {
+                for (interval, replay) in [(Timeframe::Hour1, true), (Timeframe::Min1, false)] {
+                    let ctx = egui::Context::default();
+                    let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                    app.theme = theme.clone();
+                    egui_charts::theme::apply_to_egui(&ctx, &theme);
+                    let config = app.chart.config_mut();
+                    *config = theme.apply_to_config(config.clone());
+                    app.switch_timeframe(interval);
+                    app.timeframe_toolbar.set_session(SessionType::ETH);
+                    app.apply_session();
+                    if replay {
+                        app.start_replay();
+                    }
+                    let frame = |app: &mut DemoApp| {
+                        ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    size,
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| app.show_chart(ui, theme.chart.bg),
+                        )
+                        .drop_without_applying_deltas();
+                    };
+                    frame(&mut app);
+                    for range in [DateRange::Day1, DateRange::Month1, DateRange::All] {
+                        let bars = app.chart.bars(SeriesId::MAIN);
+                        let end = bars.len();
+                        let start = if range == DateRange::Day1 {
+                            let cutoff = bars.last().unwrap().time - chrono::Duration::days(1);
+                            bars.iter().position(|b| b.time >= cutoff).unwrap()
+                        } else {
+                            0
+                        };
+                        app.handle_timeframe_toolbar(TimeframeToolbarAction::DateRangeChanged(
+                            range,
+                        ));
+                        frame(&mut app);
+                        assert_eq!(app.chart.state().visible_range(), (start, end), "{range:?}");
+                        let expected = app.chart.get_rendered_price_rect().width()
+                            / ((end - start) as f32 + 0.5);
+                        assert!((app.chart.get_time_scale_state().0 - expected).abs() < 0.001);
+                        assert_eq!(app.replay.is_some(), replay);
+                    }
+                }
+            }
+        }
+    }
 }
