@@ -259,6 +259,7 @@ pub(crate) fn show_menu<A: Clone>(
         .fixed_pos(pos)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
+            ui.set_min_size(size);
             frame.show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
                 egui::ScrollArea::vertical()
@@ -774,7 +775,7 @@ mod tests {
                 let size = if short {
                     Vec2::new(320.0, 240.0)
                 } else {
-                    Vec2::new(800.0, 600.0)
+                    Vec2::new(800.0, 900.0)
                 };
                 let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
                 chart.config_mut().show_left_axis = left;
@@ -823,6 +824,17 @@ mod tests {
                     }
                 }
                 let shapes = paint(&ctx, &mut chart, &mut menus, vec![], size);
+                if !time && !short {
+                    let settings = shapes.iter().find(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == "Scale settings…")).expect("bottom scale row");
+                    if let Shape::Text(text) = &settings.shape {
+                        assert!(
+                            settings
+                                .clip_rect
+                                .contains_rect(Rect::from_min_size(text.pos, text.galley.size())),
+                            "a menu that fits must show its bottom row without scrolling"
+                        );
+                    }
+                }
                 let label = if short {
                     "High and low"
                 } else if time {
