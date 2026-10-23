@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Action list rows are transparent at rest, including disabled rows, with disabled text and icons in the theme colour. Primary and danger rows use the shared opaque hover and pressed shades. ([#596](https://github.com/userFRM/egui-charts/issues/596))
+
 - `FormRow` starts its controls after the label column with the same horizontal gap and row pitch as `FormGrid`. ([#590](https://github.com/userFRM/egui-charts/issues/590))
 
 - Kit filter fields clear on Escape only while focused and consume that key. The clear control uses the kit icon button with hover, pressed and keyboard states. ([#588](https://github.com/userFRM/egui-charts/issues/588))
