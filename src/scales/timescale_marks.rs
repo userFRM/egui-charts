@@ -341,7 +341,10 @@ impl TickMarkGenerator {
                 index: 0, // Will be set later
             });
 
-            current += interval;
+            let Some(next) = current.checked_add_signed(interval) else {
+                break;
+            };
+            current = next;
         }
 
         marks

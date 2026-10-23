@@ -44,6 +44,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The time axis no longer panics when a bar is stamped near the end of the representable date range, such as a millisecond timestamp read as seconds or `DateTime::<Utc>::MAX_UTC`: times it would extrapolate past the range are left out, and `TickMarkGenerator::generate_marks` stops at the last mark that fits.
 - `ui_kit::Card` is visible: it fills with the theme's secondary surface, has a 1 px border and pads its content by 8 px. It filled with the panel colour and had no edge.
 - `ui_kit::section::Section` draws its icon 8 px before the title, inside the header row, instead of left of the header where it was clipped. Section titles are 11 px.
 - `ui_kit::tab_bar::TabBar` draws 12 px tabs 16 px apart from the content edge, each on a 28 px hit row, over a full-width rule that carries the active tab's underline, and leaves 8 px before the content. A hovered tab brightens, tabs report their selected state to accessibility tools and show a focus ring. The alert and drawing properties dialogs no longer draw a second rule under their tabs.

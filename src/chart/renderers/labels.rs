@@ -146,32 +146,28 @@ fn generate_time_marks(
     let extra_left = (coords.start_idx as i64).min(10); // Extend left up to 10 bars or to index 0
     let extra_right = coords.right_offset.ceil().max(0.0) as i64 + 2;
 
-    let start_time =
-        first_visible_time - Duration::milliseconds(bar_duration_ms.saturating_mul(extra_left));
-    let end_time =
-        last_visible_time + Duration::milliseconds(bar_duration_ms.saturating_mul(extra_right));
-
-    let mut bars =
-        Vec::with_capacity(extra_left as usize + visible_data.len() + extra_right as usize);
-
-    // Add extrapolated bars BEFORE visible data (for grid lines that fall before visible range)
-    for i in (1..=extra_left).rev() {
-        let time = first_visible_time - Duration::milliseconds(bar_duration_ms.saturating_mul(i));
-        let index = first_visible_idx.saturating_sub(i as usize);
-        bars.push((time, index));
-    }
-
-    // Add visible data bars
-    for (i, bar) in visible_data.iter().enumerate() {
-        bars.push((bar.time, coords.start_idx + i));
-    }
-
-    // Add extrapolated bars AFTER visible data (for grid lines in the future)
-    for i in 1..=extra_right {
-        let time = last_visible_time + Duration::milliseconds(bar_duration_ms.saturating_mul(i));
-        let index = last_visible_idx.saturating_add(i as usize);
-        bars.push((time, index));
-    }
+    // Extrapolation stops where chrono's range ends, so a bar near it cannot panic.
+    let step = |i: i64| Duration::milliseconds(bar_duration_ms.saturating_mul(i));
+    // Extrapolated bars BEFORE the visible data (for grid lines that fall before the visible range)
+    let mut bars: Vec<_> = (1..=extra_left)
+        .map_while(|i| {
+            let time = first_visible_time.checked_sub_signed(step(i))?;
+            Some((time, first_visible_idx.saturating_sub(i as usize)))
+        })
+        .collect();
+    bars.reverse();
+    bars.extend(
+        visible_data
+            .iter()
+            .enumerate()
+            .map(|(i, bar)| (bar.time, coords.start_idx + i)),
+    );
+    // Extrapolated bars AFTER the visible data (for grid lines in the future)
+    bars.extend((1..=extra_right).map_while(|i| {
+        let time = last_visible_time.checked_add_signed(step(i))?;
+        Some((time, last_visible_idx.saturating_add(i as usize)))
+    }));
+    let (start_time, end_time) = (bars[0].0, bars[bars.len() - 1].0);
 
     let marks = generator.generate_marks(start_time, end_time, context.rect.width(), &bars);
     (marks, bars)
@@ -427,8 +423,10 @@ pub fn render_legend(
 
 #[cfg(test)]
 mod tests {
+    use crate::model::{Bar, BarData};
     use crate::widget::Chart;
-    use crate::widget::test_frames::{chart, shapes};
+    use crate::widget::test_frames::{chart, frame, shapes};
+    use chrono::{DateTime, TimeZone, Utc};
     use egui::{Context, Event, Pos2, Rect, Shape};
 
     /// The tick labels and the tags one frame paints in the price axis, with the pointer at
@@ -518,6 +516,38 @@ mod tests {
                 "{case:?}: {tags:?}"
             );
             assert_eq!(ticks, kept, "{case:?}: {tags:?}");
+        }
+    }
+
+    /// One frame renders without panicking for bars stamped at or near the end of chrono's date
+    /// range, where the time axis extrapolates times past the range.
+    #[test]
+    fn time_axis_survives_timestamps_at_the_end_of_the_date_range() {
+        let start = Utc.with_ymd_and_hms(2024, 3, 15, 10, 0, 0).unwrap();
+        let minutes = |extra: [DateTime<Utc>; 1]| {
+            vec![start, start + chrono::Duration::minutes(1)]
+                .into_iter()
+                .chain(extra)
+                .collect::<Vec<_>>()
+        };
+        let far = Utc.with_ymd_and_hms(60_000, 1, 1, 0, 0, 0).unwrap();
+        // A millisecond timestamp read as seconds.
+        let millis = DateTime::from_timestamp(1_710_496_800_000, 0).unwrap();
+        for times in [
+            vec![Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(), far],
+            minutes([millis]),
+            vec![DateTime::<Utc>::MAX_UTC],
+        ] {
+            let bars = times
+                .iter()
+                .map(|&t| Bar::new(t, 10.0, 12.0, 9.0, 11.0, 1.0))
+                .collect();
+            frame(
+                &Context::default(),
+                &mut Chart::new(BarData::from_bars(bars)),
+                0.1,
+                vec![],
+            );
         }
     }
 }
