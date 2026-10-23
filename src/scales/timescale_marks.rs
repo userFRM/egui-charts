@@ -511,8 +511,11 @@ impl TickMarkGenerator {
                 .checked_add_signed(Duration::seconds(first))
                 .unwrap_or(time)
         } else {
-            // Days or more: round down to day boundary
-            time.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc()
+            // Monday 1970-01-05 anchors weeks; the Unix epoch anchors other day strides.
+            let anchor = if seconds == 604_800 { 4 * 86_400 } else { 0 };
+            let elapsed = time.timestamp() - anchor;
+            let first = elapsed.div_euclid(seconds) + i64::from(elapsed.rem_euclid(seconds) != 0);
+            DateTime::from_timestamp(anchor + first * seconds, 0).unwrap_or(time)
         }
     }
 
@@ -997,6 +1000,52 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].index.abs_diff(pair[1].index) as f32 >= min_bars)
         );
+    }
+
+    #[test]
+    fn daily_marks_keep_calendar_anchors_at_every_width() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let bars: Vec<_> = (0..600)
+            .map(|i| (start + Duration::days(i), i as usize))
+            .collect();
+        let generator = TickMarkGenerator::new();
+        for width in [434.0, 634.0, 734.0, 1274.0] {
+            let marks = generator.generate_marks(bars[300].0, bars[419].0, width, &bars[300..420]);
+            assert!(marks.len() >= 2, "width {width}: {marks:?}");
+            if width <= 734.0 {
+                assert!(marks.iter().all(|mark| mark.time.day() == 1));
+            }
+        }
+        for interval in [Duration::days(2), Duration::days(7)] {
+            let before = generator.generate_candidate_marks(
+                bars[300].0,
+                bars[400].0,
+                interval,
+                TickMarkType::DayOfMonth,
+            );
+            let after = generator.generate_candidate_marks(
+                bars[301].0,
+                bars[400].0,
+                interval,
+                TickMarkType::DayOfMonth,
+            );
+            let remaining: Vec<_> = before
+                .iter()
+                .filter(|mark| mark.time >= bars[301].0)
+                .map(|mark| mark.time)
+                .collect();
+            assert_eq!(
+                remaining,
+                after.iter().map(|mark| mark.time).collect::<Vec<_>>()
+            );
+            if interval == Duration::days(7) {
+                assert!(
+                    after
+                        .iter()
+                        .all(|mark| mark.time.weekday() == chrono::Weekday::Mon)
+                );
+            }
+        }
     }
 
     #[test]
