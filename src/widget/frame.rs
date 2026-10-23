@@ -439,7 +439,8 @@ impl Chart {
         let max_volume = visible_data
             .iter()
             .map(|c| c.volume)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .filter(|v| v.is_finite())
+            .max_by(f64::total_cmp)
             .unwrap_or(1.0);
 
         // Draw grid
