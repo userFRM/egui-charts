@@ -599,13 +599,11 @@ impl Chart {
             .chart_options
             .time_scale
             .lock_visible_time_range_on_resize
+            && let Some(prev_width) = self.prev_width
+            && (chart_width - prev_width).abs() > 1.0
         {
-            if let Some(prev_width) = self.prev_width
-                && (chart_width - prev_width).abs() > 1.0
-            {
-                let spacing = self.state.time_scale().bar_spacing() * chart_width / prev_width;
-                self.state.time_scale_mut().set_bar_spacing(spacing);
-            }
+            let spacing = self.state.time_scale().bar_spacing() * chart_width / prev_width;
+            self.state.time_scale_mut().set_bar_spacing(spacing);
         }
         self.prev_width = Some(chart_width);
 
