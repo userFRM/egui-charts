@@ -65,6 +65,12 @@ Some interface icons under `assets/icons/` are taken from [Lucide](https://githu
 | `ui/zoom-in.svg` | `zoom-in.svg` |
 | `ui/zoom-out.svg` | `zoom-out.svg` |
 
+## Roboto
+
+`assets/fonts/Roboto-Latin.ttf` is Roboto 3.015 from the [upstream release](https://github.com/googlefonts/roboto-3-classic/releases/tag/v3.015), embedded by the chart widget. It is limited to weights 400 to 600 at normal width and subset to Latin, with punctuation, currency, arrows, math and interface markers. Roboto is licensed under the SIL Open Font License 1.1; the full text is in [`assets/fonts/LICENSE-roboto.txt`](assets/fonts/LICENSE-roboto.txt).
+
+The source is `web/split/Roboto[wdth,wght].ttf` in `Roboto_v3.015.zip` (SHA-256 `d7598e12c5dbef095ff8272cfc55da0250bd07fbdecbac8a530b9b277872a134` for the TTF). The subset retains hinting and the source timestamp.
+
 ## Fonts in the web demo
 
-The library embeds no fonts: an application chooses its own, or enables egui's `default_fonts` feature (through `eframe`, as the bundled examples do). The web demo under `examples/demo` enables it, so its WebAssembly module contains egui's default fonts: Hack Regular (MIT License and Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0) and egui-icons, a five-glyph subset of emoji-icon-font (MIT License). The demo also enables egui's `monochrome_emoji_fonts` feature for the drawing bar's icon and emoji menu, which adds Noto Emoji Regular (SIL Open Font License 1.1) and the full emoji-icon-font (MIT License). Their notices and licences are in [`examples/demo/LICENSE-fonts.txt`](examples/demo/LICENSE-fonts.txt). The demo's build publishes that file and the Lucide licence next to the demo page.
+The library embeds Roboto. The web demo under `examples/demo` also enables egui's `default_fonts` feature through `eframe`, so its WebAssembly module contains egui's default fonts: Hack Regular (MIT License and Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0) and egui-icons, a five-glyph subset of emoji-icon-font (MIT License). The demo also enables egui's `monochrome_emoji_fonts` feature for the drawing bar's icon and emoji menu, which adds Noto Emoji Regular (SIL Open Font License 1.1) and the full emoji-icon-font (MIT License). Their notices and licences are in [`examples/demo/LICENSE-fonts.txt`](examples/demo/LICENSE-fonts.txt). The demo's build publishes that file and the Lucide licence next to the demo page.

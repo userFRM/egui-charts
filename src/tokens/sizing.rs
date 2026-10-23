@@ -42,7 +42,6 @@ pub struct SizingTokens {
     pub settings_dialog: SettingsDialogSizingTokens,
     pub context_menu: ContextMenuSizingTokens,
     pub symbol_header: SymbolHeaderSizingTokens,
-    pub timeframe_toolbar: TimeframeToolbarSizingTokens,
     pub candle: CandleSizingTokens,
     // New token categories
     pub floating_toolbar: FloatingToolbarSizingTokens,
@@ -204,11 +203,6 @@ pub struct ContextMenuSizingTokens {
 pub struct SymbolHeaderSizingTokens {
     pub height: f32,
     pub quote_box_height: f32,
-}
-
-#[derive(Clone, Debug)]
-pub struct TimeframeToolbarSizingTokens {
-    pub right_section_width: f32,
 }
 
 /// Candlestick rendering dimensions (body width ratio, wick width, min body height).

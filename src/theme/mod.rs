@@ -195,9 +195,9 @@ impl ChartColors {
 pub struct TextSizes {
     /// Badges and footnotes.
     pub tiny: f32,
-    /// Secondary labels and axis text.
+    /// Secondary labels.
     pub small: f32,
-    /// Control labels.
+    /// Control labels and axis text.
     pub label: f32,
     /// Body text and buttons.
     pub body: f32,
@@ -355,6 +355,7 @@ pub(crate) fn contrast(fg: Color32, bg: Color32) -> f32 {
 }
 
 /// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
+/// Also install Roboto ahead of the application's proportional fonts.
 ///
 /// Call it once at startup and again after the theme changes. Inside `eframe::App::ui` the root
 /// `Ui` already exists, so follow the call with `ui.set_style(ui.ctx().global_style())` for the
@@ -462,6 +463,25 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
         style.spacing.interact_size.y = DESIGN_TOKENS.sizing.control_height;
     });
 
+    // Interface text: Roboto, whose default digits are tabular, so prices keep their width.
+    ctx.add_font(egui::FontInsert::new(
+        "Roboto",
+        egui::FontData::from_static(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/fonts/Roboto-Latin.ttf"
+        ))),
+        vec![
+            egui::InsertFontFamily {
+                family: egui::FontFamily::Proportional,
+                priority: egui::FontPriority::Highest,
+            },
+            egui::InsertFontFamily {
+                family: egui::FontFamily::Monospace,
+                priority: egui::FontPriority::Lowest,
+            },
+        ],
+    ));
+
     // Store the theme so components resolve their colours from it while painting.
     context::set_active_theme(ctx, theme.clone());
 }
@@ -469,6 +489,48 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_font_keeps_prices_tabular() {
+        let ctx = egui::Context::default();
+        for theme in [Theme::dark(), Theme::light(), Theme::dark()] {
+            apply_to_egui(&ctx, &theme);
+            ctx.run_ui(Default::default(), |ui| {
+                ctx.fonts(|fonts| {
+                    assert_eq!(
+                        fonts.definitions().families[&egui::FontFamily::Proportional][0],
+                        "Roboto",
+                        "the bundled face must be the first proportional font"
+                    );
+                });
+                for (size, weight) in [(12.0, None), (13.0, None), (13.0, Some(600.0))] {
+                    let mut format = egui::text::TextFormat::simple(
+                        egui::FontId::proportional(size),
+                        Color32::WHITE,
+                    );
+                    if let Some(weight) = weight {
+                        format.coords.push("wght", weight);
+                    }
+                    let widths: Vec<_> = ('0'..='9')
+                        .map(|digit| {
+                            ui.painter()
+                                .layout_job(egui::text::LayoutJob::single_section(
+                                    digit.to_string(),
+                                    format.clone(),
+                                ))
+                                .size()
+                                .x
+                        })
+                        .collect();
+                    assert!(
+                        widths.iter().all(|width| *width == widths[0]),
+                        "digits must keep their width at size {size}, weight {weight:?}: {widths:?}"
+                    );
+                }
+            })
+            .drop_without_applying_deltas();
+        }
+    }
 
     #[test]
     fn text_and_control_outlines_are_readable_in_every_preset() {

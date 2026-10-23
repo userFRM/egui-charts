@@ -69,7 +69,7 @@ impl TimeframeToolbarConfig {
             separator_color: ui.border,
             hover_bg: ui.btn_bg_hover,
             active_bg: ui.btn_bg_active,
-            font_size: typography::LG,
+            font_size: typography::SM_MD,
             panel_height: DESIGN_TOKENS.sizing.toolbar.bottom_height,
             btn_padding_h: DESIGN_TOKENS.spacing.lg,
             btn_padding_v: DESIGN_TOKENS.spacing.sm,
@@ -188,15 +188,15 @@ impl TimeframeToolbar {
             // Flexible spacer - push right section to the right. Hidden controls give back
             // their share of the reservation, so the rest stays flush right.
             let spacing = &DESIGN_TOKENS.spacing;
-            let mut reserved = DESIGN_TOKENS.sizing.timeframe_toolbar.right_section_width;
-            if self.hidden.contains(&Control::TimeZone) {
-                reserved -= self.text_btn_width(&self.state.formatted_time()) + spacing.lg;
+            let mut reserved = spacing.lg;
+            if !self.hidden.contains(&Control::TimeZone) {
+                reserved += self.text_btn_width(&self.state.formatted_time()) + spacing.lg;
             }
-            if self.hidden.contains(&Control::Session) {
-                reserved -= self.text_btn_width(self.state.session_type.label());
+            if !self.hidden.contains(&Control::Session) {
+                reserved += self.text_btn_width(self.state.session_type.label());
             }
-            if self.hidden.contains(&Control::DividendAdjustment) {
-                reserved -= 2.0 * spacing.sm + stroke::HAIRLINE + self.text_btn_width("ADJ");
+            if !self.hidden.contains(&Control::DividendAdjustment) {
+                reserved += 2.0 * spacing.sm + stroke::HAIRLINE + self.text_btn_width("ADJ");
             }
             let remaining = ui.available_width() - reserved;
             if remaining > 0.0 {
@@ -424,6 +424,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn right_controls_stay_at_the_edge_when_text_sizes_or_visibility_change() {
+        for font_size in [12.0, 14.0] {
+            for hidden in [
+                vec![],
+                vec![Control::TimeZone],
+                vec![Control::DividendAdjustment],
+                vec![Control::Session, Control::DividendAdjustment],
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &Theme::dark());
+                let mut toolbar = TimeframeToolbar::new();
+                toolbar.config.font_size = font_size;
+                toolbar.hidden.extend(hidden);
+                let last = if !toolbar.hidden.contains(&Control::DividendAdjustment) {
+                    "ADJ".to_owned()
+                } else if !toolbar.hidden.contains(&Control::Session) {
+                    toolbar.state.session_type.label().to_owned()
+                } else {
+                    toolbar.state.formatted_time()
+                };
+                // The clock also has a trailing gap when it is the last control.
+                let padding =
+                    DESIGN_TOKENS.spacing.lg * if last.ends_with("UTC") { 2.0 } else { 1.0 };
+                let mut expected = 0.0;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900.0, 40.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        expected = ui.available_rect_before_wrap().max.x
+                            - padding
+                            - toolbar.text_btn_width(&last) / 2.0;
+                        toolbar.show_contents(ui);
+                    },
+                );
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == last => Some(text),
+                        _ => None,
+                    })
+                    .expect("the last visible control must be drawn");
+                let center = text.pos.x + text.galley.size().x / 2.0;
+                output.drop_without_applying_deltas();
+                assert!(
+                    (center - expected).abs() < 1.0,
+                    "{font_size}, {:?}: {center} != {expected}",
+                    toolbar.hidden
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_timeframe_toolbar_creation() {
         let panel = TimeframeToolbar::new();
         assert_eq!(panel.state.sel_range, DateRange::Month1);
@@ -438,6 +497,5 @@ mod tests {
             config.panel_height,
             DESIGN_TOKENS.sizing.toolbar.bottom_height
         );
-        assert_eq!(config.font_size, typography::LG);
     }
 }

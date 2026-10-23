@@ -217,7 +217,7 @@ egui-charts = { version = "0.2", default-features = false, features = ["widget",
 egui-charts = { version = "0.2", default-features = false, features = ["studies"] }
 ```
 
-`serde` (off by default) adds `Serialize` and `Deserialize` to `Theme`. egui-charts does not enable egui's default features, so fonts are the application's choice (eframe enables egui's `default_fonts` by default). Since egui 0.37 those fonts have no emoji, which need egui's `monochrome_emoji_fonts` feature or fonts the application installs. The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.
+`serde` (off by default) adds `Serialize` and `Deserialize` to `Theme`. `theme::apply_to_egui` installs the bundled Roboto ahead of the application's proportional fonts. To replace it, call `egui::Context::set_fonts` after applying the theme. eframe enables egui's `default_fonts` as fallbacks by default. Since egui 0.37 those fonts have no emoji, which need egui's `monochrome_emoji_fonts` feature or fonts the application installs. The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.
 
 `cargo bench --bench bare_chart --no-default-features --features widget` measures the frame cost of the bare chart example.
 
@@ -251,7 +251,7 @@ Licensed under either of
 
 at your option.
 
-Some interface icons under `assets/icons/` come from Lucide and are licensed under the ISC License (with a Feather-derived subset under the MIT License); see the [third-party notices](THIRD-PARTY-NOTICES.md) and the [Lucide licence](assets/icons/LICENSE-lucide.txt).
+Some interface icons under `assets/icons/` come from Lucide and are licensed under the ISC License (with a Feather-derived subset under the MIT License); see the [third-party notices](THIRD-PARTY-NOTICES.md) and the [Lucide licence](assets/icons/LICENSE-lucide.txt). The bundled Roboto Latin subset is licensed under the [SIL Open Font License 1.1](assets/fonts/LICENSE-roboto.txt).
 
 ## Contributing
 

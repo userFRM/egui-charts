@@ -106,7 +106,7 @@ egui = "0.37.0"
 rand = "0.10.0"
 
 [dependencies]
-# Fonts are the application's choice: eframe enables egui's `default_fonts`.
+# theme::apply_to_egui installs the bundled Roboto face.
 egui = { version = "0.37.0", default-features = false, features = ["serde"], optional = true }
 # The engine names colours as `egui::Color32`; without `widget` that path
 # resolves to this crate, which egui re-exports.

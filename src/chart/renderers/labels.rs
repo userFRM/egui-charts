@@ -3,7 +3,7 @@ use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
 use crate::model::{Bar, percent_change};
 use crate::scales::{
     PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkGenerator,
-    TickMarkGeneratorConfig, TimeFormatter,
+    TickMarkGeneratorConfig, TickMarkType, TimeFormatter,
 };
 use crate::styles::typography;
 use crate::theme::ThemeExt;
@@ -259,9 +259,18 @@ pub fn render_time_labels(
         }
 
         let y = context.rect.max.y + TIME_LABEL_GAP;
-        let galley = context
-            .painter
-            .layout_no_wrap(mark.label, font.clone(), colors.text);
+        let galley = if mark.mark_type == TickMarkType::Year {
+            context
+                .painter
+                .layout_job(egui::text::LayoutJob::single_section(
+                    mark.label,
+                    semibold(font.clone(), colors.text),
+                ))
+        } else {
+            context
+                .painter
+                .layout_no_wrap(mark.label, font.clone(), colors.text)
+        };
         let rect = egui::Align2::CENTER_TOP.anchor_size(Pos2::new(x, y), galley.size());
         if !under_tag(tags, rect) {
             labels.push(Shape::galley(rect.min, galley, colors.text));
@@ -320,7 +329,7 @@ pub fn render_ohlc_info(
         Pos2::new(rect.min.x + padding, rect.min.y + 10.0),
         egui::Align2::LEFT_TOP,
         info,
-        FontId::proportional(typography::SM),
+        FontId::proportional(typography::MD),
         text_color,
     );
 }
@@ -355,16 +364,18 @@ pub fn render_legend(
     let mut x = rect.min.x + padding;
     let y = rect.min.y + 12.0;
 
-    // Symbol name (bold, larger)
+    // Symbol name (semibold)
     let symbol_font = FontId::proportional(typography::MD);
-    let symbol_galley =
-        painter.layout_no_wrap(symbol.to_string(), symbol_font.clone(), colors.text);
-    painter.galley(Pos2::new(x, y - 2.0), symbol_galley.clone(), colors.text);
+    let symbol_galley = painter.layout_job(egui::text::LayoutJob::single_section(
+        symbol.to_string(),
+        semibold(symbol_font, colors.text),
+    ));
+    painter.galley(Pos2::new(x, y), symbol_galley.clone(), colors.text);
     x += symbol_galley.rect.width() + 8.0;
 
     // Bullet separator, in the colour of the O, H, L and C labels
     let label_color = theme.chart.axis_text_secondary;
-    let sep_font = FontId::proportional(typography::SM);
+    let sep_font = FontId::proportional(typography::MD);
     let sep = painter.layout_no_wrap("•".to_string(), sep_font.clone(), label_color);
     painter.galley(Pos2::new(x, y), sep.clone(), label_color);
     x += sep.rect.width() + 8.0;
@@ -375,8 +386,8 @@ pub fn render_legend(
     x += tf_galley.rect.width() + 20.0;
 
     // OHLC values with labels and color coding
-    let label_font = FontId::proportional(typography::SM);
-    let val_font = FontId::proportional(typography::SM);
+    let label_font = FontId::proportional(typography::MD);
+    let val_font = FontId::proportional(typography::MD);
 
     // O (Open)
     let o_label = painter.layout_no_wrap("O ".to_string(), label_font.clone(), label_color);
@@ -425,6 +436,13 @@ pub fn render_legend(
     let change_text = format!("{sign}{change:.2} ({sign}{change_pct:.2}%)");
     let change_galley = painter.layout_no_wrap(change_text, val_font, change_color);
     painter.galley(Pos2::new(x, y), change_galley, change_color);
+}
+
+/// Formats a symbol or year mark at weight 600 when the face has a weight axis.
+fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
+    let mut format = egui::text::TextFormat::simple(font, color);
+    format.coords.push("wght", 600.0);
+    format
 }
 
 #[cfg(test)]
