@@ -139,11 +139,27 @@ pub fn render_crosshair_full(
             .unwrap_or_else(|| tick_decimals(price_scale, actual_pos.y));
         format!("{price:.decimals$}")
     };
+    let left = axis_right <= context.rect.left();
     let price_tag = paint_crosshair_tag(
         context.painter,
-        Pos2::new(context.rect.max.x - 17.0, actual_pos.y),
-        Align2::LEFT_CENTER,
-        context.rect.left()..=axis_right,
+        Pos2::new(
+            if left {
+                context.rect.left() + 17.0
+            } else {
+                context.rect.right() - 17.0
+            },
+            actual_pos.y,
+        ),
+        if left {
+            Align2::RIGHT_CENTER
+        } else {
+            Align2::LEFT_CENTER
+        },
+        if left {
+            context.painter.clip_rect().left()..=context.rect.left() + 17.0
+        } else {
+            context.rect.left()..=axis_right
+        },
         price_label,
         (label_text, label_bg),
         21.0,
@@ -156,7 +172,7 @@ pub fn render_crosshair_full(
             context.painter,
             Pos2::new(actual_pos.x, chart_bottom + 1.5),
             Align2::CENTER_TOP,
-            context.rect.left()..=axis_right,
+            context.rect.left()..=axis_right.max(context.rect.right()),
             formatter.format_crosshair(candle.time, bar_seconds),
             (label_text, label_bg),
             25.0,

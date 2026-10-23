@@ -18,6 +18,7 @@ pub struct Modal {
     dim_background: bool,
     rounding: Option<f32>,
     fill: Option<Color32>,
+    top: Option<f32>,
 }
 
 impl Modal {
@@ -33,6 +34,7 @@ impl Modal {
             dim_background: true,
             rounding: None,
             fill: None,
+            top: None,
         }
     }
 
@@ -71,6 +73,12 @@ impl Modal {
     /// Override the corner radius, leaving the theme's radius as the default.
     pub fn rounding(mut self, rounding: f32) -> Self {
         self.rounding = Some(rounding);
+        self
+    }
+
+    /// Keep a fixed top edge while content height changes; clamp it inside the window.
+    pub fn top(mut self, top: f32) -> Self {
+        self.top = Some(top);
         self
     }
 
@@ -118,21 +126,32 @@ impl Modal {
         };
 
         let mut close_clicked = false;
-        let response = egui::Modal::new(self.id)
-            .frame(frame)
-            .backdrop_color(backdrop)
-            .show(ctx, |ui| {
-                ui.set_width(size.x);
-                ui.set_min_height(size.y);
-                if height.is_some() {
-                    // The area offers its last size, which filling content would otherwise keep.
-                    ui.set_max_height(size.y);
-                }
-                if !self.title.is_empty() {
-                    close_clicked = title_row(ui, &self.title, self.closable);
-                }
-                add_contents(ui)
-            });
+        let mut modal = egui::Modal::new(self.id);
+        if let Some(top) = self.top {
+            let screen = ctx.content_rect();
+            let top = top.clamp(
+                screen.top() + 24.0,
+                (screen.bottom() - height.unwrap_or(0.0) - 24.0).max(screen.top() + 24.0),
+            );
+            modal = modal.area(
+                egui::Area::new(self.id)
+                    .order(egui::Order::Foreground)
+                    .pivot(egui::Align2::CENTER_TOP)
+                    .fixed_pos(egui::pos2(screen.center().x, top)),
+            );
+        }
+        let response = modal.frame(frame).backdrop_color(backdrop).show(ctx, |ui| {
+            ui.set_width(size.x);
+            ui.set_min_height(size.y);
+            if height.is_some() {
+                // The area offers its last size, which filling content would otherwise keep.
+                ui.set_max_height(size.y);
+            }
+            if !self.title.is_empty() {
+                close_clicked = title_row(ui, &self.title, self.closable);
+            }
+            add_contents(ui)
+        });
 
         // `should_close` covers Escape and a click on the backdrop.
         let close_requested = self.closable && (close_clicked || response.should_close());

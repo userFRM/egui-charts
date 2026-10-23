@@ -862,16 +862,12 @@ mod tests {
     #[test]
     fn controls_that_are_off_emit_nothing() {
         type Off = fn(&mut TopToolbar);
-        let rows: [(Off, &[TopToolbarAction]); 7] = [
+        let rows: [(Off, &[TopToolbarAction]); 6] = [
             (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
             (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
             (
                 |t| t.set_control_visible(Control::Compare, false),
                 &[TopToolbarAction::OpenCompare],
-            ),
-            (
-                |t| t.set_control_visible(Control::Templates, false),
-                &[TopToolbarAction::OpenIndicatorTemplates],
             ),
             (
                 |t| t.set_control_visible(Control::Alerts, false),

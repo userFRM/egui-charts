@@ -55,8 +55,24 @@ pub(crate) fn paint_axis_tag(
     tag
 }
 
+/// The axis ending at the plot's left edge uses right-aligned tags.
+fn price_tag_anchor(plot: Rect, axis_right: f32, y: f32) -> (Pos2, Align2) {
+    if axis_right <= plot.left() {
+        (
+            Pos2::new(plot.left() - 5.0 - TAG_PADDING.x, y),
+            Align2::RIGHT_CENTER,
+        )
+    } else {
+        (
+            Pos2::new(plot.right() + 5.0 + TAG_PADDING.x, y),
+            Align2::LEFT_CENTER,
+        )
+    }
+}
+
 /// Renders `line` from `start_x`, clamped to the plot's left edge, to its right edge and, with
 /// `show_axis` and the line's `axis_label`, its tag in the price axis, which ends at `axis_right`.
+/// Pass the plot's left edge as `axis_right` to place tags in the left axis.
 /// Returns the tag's rect, or `None` when no tag is drawn.
 pub fn render_price_line(
     painter: &Painter,
@@ -86,12 +102,13 @@ pub fn render_price_line(
         crate::model::LineStyle::Dotted => Some((1.0, 3.0)),
         crate::model::LineStyle::Solid => None,
     };
-    if let Some((dash, gap)) = pattern {
-        draw_dashed_line(painter, start, end, stroke, dash, gap);
-    } else {
-        painter.line_segment([start, end], stroke);
+    if line.width > 0.0 {
+        if let Some((dash, gap)) = pattern {
+            draw_dashed_line(painter, start, end, stroke, dash, gap);
+        } else {
+            painter.line_segment([start, end], stroke);
+        }
     }
-
     if let Some(title) = &line.title {
         painter.with_clip_rect(price_rect).text(
             start,
@@ -110,14 +127,9 @@ pub fn render_price_line(
         price_map.price_precision().unwrap_or(2),
     );
     let text_color = tag_text_color(line.color);
+    let (anchor, align) = price_tag_anchor(price_rect, axis_right, y);
     Some(paint_axis_tag(
-        painter,
-        Pos2::new(price_rect.max.x + 5.0 + TAG_PADDING.x, y),
-        Align2::LEFT_CENTER,
-        axis_right,
-        label,
-        text_color,
-        line.color,
+        painter, anchor, align, axis_right, label, text_color, line.color,
     ))
 }
 
@@ -322,10 +334,11 @@ pub(crate) fn render_quote_tags_with_countdown(
     // Keep paint order stable even when the price coordinates reverse the row order.
     rows.sort_by_key(|row| row.0);
     for (slot, y, text, fill) in rows {
+        let (anchor, align) = price_tag_anchor(price_rect, axis_right, y);
         tags[slot] = Some(paint_axis_tag(
             painter,
-            Pos2::new(price_rect.right() + 5.0 + TAG_PADDING.x, y),
-            Align2::LEFT_CENTER,
+            anchor,
+            align,
             axis_right,
             text,
             tag_text_color(fill),

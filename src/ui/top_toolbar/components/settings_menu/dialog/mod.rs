@@ -242,6 +242,7 @@ impl SettingsDialog {
         Modal::new("chart_settings", "Settings")
             .width(width)
             .height(height)
+            .top(ctx.content_rect().top() + 24.0)
             .rounding(8.0)
             .fill(style.content_bg)
             .dim_background(false)
@@ -767,6 +768,43 @@ mod tests {
             }]);
             assert!(matches!(action, SettingsAction::Cancel));
             assert!(!dialog.is_open);
+        }
+    }
+    #[test]
+    fn changing_settings_tabs_keeps_the_top_edge() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut dialog = SettingsDialog::new();
+            dialog.open(ChartSettingsState::default());
+            let mut tops = Vec::new();
+            for tab in SettingsTab::all() {
+                dialog.active_tab = *tab;
+                for _ in 0..3 {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(1440.0, 900.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            dialog.show(ui.ctx(), &theme);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                }
+                tops.push(
+                    ctx.memory(|memory| memory.area_rect(egui::Id::unique("chart_settings")))
+                        .unwrap()
+                        .top(),
+                );
+            }
+            assert!(
+                tops.iter().all(|top| (top - tops[0]).abs() < 1.0),
+                "{tops:?}"
+            );
         }
     }
 }

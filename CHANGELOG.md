@@ -6,6 +6,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Chart settings now retain and apply title format, quote controls and independent study title/input/value visibility. `Chart::set_indicator_inputs` supplies study input captions, retained through host templates; status-line volume no longer hides the histogram. The settings dialog keeps one top edge across tabs through `Modal::top`.
+- Price scale placement and independent current/previous close labels and lines now reach rendering on either axis. Countdown visibility is honoured, with its default enabled to retain the existing displayed countdown. Migration: new `ChartConfig`, `StatusLineOptions`, `ScalesAndLinesSettings`, `Legend` and `IndicatorPaneConfig` fields need defaults in struct literals.
+
 - `TopToolbar::indicator_templates` accepts host-owned saved study names and ids. Its anchored menu emits save/apply intents; the demo keeps cloned study sets in memory for the session. Exhaustive `TopToolbarAction` matches need `SaveIndicatorTemplate` and `ApplyIndicatorTemplate` arms.
 
 - `Symbol::with_market` supplies an exchange and optional instrument kind for symbol search. Empty queries list the host catalog, with host-supplied recents first, category chips for available kinds and kind/exchange metadata in each row. Migration: `Symbol` struct literals need `exchange` and `symbol_type`, or use `Symbol::new`.

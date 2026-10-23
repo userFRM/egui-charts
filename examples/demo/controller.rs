@@ -46,6 +46,12 @@ use crate::sampledata::{
     visible_bars_for_range,
 };
 
+struct SavedIndicators {
+    name: String,
+    studies: Vec<Box<dyn egui_charts::studies::Indicator>>,
+    inputs: Vec<String>,
+}
+
 /// Object-tree ids for indicators are offset into a high range so a single
 /// `usize` id space cleanly distinguishes indicators from drawings (which use
 /// small monotonic ids from the drawing manager). The main series is id 0.
@@ -133,7 +139,7 @@ pub struct DemoApp {
     settings_dialog: SettingsDialog,
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
-    indicator_templates: Vec<(String, Vec<Box<dyn egui_charts::studies::Indicator>>)>,
+    indicator_templates: Vec<SavedIndicators>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
     series_settings: SeriesSettingsDialog,
@@ -544,7 +550,9 @@ impl DemoApp {
         if let IndicatorDialogAction::AddIndicator(study) =
             self.indicator_dialog.show(ctx, &self.theme)
         {
-            self.chart.add_indicator(study);
+            let inputs = self.indicator_dialog.input_summary(study.name());
+            let id = self.chart.add_indicator(study);
+            self.chart.set_indicator_inputs(id, inputs);
         }
 
         // Chart settings.
@@ -552,6 +560,22 @@ impl DemoApp {
             SettingsAction::Apply(state) => {
                 self.settings_state = state.clone();
                 apply_settings_state(&state, self.chart.config_mut());
+                let scale = self.chart.price_scale_mut();
+                let mode = if state.scales_and_lines.log_scale {
+                    egui_charts::scales::PriceScaleMode::Logarithmic
+                } else if state.scales_and_lines.percentage_scale {
+                    egui_charts::scales::PriceScaleMode::Percentage
+                } else {
+                    egui_charts::scales::PriceScaleMode::Normal
+                };
+                scale.options_mut().mode = mode;
+                scale.options_mut().invert_scale = state.scales_and_lines.invert_scale;
+                if state.scales_and_lines.auto_scale {
+                    scale.reset();
+                } else {
+                    let range = scale.range();
+                    scale.set_range(range.min, range.max);
+                }
             }
             SettingsAction::Cancel => {}
             _ => {}
@@ -917,21 +941,37 @@ impl DemoApp {
                     .indicators()
                     .map(|(_, study)| study.clone_box())
                     .collect();
-                self.indicator_templates.push((name.clone(), studies));
+                let inputs = self
+                    .chart
+                    .indicators()
+                    .map(|(id, _)| {
+                        self.chart
+                            .indicator_inputs(id)
+                            .unwrap_or_default()
+                            .to_owned()
+                    })
+                    .collect();
+                self.indicator_templates.push(SavedIndicators {
+                    name: name.clone(),
+                    studies,
+                    inputs,
+                });
                 self.top_toolbar
                     .indicator_templates
                     .push((name.clone(), name));
             }
             TopToolbarAction::ApplyIndicatorTemplate(id) => {
-                if let Some((_, studies)) = self
+                if let Some(saved) = self
                     .indicator_templates
                     .iter()
-                    .find(|(name, _)| *name == id)
+                    .find(|saved| saved.name == id)
                 {
-                    let studies = studies.clone();
+                    let studies = saved.studies.clone();
+                    let inputs = saved.inputs.clone();
                     self.remove_all_indicators();
-                    for study in studies {
-                        self.chart.add_indicator(study);
+                    for (study, inputs) in studies.into_iter().zip(inputs) {
+                        let id = self.chart.add_indicator(study);
+                        self.chart.set_indicator_inputs(id, inputs);
                     }
                 }
             }
@@ -1762,7 +1802,22 @@ fn apply_settings_state(state: &ChartSettingsState, config: &mut egui_charts::co
         ButtonVisibility::Hidden => NavigationButtons::Never,
     };
     config.show_ohlc_info = state.status_line.show_ohlc;
-    config.show_volume = state.status_line.show_volume;
+    config.show_symbol_labels = state.status_line.show_symbol;
+    config.title_as_description = state.status_line.title_as_description;
+    config.show_quote_boxes = state.status_line.show_quote_boxes;
+    config.show_ohlc_change = state.status_line.show_change;
+    config.show_ohlc_change_percent = state.status_line.show_change_percent;
+    config.show_legend_volume = state.status_line.show_volume;
+    config.show_indicator_labels = state.status_line.show_indicator_titles;
+    config.show_indicator_inputs = state.status_line.show_indicator_inputs;
+    config.show_indicator_last_val = state.status_line.show_indicator_values;
+    config.show_right_axis = !state.scales_and_lines.price_scale_left;
+    config.show_left_axis = state.scales_and_lines.price_scale_left;
+    config.show_symbol_last_val = state.scales_and_lines.show_last_price_label;
+    config.show_price_line = state.scales_and_lines.show_price_line;
+    config.show_symbol_prev_close = state.scales_and_lines.show_prev_close_label;
+    config.show_prev_close_line = state.scales_and_lines.show_prev_close;
+    config.show_countdown = state.scales_and_lines.show_countdown;
 }
 
 #[cfg(test)]

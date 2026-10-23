@@ -120,6 +120,15 @@ impl Chart {
                 _ => IndicatorPaneConfig::default(),
             };
 
+            config.show_name = self.config.show_indicator_labels;
+            config.show_values = self.config.show_indicator_last_val;
+            config.inputs = if self.config.show_indicator_inputs {
+                self.study_inputs[idx].clone()
+            } else {
+                String::new()
+            };
+            config.show_legend =
+                config.show_name || config.show_values || !config.inputs.is_empty();
             config.height = if collapsed { row_height } else { pane_height };
             let mut panel = IndicatorPane::with_config(config);
 

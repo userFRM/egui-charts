@@ -527,6 +527,25 @@ impl IndicatorDialog {
         self.show_config = true;
     }
 
+    /// Input caption for a study just created by this dialog; unknown host schemas stay empty.
+    pub fn input_summary(&self, name: &str) -> String {
+        let p = &self.params;
+        match self.edited(name) {
+            "SMA" | "EMA" | "WMA" | "VWMA" | "Donchian" | "Aroon" | "RSI" | "CCI" | "ATR"
+            | "ADX" | "MFI" | "Williams %R" | "ROC" | "Momentum" | "CMF" => p.period.to_string(),
+            "BB" => format!("{} {}", p.period, p.bb_std_dev),
+            "Keltner" => format!("{} {} {}", p.period, p.keltner_atr, p.keltner_multiplier),
+            "MACD" => format!("{} {} {}", p.macd_fast, p.macd_slow, p.macd_signal),
+            "Stochastic" => format!("{} {} {}", p.stoch_k, p.stoch_smooth, p.stoch_d),
+            "SuperTrend" => format!("{} {}", p.period, p.supertrend_multiplier),
+            "Ichimoku" => format!(
+                "{} {} {}",
+                p.ichimoku_tenkan, p.ichimoku_kijun, p.ichimoku_senkou
+            ),
+            _ => String::new(),
+        }
+    }
+
     /// Add the selected indicator with its parameters and close the dialog.
     fn add_selected(&mut self) -> Option<IndicatorDialogAction> {
         let study = self.create(&self.sel_indicator.as_ref()?.id)?;

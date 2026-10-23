@@ -143,9 +143,27 @@ impl Chart {
         self.studies.add(indicator);
         self.study_ids.push(id);
         self.study_autoscale.push(true);
+        self.study_inputs.push(String::new());
         self.pending_from.push(None);
         self.next_refresh.push(f64::NEG_INFINITY);
         id
+    }
+
+    /// Set the input caption displayed beside a study in the legend.
+    pub fn set_indicator_inputs(&mut self, id: SeriesId, inputs: impl Into<String>) -> bool {
+        let Some(index) = self.study_ids.iter().position(|candidate| *candidate == id) else {
+            return false;
+        };
+        self.study_inputs[index] = inputs.into();
+        true
+    }
+
+    /// The host-supplied input caption of a study, if its id is still present.
+    pub fn indicator_inputs(&self, id: SeriesId) -> Option<&str> {
+        self.study_ids
+            .iter()
+            .position(|candidate| *candidate == id)
+            .map(|index| self.study_inputs[index].as_str())
     }
 
     /// Removes the study `id` and clears the selection if it is that study. Returns `false` for
@@ -157,6 +175,7 @@ impl Chart {
         self.studies.remove_indicator(at);
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
+        self.study_inputs.remove(at);
         self.pending_from.remove(at);
         self.next_refresh.remove(at);
         if self.selection.selected_id() == Some(ChartElementId::Indicator(id)) {
