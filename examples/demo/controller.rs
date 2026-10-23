@@ -133,6 +133,7 @@ pub struct DemoApp {
     settings_dialog: SettingsDialog,
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
+    quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
     series_settings: SeriesSettingsDialog,
     drawing_props: DrawingPropertiesDialog,
@@ -243,6 +244,12 @@ impl DemoApp {
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
+            quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
+                [("symbols", "Symbol search"), ("indicators", "Indicators"), ("settings", "Chart settings"), ("export", "Export chart")]
+                    .into_iter()
+                    .map(|(id, label)| egui_charts::ui_kit::command_palette::Command::new(id, label))
+                    .collect(),
+            ),
             alert_dialog: AlertDialog::new(),
             series_settings: SeriesSettingsDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
@@ -516,6 +523,16 @@ impl DemoApp {
     // --- dialog wiring -----------------------------------------------------
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.quick_search.update(ctx) {
+            let action = match id.as_str() {
+                "symbols" => TopToolbarAction::OpenSymbolSearch,
+                "indicators" => TopToolbarAction::OpenIndicators,
+                "settings" => TopToolbarAction::OpenSettings,
+                "export" => TopToolbarAction::Save,
+                _ => TopToolbarAction::None,
+            };
+            self.handle_top_toolbar(ctx, action);
+        }
         // Indicators: add the study the dialog created.
         if let IndicatorDialogAction::AddIndicator(study) =
             self.indicator_dialog.show(ctx, &self.theme)
@@ -820,17 +837,17 @@ impl DemoApp {
                                     .corner_radius(16),
                             )
                             .clicked();
-                        search = IconButton::new(&icons::QUICK_SEARCH)
-                            .icon_scale(24.0 / 28.0)
-                            .tooltip("Quick search")
-                            .show(ui)
-                            .clicked();
+                        search = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
+                            IconButton::new(&icons::QUICK_SEARCH).icon_scale(24.0 / 28.0).show(ui),
+                            "Quick search",
+                            Some(egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K)),
+                        ).clicked();
                     },
                 );
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
                 if search {
-                    self.symbol_search.open();
+                    self.quick_search.open();
                 }
                 if trade {
                     self.notify(

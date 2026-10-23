@@ -12,7 +12,6 @@ use egui::{
 };
 
 use crate::icons::icons;
-use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 
@@ -132,7 +131,7 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
     let row = Vec2::new(ui.available_width(), ButtonSize::MD.pixels());
     let close = ui
         .allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
-            ui.label(RichText::new(title).strong().size(typography::LG));
+            ui.label(RichText::new(title).strong().size(20.0));
             closable
                 && ui
                     .with_layout(Layout::right_to_left(Align::Center), |ui| {
