@@ -105,7 +105,7 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
     builder.elements()
 }
 
-const MAX_BRICKS: usize = 10_000;
+pub(crate) const MAX_BRICKS: usize = 10_000;
 
 /// Builds Renko bricks bar by bar; `size` must be a positive finite number.
 #[derive(Clone)]

@@ -117,7 +117,7 @@ pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
     builder.elements()
 }
 
-const MAX_LINES: usize = 10_000;
+pub(crate) const MAX_LINES: usize = 10_000;
 
 /// The line in progress and the trend state.
 #[derive(Clone)]

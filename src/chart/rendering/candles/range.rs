@@ -7,7 +7,9 @@ use egui::{Color32, Painter, Pos2, Rect, Shape};
 
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
-use crate::model::{Bar, RangeBarConfig, to_range_bars_from_ohlc};
+use crate::model::{Bar, RangeBar};
+
+use super::japanese::{MAX_ELEMENTS, calc_brick_rect, calc_spacing};
 
 /// High-Low chart: just the range bars
 pub(super) fn render_high_low(
@@ -59,48 +61,27 @@ pub(super) fn render_high_low(
     }
 }
 
-/// Range bars: price-based bars
+/// Range bars: the newest ones, spread evenly over the pane like the other price-based charts
 pub(super) fn render_range_bars(
     painter: &Painter,
-    visible_data: &[Bar],
-    start_idx: usize,
+    price_rect: Rect,
+    range_bars: &[RangeBar],
     bar_width: f32,
-    range_size: f64,
     price_scale: &PriceMap,
-    chart_rect_min_x: f32,
-    idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    let config = RangeBarConfig {
-        range_size,
-        use_atr: false,
-        atr_period: 14,
-        atr_multiplier: 1.0,
-    };
-    let range_bars = to_range_bars_from_ohlc(visible_data, &config);
+    let shown = &range_bars[range_bars.len().saturating_sub(MAX_ELEMENTS)..];
+    let spacing = calc_spacing(price_rect.width(), shown.len(), bar_width);
 
-    // Range bars can outnumber the visible bars: draw the newest ones in the visible slots.
-    for (i, range_bar) in range_bars
-        .iter()
-        .skip(range_bars.len().saturating_sub(visible_data.len()))
-        .enumerate()
-    {
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-
-        let y_open = price_scale.price_to_y(range_bar.open);
-        let y_close = price_scale.price_to_y(range_bar.close);
-
+    for (i, range_bar) in shown.iter().enumerate() {
+        let x = price_rect.min.x + (i as f32 + 0.5) * spacing;
         let color = if range_bar.close > range_bar.open {
             bullish_color
         } else {
             bearish_color
         };
-
-        let body_rect = Rect::from_min_max(
-            Pos2::new(x - bar_width / 2.0, y_open.min(y_close)),
-            Pos2::new(x + bar_width / 2.0, y_open.max(y_close)),
-        );
-        painter.add(Shape::rect_filled(body_rect, 0.0, color));
+        let rect = calc_brick_rect(x, &range_bar.to_bar(), price_scale, spacing);
+        painter.add(Shape::rect_filled(rect, 0.0, color));
     }
 }

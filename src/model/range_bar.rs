@@ -233,7 +233,7 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
     builder.elements()
 }
 
-const MAX_BARS: usize = 5_000;
+pub(crate) const MAX_BARS: usize = 5_000;
 
 /// Builds range bars from OHLC bars one at a time; `range_size` must be a positive finite
 /// number. The range bar in progress is kept apart from the closed bars and added by `elements`.

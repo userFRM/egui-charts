@@ -3,30 +3,25 @@
 //! Includes: Renko, Kagi, Line Break, Point & Figure
 
 use super::helpers::{draw_brick, draw_o_symbol, draw_x_symbol};
-use crate::model::{
-    Bar, ColumnDirection, KagiConfig, LineBreakConfig, PointFigureConfig, RenkoConfig,
-    to_kagi_lines, to_line_break_lines, to_pnf_columns, to_renko_bricks,
-};
+use crate::model::kagi::KagiLine;
+use crate::model::line_break::LineBreakLine;
+use crate::model::point_figure::PnfColumn;
+use crate::model::{Bar, ColumnDirection, RenkoBrick};
 use crate::scales::PriceMap;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
-const MAX_ELEMENTS: usize = 2000;
+pub(super) const MAX_ELEMENTS: usize = 2000;
 
 pub(super) fn render_renko(
     painter: &Painter,
     price_rect: Rect,
-    visible_data: &[Bar],
-    _start_idx: usize,
+    bricks: &[RenkoBrick],
     bar_width: f32,
-    renko_brick_size: f64,
     price_scale: &PriceMap,
-    _chart_rect_min_x: f32,
-    _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
     let coords = *price_scale;
-    let bricks = to_renko_bricks(visible_data, &RenkoConfig::new(renko_brick_size));
     let brick_count = bricks.len().min(MAX_ELEMENTS);
     let spacing = calc_spacing(price_rect.width(), brick_count, bar_width);
 
@@ -54,17 +49,12 @@ pub(super) fn render_renko(
 pub(super) fn render_kagi(
     painter: &Painter,
     price_rect: Rect,
-    visible_data: &[Bar],
-    _start_idx: usize,
-    kagi_reversal_amount: f64,
+    lines: &[KagiLine],
     price_scale: &PriceMap,
-    _chart_rect_min_x: f32,
-    _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
     let coords = *price_scale;
-    let lines = to_kagi_lines(visible_data, &KagiConfig::new(kagi_reversal_amount));
     if lines.is_empty() {
         return;
     }
@@ -72,7 +62,7 @@ pub(super) fn render_kagi(
     let line_count = lines.len().min(MAX_ELEMENTS);
     let spacing = (price_rect.width() / line_count as f32).max(2.0);
 
-    let points = collect_kagi_points(&lines, &coords, price_rect, spacing);
+    let points = collect_kagi_points(lines, &coords, price_rect, spacing);
     draw_kagi_segments(painter, &points, bullish_color, bearish_color);
 }
 
@@ -80,18 +70,13 @@ pub(super) fn render_kagi(
 pub(super) fn render_line_break(
     painter: &Painter,
     price_rect: Rect,
-    visible_data: &[Bar],
-    _start_idx: usize,
+    lines: &[LineBreakLine],
     bar_width: f32,
-    line_break_count: usize,
     price_scale: &PriceMap,
-    _chart_rect_min_x: f32,
-    _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
     let coords = *price_scale;
-    let lines = to_line_break_lines(visible_data, &LineBreakConfig::new(line_break_count));
     if lines.is_empty() {
         return;
     }
@@ -124,26 +109,13 @@ pub(super) fn render_line_break(
 pub(super) fn render_point_and_figure(
     painter: &Painter,
     price_rect: Rect,
-    visible_data: &[Bar],
-    _start_idx: usize,
+    columns: &[PnfColumn],
     bar_width: f32,
-    box_size: f64,
-    reversal_boxes: u32,
     price_scale: &PriceMap,
-    _chart_rect_min_x: f32,
-    _idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
     let coords = *price_scale;
-    let config = PointFigureConfig {
-        box_size,
-        reversal_boxes: reversal_boxes as usize,
-        use_atr: false,
-        atr_period: 14,
-        use_close: false,
-    };
-    let columns = to_pnf_columns(visible_data, &config);
     if columns.is_empty() {
         return;
     }
@@ -177,7 +149,7 @@ pub(super) fn render_point_and_figure(
 
 // === Helper Functions ===
 
-fn calc_spacing(width: f32, count: usize, bar_width: f32) -> f32 {
+pub(super) fn calc_spacing(width: f32, count: usize, bar_width: f32) -> f32 {
     if count > 1 {
         (width / count as f32).min(bar_width)
     } else {
@@ -189,7 +161,7 @@ fn in_range(x: f32, rect: Rect) -> bool {
     x >= rect.min.x && x <= rect.max.x
 }
 
-fn calc_brick_rect(x: f32, bar: &Bar, coords: &PriceMap, spacing: f32) -> Rect {
+pub(super) fn calc_brick_rect(x: f32, bar: &Bar, coords: &PriceMap, spacing: f32) -> Rect {
     let y_open = coords.price_to_y(bar.open);
     let y_close = coords.price_to_y(bar.close);
     let top = y_open.min(y_close);

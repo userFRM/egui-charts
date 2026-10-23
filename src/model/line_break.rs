@@ -93,7 +93,7 @@ pub fn to_line_break_lines(data: &[Bar], config: &LineBreakConfig) -> Vec<LineBr
     builder.elements()
 }
 
-const MAX_LINES: usize = 10_000;
+pub(crate) const MAX_LINES: usize = 10_000;
 
 /// Builds Line Break lines bar by bar.
 #[derive(Clone)]
@@ -190,7 +190,7 @@ impl PriceBuilder for LineBreakBuilder {
 
         // Bound memory by dropping the oldest lines; only the last `line_cnt` are read.
         let keep = MAX_LINES.max(self.line_cnt);
-        if self.lines.len() >= 2 * keep {
+        if self.lines.len() >= keep.saturating_mul(2) {
             self.lines.drain(..self.lines.len() - keep);
         }
     }

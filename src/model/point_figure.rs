@@ -148,7 +148,7 @@ pub fn to_pnf_columns(data: &[Bar], config: &PointFigureConfig) -> Vec<PnfColumn
     builder.elements()
 }
 
-const MAX_COLUMNS: usize = 5_000;
+pub(crate) const MAX_COLUMNS: usize = 5_000;
 
 /// Builds Point and Figure columns bar by bar; `box_size` must be a positive finite number and
 /// the reversal at least one box. The column in progress is kept apart from the closed columns
