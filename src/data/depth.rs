@@ -77,11 +77,14 @@ impl Book {
     /// last one applied. A replayed delta is ignored; a gap or a delta before any snapshot loses
     /// the book, and the delta is held for the next snapshot.
     pub(crate) fn delta(&mut self, sequence: u64, changes: OrderBook) -> Result<(), Lost> {
+        // A replay is never applied, so its contents cannot lose the book.
+        if self.sequence.is_some_and(|last| sequence <= last) {
+            return Ok(());
+        }
         if !valid(&changes) {
             return Err(self.lose(true));
         }
         match self.sequence {
-            Some(last) if sequence <= last => return Ok(()),
             Some(last) if last.checked_add(1) == Some(sequence) => {}
             _ => {
                 let lost = self.lose(false);
@@ -230,6 +233,11 @@ mod tests {
             ("an invalid delta is rejected and loses the book",
                 vec![initial(), Delta(11, book(&[(f64::NAN, 1.0)], &[]))],
                 vec![Ok(()), lost(true, true)], Some(book(&[], &[]))),
+            ("a replayed invalid delta is ignored",
+                vec![initial(), Delta(11, book(&[(99.0, 5.0)], &[])),
+                    Delta(11, book(&[(f64::NAN, 1.0)], &[]))],
+                vec![Ok(()), Ok(()), Ok(())],
+                Some(book(&[(99.0, 5.0), (98.0, 2.0)], &[(100.0, 3.0)]))),
             ("an invalid snapshot is rejected and asks once per loss",
                 vec![Snapshot(10, book(&[], &[(100.0, -1.0)])), Delta(11, book(&[], &[])),
                     Snapshot(12, book(&[], &[(100.0, -1.0)]))],
