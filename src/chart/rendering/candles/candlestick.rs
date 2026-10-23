@@ -187,24 +187,29 @@ pub(super) fn render_heikin_ashi(
         return;
     }
 
-    // Slice the visible window out of the cached full-series transform.
-    let ha_window = heikin_ashi::window(full_data, revision, start_idx, visible_data.len());
+    heikin_ashi::with_window(
+        full_data,
+        revision,
+        start_idx,
+        visible_data.len(),
+        |ha_window| {
+            let painter = price_ctx.painter;
+            let coords = *price_scale;
 
-    let painter = price_ctx.painter;
-    let coords = *price_scale;
+            for (i, bar) in ha_window.iter().enumerate() {
+                let x = idx_to_coord(start_idx + i, chart_rect_min_x);
+                let color = if bar.close >= bar.open {
+                    bullish_color
+                } else {
+                    bearish_color
+                };
+                let y = OhlcYCoords::from_bar(bar, &coords);
 
-    for (i, bar) in ha_window.iter().enumerate() {
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let color = if bar.close >= bar.open {
-            bullish_color
-        } else {
-            bearish_color
-        };
-        let y = OhlcYCoords::from_bar(bar, &coords);
-
-        draw_wicks(painter, x, &y, wick_width, color);
-        draw_body_filled(painter, x, bar_width, &y, color);
-    }
+                draw_wicks(painter, x, &y, wick_width, color);
+                draw_body_filled(painter, x, bar_width, &y, color);
+            }
+        },
+    );
 
     if show_volume {
         render_volume_for_bars(

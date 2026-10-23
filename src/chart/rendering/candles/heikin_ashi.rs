@@ -17,37 +17,32 @@
 
 use std::cell::RefCell;
 
-use crate::model::{Bar, SpanCache};
+use crate::model::Bar;
 
 /// Transform a full OHLC series into its Heikin-Ashi representation.
 ///
 /// The input must be the complete dataset (not a visible sub-window) so that
 /// the recurrence is seeded deterministically from the first bar.
 pub fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
-    let mut ha_bars: Vec<Bar> = Vec::with_capacity(bars.len());
+    let mut ha_bars = Vec::with_capacity(bars.len());
+    extend(&mut ha_bars, bars);
+    ha_bars
+}
 
-    let Some(first) = bars.first() else {
-        return ha_bars;
-    };
-
-    let mut prev_ha_open = (first.open + first.close) / 2.0;
-    let mut prev_ha_close = (first.open + first.high + first.low + first.close) / 4.0;
-
-    ha_bars.push(Bar {
-        time: first.time,
-        open: prev_ha_open,
-        high: first.high,
-        low: first.low,
-        close: prev_ha_close,
-        volume: first.volume,
-    });
-
-    for bar in bars.iter().skip(1) {
+fn extend(ha_bars: &mut Vec<Bar>, bars: &[Bar]) {
+    for bar in bars {
         let ha_close = (bar.open + bar.high + bar.low + bar.close) / 4.0;
-        let ha_open = (prev_ha_open + prev_ha_close) / 2.0;
-        let ha_high = bar.high.max(ha_open).max(ha_close);
-        let ha_low = bar.low.min(ha_open).min(ha_close);
-
+        let (ha_open, ha_high, ha_low) = match ha_bars.last() {
+            Some(prev) => {
+                let open = (prev.open + prev.close) / 2.0;
+                (
+                    open,
+                    bar.high.max(open).max(ha_close),
+                    bar.low.min(open).min(ha_close),
+                )
+            }
+            None => ((bar.open + bar.close) / 2.0, bar.high, bar.low),
+        };
         ha_bars.push(Bar {
             time: bar.time,
             open: ha_open,
@@ -56,40 +51,85 @@ pub fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
             close: ha_close,
             volume: bar.volume,
         });
-
-        prev_ha_open = ha_open;
-        prev_ha_close = ha_close;
     }
+}
 
-    ha_bars
+struct CachedSeries {
+    revision: u64,
+    first: Bar,
+    last: Bar,
+    bars: Vec<Bar>,
+}
+
+fn same_bar(a: &Bar, b: &Bar) -> bool {
+    let bits = |bar: &Bar| [bar.open, bar.high, bar.low, bar.close, bar.volume].map(f64::to_bits);
+    a.time == b.time && bits(a) == bits(b)
 }
 
 thread_local! {
-    /// Heikin-Ashi series of recently drawn datasets. Charts are rendered one
-    /// at a time in immediate mode, so a small bound covers realistic
-    /// multi-chart layouts while keeping memory bounded.
-    static HEIKIN_ASHI_CACHE: RefCell<SpanCache<Vec<Bar>>> = const { RefCell::new(SpanCache::new(8)) };
+    static HEIKIN_ASHI_CACHE: RefCell<Vec<CachedSeries>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Heikin-Ashi values for the visible window `[start_idx, start_idx + len)`
-/// of `full_data`, a series at `revision` (see [`ChartState::revision`](crate::model::ChartState::revision)).
-///
-/// The full-series transform is computed once per dataset and cached on the
-/// render thread; this returns the requested sub-window sliced out of it, so the
-/// values are invariant under panning and zooming. Indices outside the dataset
-/// are clamped, never panicking.
-pub fn window(full_data: &[Bar], revision: u64, start_idx: usize, len: usize) -> Vec<Bar> {
-    let series = HEIKIN_ASHI_CACHE
-        .with_borrow_mut(|cache| cache.get((), 0, full_data, revision, transform_to_heikin_ashi));
-    let start = start_idx.min(series.len());
-    let end = start.saturating_add(len).min(series.len());
-    series[start..end].to_vec()
+/// Calls `use_window` with the Heikin-Ashi values of the visible window
+/// [start_idx, start_idx + len) of full_data, a series at revision; indices outside the dataset are clamped.
+pub(super) fn with_window<R>(
+    full_data: &[Bar],
+    revision: u64,
+    start_idx: usize,
+    len: usize,
+    use_window: impl FnOnce(&[Bar]) -> R,
+) -> R {
+    let (Some(first), Some(last)) = (full_data.first(), full_data.last()) else {
+        return use_window(&[]);
+    };
+    HEIKIN_ASHI_CACHE.with_borrow_mut(|cache| {
+        let pos = cache.iter().position(|entry| {
+            entry.revision == revision
+                && same_bar(&entry.first, first)
+                && entry.bars.len() <= full_data.len()
+        });
+        let entry = match pos {
+            Some(pos) => {
+                // A live tail update retains the preceding bars.
+                let mut entry = cache.remove(pos);
+                let old_len = entry.bars.len();
+                let from = if same_bar(&entry.last, &full_data[old_len - 1]) {
+                    old_len
+                } else {
+                    old_len - 1
+                };
+                entry.bars.truncate(from);
+                extend(&mut entry.bars, &full_data[from..]);
+                entry.last = last.clone();
+                entry
+            }
+            None => CachedSeries {
+                revision,
+                first: first.clone(),
+                last: last.clone(),
+                bars: transform_to_heikin_ashi(full_data),
+            },
+        };
+        let start = start_idx.min(entry.bars.len());
+        let end = start.saturating_add(len).min(entry.bars.len());
+        let result = use_window(&entry.bars[start..end]);
+        // Eight recently drawn datasets cover a multi-chart layout without unbounded history.
+        if cache.len() >= 8 {
+            cache.remove(0);
+        }
+        cache.push(entry);
+        result
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+
+    fn window(full: &[Bar], revision: u64, start: usize, len: usize) -> Vec<Bar> {
+        with_window(full, revision, start, len, <[Bar]>::to_vec)
+    }
 
     fn bar(i: i64, open: f64, high: f64, low: f64, close: f64) -> Bar {
         Bar {
@@ -152,18 +192,74 @@ mod tests {
         );
     }
 
-    /// Appending to the dataset invalidates the cached series for the new shape.
     #[test]
-    fn cache_invalidates_on_data_change() {
-        let series_a = sample_series();
-        let win_a = window(&series_a, 0, 0, series_a.len());
-        assert_eq!(win_a.len(), series_a.len());
-
-        let mut series_b = sample_series();
-        series_b.push(bar(6, 10.0, 10.5, 9.0, 9.5));
-        let win_b = window(&series_b, 0, 0, series_b.len());
-        assert_eq!(win_b.len(), series_b.len());
-        assert_ne!(win_a.len(), win_b.len());
+    fn streaming_updates_retain_the_prefix_and_match_a_fresh_transform() {
+        use crate::model::{BarData, ChartState};
+        let mut state = ChartState::new(BarData::new());
+        let check = |state: &ChartState| {
+            let full = &state.data().bars;
+            let fresh = transform_to_heikin_ashi(full);
+            with_window(full, state.revision(), 0, full.len(), |cached| {
+                assert_eq!(cached.len(), fresh.len());
+                for (a, b) in cached.iter().zip(&fresh) {
+                    assert_bars_eq(a, b, "stream");
+                    assert_eq!(a.time, b.time);
+                    assert_eq!(a.volume.to_bits(), b.volume.to_bits());
+                }
+                cached.as_ptr()
+            })
+        };
+        for next in sample_series() {
+            state.edit_bars(|bars| {
+                let from = bars.len();
+                bars.push(next);
+                Some(from)
+            });
+            let prefix = check(&state);
+            for tick in [0.25, -0.5, 0.0] {
+                state.edit_bars(|bars| {
+                    let from = bars.len() - 1;
+                    bars[from].close += tick;
+                    bars[from].volume += 1.0;
+                    Some(from)
+                });
+                let updated = check(&state);
+                if state.data().len() > 1 {
+                    assert_eq!(
+                        prefix, updated,
+                        "a forming-bar tick must retain the cached prefix"
+                    );
+                }
+            }
+        }
+        // Several bars can arrive between frames, including a final update of the old tail.
+        state.edit_bars(|bars| {
+            let from = bars.len() - 1;
+            bars[from].close += 0.125;
+            bars.extend([
+                bar(6, 10.0, 12.0, 9.0, 11.0),
+                bar(7, 11.0, 13.0, 10.0, 12.0),
+            ]);
+            Some(from)
+        });
+        check(&state);
+        state.edit_bars(|bars| {
+            bars[2].close += 0.5;
+            Some(2)
+        });
+        check(&state);
+        state.edit_bars(|bars| {
+            bars.insert(0, bar(-1, 9.0, 11.0, 8.0, 10.0));
+            Some(0)
+        });
+        check(&state);
+        state.edit_bars(|bars| {
+            bars.truncate(3);
+            Some(3)
+        });
+        check(&state);
+        state.set_data(BarData::default());
+        check(&state);
     }
 
     /// Out-of-range indices clamp to the available data instead of panicking.
