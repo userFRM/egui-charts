@@ -22,16 +22,15 @@ pub use bar::render_ohlc_bar;
 pub use candle::render_candle;
 pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 
-pub use crosshair::render_crosshair_full;
-#[cfg(feature = "icons")]
-pub(crate) use crosshair::snap_to_nearest_ohlc;
+pub use crosshair::{render_crosshair_full, render_crosshair_with_options};
+pub(crate) use crosshair::{render_crosshair_lines, render_crosshair_price_tag, snap_to_values};
 pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::paint_study_plot;
 pub use labels::{
-    Legend, LegendStatus, QuoteSide, render_price_labels, render_price_labels_at_pos,
+    Legend, LegendStatus, QuoteSide, StudyAction, render_price_labels, render_price_labels_at_pos,
     render_time_labels,
 };
-pub(crate) use labels::{price_decimals, render_time_grid};
+pub(crate) use labels::{price_decimals, render_time_grid, study_controls};
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,

@@ -2,7 +2,7 @@
 
 use super::{
     Chart, IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
-    RenderedIndicatorPane, SeriesId,
+    RenderedIndicatorPane,
 };
 use crate::chart::indicators::{
     SelectionDotConfig, hit_test_pane_indicator, render_indicator_selection_dots,
@@ -113,10 +113,13 @@ impl Chart {
         let mut pending_pane_selection: Option<Option<ChartElementId>> = None;
         // Study whose pane legend "x" was clicked this frame, if any.
         // Removed after the immutable study borrow ends.
-        let mut pending_indicator_remove: Option<SeriesId> = None;
+        let mut pending_indicator_action = None;
         let current_selection = self.selection.selected_id();
 
-        for (idx, id, collapsed) in panes {
+        for (_, id, collapsed) in panes {
+            let Some(idx) = self.study_ids.iter().position(|study| *study == id) else {
+                continue;
+            };
             let indicator = &self.studies.indicators()[idx];
             ui.add_space(gap);
 
@@ -138,6 +141,18 @@ impl Chart {
                 config.show_name || config.show_values || !config.inputs.is_empty();
             config.height = if collapsed { row_height } else { pane_height };
             let mut panel = IndicatorPane::with_config(config);
+            panel.bar_index = self.last_hover_bar_idx.and_then(|index| {
+                let index = index.round() as usize;
+                (index < self.state.shown().len()).then_some(index)
+            });
+            let hover = self
+                .last_hover_bar_idx
+                .and_then(|_| ui.input(|input| input.pointer.hover_pos()))
+                .filter(|_| !egui::Popup::is_any_open(ui.ctx()));
+            let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
+            if self.drawings.eraser_mode {
+                crosshair_options.style = crate::config::CrosshairStyle::Arrow;
+            }
 
             // Use show_aligned_interactive to get pane info for hit testing
             if let Some(interaction) = panel.show_aligned_interactive_in(
@@ -145,8 +160,9 @@ impl Chart {
                 indicator.as_ref(),
                 visible_range.clone(),
                 coords,
-                Some(plot.x_range()),
+                Some((plot.x_range(), self.config.show_right_axis)),
                 collapsed,
+                hover.map(|pos| (pos, crosshair_options)),
             ) {
                 let PaneInteraction {
                     panel_rect,
@@ -155,6 +171,8 @@ impl Chart {
                     y_max,
                     response: pane_response,
                     close_response,
+                    visibility_response,
+                    settings_response,
                 } = interaction;
 
                 // A click on the legend's close "x" removes this study.
@@ -163,15 +181,29 @@ impl Chart {
                     self.indicator_settings_request = Some(id);
                 }
                 if close_clicked {
-                    pending_indicator_remove = Some(id);
+                    pending_indicator_action =
+                        Some(crate::chart::renderers::StudyAction::Remove(idx));
                 }
 
+                let visibility_clicked = visibility_response.as_ref().is_some_and(|r| r.clicked());
+                let settings_clicked = settings_response.as_ref().is_some_and(|r| r.clicked());
+                if visibility_clicked {
+                    pending_indicator_action =
+                        Some(crate::chart::renderers::StudyAction::ToggleVisibility(idx));
+                }
+                if settings_clicked {
+                    pending_indicator_action =
+                        Some(crate::chart::renderers::StudyAction::Settings(idx));
+                }
+                let control_clicked = close_clicked || visibility_clicked || settings_clicked;
                 let header = Rect::from_min_max(
                     chart_rect.min,
                     Pos2::new(
-                        close_response.as_ref().map_or(chart_rect.right(), |r| {
-                            r.rect.left().min(chart_rect.right())
-                        }),
+                        visibility_response
+                            .as_ref()
+                            .map_or(chart_rect.right(), |r| {
+                                r.rect.left().min(chart_rect.right())
+                            }),
                         (chart_rect.top() + 24.0).min(chart_rect.bottom()),
                     ),
                 );
@@ -182,7 +214,7 @@ impl Chart {
                     } else {
                         "Collapse pane"
                     });
-                if toggle.clicked() && !close_clicked {
+                if toggle.clicked() && !control_clicked {
                     ui.data_mut(|d| d.insert_temp(pane_state.with(id), !collapsed));
                 }
                 let pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
@@ -193,7 +225,7 @@ impl Chart {
                 // change the selection.
                 if !collapsed
                     && !toggle.clicked()
-                    && !close_clicked
+                    && !control_clicked
                     && pane_response.clicked()
                     && let Some(click_pos) = pane_response.interact_pointer_pos()
                 {
@@ -255,8 +287,8 @@ impl Chart {
         }
 
         // The panes reflow on the next frame.
-        if let Some(id) = pending_indicator_remove {
-            self.remove_series(id);
+        if let Some(action) = pending_indicator_action {
+            self.apply_study_action(action);
         }
 
         ui.allocate_space(egui::vec2(available.width(), axis_height));
@@ -454,6 +486,180 @@ mod tests {
                         24.0,
                         "short panes collapse after resize"
                     );
+                }
+            }
+        }
+    }
+    #[test]
+    fn every_pane_shares_hover_readouts_and_uses_its_own_horizontal_scale() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::widget::test_frames::{frame, shapes};
+        for left in [false, true] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.config.show_right_axis = !left;
+            chart.config.show_left_axis = left;
+            for (name, base) in [("Readout", 20.0), ("Other", 30.0)] {
+                chart.add_indicator(Box::new(
+                    CustomIndicator::new(name, move |bars| {
+                        (0..bars.len())
+                            .map(|index| IndicatorValue::Single(base + index as f64 / 10.0))
+                            .collect()
+                    })
+                    .with_overlay(false),
+                ));
+            }
+            let overlay = chart.add_indicator(Box::new(CustomIndicator::new("Overlay", |bars| {
+                vec![IndicatorValue::Single(107.25); bars.len()]
+            })));
+            chart.chart_options.crosshair.line_style = crate::config::CrosshairLineStyle::Solid;
+            chart.chart_options.crosshair.vert_line_color = egui::Color32::RED;
+            chart.chart_options.crosshair.horz_line_color = egui::Color32::BLUE;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            let map = chart.get_chart_mapping();
+            let panes = chart.get_rendered_indicator_panes();
+            let rects = [
+                chart.last_rendered_price_rect,
+                chart.last_rendered_volume_rect,
+                panes[0].chart_rect,
+                panes[1].chart_rect,
+            ];
+            for (step, rect) in rects.iter().enumerate() {
+                let pos = Pos2::new(map.idx_to_x(70) + 1.0, rect.center().y);
+                let painted = shapes(
+                    &ctx,
+                    &mut chart,
+                    1.0 + step as f64,
+                    vec![Event::PointerMoved(pos)],
+                );
+                assert_eq!(
+                    chart
+                        .get_hover_bar_idx()
+                        .map(|index| index.round() as usize),
+                    Some(70)
+                );
+                let text: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                for expected in ["Readout 27.00", "Other 37.00", "Open"] {
+                    assert!(text.contains(&expected), "{expected}: {text:?}");
+                }
+                assert!(
+                    painted.iter().any(
+                        |shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
+                if stroke.color == egui::Color32::BLUE && points[0] == Pos2::new(rect.left(), pos.y)
+                    && points[1] == Pos2::new(rect.right(), pos.y))
+                    ),
+                    "horizontal in {rect:?}"
+                );
+                for pane in &rects[2..] {
+                    assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == egui::Color32::RED && points[0] == Pos2::new(map.idx_to_x(70), pane.top())
+                        && points[1] == Pos2::new(map.idx_to_x(70), pane.bottom()))), "vertical in {pane:?}");
+                }
+            }
+            let painted = shapes(&ctx, &mut chart, 10.0, vec![Event::PointerGone]);
+            assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Readout 29.90")));
+            chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;
+            // With OHLC at 100 and 110, 107.25 can only come from the overlay.
+            // Each pane contains 20 or 30 plus i/10, so bar 70 reads 27 or 37.
+            for (step, (rect, value, y)) in [
+                (rects[0], 107.25, map.price_to_y(107.25)),
+                (
+                    rects[2],
+                    27.0,
+                    rects[2].bottom() - (27.0 - 19.01) / 11.88 * rects[2].height(),
+                ),
+                (
+                    rects[3],
+                    37.0,
+                    rects[3].bottom() - (37.0 - 29.01) / 11.88 * rects[3].height(),
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let painted = shapes(
+                    &ctx,
+                    &mut chart,
+                    20.0 + step as f64,
+                    vec![Event::PointerMoved(Pos2::new(map.idx_to_x(70), y + 1.0))],
+                );
+                assert!(
+                    painted.iter().any(
+                        |shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
+                if stroke.color == egui::Color32::BLUE && (points[0].y - y).abs() < 0.01
+                    && points[0].x == rect.left())
+                    ),
+                    "snap to {value}"
+                );
+            }
+            chart.set_indicator_visible(overlay, false);
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                30.0,
+                vec![Event::PointerMoved(Pos2::new(
+                    map.idx_to_x(70),
+                    map.price_to_y(107.25),
+                ))],
+            );
+            assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
+            if stroke.color == egui::Color32::BLUE && (points[0].y - map.price_to_y(110.0)).abs() < 0.01)), "hidden study must not attract the cursor");
+            chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Normal;
+            for (offset, action) in [(30.0, "settings"), (50.0, "remove"), (10.0, "hide")] {
+                let painted = shapes(&ctx, &mut chart, 40.0, vec![Event::PointerGone]);
+                let pane = &chart.get_rendered_indicator_panes()[0];
+                let study = chart.study_ids[pane.indicator_idx];
+                let title = painted
+                    .iter()
+                    .find_map(|shape| match shape {
+                        egui::Shape::Text(text)
+                            if text.galley.text().starts_with("Readout ")
+                                || text.galley.text().starts_with("Other ") =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let pos = title.pos
+                    + egui::vec2(
+                        title.galley.size().x + crate::tokens::DESIGN_TOKENS.spacing.md + offset,
+                        10.0,
+                    );
+                for pressed in [None, Some(true), Some(false)] {
+                    let mut events = vec![Event::PointerMoved(pos)];
+                    if let Some(pressed) = pressed {
+                        events.push(Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        });
+                    }
+                    frame(&ctx, &mut chart, 41.0, events);
+                }
+                match action {
+                    "settings" => {
+                        assert_eq!(chart.take_indicator_settings_request(), Some(study));
+                        assert!(chart.get_rendered_indicator_panes()[0].chart_rect.height() > 24.0);
+                    }
+                    "remove" => assert!(!chart.indicators().any(|(id, _)| id == study)),
+                    _ => assert!(
+                        !chart
+                            .indicators()
+                            .find(|(id, _)| *id == study)
+                            .unwrap()
+                            .1
+                            .is_visible()
+                    ),
                 }
             }
         }

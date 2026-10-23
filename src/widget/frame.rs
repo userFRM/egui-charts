@@ -397,10 +397,7 @@ impl Chart {
                         .or(input.pointer.hover_pos())
                         .is_some_and(|pos| {
                             axis_corner.contains(pos)
-                                || self.axis_hover.is_some_and(|(_, tag)| {
-                                    Rect::from_min_size(tag.min, Vec2::new(21.0, tag.height()))
-                                        .contains(pos)
-                                })
+                                || self.axis_hover.is_some_and(|(_, tag)| tag.contains(pos))
                         })
             });
         if navigation_interaction || axis_interaction {
@@ -1127,6 +1124,8 @@ impl Chart {
         } else {
             self.cursor_modes.move_pointer(None);
         }
+        let hover_rect =
+            Rect::from_min_max(price_rect.min, Pos2::new(price_rect.right(), time_axis_top));
         let hover_pos = self
             .axis_hover
             .filter(|(_, tag)| {
@@ -1138,7 +1137,11 @@ impl Chart {
                 })
             })
             .map(|(pos, _)| pos)
-            .or_else(|| shown.hover_pos().filter(|pos| price_rect.contains(*pos)));
+            .or_else(|| {
+                ui.input(|input| input.pointer.hover_pos())
+                    .filter(|pos| hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect))
+            });
+        let mut study_action = None;
         {
             let visible_data = self.state.visible_data();
             let selected = hover_pos
@@ -1196,15 +1199,15 @@ impl Chart {
                 if let Some(action) = quote_action {
                     self.quote_action = Some(action);
                 }
-                if let Some(index) = study_settings {
-                    self.indicator_settings_request = self.study_ids.get(index).copied();
-                }
+                study_action = study_settings;
             }
         }
 
         if let Some(hover_pos) = hover_pos {
             // Cache the hover bar index for multi-chart sync
-            self.last_hover_bar_idx = Some(coords.x_to_idx_f32(hover_pos.x) as f64);
+            self.last_hover_bar_idx = coords
+                .local_idx_at_x(hover_pos.x, visible_data.len())
+                .map(|local| (start_idx + local) as f64);
 
             if !menu_open {
                 let mut tooltip_options = self.chart_options.tooltip.clone();
@@ -1227,19 +1230,68 @@ impl Chart {
                 if held_values || self.drawings.eraser_mode {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
                 }
+                let index = coords
+                    .local_idx_at_x(hover_pos.x, visible_data.len())
+                    .map(|local| start_idx + local);
+                let snapped = if price_rect.contains(hover_pos) {
+                    index.map_or(hover_pos, |index| {
+                        self.snap_crosshair(hover_pos, &price_map, index, None)
+                    })
+                } else {
+                    hover_pos
+                };
+                crosshair_options.mode = crate::config::CrosshairMode::Normal;
+                let mut main_options = crosshair_options;
+                if volume_rect.contains(hover_pos) {
+                    main_options.horz_line_visible = false;
+                    if main_options.style == crate::config::CrosshairStyle::Dot {
+                        main_options.style = crate::config::CrosshairStyle::Arrow;
+                    }
+                }
                 crosshair_tags = rendering::render_crosshair_with_options(
                     &price_ctx,
-                    hover_pos,
+                    snapped,
                     visible_data,
                     &price_map,
                     &coords,
-                    &crosshair_options,
+                    &main_options,
                     time_axis_top,
                     axis_edge,
                     last_price_tag,
                     formatter.as_ref(),
                     bar_seconds,
                 );
+
+                if volume_rect.contains(hover_pos) {
+                    let map = crate::scales::PriceMap::new(
+                        crate::scales::PriceTransform::default(),
+                        crate::scales::PriceRange::new(0.0, max_volume.max(1.0)),
+                        volume_rect.top(),
+                        volume_rect.bottom(),
+                        false,
+                    )
+                    .with_price_precision(Some(0));
+                    let mut pos = hover_pos;
+                    if let Some(index) = index {
+                        pos.x = coords.idx_to_x(index);
+                        if self.chart_options.crosshair.mode == crate::config::CrosshairMode::Magnet
+                        {
+                            pos.y = map.price_to_y(self.state.shown()[index].volume);
+                        }
+                    }
+                    let mut options = crosshair_options.resolved(ui.ctx());
+                    options.vert_line_visible = false;
+                    let context = RenderContext::new(&painter, volume_rect);
+                    renderers::render_crosshair_lines(
+                        &context,
+                        pos,
+                        &options,
+                        volume_rect.bottom(),
+                    );
+                    crosshair_tags[0] = renderers::render_crosshair_price_tag(
+                        &context, pos, &map, &options, axis_edge, None,
+                    );
+                }
 
                 if tooltip_options.on_long_press
                     && ui.input(|input| input.any_touches() && input.pointer.primary_down())
@@ -1335,12 +1387,18 @@ impl Chart {
         self.axis_hover = hover_pos.zip(crosshair_tags[0]);
         #[cfg(feature = "icons")]
         if show_price_axis {
-            if let Some((pos, tag)) = self.axis_hover {
+            if let Some((pos, tag)) = self
+                .axis_hover
+                .filter(|(pos, _)| price_rect.contains(*pos) && !volume_rect.contains(*pos))
+            {
                 let price = if self.chart_options.crosshair.mode
                     == crate::config::CrosshairMode::Magnet
                     && let Some(index) = coords.local_idx_at_x(pos.x, visible_data.len())
                 {
-                    renderers::snap_to_nearest_ohlc(pos.y, &price_map, &visible_data[index])
+                    price_map.y_to_price(
+                        self.snap_crosshair(pos, &price_map, start_idx + index, None)
+                            .y,
+                    )
                 } else {
                     price_map.y_to_price(pos.y)
                 };
@@ -1414,6 +1472,9 @@ impl Chart {
         // Focus ring for keyboard accessibility
         crate::styles::focus::draw_focus_ring(ui, &shown, 0.0);
 
+        if let Some(action) = study_action {
+            self.apply_study_action(action);
+        }
         shown
     }
 }

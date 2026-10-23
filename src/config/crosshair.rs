@@ -12,10 +12,10 @@ use egui::Color32;
 /// Crosshair mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CrosshairMode {
-    /// Normal crosshair (follows mouse exactly)
+    /// Normal crosshair (snaps x to the bar center and follows the pointer value)
     #[default]
     Normal,
-    /// Magnet crosshair (snaps to nearest OHLC data point)
+    /// Magnet crosshair (snaps to the nearest visible OHLC or study value)
     Magnet,
 }
 

@@ -1208,12 +1208,15 @@ impl DemoApp {
                 dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
                     != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
+                let mode = if dm.options.magnet_mode { egui_charts::config::CrosshairMode::Magnet } else { egui_charts::config::CrosshairMode::Normal };
+                self.chart.set_crosshair_mode(mode);
             }
             DrawingToolbarAction::SetMagnetType(kind) => {
                 dm.options.magnet_mode = true;
                 dm.options.strong_magnet =
                     kind != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
+                self.chart.set_crosshair_mode(egui_charts::config::CrosshairMode::Magnet);
             }
             DrawingToolbarAction::ToggleEraserMode => {
                 let on = !dm.eraser_mode;

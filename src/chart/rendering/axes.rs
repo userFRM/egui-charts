@@ -146,7 +146,7 @@ fn tag_text_color(fill: Color32) -> Color32 {
     }
 }
 
-/// Paints a hover tag within the plot's horizontal bounds, reserving its action cell.
+/// Paints a compact hover tag within its axis bounds.
 pub(crate) fn paint_crosshair_tag(
     painter: &Painter,
     anchor: Pos2,
@@ -155,36 +155,34 @@ pub(crate) fn paint_crosshair_tag(
     text: String,
     colors: (Color32, Color32),
     height: f32,
-    action_width: f32,
     covered: Option<Rect>,
 ) -> Rect {
     let (text_color, fill) = colors;
-    let padding = if action_width > 0.0 { 16.0 } else { 32.0 };
+    let padding = 8.0;
     let available = (bounds.end() - bounds.start()).max(0.0);
     let mut job =
         egui::text::LayoutJob::simple_singleline(text, axis_font(painter.ctx()), text_color);
-    job.wrap =
-        egui::text::TextWrapping::truncate_at_width((available - action_width - padding).max(0.0));
+    job.wrap = egui::text::TextWrapping::truncate_at_width((available - padding).max(0.0));
     let galley = painter.layout_job(job);
     let size = Vec2::new(
-        (galley.size().x + padding + action_width).min(available),
+        (galley.size().x + padding).min(available),
         height.max(galley.size().y),
     );
     let mut tag = align.anchor_size(anchor, size);
     tag = tag.translate(Vec2::new((bounds.end() - tag.right()).min(0.0), 0.0));
     tag = tag.translate(Vec2::new((bounds.start() - tag.left()).max(0.0), 0.0));
     if let Some(covered) = covered.filter(|covered| covered.intersects(tag)) {
-        tag.min.x = tag.min.x.min(covered.min.x);
-        tag.max.x = tag.max.x.max(covered.max.x);
+        let cover = covered.intersect(Rect::from_x_y_ranges(
+            *bounds.start()..=*bounds.end(),
+            painter.clip_rect().y_range(),
+        ));
+        painter.rect_filled(cover, 0.0, painter.ctx().active_theme().chart.bg);
     }
     tag.min.x = tag.min.x.max(*bounds.start());
     tag.max.x = tag.max.x.min(*bounds.end());
     let painter = painter.with_clip_rect(tag.intersect(painter.clip_rect()));
     painter.rect_filled(tag, 1.0, fill);
-    let text_pos = Pos2::new(
-        tag.left() + action_width + if action_width > 0.0 { 10.0 } else { 16.0 },
-        tag.center().y - galley.size().y / 2.0,
-    );
+    let text_pos = Pos2::new(tag.left() + 4.0, tag.center().y - galley.size().y / 2.0);
     painter.galley(text_pos, galley, text_color);
     tag
 }
@@ -352,9 +350,9 @@ pub(crate) fn render_quote_tags_with_countdown(
     tags
 }
 
-/// Draws and routes the add cell of a crosshair price tag. A click returns the tagged price
+/// Routes a click on a crosshair price tag. A click returns the tagged price
 /// for the host's alert, order or price-line menu. Call before handling price-axis drags.
-/// Pass the resolved label text colour as `foreground` to keep the glyph on the same pair.
+/// Pass the resolved label text colour as `foreground` for the hover outline.
 #[cfg(feature = "icons")]
 pub fn crosshair_price_action(
     ui: &mut egui::Ui,
@@ -362,21 +360,19 @@ pub fn crosshair_price_action(
     price: f64,
     foreground: Color32,
 ) -> Option<f64> {
-    let cell = Rect::from_min_size(tag.min, Vec2::new(21.0, tag.height())).intersect(tag);
     let response = ui.interact(
-        cell,
+        tag,
         ui.scope_id().with("crosshair_price_action"),
         egui::Sense::click(),
     );
-    ui.painter().line_segment(
-        [cell.right_top(), cell.right_bottom()],
-        Stroke::new(0.5, foreground),
-    );
-    ui.painter()
-        .circle_stroke(cell.center(), 7.0, Stroke::new(0.8, foreground));
-    crate::icons::icons::PLUS
-        .as_image_tinted(Vec2::splat(14.0), foreground)
-        .paint_at(ui, Rect::from_center_size(cell.center(), Vec2::splat(14.0)));
+    if response.hovered() {
+        ui.painter().rect_stroke(
+            tag,
+            1.0,
+            Stroke::new(1.0, foreground),
+            egui::StrokeKind::Inside,
+        );
+    }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Add at price"));
     response
         .on_hover_text("Add at price")
@@ -680,25 +676,6 @@ mod tests {
         let ctx = Context::default();
         let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
         let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
-        for (_, theme) in crate::theme::presets() {
-            crate::theme::apply_to_egui(&ctx, &theme);
-            for configured in [Color32::PLACEHOLDER, Color32::WHITE, Color32::BLACK] {
-                let options = crate::config::CrosshairOptions {
-                    label_text_color: configured,
-                    ..Default::default()
-                }
-                .resolved(&ctx);
-                let output = ctx.run_ui(Default::default(), |ui| {
-                    crosshair_price_action(ui, tag, 704.64, options.label_text_color);
-                });
-                let color = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
-                    _ => None,
-                });
-                output.drop_without_applying_deltas();
-                assert_eq!(color, Some(options.label_text_color));
-            }
-        }
         let mut actions = Vec::new();
         for (pos, expected) in [
             (Pos2::new(110.0, 110.0), "add"),

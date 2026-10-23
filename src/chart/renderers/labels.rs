@@ -353,7 +353,7 @@ pub(crate) fn price_decimals(price: f64) -> usize {
 
 #[path = "legend/mod.rs"]
 mod legend;
-pub use legend::{Legend, LegendStatus, QuoteSide};
+pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
 
 /// Formats text at weight 600 when the face has a weight axis.
 fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
@@ -655,3 +655,5 @@ mod tests {
         }
     }
 }
+
+pub(crate) use legend::study_controls;

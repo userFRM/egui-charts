@@ -28,6 +28,17 @@ pub enum QuoteSide {
     Buy,
 }
 
+/// An action on the zero-based study index in a legend's study slice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StudyAction {
+    /// Open the study's settings in the host.
+    Settings(usize),
+    /// Toggle study visibility.
+    ToggleVisibility(usize),
+    /// Remove the study.
+    Remove(usize),
+}
+
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
 pub struct Legend<'a> {
     /// Fallback title when the instrument has no description.
@@ -46,7 +57,7 @@ pub struct Legend<'a> {
     pub badge: Option<ImageSource<'a>>,
     /// Optional host-owned status marks.
     pub statuses: &'a [LegendStatus<'a>],
-    /// Studies on the chart. Only visible overlay studies receive a row.
+    /// Studies on the chart. Overlay studies retain a row while hidden so they can be shown again.
     pub studies: &'a [Box<dyn Indicator>],
     /// Display inputs supplied by the host, in `studies` order. Missing entries are omitted.
     pub study_inputs: &'a [&'a str],
@@ -105,13 +116,13 @@ impl<'a> Legend<'a> {
         self.show_with_study_actions(ui, plot).0
     }
 
-    /// Paint the legend and report quote and study-settings intents independently.
-    /// A study intent is its zero-based index in [`studies`](Self::studies).
+    /// Paint the legend and report quote and study intents independently.
+    /// Each study intent identifies its zero-based index in [`studies`](Self::studies).
     pub fn show_with_study_actions(
         &self,
         ui: &mut Ui,
         plot: Rect,
-    ) -> (Option<QuoteSide>, Option<usize>) {
+    ) -> (Option<QuoteSide>, Option<StudyAction>) {
         let theme = ui.active_theme();
         let colors = StyleColors {
             bullish: theme.chart.candle_up,
@@ -131,7 +142,7 @@ impl<'a> Legend<'a> {
         ui: &mut Ui,
         plot: Rect,
         colors: &StyleColors,
-    ) -> (Option<QuoteSide>, Option<usize>) {
+    ) -> (Option<QuoteSide>, Option<StudyAction>) {
         let theme = ui.active_theme();
         let bounds = plot.shrink(8.0);
         if !bounds.is_positive() {
@@ -285,11 +296,7 @@ impl<'a> Legend<'a> {
         let collapsed = ui
             .ctx()
             .data_mut(|data| data.get_temp::<bool>(id).unwrap_or(false));
-        let has_rows = self.show_volume
-            || self
-                .studies
-                .iter()
-                .any(|study| study.is_overlay() && study.is_visible());
+        let has_rows = self.show_volume || self.studies.iter().any(|study| study.is_overlay());
         if !collapsed {
             if self.show_volume {
                 layout.field(
@@ -304,8 +311,9 @@ impl<'a> Legend<'a> {
                 .studies
                 .iter()
                 .enumerate()
-                .filter(|(_, study)| study.is_overlay() && study.is_visible())
+                .filter(|(_, study)| study.is_overlay())
             {
+                let row_start = layout.pos;
                 if self.show_indicator_titles {
                     layout.text(
                         study.name().to_owned(),
@@ -329,9 +337,11 @@ impl<'a> Legend<'a> {
                 }
                 let study_colors = study.colors();
                 let precision = study.precision().unwrap_or(precision);
-                for index in (0..study.line_cnt())
-                    .filter(|index| self.show_indicator_values && study.plot_style(*index).visible)
-                {
+                for index in (0..study.line_cnt()).filter(|index| {
+                    self.show_indicator_values
+                        && study.is_visible()
+                        && study.plot_style(*index).visible
+                }) {
                     let value = study
                         .values()
                         .value(index, self.bar_index)
@@ -344,27 +354,23 @@ impl<'a> Legend<'a> {
                     let color = study_colors.get(index).copied().unwrap_or(colors.text);
                     layout.text(text, typography::MD, color, bounds.width());
                 }
-                let button = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
-                let response = ui
-                    .interact(button, id.with(("study_settings", index)), Sense::click())
-                    .on_hover_text("Study settings");
-                response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Button, true, "Study settings")
-                });
-                #[cfg(feature = "icons")]
-                crate::icons::icons::SETTINGS
-                    .as_image_tinted(Vec2::splat(14.0), theme.ui.text_secondary)
-                    .paint_at(ui, button.shrink(3.0));
-                #[cfg(not(feature = "icons"))]
-                painter.text(
-                    button.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "...",
-                    FontId::proportional(12.0),
-                    colors.text,
+                let controls = layout.reserve(Vec2::new(60.0, 20.0)).intersect(bounds);
+                let row = Rect::from_min_max(row_start, controls.right_bottom()).intersect(bounds);
+                let responses = study_controls(
+                    ui,
+                    row,
+                    controls,
+                    id.with(("study", index)),
+                    study.is_visible(),
                 );
-                if response.clicked() {
-                    study_settings = Some(index);
+                for (response, intent) in responses.iter().zip([
+                    StudyAction::ToggleVisibility(index),
+                    StudyAction::Settings(index),
+                    StudyAction::Remove(index),
+                ]) {
+                    if response.clicked() {
+                        study_settings = Some(intent);
+                    }
                 }
                 layout.new_row();
             }
@@ -442,6 +448,65 @@ impl<'a> Legend<'a> {
             .map_or_else(|| price_decimals(price), usize::from)
             .min(8)
     }
+}
+
+pub(crate) fn study_controls(
+    ui: &mut Ui,
+    row: Rect,
+    controls: Rect,
+    id: egui::Id,
+    visible: bool,
+) -> [Response; 3] {
+    let theme = ui.active_theme();
+    if ui.rect_contains_pointer(row) {
+        ui.painter().rect_stroke(
+            row,
+            3.0,
+            Stroke::new(1.0, theme.ui.border_control),
+            egui::StrokeKind::Inside,
+        );
+    }
+    std::array::from_fn(|index| {
+        let rect = Rect::from_min_size(
+            controls.min + Vec2::new(index as f32 * 20.0, 0.0),
+            Vec2::splat(20.0),
+        )
+        .intersect(controls);
+        let label = match index {
+            0 if visible => "Hide study",
+            0 => "Show study",
+            1 => "Study settings",
+            _ => "Remove study",
+        };
+        let response = ui
+            .interact(rect, id.with(index), Sense::click())
+            .on_hover_text(label);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+        if response.hovered() {
+            ui.painter().rect_filled(rect, 3.0, theme.ui.btn_bg_hover);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        #[cfg(feature = "icons")]
+        {
+            let icon = match index {
+                0 if visible => &crate::icons::icons::EYE,
+                0 => &crate::icons::icons::EYE_HIDE,
+                1 => &crate::icons::icons::SETTINGS,
+                _ => &crate::icons::icons::CLOSE,
+            };
+            icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text_secondary)
+                .paint_at(ui, rect.shrink(3.0));
+        }
+        #[cfg(not(feature = "icons"))]
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            [if visible { "−" } else { "+" }, "...", "×"][index],
+            FontId::proportional(14.0),
+            theme.ui.text_secondary,
+        );
+        response
+    })
 }
 
 struct Layout<'a> {
@@ -814,9 +879,9 @@ mod tests {
             };
             // Tab through both legends, then activate each control in the second one.
             for (tabs, side) in [
-                (5, Some(QuoteSide::Sell)),
+                (7, Some(QuoteSide::Sell)),
                 (1, Some(QuoteSide::Buy)),
-                (2, None),
+                (4, None),
             ] {
                 for _ in 0..tabs {
                     frame(1, vec![key(Key::Tab, true)]);
