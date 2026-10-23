@@ -510,11 +510,11 @@ impl IndicatorDialog {
         None
     }
 
-    /// Select `indicator` and open its configuration panel with fresh parameters.
+    /// Select `indicator` and open its configuration panel with the study's own parameters.
     fn select(&mut self, indicator: &IndicatorInfo) {
+        self.params = Self::defaults(self.edited(&indicator.id));
         self.sel_indicator = Some(indicator.clone());
         self.show_config = true;
-        self.params = IndicatorParams::default();
     }
 
     /// Add the selected indicator with its parameters and close the dialog.
@@ -565,8 +565,19 @@ impl IndicatorDialog {
         let edited = self.edited(name);
         let p = &mut self.params;
         match edited {
-            "SMA" | "EMA" | "WMA" | "VWMA" | "Keltner" | "Donchian" | "Aroon" => {
+            "SMA" | "EMA" | "WMA" | "VWMA" | "Donchian" | "Aroon" => {
                 Self::draw_int_param(ui, "Period", &mut p.period, 1..=500);
+            }
+            "Keltner" => {
+                Self::draw_int_param(ui, "Period", &mut p.period, 1..=500);
+                Self::draw_int_param(ui, "ATR Period", &mut p.keltner_atr, 1..=500);
+                Self::draw_float_param(
+                    ui,
+                    "Multiplier",
+                    &mut p.keltner_multiplier,
+                    0.1..=10.0,
+                    0.1,
+                );
             }
             "BB" => {
                 Self::draw_int_param(ui, "Period", &mut p.period, 1..=500);
@@ -582,6 +593,7 @@ impl IndicatorDialog {
             }
             "Stochastic" => {
                 Self::draw_int_param(ui, "%K Period", &mut p.stoch_k, 1..=500);
+                Self::draw_int_param(ui, "%K Smoothing", &mut p.stoch_smooth, 1..=500);
                 Self::draw_int_param(ui, "%D Period", &mut p.stoch_d, 1..=500);
             }
             "SuperTrend" => {
@@ -632,6 +644,21 @@ impl IndicatorDialog {
         ui.end_row();
     }
 
+    /// The parameters of the study registered as `name` as the factory creates it; the
+    /// fields the study does not read keep their `IndicatorParams::default()` values.
+    fn defaults(name: &str) -> IndicatorParams {
+        let period = match name {
+            "SMA" | "WMA" | "VWMA" | "BB" | "CCI" | "Keltner" | "Donchian" | "CMF" => 20,
+            "EMA" => 12,
+            "Momentum" | "SuperTrend" => 10,
+            _ => 14,
+        };
+        IndicatorParams {
+            period,
+            ..IndicatorParams::default()
+        }
+    }
+
     /// `name` if the dialog edits the parameters of the study registered under it, which is
     /// a built-in, else `""`: a host's study, even under a built-in's name, is created as
     /// the host registered it.
@@ -654,7 +681,7 @@ impl IndicatorDialog {
             "BB" => Box::new(BollingerBands::new(p.period, p.bb_std_dev)),
             "RSI" => Box::new(RSI::new(p.period)),
             "MACD" => Box::new(MACD::new(p.macd_fast, p.macd_slow, p.macd_signal)),
-            "Stochastic" => Box::new(Stochastic::new(p.stoch_k, 3, p.stoch_d)),
+            "Stochastic" => Box::new(Stochastic::new(p.stoch_k, p.stoch_smooth, p.stoch_d)),
             "CCI" => Box::new(CCI::new(p.period)),
             "ATR" => Box::new(ATR::new(p.period)),
             "ADX" => Box::new(ADX::new(p.period)),
@@ -665,7 +692,11 @@ impl IndicatorDialog {
                 p.ichimoku_senkou,
             )),
             "SuperTrend" => Box::new(SuperTrend::new(p.period, p.supertrend_multiplier)),
-            "Keltner" => Box::new(KeltnerChannels::new(p.period, 10, 2.0)),
+            "Keltner" => Box::new(KeltnerChannels::new(
+                p.period,
+                p.keltner_atr,
+                p.keltner_multiplier,
+            )),
             "Donchian" => Box::new(DonchianChannels::new(p.period)),
             "Williams %R" => Box::new(WilliamsR::new(p.period)),
             "ROC" => Box::new(RateOfChange::new(p.period)),
@@ -741,6 +772,45 @@ mod tests {
             };
             assert_eq!(study.name(), "SMA", "{name}");
         }
+    }
+
+    /// Each study is added with the parameters the factory creates it with until the user
+    /// changes them.
+    #[test]
+    fn each_study_is_added_with_its_own_defaults() {
+        use crate::model::Bar;
+        use chrono::{TimeZone, Utc};
+        let bars: Vec<Bar> = (0..300)
+            .map(|i: i64| {
+                let x = i as f64;
+                let close = 100.0 + (x * 0.13).sin() * 8.0 + (x * 0.029).cos() * 5.0;
+                let open = close - (x * 0.7).sin() * 1.5;
+                Bar {
+                    time: Utc.timestamp_opt(i * 3_600, 0).unwrap(),
+                    open,
+                    high: close.max(open) + 0.5 + (x * 0.3).sin().abs(),
+                    low: close.min(open) - 0.5 - (x * 0.5).cos().abs(),
+                    close,
+                    volume: 1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                }
+            })
+            .collect();
+        let factory = IndicatorFactory::new();
+        let mut dialog = IndicatorDialog::new();
+        let mut differ = Vec::new();
+        for info in dialog.indicators.clone() {
+            dialog.select(&info);
+            let Some(IndicatorDialogAction::AddIndicator(mut added)) = dialog.add_selected() else {
+                panic!("{} is added", info.id);
+            };
+            let mut default = factory.create(&info.id).unwrap();
+            added.calculate(&bars);
+            default.calculate(&bars);
+            if format!("{:?}", added.values()) != format!("{:?}", default.values()) {
+                differ.push(info.id);
+            }
+        }
+        assert!(differ.is_empty(), "added with other parameters: {differ:?}");
     }
 
     #[test]

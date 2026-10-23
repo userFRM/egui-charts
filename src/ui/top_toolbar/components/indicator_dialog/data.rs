@@ -65,10 +65,15 @@ impl IndicatorInfo {
 }
 
 /// Indicator params for configuration
+///
+/// Selecting a study in the dialog sets these to the parameters the factory creates it with.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndicatorParams {
     // Moving avgs
     pub period: usize,
+    // Keltner Channels
+    pub keltner_atr: usize,
+    pub keltner_multiplier: f64,
     // Bollinger Bands
     pub bb_std_dev: f64,
     // MACD
@@ -77,6 +82,7 @@ pub struct IndicatorParams {
     pub macd_signal: usize,
     // Stochastic
     pub stoch_k: usize,
+    pub stoch_smooth: usize,
     pub stoch_d: usize,
     // SuperTrend
     pub supertrend_multiplier: f64,
@@ -90,11 +96,14 @@ impl Default for IndicatorParams {
     fn default() -> Self {
         Self {
             period: 14,
+            keltner_atr: 10,
+            keltner_multiplier: 2.0,
             bb_std_dev: 2.0,
             macd_fast: 12,
             macd_slow: 26,
             macd_signal: 9,
             stoch_k: 14,
+            stoch_smooth: 3,
             stoch_d: 3,
             supertrend_multiplier: 3.0,
             ichimoku_tenkan: 9,

@@ -371,9 +371,9 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Modal overlay with dim background
 - [x] Left category sidebar
 - [x] Search bar with case-insensitive substring filtering
-- [ ] Tabs: Indicators, Profiles and Patterns render, but every tab lists the same indicators; the Community category lists every indicator and Premium none
-- [x] Favorite toggling
-- [x] Configuration panel for parameters
+- [x] Tabs: Indicators lists the studies; Profiles, Patterns and the Community and Premium categories show their empty states, as nothing supplies them yet
+- [ ] Favorite toggling: favourites live in `IndicatorDialog::favorites` for the session; persisting them is left to the host
+- [x] Configuration panel: each study starts from its own default parameters; the common studies' parameters are editable, the others are added with their defaults until studies declare their inputs
 
 ### Symbol Search Dialog
 - [x] Real-time text filtering
