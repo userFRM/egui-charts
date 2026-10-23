@@ -726,10 +726,10 @@ fn styled_dropdown<R>(
 
 fn styled_checkbox(ui: &mut Ui, checked: &mut bool, label: &str, text_color: Color32) {
     ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), 46.0),
+        egui::vec2(ui.available_width(), 42.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            ui.set_min_height(46.0);
+            ui.set_min_height(42.0);
             ui.spacing_mut().icon_width = 18.0;
             ui.spacing_mut().icon_width_inner = 12.0;
             let background = ui.visuals().panel_fill;
