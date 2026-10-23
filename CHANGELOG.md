@@ -93,6 +93,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Three-anchor projections add the first price and bar leg at the third anchor before mapping to screen coordinates, so logarithmic charts preserve the measured move. The target label shows the projected price.
+
 - Gann grid percentages suppress floating-point tails, the fixed-ratio label sizes to its text, and pitchfan labels sit at the visible ray ends where they have room.
 
 - Drawing placement collects the construction anchors: three for extensions, trend-based time, wedges, pitchfans, arcs, rotated rectangles, projections and channels; four for triangle patterns; seven for three drives; three and five for double and triple Elliott combinations. Price notes and arrow markers take two points. Positions place entry, target and stop in one click, with independent editable anchors. Extensions project the price leg from the third anchor and trend-based time projects its bar interval there.

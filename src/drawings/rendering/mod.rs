@@ -435,7 +435,7 @@ impl Drawing {
             DrawingToolType::Forecast => self.render_forecast(painter, view),
             DrawingToolType::BarsPattern => self.render_bars_pattern(painter, view),
             DrawingToolType::GhostFeed => self.render_ghost_feed(painter),
-            DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect),
+            DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect, view),
 
             // Volume (3 tools)
             DrawingToolType::AnchoredVWAP => self.render_anchored_vwap(painter, view),

@@ -1,6 +1,7 @@
 //! Projection tool rendering
 
 use crate::drawings::domain::Drawing;
+use crate::drawings::rendering::ChartView;
 use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -9,7 +10,12 @@ use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 impl Drawing {
     /// Renders Projection Tool with measured move and percentage.
     /// Features: AB=CD style projection, percentage labels, target zone.
-    pub(crate) fn render_projection_tool(&self, painter: &egui::Painter, _chart_rect: Rect) {
+    pub(crate) fn render_projection_tool(
+        &self,
+        painter: &egui::Painter,
+        _chart_rect: Rect,
+        view: &ChartView,
+    ) {
         if self.points.len() < 2 {
             return;
         }
@@ -38,7 +44,14 @@ impl Drawing {
         let dashed_color =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 150);
 
-        let proj_end = Pos2::new(proj_point.x + dx, proj_point.y + dy);
+        let proj_end = if let [a, b, c, ..] = self.chart_points.as_slice() {
+            Pos2::new(
+                (view.bar_to_x)(c.bar_idx + b.bar_idx - a.bar_idx),
+                (view.price_to_y)(c.price + b.price - a.price),
+            )
+        } else {
+            Pos2::new(proj_point.x + dx, proj_point.y + dy)
+        };
         draw_dashed_line(
             painter,
             proj_point,
@@ -193,7 +206,15 @@ impl Drawing {
 
         // Projection target label
         let zone_height = (dy.abs() * 0.2).max(20.0);
-        let target_label = format!("Target: {price_change:.2}");
+        let target_label = self.chart_points.get(2).map_or_else(
+            || "Target: n/a".to_owned(),
+            |c| {
+                format!(
+                    "Target: {:.2}",
+                    c.price + self.chart_points[1].price - self.chart_points[0].price
+                )
+            },
+        );
         let target_bg = Rect::from_center_size(
             Pos2::new(proj_end.x, proj_end.y - zone_height / 2.0 - 12.0),
             egui::vec2(80.0, 16.0),
@@ -205,6 +226,37 @@ impl Drawing {
             target_label,
             font,
             Color32::WHITE,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::{ChartPoint, DrawingToolType};
+
+    #[test]
+    fn projection_adds_the_price_leg_on_a_logarithmic_chart() {
+        use crate::widget::test_frames::{chart, shapes};
+        let mut chart = chart(&[80.0], &[200.0]);
+        chart.config_mut().right_axis_scale_mode = crate::scales::PriceScaleMode::Logarithmic;
+        let mut drawing = Drawing::new(1, DrawingToolType::ProjectionTool);
+        drawing.chart_points = vec![
+            ChartPoint::new(10.0, 100.0),
+            ChartPoint::new(20.0, 150.0),
+            ChartPoint::new(40.0, 120.0),
+        ];
+        drawing.completed = true;
+        chart.drawings_mut().drawings.push(drawing);
+        let output = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
+        let map = chart.get_chart_mapping();
+        // D=C+(B-A): bar 40+(20-10)=50, price 120+(150-100)=170.
+        let target = Pos2::new(map.idx_to_x(50), map.price_to_y(170.0));
+        assert!(output.iter().any(|s|matches!(s,egui::Shape::Rect(r) if (r.rect.width()-20.0).abs()<1e-3 && r.rect.center().distance(target)<1e-2)));
+        assert!(
+            output
+                .iter()
+                .any(|s| matches!(s,egui::Shape::Text(t) if t.galley.job.text=="Target: 170.00"))
         );
     }
 }
