@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Schaff Trend Cycle (STC)
 /// Combines MACD with stochastic to create a faster, more accurate oscillator
@@ -120,31 +121,16 @@ impl SchaffTrendCycle {
 
         result
     }
-}
 
-impl Default for SchaffTrendCycle {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Indicator for SchaffTrendCycle {
-    fn name(&self) -> &str {
-        "STC"
-    }
-
-    fn desc(&self) -> &str {
-        "Schaff Trend Cycle - Fast trend oscillator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.len() < self.macd_long.saturating_add(self.cycle) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Get closes
@@ -174,13 +160,35 @@ impl Indicator for SchaffTrendCycle {
         // Store results
         for value in stc {
             if value.is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 // Clamp to 0-100 range
                 let clamped = value.clamp(0.0, 100.0);
-                self.values.push(IndicatorValue::Single(clamped));
+                values.push(IndicatorValue::Single(clamped));
             }
         }
+
+        values
+    }
+}
+
+impl Default for SchaffTrendCycle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Indicator for SchaffTrendCycle {
+    fn name(&self) -> &str {
+        "STC"
+    }
+
+    fn desc(&self) -> &str {
+        "Schaff Trend Cycle - Fast trend oscillator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

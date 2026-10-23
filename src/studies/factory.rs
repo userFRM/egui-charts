@@ -661,12 +661,6 @@ mod tests {
         // the last bar clear of bar 100. Each study listed still carries the bar to the end,
         // under the issue that tracks its fix; the list may only shrink.
         const CARRY_NON_FINITE: &[(&str, u32)] = &[
-            ("Elder Ray", 647),
-            ("Force Index", 647),
-            ("Mass Index", 647),
-            ("TSI", 647),
-            ("SMI", 647),
-            ("STC", 647),
             ("DMI", 647),
             ("Keltner", 647),
             ("CV", 647),

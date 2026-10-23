@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Stochastic Momentum Index (SMI)
 /// Enhanced stochastic that measures close relative to HL range midpoint
@@ -77,31 +78,16 @@ impl StochasticMomentumIndex {
 
         ema
     }
-}
 
-impl Default for StochasticMomentumIndex {
-    fn default() -> Self {
-        Self::new(10, 3, 3, 10)
-    }
-}
-
-impl Indicator for StochasticMomentumIndex {
-    fn name(&self) -> &str {
-        "SMI"
-    }
-
-    fn desc(&self) -> &str {
-        "Stochastic Momentum Index - Enhanced stochastic"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite high, low and close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate highest high and lowest low
@@ -169,14 +155,39 @@ impl Indicator for StochasticMomentumIndex {
         // Store results
         for i in 0..data.len() {
             if smi[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else if signal[i].is_nan() {
-                self.values.push(IndicatorValue::Single(smi[i]));
+                values.push(IndicatorValue::Single(smi[i]));
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![smi[i], signal[i]]));
+                values.push(IndicatorValue::Multiple(vec![smi[i], signal[i]]));
             }
         }
+
+        values
+    }
+}
+
+impl Default for StochasticMomentumIndex {
+    fn default() -> Self {
+        Self::new(10, 3, 3, 10)
+    }
+}
+
+impl Indicator for StochasticMomentumIndex {
+    fn name(&self) -> &str {
+        "SMI"
+    }
+
+    fn desc(&self) -> &str {
+        "Stochastic Momentum Index - Enhanced stochastic"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

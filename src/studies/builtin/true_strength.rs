@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
@@ -58,25 +59,10 @@ impl TrueStrengthIndex {
 
         result
     }
-}
 
-impl Default for TrueStrengthIndex {
-    fn default() -> Self {
-        Self::new(25, 13, 7)
-    }
-}
-
-impl Indicator for TrueStrengthIndex {
-    fn name(&self) -> &str {
-        "TSI"
-    }
-
-    fn desc(&self) -> &str {
-        "True Strength Index - Double-smoothed momentum"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         let min_period = self
             .long_period
@@ -84,9 +70,9 @@ impl Indicator for TrueStrengthIndex {
             .saturating_add(1);
         if data.len() < min_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Price changes start at bar 1; there is no change on bar 0, and pc[k] belongs to bar k + 1
@@ -118,14 +104,36 @@ impl Indicator for TrueStrengthIndex {
         // Build output
         for i in 0..data.len() {
             if i < min_period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push(IndicatorValue::Multiple(vec![
+                values.push(IndicatorValue::Multiple(vec![
                     tsi_values[i - 1],
                     signal[i - 1],
                 ]));
             }
         }
+
+        values
+    }
+}
+
+impl Default for TrueStrengthIndex {
+    fn default() -> Self {
+        Self::new(25, 13, 7)
+    }
+}
+
+impl Indicator for TrueStrengthIndex {
+    fn name(&self) -> &str {
+        "TSI"
+    }
+
+    fn desc(&self) -> &str {
+        "True Strength Index - Double-smoothed momentum"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
     fn values(&self) -> &[IndicatorValue] {

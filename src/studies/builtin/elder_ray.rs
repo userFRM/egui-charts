@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Elder Ray Index (Bull Power / Bear Power)
 /// Measures buying and selling pressure
@@ -59,6 +60,37 @@ impl ElderRay {
 
         ema
     }
+
+    /// The values over `data`, every bar of which has a finite high, low and close.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        // Calculate EMA
+        let ema = Self::calculate_ema(data, self.period);
+
+        // Calculate Bull Power and Bear Power
+        for i in 0..data.len() {
+            if ema[i].is_nan() {
+                values.push(IndicatorValue::None);
+            } else {
+                // Bull Power = High - EMA
+                let bull_power = data[i].high - ema[i];
+                // Bear Power = Low - EMA
+                let bear_power = data[i].low - ema[i];
+
+                values.push(IndicatorValue::Multiple(vec![bull_power, bear_power]));
+            }
+        }
+
+        values
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -78,32 +110,11 @@ impl Indicator for ElderRay {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // Calculate EMA
-        let ema = Self::calculate_ema(data, self.period);
-
-        // Calculate Bull Power and Bear Power
-        for i in 0..data.len() {
-            if ema[i].is_nan() {
-                self.values.push(IndicatorValue::None);
-            } else {
-                // Bull Power = High - EMA
-                let bull_power = data[i].high - ema[i];
-                // Bear Power = Low - EMA
-                let bear_power = data[i].low - ema[i];
-
-                self.values
-                    .push(IndicatorValue::Multiple(vec![bull_power, bear_power]));
-            }
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Mass Index
 /// Identifies trend reversals based on range expansion
@@ -81,25 +82,10 @@ impl MassIndex {
 
         ema
     }
-}
 
-impl Default for MassIndex {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Indicator for MassIndex {
-    fn name(&self) -> &str {
-        "Mass Index"
-    }
-
-    fn desc(&self) -> &str {
-        "Mass Index - Identifies reversals based on range expansion"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+    /// The values over `data`, every bar of which has a finite high and low.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
 
         let required = self
             .ema_period
@@ -107,9 +93,9 @@ impl Indicator for MassIndex {
             .saturating_add(self.sum_period);
         if data.len() < required {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate range (High - Low)
@@ -137,7 +123,7 @@ impl Indicator for MassIndex {
         // Sum the ratio over sum_period
         for i in 0..data.len() {
             if i < self.sum_period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let window = &ratio[i + 1 - self.sum_period..=i];
                 let mut sum = 0.0;
@@ -152,12 +138,38 @@ impl Indicator for MassIndex {
                 }
 
                 if has_nan {
-                    self.values.push(IndicatorValue::None);
+                    values.push(IndicatorValue::None);
                 } else {
-                    self.values.push(IndicatorValue::Single(sum));
+                    values.push(IndicatorValue::Single(sum));
                 }
             }
         }
+
+        values
+    }
+}
+
+impl Default for MassIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Indicator for MassIndex {
+    fn name(&self) -> &str {
+        "Mass Index"
+    }
+
+    fn desc(&self) -> &str {
+        "Mass Index - Identifies reversals based on range expansion"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {

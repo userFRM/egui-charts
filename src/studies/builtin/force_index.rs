@@ -1,3 +1,4 @@
+use super::over_finite_bars;
 use crate::model::Bar;
 /// Force Index
 /// Measures the force behind price movements using price change and volume
@@ -74,6 +75,41 @@ impl ForceIndex {
 
         ema
     }
+
+    /// The values over `data`, every bar of which has a finite close and volume.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+
+        if data.len() < 2 {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        // Calculate raw force index: (Close - PrevClose) * Volume
+        let mut raw_force = Vec::with_capacity(data.len());
+        raw_force.push(f64::NAN); // First bar has no previous
+
+        for i in 1..data.len() {
+            let force = (data[i].close - data[i - 1].close) * data[i].volume;
+            raw_force.push(force);
+        }
+
+        // Apply EMA smoothing
+        let smoothed = Self::calculate_ema(&raw_force, self.period);
+
+        // Store results
+        for value in smoothed {
+            if value.is_nan() {
+                values.push(IndicatorValue::None);
+            } else {
+                values.push(IndicatorValue::Single(value));
+            }
+        }
+
+        values
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -93,35 +129,11 @@ impl Indicator for ForceIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < 2 {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // Calculate raw force index: (Close - PrevClose) * Volume
-        let mut raw_force = Vec::with_capacity(data.len());
-        raw_force.push(f64::NAN); // First bar has no previous
-
-        for i in 1..data.len() {
-            let force = (data[i].close - data[i - 1].close) * data[i].volume;
-            raw_force.push(force);
-        }
-
-        // Apply EMA smoothing
-        let smoothed = Self::calculate_ema(&raw_force, self.period);
-
-        // Store results
-        for value in smoothed {
-            if value.is_nan() {
-                self.values.push(IndicatorValue::None);
-            } else {
-                self.values.push(IndicatorValue::Single(value));
-            }
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.close.is_finite() && b.volume.is_finite(),
+            |data| self.compute(data),
+        );
     }
 
     fn values(&self) -> &[IndicatorValue] {
