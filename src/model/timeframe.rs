@@ -27,7 +27,7 @@ use std::str::FromStr;
 
 /// Timeframe for bar aggregation.
 ///
-/// Each variant represents a fixed time interval over which OHLCV data is aggregated
+/// Time variants represent a fixed interval over which OHLCV data is aggregated
 /// into a single [`Bar`](super::Bar). The default timeframe is [`Min1`](Timeframe::Min1).
 ///
 /// Timeframes are divided into tiers:
@@ -52,6 +52,9 @@ use std::str::FromStr;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Timeframe {
+    /// One bar per nonzero number of accepted trades, starting at subscription or replay start.
+    Ticks(NonZeroU64),
+
     // Millisecond timeframes (for high-frequency trading)
     /// 100-millisecond bars (HFT).
     Ms100,
@@ -105,6 +108,7 @@ impl Timeframe {
     /// Returns the canonical string label for this timeframe (e.g. `"1min"`, `"4h"`, `"1D"`).
     pub fn as_str(&self) -> Cow<'static, str> {
         match self {
+            Timeframe::Ticks(count) => Cow::Owned(format!("{count}t")),
             Timeframe::Ms100 => Cow::Borrowed("100ms"),
             Timeframe::Ms250 => Cow::Borrowed("250ms"),
             Timeframe::Ms500 => Cow::Borrowed("500ms"),
@@ -126,7 +130,7 @@ impl Timeframe {
         }
     }
 
-    /// Returns all preset (non-custom) timeframes in ascending order.
+    /// Returns the preset time intervals in ascending duration order. Count intervals are excluded.
     pub fn all() -> Vec<Timeframe> {
         vec![
             Timeframe::Ms100,
@@ -149,9 +153,11 @@ impl Timeframe {
         ]
     }
 
-    /// Get duration in milliseconds, saturating at `i64::MAX` for huge custom timeframes
+    /// Duration in milliseconds, saturating at `i64::MAX` for huge custom timeframes.
+    /// Count intervals have no time duration and return zero; do not use them to step time.
     pub fn duration_ms(&self) -> i64 {
         match self {
+            Timeframe::Ticks(_) => 0,
             Timeframe::Ms100 => 100,
             Timeframe::Ms250 => 250,
             Timeframe::Ms500 => 500,
@@ -175,7 +181,7 @@ impl Timeframe {
         }
     }
 
-    /// Get chrono Duration
+    /// Duration as a chrono value; zero for count intervals.
     pub fn duration(&self) -> Duration {
         Duration::milliseconds(self.duration_ms())
     }
@@ -188,6 +194,7 @@ impl Timeframe {
     /// Convert a resolution string to Timeframe
     pub fn from_resolution(resolution: &str) -> Option<Self> {
         match resolution {
+            value if value.ends_with('T') || value.ends_with('t') => value.parse().ok(),
             "1" => Some(Timeframe::Min1),
             "5" => Some(Timeframe::Min5),
             "15" => Some(Timeframe::Min15),
@@ -233,6 +240,12 @@ impl FromStr for Timeframe {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(count) = s.to_lowercase().strip_suffix('t') {
+            return count
+                .parse::<NonZeroU64>()
+                .map(Timeframe::Ticks)
+                .map_err(|_| "Tick count must be a positive integer".into());
+        }
         // Try known preset names first
         match s.to_lowercase().as_str() {
             "100ms" => return Ok(Timeframe::Ms100),
@@ -347,6 +360,12 @@ mod tests {
     #[test]
     fn test_from_str_presets() {
         assert_eq!("1min".parse::<Timeframe>(), Ok(Timeframe::Min1));
+        let ticks = Timeframe::Ticks(NonZeroU64::new(10).unwrap());
+        assert_eq!("10t".parse::<Timeframe>(), Ok(ticks));
+        assert_eq!(ticks.to_string(), "10t");
+        assert_eq!(Timeframe::from_resolution("10T"), Some(ticks));
+        assert!("0t".parse::<Timeframe>().is_err());
+        assert!(serde_json::from_str::<Timeframe>(r#"{"Ticks":0}"#).is_err());
         assert_eq!("1h".parse::<Timeframe>(), Ok(Timeframe::Hour1));
         assert_eq!("1d".parse::<Timeframe>(), Ok(Timeframe::Day1));
         assert_eq!("1w".parse::<Timeframe>(), Ok(Timeframe::Week1));

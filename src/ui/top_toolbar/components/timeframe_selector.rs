@@ -21,6 +21,8 @@ const CUSTOM_FORM_W: f32 = 232.0;
 /// Timeframe unit
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeframeUnit {
+    /// A fixed number of executions per bar.
+    Tick,
     Second,
     Minute,
     Hour,
@@ -32,6 +34,7 @@ pub enum TimeframeUnit {
 impl TimeframeUnit {
     pub fn short_name(&self) -> &'static str {
         match self {
+            TimeframeUnit::Tick => "T",
             TimeframeUnit::Second => "S",
             TimeframeUnit::Minute => "m",
             TimeframeUnit::Hour => "h",
@@ -43,6 +46,7 @@ impl TimeframeUnit {
 
     pub fn name(&self) -> &'static str {
         match self {
+            TimeframeUnit::Tick => "ticks",
             TimeframeUnit::Second => "seconds",
             TimeframeUnit::Minute => "minutes",
             TimeframeUnit::Hour => "hours",
@@ -74,6 +78,7 @@ impl Timeframe {
     pub fn display_long(&self) -> String {
         let unit_name = if self.value == 1 {
             match self.unit {
+                TimeframeUnit::Tick => "tick",
                 TimeframeUnit::Second => "second",
                 TimeframeUnit::Minute => "minute",
                 TimeframeUnit::Hour => "hour",
@@ -91,6 +96,10 @@ impl Timeframe {
     /// one. `None` only for a zero value.
     pub(crate) fn to_model(self) -> Option<crate::model::Timeframe> {
         let unit_seconds: u64 = match self.unit {
+            TimeframeUnit::Tick => {
+                return std::num::NonZeroU64::new(u64::from(self.value))
+                    .map(crate::model::Timeframe::Ticks);
+            }
             TimeframeUnit::Second => 1,
             TimeframeUnit::Minute => 60,
             TimeframeUnit::Hour => 3_600,
@@ -113,6 +122,11 @@ impl Timeframe {
     /// Get all predefined timeframes
     pub fn all_presets() -> Vec<Timeframe> {
         vec![
+            // Ticks
+            Timeframe::new(1, TimeframeUnit::Tick),
+            Timeframe::new(10, TimeframeUnit::Tick),
+            Timeframe::new(100, TimeframeUnit::Tick),
+            Timeframe::new(1000, TimeframeUnit::Tick),
             // Seconds
             Timeframe::new(1, TimeframeUnit::Second),
             Timeframe::new(5, TimeframeUnit::Second),
@@ -253,6 +267,7 @@ impl CustomTimeframeDialog {
     /// Available units for the custom dialog
     fn available_units() -> &'static [(TimeframeUnit, &'static str)] {
         &[
+            (TimeframeUnit::Tick, "Ticks"),
             (TimeframeUnit::Second, "Seconds"),
             (TimeframeUnit::Minute, "Minutes"),
             (TimeframeUnit::Hour, "Hours"),
@@ -459,6 +474,7 @@ impl TimeframeSelector {
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 for (unit, header) in [
+                    (TimeframeUnit::Tick, "Ticks"),
                     (TimeframeUnit::Second, "Seconds"),
                     (TimeframeUnit::Minute, "Minutes"),
                     (TimeframeUnit::Hour, "Hours"),
@@ -628,7 +644,7 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
-                            action = selector.menu_ui(ui, &theme, 800.0);
+                            action = selector.menu_ui(ui, &theme, 1600.0);
                         },
                     );
                     let pos = output
@@ -669,6 +685,10 @@ mod tests {
     fn every_preset_maps_to_a_model_timeframe() {
         let custom = |s| Model::Custom(std::num::NonZeroU64::new(s).unwrap());
         let expected = vec![
+            "1t".parse().unwrap(),
+            "10t".parse().unwrap(),
+            "100t".parse().unwrap(),
+            "1000t".parse().unwrap(),
             Model::Sec1,
             Model::Sec5,
             Model::Sec10,

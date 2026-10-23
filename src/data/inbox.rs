@@ -45,6 +45,8 @@ struct Live {
     forming: Option<DateTime<Utc>>,
     /// Feed clock minus system clock, as last reported; zero until then.
     offset: TimeDelta,
+    count_bar: Option<(Bar, u64)>,
+    last_trade: Option<DateTime<Utc>>,
     book: Book,
     taken: TakenIds,
     updates: Updates,
@@ -152,6 +154,8 @@ impl Inbox {
             clock,
             forming: None,
             offset: TimeDelta::zero(),
+            count_bar: None,
+            last_trade: None,
             book: Book::default(),
             taken: TakenIds {
                 order: VecDeque::new(),
@@ -315,6 +319,14 @@ impl Sink {
                 live.updates.rejected += 1;
                 return;
             }
+            if matches!(
+                live.clock.timeframe(),
+                Some(crate::model::Timeframe::Ticks(_))
+            ) && live.forming.is_none_or(|last| slot >= last)
+            {
+                live.count_bar = None;
+                live.last_trade = Some(slot);
+            }
             live.forming = live.forming.max(Some(slot));
             live.updates.bars.insert(slot, (bar, Origin::Live));
         });
@@ -327,9 +339,68 @@ impl Sink {
     /// a trade whose id is among those of the last trades the subscription folded, as many as its
     /// trade store holds. A trade stamped too far ahead of the feed's current time is rejected, as
     /// [`Sink::set_server_time`] describes.
+    ///
+    /// Count intervals start at the first accepted execution of the subscription. Replay the
+    /// retained executions on resubscription to rebuild a partial bar. Count bars use the first
+    /// trade's time; if that would duplicate a bar time, it advances by one nanosecond. Original
+    /// execution times remain unchanged. A pushed count bar must be complete: the next trade
+    /// starts a fresh bar. History pages should contain complete count bars only.
     pub fn push_tick(&self, tick: Tick) {
         let system = Utc::now();
         self.update(|live| {
+            if let Some(crate::model::Timeframe::Ticks(count)) = live.clock.timeframe() {
+                if !trades::valid(&tick) || live.ahead(tick.ts, system) {
+                    live.updates.rejected += 1;
+                } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
+                    live.updates.repeated_ticks += 1;
+                } else if live.last_trade.is_some_and(|last| tick.ts < last) {
+                    live.updates.late_ticks += 1;
+                } else {
+                    let starts = live
+                        .count_bar
+                        .as_ref()
+                        .is_none_or(|(_, n)| *n == count.get());
+                    let open = if starts {
+                        match live.forming.filter(|last| *last >= tick.ts) {
+                            Some(last) => {
+                                match last.checked_add_signed(TimeDelta::nanoseconds(1)) {
+                                    Some(time) => time,
+                                    None => {
+                                        live.updates.rejected += 1;
+                                        return;
+                                    }
+                                }
+                            }
+                            None => tick.ts,
+                        }
+                    } else {
+                        live.count_bar.as_ref().unwrap().0.time
+                    };
+                    let trade = Bar::new(
+                        open, tick.price, tick.price, tick.price, tick.price, tick.size,
+                    );
+                    let (bar, n) = if starts {
+                        (trade, 1)
+                    } else {
+                        let (old, n) = live.count_bar.as_ref().unwrap();
+                        let Some(bar) = fold(old, &trade) else {
+                            live.updates.rejected += 1;
+                            return;
+                        };
+                        (bar, n + 1)
+                    };
+                    live.forming = Some(open);
+                    live.last_trade = Some(tick.ts);
+                    live.count_bar = Some((bar.clone(), n));
+                    // A full snapshot survives drains without adding the same trades twice.
+                    live.updates.bars.insert(open, (bar, Origin::Live));
+                    if let Some(id) = tick.id {
+                        live.taken.insert(id);
+                    }
+                    live.updates.trades.push(tick);
+                }
+                return;
+            }
             let (open, price) = (live.clock.bar_open(tick.ts), tick.price);
             let ticks = Bar::new(open, price, price, price, price, tick.size);
             let ahead = live.ahead(open, system);
@@ -533,6 +604,46 @@ mod tests {
 
     fn subscribe(inbox: &Arc<Inbox>) -> Sink {
         inbox.subscribe("ES".into(), BarClock::new(Timeframe::Min1), 100)
+    }
+
+    /// Count bars must keep their progress across drains, count only accepted trades, and
+    /// separate bars even when the exchange stamps several executions at the same instant.
+    #[test]
+    fn count_bars_follow_accepted_trades_across_frames() {
+        for count in [1, 10, 100, 1000] {
+            let timeframe = format!("{count}t").parse().unwrap();
+            let inbox = Arc::new(Inbox::default());
+            let sink = inbox.subscribe("ES".into(), BarClock::new(timeframe), 10_000);
+            let mut bars = BTreeMap::new();
+            for i in 0..(count * 2 + 1) {
+                let trade =
+                    tick(at(0, 5), 100.0 + (i % 3) as f64, (i % 4 + 1) as f64).with_id(i as u64);
+                sink.push_tick(trade.clone());
+                sink.push_tick(trade); // Replays must not consume a count.
+                sink.push_tick(tick(at(0, 5), f64::NAN, 1.0));
+                let (_, updates) = inbox.drain().updates.pop().unwrap();
+                bars.extend(updates.bars.into_iter().map(|(t, (bar, _))| (t, bar)));
+                assert_eq!(updates.repeated_ticks, 1);
+                assert_eq!(updates.rejected, 1);
+            }
+            assert_eq!(bars.len(), 3, "{count}");
+            for (group, bar) in bars.values().enumerate() {
+                let start = group * count;
+                let end = (start + count).min(count * 2 + 1);
+                let prices: Vec<_> = (start..end).map(|i| 100.0 + (i % 3) as f64).collect();
+                assert_eq!(
+                    [bar.open, bar.high, bar.low, bar.close, bar.volume],
+                    [
+                        prices[0],
+                        prices.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                        prices.iter().copied().fold(f64::INFINITY, f64::min),
+                        *prices.last().unwrap(),
+                        (start..end).map(|i| (i % 4 + 1) as f64).sum()
+                    ],
+                    "{count}, group {group}",
+                );
+            }
+        }
     }
 
     /// Guards coalescing: folding must keep the highs and lows of every trade, a pushed bar must

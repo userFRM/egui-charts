@@ -42,6 +42,9 @@ pub fn resample(bars: &[Bar], from: Timeframe, to: Timeframe) -> Option<Vec<Bar>
     if from == to {
         return Some(bars.to_vec());
     }
+    if matches!(from, Timeframe::Ticks(_)) || matches!(to, Timeframe::Ticks(_)) {
+        return None;
+    }
     // Weeks do not nest in months or in fixed multi-week intervals, and a month has no fixed length.
     if matches!(from, Timeframe::Week1 | Timeframe::Month1) {
         return None;

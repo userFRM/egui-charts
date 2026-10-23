@@ -33,13 +33,14 @@ impl BarClock {
 
     /// Open time of the bar containing `t`. Bars shorter than a day align to UTC midnight,
     /// weekly bars to Monday, monthly bars to the first day of the month, and other bars to the
-    /// Unix epoch.
+    /// Unix epoch. Count bars retain their exact opening timestamp.
     pub fn bar_open(&self, t: DateTime<Utc>) -> DateTime<Utc> {
         let Some(timeframe) = self.timeframe else {
             return t;
         };
         let ms = t.timestamp_millis();
         let (period, anchor) = match timeframe {
+            Timeframe::Ticks(_) => return t,
             Timeframe::Month1 => {
                 return t
                     .date_naive()
