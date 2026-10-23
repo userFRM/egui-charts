@@ -493,6 +493,7 @@ impl UiExt for Ui {
         let size = DESIGN_TOKENS.sizing.button_md;
         let icon_size = icons::MEDIUM;
         let (rect, response) = self.allocate_exact_size(Vec2::splat(size), Sense::click());
+        crate::styles::focus::draw_focus_ring(self, &response, DESIGN_TOKENS.rounding.button);
 
         if self.is_rect_visible(rect) {
             let visuals = &self.style().visuals;
@@ -569,6 +570,7 @@ impl UiExt for Ui {
             Vec2::new(total_width, DESIGN_TOKENS.sizing.button_md),
             Sense::click(),
         );
+        crate::styles::focus::draw_focus_ring(self, &response, DESIGN_TOKENS.rounding.button);
 
         if self.is_rect_visible(rect) {
             let visuals = self.style().visuals.clone();

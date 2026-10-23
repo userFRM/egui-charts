@@ -367,6 +367,7 @@ impl SettingsDialog {
             DESIGN_TOKENS.sizing.settings_dialog.tab_height,
         );
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
 
         // Determine colors based on state (hover, active)
         let bg_color = if is_active {

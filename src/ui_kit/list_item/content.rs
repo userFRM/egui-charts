@@ -19,7 +19,7 @@ pub struct ContentContext<'a> {
     pub list_item: &'a ListItem,
     /// Reference to the response for the list item
     pub response: &'a egui::Response,
-    /// Visual state with color computation methods (rerun-inspired)
+    /// Visual state with color computation methods
     pub visuals: ListVisuals,
 }
 

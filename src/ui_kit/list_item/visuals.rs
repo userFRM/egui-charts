@@ -1,15 +1,11 @@
-//! ListVisuals - Color computation methods for list items (rerun-inspired)
+//! ListVisuals - Color computation methods for list items
 //!
 //! Instead of pre-computing colors, this struct provides methods that compute
-//! colors based on the current state, following rerun's pattern.
+//! colors based on the current state.
 
 use egui::{Color32, Visuals};
 
 /// Visual state information for list items with color computation methods
-///
-/// This struct follows rerun's pattern of computing colors via methods
-/// rather than storing pre-computed values. This allows for more flexible
-/// color computation based on complex state combinations.
 #[derive(Clone, Debug)]
 pub struct ListVisuals {
     /// Whether the item is hovered

@@ -115,13 +115,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Kit list rows draw their keyboard focus ring and retain visual row order under Tab. ([#277](https://github.com/userFRM/egui-charts/issues/277))
+- Custom controls draw keyboard focus rings, including object-tree actions, floating controls, layout menus and the Save arrow. Contiguous list rows keep their ring inside the row so neighbouring fills cannot cover it. Toolbars, custom intervals and dialog footers follow visual order under Tab; search and template fields release focus, and Enter activates the focused control. ([#277](https://github.com/userFRM/egui-charts/issues/277))
 
 - The colour picker measures its popup bounds after layout, so clicking Hex reaches the custom editor. Custom editing starts from the current colour, Escape is consumed, and closing restores the swatch view. Only selection and hover draw a 2 px ring; swatches close to the popup fill get an inside hairline. Wells, swatches and the custom row show keyboard focus. Migration: `ColorPicker::show` returns `egui::InnerResponse<Option<Color32>>`; read `.inner` for a picked colour and `.response` for the well. The unused `color_picker_btn` helper is removed; use `ColorPicker` with persistent `ColorPickerState`. ([#576](https://github.com/userFRM/egui-charts/issues/576), [#650](https://github.com/userFRM/egui-charts/issues/650), part of [#277](https://github.com/userFRM/egui-charts/issues/277))
 
 - Autocomplete keeps its popup alive while open and moves selection to the hovered suggestion before drawing any row. Only that row is highlighted, inset with rounded corners, and Enter confirms it. ([#592](https://github.com/userFRM/egui-charts/issues/592))
 
-- Auto-height dialogs and modals offer scrolling bodies the current window cap each frame, so they grow with content, shrink again and retain their on-screen header when resized. The shortcuts dialog uses that cap without its own height workaround. ([#641](https://github.com/userFRM/egui-charts/issues/641), [#652](https://github.com/userFRM/egui-charts/issues/652))
+- Auto-height dialogs and modals offer scrolling bodies the current window cap each frame, so they grow with content, shrink again and retain their on-screen header when resized. Dialogs also retain their horizontal margins in narrow windows. The shortcuts dialog uses that cap without its own height workaround. ([#641](https://github.com/userFRM/egui-charts/issues/641), [#652](https://github.com/userFRM/egui-charts/issues/652))
 
 - Egui controls and kit buttons share the 4 px small radius. Focus rings follow each control's corners and end 2 px outside it; the text cursor uses the theme text colour. Split buttons, sections and `UiExt` combos use the small chevron icons. Migration: `styles::focus::draw_focus_ring` takes the control's radius as its third argument. ([#586](https://github.com/userFRM/egui-charts/issues/586), [#593](https://github.com/userFRM/egui-charts/issues/593), [#594](https://github.com/userFRM/egui-charts/issues/594), [#595](https://github.com/userFRM/egui-charts/issues/595))
 

@@ -352,34 +352,37 @@ mod tests {
 
     #[test]
     fn focus_ring_follows_the_button_corners_and_stays_within_two_pixels() {
-        let ctx = egui::Context::default();
-        let mut id = egui::Id::NULL;
-        ctx.run_ui(Default::default(), |ui| {
-            id = Button::new("Focus").show(ui).id;
-        })
-        .drop_without_applying_deltas();
-        ctx.memory_mut(|m| m.request_focus(id));
-        let mut rect = egui::Rect::NOTHING;
-        let output = ctx.run_ui(Default::default(), |ui| {
-            rect = Button::new("Focus").show(ui).rect;
-        });
-        let rings: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if r.stroke.width == DESIGN_TOKENS.stroke.thick => {
-                    Some(r.clone())
-                }
-                _ => None,
+        for (_, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut id = egui::Id::NULL;
+            ctx.run_ui(Default::default(), |ui| {
+                id = Button::new("Focus").show(ui).id;
             })
-            .collect();
-        output.drop_without_applying_deltas();
-        assert_eq!(rings.len(), 1);
-        assert_eq!(rings[0].rect, rect.expand(2.0));
-        assert_eq!(rings[0].stroke_kind, egui::epaint::StrokeKind::Inside);
-        assert_eq!(
-            rings[0].corner_radius,
-            egui::CornerRadius::from(DESIGN_TOKENS.rounding.button + 2.0)
-        );
+            .drop_without_applying_deltas();
+            ctx.memory_mut(|m| m.request_focus(id));
+            let mut rect = egui::Rect::NOTHING;
+            let output = ctx.run_ui(Default::default(), |ui| {
+                rect = Button::new("Focus").show(ui).rect;
+            });
+            let rings: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.stroke.width == DESIGN_TOKENS.stroke.thick => {
+                        Some(r.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(rings.len(), 1);
+            assert_eq!(rings[0].rect, rect.expand(2.0));
+            assert_eq!(rings[0].stroke_kind, egui::epaint::StrokeKind::Inside);
+            assert_eq!(
+                rings[0].corner_radius,
+                egui::CornerRadius::from(DESIGN_TOKENS.rounding.button + 2.0)
+            );
+        }
     }
 }

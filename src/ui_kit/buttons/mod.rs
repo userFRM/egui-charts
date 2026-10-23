@@ -1,4 +1,4 @@
-//! Unified button components for open-trading-charts-rs
+//! Shared button components.
 //!
 //! Consolidates scattered button implementations into a consistent API.
 //!

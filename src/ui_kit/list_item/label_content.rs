@@ -82,7 +82,6 @@ impl<'a> ListItemContent for LabelContent<'a> {
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> Response {
         let egui_visuals = ui.style().visuals.clone();
 
-        // Use ListVisuals methods for color computation (rerun-inspired)
         let mut list_visuals = context.visuals.clone();
         list_visuals.strong = self.strong;
 

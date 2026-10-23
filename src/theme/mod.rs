@@ -744,16 +744,14 @@ mod tests {
             ] {
                 check("text", ui.text, surface, bg, text_min);
                 check("label text", visuals.text_color(), surface, bg, text_min);
-                {
-                    check("muted text", ui.text_muted, surface, bg, text_min);
-                    check(
-                        "weak text",
-                        visuals.weak_text_color(),
-                        surface,
-                        bg,
-                        text_min,
-                    );
-                }
+                check("muted text", ui.text_muted, surface, bg, text_min);
+                check(
+                    "weak text",
+                    visuals.weak_text_color(),
+                    surface,
+                    bg,
+                    text_min,
+                );
                 check("error text", visuals.error_fg_color, surface, bg, text_min);
                 check("warning text", visuals.warn_fg_color, surface, bg, text_min);
                 check(

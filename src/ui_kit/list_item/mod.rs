@@ -1,4 +1,4 @@
-//! List Item Module - Composable list items following rerun patterns
+//! List Item Module - Composable list items
 //!
 //! This module provides a flexible list item system with composable content:
 //!
@@ -84,7 +84,6 @@ impl ListItem {
         if ui.is_rect_visible(rect) {
             let egui_visuals = ui.style().visuals.clone();
 
-            // Build ListVisuals (rerun-inspired pattern)
             let list_visuals = ListVisuals::new()
                 .with_hovered(response.hovered())
                 .with_active(interactive && response.is_pointer_button_down_on())
@@ -127,7 +126,14 @@ impl ListItem {
             }
         }
 
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
+        // Rows touch, so keep the ring inside the row instead of under its neighbour's fill.
+        crate::styles::focus::draw_focus_ring(
+            ui,
+            &response
+                .clone()
+                .with_new_rect(rect.shrink(DESIGN_TOKENS.spacing.xs)),
+            DESIGN_TOKENS.rounding.sm - DESIGN_TOKENS.spacing.xs,
+        );
 
         // Handle selection on click
         if response.clicked() && interactive {
@@ -249,12 +255,6 @@ mod tests {
                 );
             }
             assert_ne!(theme.ui.text_muted, theme.ui.text);
-            for bg in [theme.ui.panel_bg, theme.ui.panel_bg_floating] {
-                assert!(
-                    crate::theme::contrast(theme.ui.text_muted, bg) >= 4.5,
-                    "{name}"
-                );
-            }
         }
     }
 
@@ -295,7 +295,7 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             }]);
             assert!(rows[index].has_focus(), "row {index}");
-            assert_eq!(rings, vec![rows[index].rect.expand(2.0)]);
+            assert_eq!(rings, vec![rows[index].rect]);
         }
     }
 }
