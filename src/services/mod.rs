@@ -1,5 +1,5 @@
-//! Services a host supplies, each through a small trait. Nothing in the crate calls them yet;
-//! they define the contract for the assembled terminal.
+//! Services a host supplies, each through a small trait. The alerts panel consumes `Alerts`;
+//! other contracts define the host side of the assembled terminal.
 //!
 //! Like [`Datafeed`](crate::data::Datafeed), every service is held as an `Arc<dyn Trait>` and
 //! called on the UI thread. Its methods return at once and answer later through a
@@ -9,7 +9,7 @@
 mod alerts;
 mod broker;
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "ui")),
     expect(dead_code, reason = "only the terminal consumes the listener")
 )]
 mod events;
@@ -20,6 +20,8 @@ mod storage;
 pub use alerts::{AlertEvent, Alerts};
 pub use broker::{AccountEvent, Broker};
 pub use events::Events;
+#[cfg(feature = "ui")]
+pub(crate) use events::Listener;
 pub use search::{SymbolQuery, SymbolSearch};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{Storage, StoreKind};

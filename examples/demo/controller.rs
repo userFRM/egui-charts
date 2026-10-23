@@ -10,6 +10,7 @@ use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
 use egui_charts::chart::series::SeriesSettings;
+use egui_charts::model::{Alert, AlertCondition, AlertFrequency};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
@@ -23,7 +24,6 @@ use egui_charts::ui::dialogs::{DrawingContextMenuAction, DrawingLineStyle};
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
-use egui_charts::ui::model::{AlertCondition, AlertStatus, PriceAlert};
 use egui_charts::ui::replay::{ReplayAction, ReplayController};
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
@@ -38,9 +38,9 @@ use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
+use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
-use egui_charts::ui_kit::{EmptyState, IconButton, PanelHeader};
 use std::sync::{Arc, mpsc};
 
 use crate::sampledata::{
@@ -157,10 +157,8 @@ pub struct DemoApp {
     open_panel: Option<SidePanel>,
     data_window_expanded: bool,
 
-    // In-memory alert store. `AlertManager` exposes no mutators, so the demo
-    // owns its alerts for the session (no fake persistence).
-    alerts: Vec<PriceAlert>,
-    next_alert_id: usize,
+    // Host-owned session-only alerts, shown through the library service connection.
+    alerts: AlertsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -279,8 +277,7 @@ impl DemoApp {
             object_tree: ObjectTreePanel::new(),
             open_panel: None,
             data_window_expanded: true,
-            alerts: Vec::new(),
-            next_alert_id: 1,
+            alerts: AlertsPanel::default(),
             replay: None,
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
@@ -288,6 +285,8 @@ impl DemoApp {
             notice: None,
             toasts: Toasts::new(),
         };
+        app.alerts
+            .set_service(Arc::new(crate::panel_alerts::DemoAlerts::default()));
         app.apply_session();
         app
     }
@@ -496,30 +495,24 @@ impl DemoApp {
             repeating,
         } = data
         {
-            self.alerts.push(PriceAlert {
-                id: self.next_alert_id,
-                symbol,
-                target_price: price,
-                condition: condition_from_label(&condition),
-                status: AlertStatus::Active,
-                message: (!message.is_empty()).then_some(message),
-                repeating,
-            });
-            self.next_alert_id += 1;
+            let mut alert = Alert::new(symbol, condition_from_label(&condition, price));
+            alert.message = message;
+            alert.frequency = if repeating {
+                AlertFrequency::EveryTime
+            } else {
+                AlertFrequency::Once
+            };
+            self.alerts.save(alert);
+        } else {
+            self.notify(
+                "This session store accepts price alerts; other conditions need a host evaluator",
+            );
         }
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
-        self.alerts.push(PriceAlert {
-            id: self.next_alert_id,
-            symbol,
-            target_price: price,
-            condition: AlertCondition::CrossesAbove,
-            status: AlertStatus::Active,
-            message: None,
-            repeating: false,
-        });
-        self.next_alert_id += 1;
+        self.alerts
+            .save(Alert::new(symbol, AlertCondition::CrossingUp(price)));
     }
 
     // --- selection / context helpers --------------------------------------
@@ -818,6 +811,7 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
+        self.alerts.poll(&ctx);
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
@@ -1411,49 +1405,23 @@ impl DemoApp {
     }
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
-        PanelHeader::new("Alerts").show(ui, |ui| {
-            if IconButton::new(&egui_charts::icons::icons::PLUS)
-                .tooltip("New alert")
-                .show(ui)
-                .clicked()
-            {
-                self.alert_dialog.open(self.state.symbol.clone());
+        match self.alerts.show(ui) {
+            AlertPanelAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            AlertPanelAction::ExportLog(csv) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let path = std::env::temp_dir().join("alerts.csv");
+                #[cfg(target_arch = "wasm32")]
+                let path = std::path::PathBuf::from("alerts.csv");
+                #[cfg(not(target_arch = "wasm32"))]
+                let result = std::fs::write(&path, csv).map_err(|e| e.to_string());
+                #[cfg(target_arch = "wasm32")]
+                let result = browser_download(csv.as_bytes(), &path);
+                self.notify(match result {
+                    Ok(()) => format!("Export successful: {}", path.display()),
+                    Err(error) => format!("Export failed: {error}"),
+                });
             }
-        });
-        if self.alerts.is_empty() {
-            if EmptyState::new("No alerts yet")
-                .icon(&egui_charts::icons::icons::ALERTS)
-                .description("Create an alert with the + button or the chart menu.")
-                .action("Create alert")
-                .fill_height()
-                .show(ui)
-            {
-                self.alert_dialog.open(self.state.symbol.clone());
-            }
-            return;
-        }
-        let mut remove: Option<usize> = None;
-        for alert in &self.alerts {
-            ui.horizontal(|ui| {
-                let dot = match alert.status {
-                    AlertStatus::Active => egui::Color32::from_rgb(38, 166, 154),
-                    AlertStatus::Triggered => egui::Color32::from_rgb(239, 83, 80),
-                    _ => egui::Color32::GRAY,
-                };
-                ui.colored_label(dot, "●");
-                ui.label(format!(
-                    "{} {} {:.2}",
-                    alert.symbol,
-                    alert.condition.as_str(),
-                    alert.target_price
-                ));
-                if ui.small_button("✕").clicked() {
-                    remove = Some(alert.id);
-                }
-            });
-        }
-        if let Some(id) = remove {
-            self.alerts.retain(|a| a.id != id);
+            AlertPanelAction::None => {}
         }
     }
 
@@ -1851,12 +1819,13 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .inner_margin(egui::Margin::ZERO)
 }
 
-fn condition_from_label(label: &str) -> AlertCondition {
-    match label.to_lowercase().as_str() {
-        l if l.contains("below") && l.contains("cross") => AlertCondition::CrossesBelow,
-        l if l.contains("cross") => AlertCondition::CrossesAbove,
-        l if l.contains("below") || l.contains("less") => AlertCondition::Below,
-        _ => AlertCondition::Above,
+fn condition_from_label(label: &str, price: f64) -> AlertCondition {
+    match label {
+        "Crossing" => AlertCondition::Crossing(price),
+        "Crossing Up" => AlertCondition::CrossingUp(price),
+        "Crossing Down" => AlertCondition::CrossingDown(price),
+        "Less Than" => AlertCondition::Below(price),
+        _ => AlertCondition::Above(price),
     }
 }
 
