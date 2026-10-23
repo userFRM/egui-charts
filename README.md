@@ -36,7 +36,7 @@ Candlestick, bar, line, area, Japanese and range chart types, drawing tools, tec
 
 ```mermaid
 graph LR
-    A["DataSource<br/><i>REST · WebSocket · CSV</i>"] --> B["Model<br/><i>Bar · OHLCV · Symbol</i>"]
+    A["Datafeed<br/><i>REST · WebSocket · CSV</i>"] --> B["Model<br/><i>Bar · OHLCV · Symbol</i>"]
     B --> C["Chart Engine<br/><i>pan · zoom · coords</i>"]
     C --> D["Renderers<br/><i>candles · lines · series</i>"]
     D --> E["egui::Painter"]
@@ -60,7 +60,6 @@ graph LR
 ```text
 egui-charts/src/
 ├── chart/                     Rendering engine, pan/zoom, hit-testing, overlays
-│   ├── builder.rs             ChartBuilder fluent API + TradingChart runtime wrapper
 │   ├── rendering/             Per-chart-type rendering (candles, lines, areas, Renko, Kagi, TPO…)
 │   ├── renderers/             Crosshair, indicator lines, labels, markers, session breaks
 │   ├── coords/                Coordinate mapping (chart ↔ screen space)
@@ -79,11 +78,11 @@ egui-charts/src/
 ├── model/                     Domain types: Bar, BarData, Symbol, Timeframe, ChartType
 ├── scales/                    Price scales (linear, log, %), time scales, formatters
 ├── config/                    ChartConfig, ChartOptions, crosshair, tooltip, keyboard
-├── data.rs                    DataSource trait: pluggable data provider interface
+├── data/                      Datafeed contract: history, live bars, trades and depth
 ├── theme/                     Theme value, its presets, apply_to_egui
 ├── tokens/                    Design tokens as Rust constants (colors, spacing, typography)
 ├── styles/                    Focus ring, sizing, typography and icon constants
-├── widget/                    Chart egui widget, indicator panes
+├── widget/                    Chart egui widget, ChartBuilder, indicator panes, feed loading
 ├── icons/                     Compile-time embedded SVG icons
 ├── ext/                       UiExt, ResponseExt, widget builder extensions (feature `ui`)
 ├── ui/          [feature: ui] Toolbars, panels, dialogs, replay controls
@@ -106,19 +105,18 @@ egui-charts = "0.2"
 Create a chart in your egui app (this example uses `eframe`):
 
 ```rust
-use egui_charts::{ChartBuilder, TradingChart};
+use egui_charts::{Chart, ChartBuilder};
 use egui_charts::model::Timeframe;
 use egui_charts::theme::Theme;
 
 struct App {
-    chart: TradingChart,
+    chart: Chart,
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
-            self.chart.update(); // poll the data source, load older bars
-            self.chart.show(ui); // render the chart
+            self.chart.show(ui); // load from the feed, if any, and render the chart
         });
     }
 }
@@ -148,7 +146,7 @@ let mini = ChartBuilder::price_chart()
 
 | Constructor | Use Case |
 |---|---|
-| `ChartBuilder::new()` | Sensible defaults, auto-fetch 1000 bars |
+| `ChartBuilder::new()` | Sensible defaults; with a feed, loads the latest 1000 bars |
 | `ChartBuilder::price_chart()` | Minimal sparkline / dashboard widget |
 | `ChartBuilder::options_chart()` | Non-time-based displays (options chains) |
 
@@ -245,54 +243,37 @@ Without a chart, `IndicatorRegistry` computes studies on a slice of bars.
 
 ---
 
-## Custom Data Sources
+## Custom Data Feeds
 
-Implement `DataSource` to connect any market data provider:
+Implement `Datafeed` to connect any market data provider; only `history` is required:
 
 ```rust
-use egui_charts::data::{DataSource, DataSourceError, DataUpdate, HistoricalDataRequest};
-use egui_charts::model::{Bar, Timeframe};
+use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply, Subscription};
+use std::sync::Arc;
 
-struct MyBrokerData {
-    subscriptions: Vec<(String, Timeframe)>,
-}
+struct MyBrokerData;
 
-impl DataSource for MyBrokerData {
-    fn symbols(&self) -> Vec<String> {
-        vec!["BTCUSDT".to_string()]
+impl Datafeed for MyBrokerData {
+    fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+        // Up to `request.count` bars that open before `request.before`, or the latest
+        // bars when it is `None`. Fetch them elsewhere and send the reply from there.
+        reply.send(Ok(HistoryPage::default()));
     }
 
-    fn subscribe(&mut self, symbol: String, timeframe: Timeframe) -> Result<(), DataSourceError> {
-        self.subscriptions.push((symbol, timeframe));
-        Ok(())
-    }
-
-    fn unsubscribe(&mut self, symbol: String) -> Result<(), DataSourceError> {
-        self.subscriptions.retain(|(s, _)| *s != symbol);
-        Ok(())
-    }
-
-    fn poll(&mut self) -> Vec<DataUpdate> {
-        // Return the updates your feed delivered since the last call.
-        Vec::new()
-    }
-
-    fn fetch_historical(
-        &mut self,
-        request: HistoricalDataRequest,
-    ) -> Result<Vec<Bar>, DataSourceError> {
-        // Load up to `request.limit` bars before `request.end_ts_millis`
-        // from your API, database or files.
-        Ok(Vec::new())
-    }
-
-    fn get_timeframe(&self, symbol: &str) -> Option<Timeframe> {
-        self.subscriptions.iter().find(|(s, _)| s == symbol).map(|(_, tf)| *tf)
+    fn subscribe(&self, subscription: Subscription) {
+        // Push live bars, trades and depth into `subscription.sink` from your
+        // connection's thread until `Sink::is_active` turns false.
+        let _ = subscription;
     }
 }
+
+let chart = egui_charts::ChartBuilder::new()
+    .with_symbol("BTCUSDT")
+    .with_feed(Arc::new(MyBrokerData))
+    .build();
 ```
 
-`TradingChart` calls `poll` and `fetch_historical` on the UI thread, so both should return quickly. Run network I/O on another thread and hand the results to the data source through a channel.
+The chart calls the feed from `show` on the UI thread and never waits for it: answer through the `Reply` and push into the `Sink` from any thread, runtime or browser task. The chart asks for older pages as the user scrolls back, and unsubscribes when the symbol or timeframe changes. [`examples/live_feed.rs`](examples/live_feed.rs) streams a synthetic feed.
 
 ---
 
@@ -339,7 +320,7 @@ egui-charts = "0.2"
 ```
 
 ```rust
-# struct App { chart: egui_charts::TradingChart }
+# struct App { chart: egui_charts::Chart }
 use egui_charts::theme::{Theme, apply_to_egui};
 
 impl eframe::App for App {
@@ -350,7 +331,6 @@ impl eframe::App for App {
         ui.set_style(ui.ctx().global_style());
 
         egui::CentralPanel::default().show(ui, |ui| {
-            self.chart.update();
             self.chart.show(ui);
         });
     }
@@ -358,8 +338,8 @@ impl eframe::App for App {
 ```
 
 1. **Add the dependency**; its default `ui` feature includes the toolbars and panels.
-2. **Implement `DataSource`** to bridge your Tauri backend (IPC or WebSocket) to the chart's data layer.
-3. **Build the chart once** with `ChartBuilder`, then call `update()` and `show(ui)` in `eframe::App::ui`.
+2. **Implement `Datafeed`** to bridge your Tauri backend (IPC or WebSocket) to the chart.
+3. **Build the chart once** with `ChartBuilder::with_feed`, then call `show(ui)` in `eframe::App::ui`.
 4. **Apply a theme** at startup with `apply_to_egui()` to propagate design tokens.
 
 ---
@@ -374,7 +354,7 @@ impl eframe::App for App {
 | Crosshair | Can follow another chart via `Chart::set_synced_crosshair_bar_idx` |
 | Keyboard | Configurable via `KeyboardOptions` |
 
-Kinetic scrolling with momentum-based panning. Real-time streaming via `chart.update()`, which merges each bar in place and follows the live edge.
+Kinetic scrolling with momentum-based panning. Real-time streaming from a `Datafeed` or through `chart.update(SeriesId::MAIN, bar)`, which merge each bar in place and follow the live edge.
 
 ---
 

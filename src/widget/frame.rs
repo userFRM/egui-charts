@@ -601,8 +601,8 @@ impl Chart {
         // left-click priority (drawing > overlay indicator > series), and
         // right-clicking an object also selects it so the menu and the
         // selection handles agree. The captured target is
-        // drained by the host via `take_right_click`, or consumed by the
-        // turnkey menu in `TradingChart`.
+        // drained by the host via `take_right_click`, or consumed by
+        // `ChartMenus`.
         if response.secondary_clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
             && chart_rect.contains(click_pos)

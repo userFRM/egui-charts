@@ -492,11 +492,9 @@ The ui_kit components are generic building blocks:
 ## Infrastructure
 
 ### Data Layer
-- [x] `DataSource` trait defined with error types (8 variants)
-- [x] `DataSourceError` with `is_recoverable()` and `is_conn_error()` helpers
-- [ ] `data::Datafeed` (callback contract for history, live bars, trades and depth) is defined, but no chart consumes it yet
+- [x] `data::Datafeed`: charts load history, live bars, trades and depth through `ChartBuilder::with_feed`
 - [ ] `services::Storage`, `SymbolSearch`, `Signals`, `Alerts` and `Broker` are defined, but nothing calls them yet
-- [ ] No in-crate `DataSource` implementations (streaming, tick feeds, symbol search all in host)
+- [ ] No in-crate `Datafeed` implementation: the host owns the transport
 
 ### Configuration
 - [x] `ChartConfig`: chart configuration
@@ -570,7 +568,7 @@ The ui_kit components are generic building blocks:
 - [ ] Accessibility (a11y)
 - [ ] Image drawing tool (load and display user images on chart)
 - [ ] Social features (Tweet embed, Idea sharing)
-- [ ] Charts consume `data::Datafeed` for live data (the contract exists; `TradingChart` reads only `DataSource`)
+- [x] Charts consume `data::Datafeed` for live data
 - [ ] Server-side rendering for chart snapshots
 - [ ] Chart comparison / overlay mode
 - [ ] Multi-symbol data correlation

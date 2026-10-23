@@ -44,8 +44,7 @@ impl LiveFeedApp {
             .with_timeframe(Timeframe::Min1)
             .with_feed(Arc::new(SyntheticFeed::new(20_000)))
             .with_initial_bars(500)
-            .build()
-            .chart;
+            .build();
         Self { chart }
     }
 }

@@ -7,13 +7,13 @@
 //! a notice instead, and the context menu entries it does not model do nothing.
 
 use eframe::egui;
-use egui_charts::chart::builder::TradingChart;
+use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
 use egui_charts::chart::series::SeriesSettings;
 use egui_charts::model::{Bar, ChartType, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
-use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
+use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
 use egui_charts::ui::dialogs::{
     AlertData, AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction,
     DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog, SeriesContextMenuAction,
@@ -116,7 +116,8 @@ impl ChartAppState for DemoAppState {
 
 /// The full demo application.
 pub struct DemoApp {
-    pub trading_chart: TradingChart,
+    pub chart: Chart,
+    menus: ChartMenus,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     pub theme: Theme,
@@ -173,7 +174,7 @@ impl DemoApp {
         let timeframe = Timeframe::Day1;
         let symbol = "BTCUSD";
 
-        let mut tc = egui_charts::ChartBuilder::new()
+        let mut chart = egui_charts::ChartBuilder::new()
             .with_symbol(symbol)
             .with_timeframe(timeframe)
             .with_theme(theme.clone())
@@ -183,7 +184,7 @@ impl DemoApp {
             .build();
 
         let bars = generate_sample_bars(symbol, 500, timeframe);
-        tc.chart.set_data(SeriesId::MAIN, bars.clone());
+        chart.set_data(SeriesId::MAIN, bars.clone());
 
         let spec = DemoSymbol::find(symbol);
         let last = bars.last().cloned().unwrap_or_else(|| Bar {
@@ -209,7 +210,8 @@ impl DemoApp {
         ));
 
         Self {
-            trading_chart: tc,
+            chart,
+            menus: ChartMenus::default(),
             state: DemoAppState {
                 symbol: symbol.into(),
                 timeframe,
@@ -254,6 +256,7 @@ impl DemoApp {
 
     fn switch_timeframe(&mut self, tf: Timeframe) {
         self.state.timeframe = tf;
+        self.chart.set_timeframe(tf);
         let count = bar_count_for_timeframe(tf);
         self.regenerate_bars(count, tf);
         self.symbol_header.symbol_info.timeframe = tf.as_str().to_string();
@@ -262,7 +265,7 @@ impl DemoApp {
     fn switch_symbol(&mut self, symbol: &str) {
         let spec = DemoSymbol::find(symbol);
         self.state.symbol = spec.symbol.to_string();
-        self.trading_chart.set_symbol(spec.symbol);
+        self.chart.set_symbol(spec.symbol);
         self.symbol_header.symbol_info.symbol = spec.symbol.to_string();
         self.symbol_header.symbol_info.company_name = spec.company_name.to_string();
         self.symbol_header.symbol_info.exchange = spec.exchange.to_string();
@@ -274,9 +277,7 @@ impl DemoApp {
 
     fn regenerate_bars(&mut self, count: usize, tf: Timeframe) {
         self.bars = generate_sample_bars(&self.state.symbol, count, tf);
-        self.trading_chart
-            .chart
-            .set_data(SeriesId::MAIN, self.bars.clone());
+        self.chart.set_data(SeriesId::MAIN, self.bars.clone());
         self.update_symbol_header();
     }
 
@@ -319,9 +320,7 @@ impl DemoApp {
             self.state.replay_active = false;
             self.replay_control.hide_control();
             // Restore the full series the chart had before replay.
-            self.trading_chart
-                .chart
-                .set_data(SeriesId::MAIN, self.bars.clone());
+            self.chart.set_data(SeriesId::MAIN, self.bars.clone());
         }
     }
 
@@ -331,7 +330,7 @@ impl DemoApp {
         if let Some(replay) = self.replay.as_ref() {
             let visible: Vec<Bar> = replay.visible_bars().to_vec();
             if !visible.is_empty() {
-                self.trading_chart.chart.set_data(SeriesId::MAIN, visible);
+                self.chart.set_data(SeriesId::MAIN, visible);
             }
         }
     }
@@ -381,7 +380,7 @@ impl DemoApp {
     }
 
     fn open_drawing_props_for(&mut self, drawing_id: usize) {
-        let dm = self.trading_chart.chart.drawings();
+        let dm = self.chart.drawings();
         let Some(drawing) = dm.drawings.iter().find(|d| d.id == drawing_id) else {
             return;
         };
@@ -402,13 +401,13 @@ impl DemoApp {
         match self.indicator_dialog.show(ctx, &self.theme) {
             IndicatorDialogAction::AddConfiguredIndicator(cfg) => {
                 let indicator = self.indicator_dialog.create_indicator(cfg.indicator_type);
-                self.trading_chart.chart.add_indicator(indicator);
+                self.chart.add_indicator(indicator);
             }
             IndicatorDialogAction::AddIndicator(id) => {
                 use egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorType;
                 if let Some(kind) = IndicatorType::from_id(&id) {
                     let indicator = self.indicator_dialog.create_indicator(kind);
-                    self.trading_chart.chart.add_indicator(indicator);
+                    self.chart.add_indicator(indicator);
                 }
             }
             _ => {}
@@ -418,7 +417,7 @@ impl DemoApp {
         match self.settings_dialog.show(ctx, &self.theme) {
             SettingsAction::Apply(state) => {
                 self.settings_state = state.clone();
-                apply_settings_state(&state, self.trading_chart.config_mut());
+                apply_settings_state(&state, self.chart.config_mut());
             }
             SettingsAction::Cancel => {}
             _ => {}
@@ -439,11 +438,10 @@ impl DemoApp {
         // Series settings.
         match self.series_settings.show(ctx) {
             SeriesSettingsAction::Apply(_id, settings) => {
-                self.trading_chart.apply_series_settings(&settings);
+                self.chart.apply_series_settings(&settings);
             }
             SeriesSettingsAction::ResetToDefault(_id) => {
-                self.trading_chart
-                    .apply_series_settings(&SeriesSettings::default());
+                self.chart.apply_series_settings(&SeriesSettings::default());
             }
             SeriesSettingsAction::None | SeriesSettingsAction::Cancel => {}
         }
@@ -452,7 +450,7 @@ impl DemoApp {
         match self.drawing_props.show(ctx) {
             DrawingPropertiesAction::Apply(id, props) => self.apply_drawing_props(id, props),
             DrawingPropertiesAction::Delete(id) => {
-                self.trading_chart.chart.drawings_mut().delete_drawing(id.0);
+                self.chart.drawings_mut().delete_drawing(id.0);
             }
             DrawingPropertiesAction::Clone(id) => self.clone_drawing(id.0),
             DrawingPropertiesAction::Cancel | DrawingPropertiesAction::None => {}
@@ -476,7 +474,7 @@ impl DemoApp {
     }
 
     fn remove_all_indicators(&mut self) {
-        let chart = &mut self.trading_chart.chart;
+        let chart = &mut self.chart;
         let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
         for id in ids {
             chart.remove_series(id);
@@ -484,7 +482,7 @@ impl DemoApp {
     }
 
     fn apply_drawing_props(&mut self, id: DrawingId, props: DrawingProps) {
-        let dm = self.trading_chart.chart.drawings_mut();
+        let dm = self.chart.drawings_mut();
         if let Some(drawing) = dm.drawings.iter_mut().find(|d| d.id == id.0) {
             drawing.color = props.color.to_array();
             drawing.stroke_width = props.line_width;
@@ -498,7 +496,7 @@ impl DemoApp {
     }
 
     fn clone_drawing(&mut self, id: usize) {
-        let dm = self.trading_chart.chart.drawings_mut();
+        let dm = self.chart.drawings_mut();
         if let Some(src) = dm.drawings.iter().find(|d| d.id == id).cloned() {
             let mut copy = src;
             for cp in &mut copy.chart_points {
@@ -516,7 +514,7 @@ impl DemoApp {
         // Re-center the visible window around the chosen date.
         let window = 120usize.min(self.bars.len());
         let visible = window.min(self.bars.len().saturating_sub(approx_bar).max(10));
-        self.trading_chart.chart.set_visible_bars(visible);
+        self.chart.set_visible_bars(visible);
     }
 
     fn run_export(
@@ -611,7 +609,7 @@ impl eframe::App for DemoApp {
         self.show_notice(&ctx);
 
         // Keep the header OHLC in sync with whatever the chart last rendered.
-        if let Some(last) = self.trading_chart.get_last_bar() {
+        if let Some(last) = self.chart.bars(SeriesId::MAIN).last() {
             self.symbol_header.ohlc =
                 OhlcData::new(last.open, last.high, last.low, last.close, last.volume);
         }
@@ -634,7 +632,7 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        let drawings = self.trading_chart.chart.drawings();
+        let drawings = self.chart.drawings();
         self.top_toolbar.state.can_undo = drawings.can_undo();
         self.top_toolbar.state.can_redo = drawings.can_redo();
         egui::Panel::top("toolbar")
@@ -652,7 +650,7 @@ impl DemoApp {
             TopToolbarAction::ChartStyleSelected(name) => {
                 if let Some(ct) = chart_type_from_name(&name) {
                     self.state.chart_type = ct;
-                    self.trading_chart.set_chart_type(ct);
+                    self.chart.set_chart_type(ct);
                 }
             }
             TopToolbarAction::IntervalSelected(display) => {
@@ -675,10 +673,10 @@ impl DemoApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
             }
             TopToolbarAction::Undo => {
-                self.trading_chart.chart.drawings_mut().undo();
+                self.chart.drawings_mut().undo();
             }
             TopToolbarAction::Redo => {
-                self.trading_chart.chart.drawings_mut().redo();
+                self.chart.drawings_mut().redo();
             }
             // Indicator templates live in the indicator dialog's Profiles tab.
             TopToolbarAction::OpenIndicatorTemplates => {
@@ -720,7 +718,7 @@ impl DemoApp {
         } else {
             Theme::dark()
         };
-        let cfg = self.trading_chart.config_mut();
+        let cfg = self.chart.config_mut();
         cfg.background_color = self.theme.chart.bg;
         cfg.text_color = self.theme.chart.axis_text;
         cfg.grid_color = self.theme.chart.grid_line;
@@ -757,7 +755,7 @@ impl DemoApp {
                 return;
             }
             DrawingToolbarAction::HideAllIndicators => {
-                let chart = &mut self.trading_chart.chart;
+                let chart = &mut self.chart;
                 let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
                 for id in ids {
                     chart.set_indicator_visible(id, false);
@@ -779,7 +777,7 @@ impl DemoApp {
             _ => {}
         }
 
-        let dm = self.trading_chart.chart.drawings_mut();
+        let dm = self.chart.drawings_mut();
         match action {
             DrawingToolbarAction::SelectTool(tool) => dm.set_active_tool(Some(tool)),
             DrawingToolbarAction::ClearSelection => {
@@ -891,7 +889,7 @@ impl DemoApp {
         ));
 
         // Live indicators.
-        for (id, ind) in self.trading_chart.chart.indicators() {
+        for (id, ind) in self.chart.indicators() {
             let color = ind.colors().first().copied().unwrap_or(egui::Color32::GRAY);
             let mut item = SourceItem::indicator(indicator_tree_id(id), ind.name(), color);
             item.visible = ind.is_visible();
@@ -899,7 +897,7 @@ impl DemoApp {
         }
 
         // Live drawings.
-        for d in &self.trading_chart.chart.drawings().drawings {
+        for d in &self.chart.drawings().drawings {
             let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
             item.visible = d.visible;
             item.locked = d.locked;
@@ -909,7 +907,7 @@ impl DemoApp {
     }
 
     fn build_data_window(&self) -> DataWindowInfo {
-        let last = self.trading_chart.get_last_bar();
+        let last = self.chart.bars(SeriesId::MAIN).last();
         let mut info = DataWindowInfo::new(self.state.symbol.clone())
             .with_timeframe(self.state.timeframe.as_str().to_string());
         if let Some(b) = last {
@@ -922,7 +920,7 @@ impl DemoApp {
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
         match action {
             ObjectTreeAction::ToggleVisibility(id) => {
-                let chart = &mut self.trading_chart.chart;
+                let chart = &mut self.chart;
                 if let Some(study) = indicator_from_tree_id(id) {
                     let now = chart
                         .indicators()
@@ -939,13 +937,13 @@ impl DemoApp {
                 }
             }
             ObjectTreeAction::ToggleLock(id) => {
-                let dm = self.trading_chart.chart.drawings_mut();
+                let dm = self.chart.drawings_mut();
                 if let Some(d) = dm.drawings.iter_mut().find(|d| d.id == id) {
                     d.locked = !d.locked;
                 }
             }
             ObjectTreeAction::Delete(id) | ObjectTreeAction::RemoveIndicator(id) => {
-                let chart = &mut self.trading_chart.chart;
+                let chart = &mut self.chart;
                 if let Some(study) = indicator_from_tree_id(id) {
                     chart.remove_series(study);
                 } else {
@@ -954,11 +952,11 @@ impl DemoApp {
             }
             ObjectTreeAction::Select(id) => {
                 if indicator_from_tree_id(id).is_none() {
-                    self.trading_chart.chart.drawings_mut().select(id);
+                    self.chart.drawings_mut().select(id);
                 }
             }
             ObjectTreeAction::ChangeColor(id, color) => {
-                let chart = &mut self.trading_chart.chart;
+                let chart = &mut self.chart;
                 if let Some(study) = indicator_from_tree_id(id) {
                     if let Some(ind) = chart.indicator_mut(study) {
                         ind.set_color(0, color);
@@ -985,27 +983,27 @@ impl DemoApp {
                 }
             }
             ObjectTreeAction::BringToFront(id) => {
-                self.trading_chart.chart.drawings_mut().bring_to_front(id);
+                self.chart.drawings_mut().bring_to_front(id);
             }
             ObjectTreeAction::SendToBack(id) => {
-                self.trading_chart.chart.drawings_mut().send_to_back(id);
+                self.chart.drawings_mut().send_to_back(id);
             }
             ObjectTreeAction::HideAll => {
-                for d in &mut self.trading_chart.chart.drawings_mut().drawings {
+                for d in &mut self.chart.drawings_mut().drawings {
                     d.visible = false;
                 }
             }
             ObjectTreeAction::ShowAll => {
-                for d in &mut self.trading_chart.chart.drawings_mut().drawings {
+                for d in &mut self.chart.drawings_mut().drawings {
                     d.visible = true;
                 }
             }
             ObjectTreeAction::RemoveAllDrawings => {
-                self.trading_chart.chart.drawings_mut().clear_all();
+                self.chart.drawings_mut().clear_all();
             }
             ObjectTreeAction::RemoveAllIndicators => self.remove_all_indicators(),
             ObjectTreeAction::ClearSelection => {
-                self.trading_chart.chart.drawings_mut().deselect();
+                self.chart.drawings_mut().deselect();
             }
             _ => {
                 let _ = sources;
@@ -1065,10 +1063,10 @@ impl DemoApp {
         match action {
             TimeframeToolbarAction::DateRangeChanged(range) => {
                 let visible = visible_bars_for_range(range, self.bars.len());
-                self.trading_chart.chart.set_visible_bars(visible);
+                self.chart.set_visible_bars(visible);
             }
             TimeframeToolbarAction::ZoomFitAll => {
-                self.trading_chart.chart.set_visible_bars(self.bars.len());
+                self.chart.set_visible_bars(self.bars.len());
             }
             TimeframeToolbarAction::TimeframeChanged(tf) => self.switch_timeframe(tf),
             TimeframeToolbarAction::GoToDate(dt) => self.go_to_date(dt.date_naive()),
@@ -1084,11 +1082,11 @@ impl DemoApp {
         let chart = egui::CentralPanel::default()
             .frame(panel_frame(bg))
             .show(ui, |ui| {
-                self.trading_chart.show(ui);
+                self.chart.show(ui);
             });
         self.replay_control.set_dock_rect(chart.response.rect);
         // Right-click context actions resolve after the chart is shown.
-        while let Some(action) = self.trading_chart.take_context_action() {
+        if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(action);
         }
     }
@@ -1109,17 +1107,10 @@ impl DemoApp {
             ContextMenuAction::OpenSeriesSettings => self.open_series_settings_dialog(),
             ContextMenuAction::InsertIndicator => self.indicator_dialog.open(),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
-            ContextMenuAction::RemoveIndicator(idx) => {
-                let chart = &mut self.trading_chart.chart;
-                let study = chart.indicators().nth(idx).map(|(id, _)| id);
-                if let Some(id) = study {
-                    chart.remove_series(id);
-                }
-            }
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::ResetChart => {
-                self.trading_chart.chart.set_visible_bars(100);
+                self.chart.set_visible_bars(100);
             }
             ContextMenuAction::ChangeSymbol | ContextMenuAction::CompareOrAddSymbol => {
                 self.symbol_search.open()
@@ -1147,10 +1138,10 @@ impl DemoApp {
     fn handle_drawing_context(&mut self, action: DrawingContextMenuAction) {
         // The library selects the right-clicked drawing, so the selected id is
         // the menu's target.
-        let Some(id) = self.trading_chart.chart.drawings().sel_drawing() else {
+        let Some(id) = self.chart.drawings().sel_drawing() else {
             return;
         };
-        let dm = self.trading_chart.chart.drawings_mut();
+        let dm = self.chart.drawings_mut();
         match action {
             DrawingContextMenuAction::Delete => dm.delete_drawing(id),
             DrawingContextMenuAction::Edit => self.open_drawing_props_for(id),

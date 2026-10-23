@@ -1,8 +1,8 @@
 //! Chart construction, configuration, and data management methods.
 //!
-//! This module contains the builder-pattern constructors and the mutable
-//! configuration API for [`Chart`]. Use these methods to create a chart,
-//! set its initial state, and update it across frames.
+//! This module contains [`ChartBuilder`], the builder-pattern constructors and
+//! the mutable configuration API for [`Chart`]. Use these methods to create a
+//! chart, set its initial state, and update it across frames.
 //!
 //! # Builder Pattern
 //!
@@ -36,17 +36,19 @@
 
 use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::selection::SelectionState;
-use crate::config::{ChartConfig, ChartOptions};
-use crate::data::FeedState;
+use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
+use crate::data::{Datafeed, FeedState};
 use crate::drawings::DrawingManager;
 use crate::model::ChartType;
-use crate::model::{BarClock, BarData, ChartState};
+use crate::model::{BarClock, BarData, ChartState, Timeframe};
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::IndicatorRegistry;
+use crate::theme::Theme;
 
 use super::Chart;
 use super::state::{BoxZoomState, KineticScrollState};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 impl Chart {
     /// Creates a new chart with default configuration.
@@ -355,5 +357,355 @@ impl Chart {
     /// external code that needs to do hit testing on indicator lines.
     pub fn get_rendered_indicator_panes(&self) -> &[super::RenderedIndicatorPane] {
         &self.last_rendered_indicator_panes
+    }
+}
+
+/// Fluent builder for a [`Chart`].
+///
+/// Use one of the constructor methods ([`new`](Self::new),
+/// [`price_chart`](Self::price_chart), [`options_chart`](Self::options_chart)) and chain
+/// configuration calls before calling [`build`](Self::build) to produce the chart.
+///
+/// All setter methods return `Self` and are marked `#[must_use]` to prevent accidental
+/// drops of the builder mid-chain.
+///
+/// # Examples
+///
+/// ```rust
+/// use egui_charts::{ChartBuilder, ChartType};
+/// use egui_charts::model::Timeframe;
+/// use egui_charts::theme::Theme;
+///
+/// let chart = ChartBuilder::new()
+///     .with_symbol("ETHUSDT")
+///     .with_timeframe(Timeframe::Hour1)
+///     .with_theme(Theme::dark())
+///     .with_chart_type(ChartType::Candles)
+///     .with_visible_candles(120)
+///     .build();
+/// ```
+pub struct ChartBuilder {
+    feed: Option<Arc<dyn Datafeed>>,
+    symbol: Option<String>,
+    timeframe: Timeframe,
+    theme: Theme,
+    chart_type: ChartType,
+    config: ChartConfig,
+    chart_options: ChartOptions,
+    indicators: Option<IndicatorRegistry>,
+    visible_candles: usize,
+    /// Bars asked for in the first page of history.
+    initial_bars: usize,
+}
+
+impl ChartBuilder {
+    /// Create a new chart builder with sensible defaults
+    ///
+    /// With a feed and a symbol, the chart asks for the latest 1000 bars at its
+    /// first `show`, and again when the symbol or timeframe changes.
+    pub fn new() -> Self {
+        Self {
+            feed: None,
+            symbol: None,
+            timeframe: Timeframe::Min1,
+            theme: Theme::dark(),
+            chart_type: ChartType::Candles,
+            config: ChartConfig::default(),
+            chart_options: ChartOptions::default(),
+            indicators: None,
+            visible_candles: 100,
+            initial_bars: 1000,
+        }
+    }
+
+    /// Creates a line chart with the time axis labels and ticks hidden.
+    ///
+    /// The data is still a time series of bars, and pan and zoom work as on any
+    /// chart.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use egui_charts::ChartBuilder;
+    ///
+    /// // Line chart without time axis labels
+    /// let chart = ChartBuilder::options_chart()
+    ///     .with_symbol("SPY")
+    ///     .build();
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// For traditional OHLC price charts, use [`ChartBuilder::new()`] instead.
+    pub fn options_chart() -> Self {
+        let mut chart_options = ChartOptions::default();
+        // Disable time-based features
+        chart_options.time_scale.time_visible = false;
+        chart_options.time_scale.seconds_visible = false;
+        chart_options.time_scale.ticks_visible = false;
+
+        Self::new()
+            .with_chart_options(chart_options)
+            .with_chart_type(ChartType::Line)
+    }
+
+    /// Creates a line chart without grid or crosshair, showing 50 bars.
+    ///
+    /// Drawing tools and studies are not added.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use egui_charts::ChartBuilder;
+    ///
+    /// // Create minimal price ticker
+    /// let chart = ChartBuilder::price_chart()
+    ///     .with_symbol("BTCUSDT")
+    ///     .with_visible_candles(30)  // Even narrower view
+    ///     .build();
+    ///
+    /// // Clean chart with no grid, crosshair, or tools
+    /// ```
+    ///
+    /// ## Dashboard Example
+    ///
+    /// ```rust
+    /// use egui_charts::ChartBuilder;
+    ///
+    /// // Multiple mini-charts for dashboard
+    /// let btc_chart = ChartBuilder::price_chart()
+    ///     .with_symbol("BTCUSDT")
+    ///     .build();
+    ///
+    /// let eth_chart = ChartBuilder::price_chart()
+    ///     .with_symbol("ETHUSDT")
+    ///     .build();
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// For drawing tools and studies, use [`ChartBuilder::new()`] instead.
+    pub fn price_chart() -> Self {
+        use crate::config::CrosshairOptions;
+
+        let config = ChartConfig {
+            show_horizontal_grid: false,
+            show_vertical_grid: false,
+            ..ChartConfig::default()
+        };
+
+        let chart_options = ChartOptions {
+            crosshair: CrosshairOptions {
+                vert_line_visible: false,
+                horz_line_visible: false,
+                label_visible: false,
+                ..CrosshairOptions::default()
+            },
+            ..ChartOptions::default()
+        };
+
+        Self::new()
+            .with_config(config)
+            .with_chart_options(chart_options)
+            .with_chart_type(ChartType::Line)
+            .with_visible_candles(50)
+    }
+
+    /// Source of instrument, history and live updates. Without one, feed the chart with
+    /// [`Chart::set_data`] and [`Chart::update`].
+    ///
+    /// [`build`](Self::build) calls no feed method: with a symbol, the chart's first
+    /// [`show`](Chart::show) asks the feed for the instrument and the latest page of history,
+    /// and subscribes once the instrument resolves.
+    #[must_use]
+    pub fn with_feed(mut self, feed: Arc<dyn Datafeed>) -> Self {
+        self.feed = Some(feed);
+        self
+    }
+
+    /// Set the trading symbol (e.g., `"BTCUSDT"`, `"AAPL"`).
+    ///
+    /// Without a symbol the chart shows none and requests nothing from the
+    /// feed.
+    #[must_use]
+    pub fn with_symbol(mut self, symbol: impl Into<String>) -> Self {
+        self.symbol = Some(symbol.into());
+        self
+    }
+
+    /// Set the bar aggregation timeframe (default: `Timeframe::Min1`).
+    #[must_use]
+    pub fn with_timeframe(mut self, timeframe: Timeframe) -> Self {
+        self.timeframe = timeframe;
+        self
+    }
+
+    /// Set the visual theme (default: `Theme::dark()`).
+    ///
+    /// The theme is applied to the [`ChartConfig`] during [`build`](Self::build),
+    /// controlling colors for background, candles, grid, axes, and overlays.
+    #[must_use]
+    pub fn with_theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    /// Set the chart visualization type (default: `ChartType::Candles`).
+    ///
+    /// Common types: `Candles`, `Line`, `Area`, `Bar`, `Baseline`, `Histogram`.
+    #[must_use]
+    pub fn with_chart_type(mut self, chart_type: ChartType) -> Self {
+        self.chart_type = chart_type;
+        self
+    }
+
+    /// Override the entire [`ChartConfig`] (axis visibility, grid, realtime button, etc.).
+    #[must_use]
+    pub fn with_config(mut self, config: ChartConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Override the [`ChartOptions`] (crosshair, time scale, scroll/zoom behavior, etc.).
+    #[must_use]
+    pub fn with_chart_options(mut self, options: ChartOptions) -> Self {
+        self.chart_options = options;
+        self
+    }
+
+    /// Toggle session-break dividers (day/week/month boundaries) and shading.
+    #[must_use]
+    pub fn with_session_breaks(mut self, show: bool) -> Self {
+        self.config.show_session_breaks = show;
+        self
+    }
+
+    /// Add the studies of `registry` (SMA, RSI, MACD, etc.) to the chart, which computes,
+    /// updates and draws them.
+    #[must_use]
+    pub fn with_indicators(mut self, registry: IndicatorRegistry) -> Self {
+        self.indicators = Some(registry);
+        self
+    }
+
+    /// Set the number of bars visible in the initial viewport (default: 100).
+    ///
+    /// This controls the initial bar spacing so that approximately `count` bars
+    /// fit within the chart width.
+    #[must_use]
+    pub fn with_visible_candles(mut self, count: usize) -> Self {
+        self.visible_candles = count;
+        self
+    }
+
+    /// Bars asked for in the first page of history (default 1,000); scroll-back pages ask for
+    /// at least 600.
+    ///
+    /// # Examples
+    /// ```
+    /// use egui_charts::ChartBuilder;
+    ///
+    /// let chart = ChartBuilder::new().with_initial_bars(500).build();
+    /// ```
+    #[must_use]
+    pub fn with_initial_bars(mut self, bars: usize) -> Self {
+        self.initial_bars = bars;
+        self
+    }
+
+    /// Configure the right price scale
+    ///
+    /// The right price scale is the primary scale, shown by default. The chart
+    /// starts with this visibility and scale mode.
+    ///
+    /// # Examples
+    /// ```
+    /// use egui_charts::ChartBuilder;
+    /// use egui_charts::scales::PriceScaleMode;
+    ///
+    /// let chart = ChartBuilder::new()
+    ///     .with_right_price_scale(true, PriceScaleMode::Logarithmic)
+    ///     .build();
+    /// ```
+    #[must_use]
+    pub fn with_right_price_scale(
+        mut self,
+        visible: bool,
+        mode: crate::scales::PriceScaleMode,
+    ) -> Self {
+        self.config.show_right_axis = visible;
+        self.config.right_axis_scale_mode = mode;
+        self
+    }
+
+    /// Enable or disable the "Go to Realtime" button
+    ///
+    /// Default: true (visible)
+    #[must_use]
+    pub fn with_realtime_btn(mut self, visible: bool) -> Self {
+        self.config.show_realtime_btn = visible;
+        self
+    }
+
+    /// Set the position of the "Go to Realtime" button
+    ///
+    /// Default: TopCenter
+    #[must_use]
+    pub fn with_realtime_button_pos(mut self, position: RealtimeButtonPos) -> Self {
+        self.config.realtime_button_pos = position;
+        self
+    }
+
+    /// Set custom text for the "Go to Realtime" button
+    ///
+    /// Default: "Go to Realtime"
+    #[must_use]
+    pub fn with_realtime_button_text(mut self, text: impl Into<String>) -> Self {
+        self.config.realtime_button_text = Some(text.into());
+        self
+    }
+
+    /// Set the size of the "Go to Realtime" button (width, height)
+    ///
+    /// Default: (110.0, 28.0)
+    #[must_use]
+    pub fn with_realtime_button_size(mut self, width: f32, height: f32) -> Self {
+        self.config.realtime_button_size = (width, height);
+        self
+    }
+
+    /// Consume the builder and produce the chart.
+    ///
+    /// This applies the theme to the config and sets up the chart. It never
+    /// blocks and calls no feed method: with a feed and a symbol, the chart's
+    /// first [`show`](Chart::show) asks the feed for the instrument and history.
+    pub fn build(mut self) -> Chart {
+        // Apply theme to config
+        self.config = self.theme.apply_to_config(self.config);
+
+        let right_scale_mode = self.config.right_axis_scale_mode;
+        let mut chart =
+            Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
+        chart.state.price_scale_mut().options_mut().mode = right_scale_mode;
+
+        chart.set_chart_type(self.chart_type);
+        chart.set_visible_bars(self.visible_candles);
+        chart.set_symbol(self.symbol.unwrap_or_default());
+        chart.set_timeframe(self.timeframe);
+        if let Some(feed) = self.feed {
+            chart.attach_feed(feed, self.initial_bars);
+        }
+
+        let mut studies = self.indicators.unwrap_or_default();
+        while let Some(study) = studies.remove_indicator(0) {
+            chart.add_indicator(study);
+        }
+        chart
+    }
+}
+
+impl Default for ChartBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }

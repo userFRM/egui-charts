@@ -56,8 +56,6 @@ pub enum ContextMenuAction {
     TableView,
     /// Open the object tree panel
     ObjectTree,
-    /// Remove a specific indicator by index
-    RemoveIndicator(usize),
     /// Remove all indicators from the chart
     RemoveAllIndicators,
     /// Open chart settings dialog

@@ -53,8 +53,8 @@ impl Chart {
     /// consistent.
     ///
     /// Hosts that build their own context menus read this each frame and open
-    /// the appropriate menu at [`RightClickTarget`]`::pos`. The turnkey menu in
-    /// [`TradingChart`](crate::TradingChart) consumes it for you.
+    /// the appropriate menu at [`RightClickTarget`]`::pos`. With the `ui`
+    /// feature, `ui::context_menu::ChartMenus` consumes it for you.
     ///
     /// Carries no `ui`-feature types, so it is available without the `ui`
     /// feature.

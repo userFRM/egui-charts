@@ -115,6 +115,7 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 pub mod indicator_pane;
 pub use crate::chart::selection::{ChartElementId, SeriesId};
+pub use builder::ChartBuilder;
 use egui::{Pos2, Rect, Vec2};
 pub use indicator_pane::{
     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
@@ -288,9 +289,9 @@ pub struct Chart {
     /// readable by host apps via [`Chart::selected_element`].
     pub(crate) selection: SelectionState<ChartElementId>,
     /// Right-click hit result captured during the last frame, drained by the
-    /// host via [`Chart::take_right_click`] (or by the turnkey context-menu
-    /// path in `TradingChart`). Holds no UI types so the core widget builds
-    /// without the `ui` feature.
+    /// host via [`Chart::take_right_click`] (or by `ChartMenus` with the `ui`
+    /// feature). Holds no UI types so the core widget builds without the `ui`
+    /// feature.
     pub(crate) right_click: Option<RightClickTarget>,
     /// Set by the context menus while one is open, so the next frame draws no crosshair or
     /// tooltip under it. Cleared by every frame.
@@ -307,8 +308,7 @@ pub struct Chart {
 ///
 /// This type intentionally carries no `ui`-feature types, so the core chart can
 /// surface right-clicks even when built without the `ui` feature; the host
-/// (or the `ui`-gated turnkey menu in `TradingChart`) maps it to a concrete
-/// menu.
+/// (or `ChartMenus` with the `ui` feature) maps it to a concrete menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RightClickTarget {
     /// A series or overlay/pane indicator line was hit.

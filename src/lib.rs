@@ -15,15 +15,14 @@
 //! use egui_charts::theme::Theme;
 //!
 //! // Build a chart with the fluent API
-//! let trading_chart = ChartBuilder::new()
+//! let chart = ChartBuilder::new()
 //!     .with_symbol("BTCUSDT")
 //!     .with_timeframe(Timeframe::Hour1)
 //!     .with_theme(Theme::dark())
 //!     .build();
 //!
 //! // In `eframe::App::ui`, with `ui: &mut egui::Ui`:
-//! // trading_chart.update(); // poll the data source, load older bars
-//! // trading_chart.show(ui); // render the chart
+//! // chart.show(ui); // load from the feed, if any, and render the chart
 //! # }
 //! ```
 //!
@@ -46,15 +45,15 @@
 //! | Layer | Modules | Purpose |
 //! |---|---|---|
 //! | **Domain model** | [`model`] | `Bar`, `BarData`, `Symbol`, `Timeframe`, `ChartType`, Renko/Kagi/P&F transforms |
-//! | **Data** | [`data`] | `DataSource` trait, `DataUpdate`, historical/live data abstractions |
+//! | **Data** | [`data`] | `Datafeed` contract for history and live data, `Reply`, `Sink`, bar resampling |
 //! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
-//! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays, `ChartBuilder` and `TradingChart` |
+//! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays |
 //! | **Drawing tools** | [`drawings`] | 95 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
 //! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 129 indicator names in `IndicatorFactory` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
-//! | **Widget** | [`widget`] | `Chart` egui widget: pan and zoom, kinetic scrolling, keyboard and drawing input, indicator panes |
+//! | **Widget** | [`widget`] | `Chart` egui widget and `ChartBuilder`: pan and zoom, kinetic scrolling, keyboard and drawing input, indicator panes, loading from a feed |
 //! | **Extensions** | `ext` | *(feature `ui`)* `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt`, `RoundingExt` |
 //! | **Icons** | [`icons`] | Compile-time embedded SVG icons |
 //! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
@@ -91,9 +90,8 @@
 //!    [`data::Reply`] and push live updates into the [`data::Sink`] that
 //!    `subscribe` receives, from any thread. `examples/live_feed.rs` shows one.
 //!
-//! 3. Build the chart once with [`chart::builder::ChartBuilder`] and
-//!    [`chart::builder::ChartBuilder::with_data_src`], then call
-//!    `trading_chart.update()` and `trading_chart.show(ui)` inside an
+//! 3. Build the chart once with [`ChartBuilder`] and
+//!    [`ChartBuilder::with_feed`], then call `chart.show(ui)` inside an
 //!    `egui::CentralPanel` in `eframe::App::ui`.
 //!
 //! 4. Apply a theme at startup with [`theme::apply_to_egui`] to propagate
@@ -104,9 +102,8 @@
 //! The most commonly used types are re-exported at the crate root for
 //! convenience:
 //!
-//! - [`ChartBuilder`] / [`TradingChart`]: fluent chart construction
-//! - [`Chart`]: the low-level egui widget
-//! - [`DataSource`]: data provider trait
+//! - [`ChartBuilder`]: fluent chart construction
+//! - [`Chart`]: the egui chart widget
 //! - [`ChartType`]: candlestick, line, area, bar, etc.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
@@ -172,12 +169,9 @@ pub mod ui;
 
 // ─── Convenience re-exports ──────────────────────────────────────────────────
 
-#[cfg(feature = "widget")]
-pub use chart::builder::{ChartBuilder, TradingChart};
-pub use data::DataSource;
 pub use model::ChartType;
 #[cfg(feature = "widget")]
-pub use widget::{Chart, RightClickTarget};
+pub use widget::{Chart, ChartBuilder, RightClickTarget};
 
 // Compiles and runs the README's Rust snippets as doctests.
 #[cfg(all(doctest, feature = "ui"))]

@@ -84,15 +84,15 @@ The bundled library examples can be run with the usual cargo invocation, for exa
 A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/lib.rs) for the full table):
 
 - [`model`](src/model): domain types (`Bar`, `Symbol`, `Timeframe`, `ChartType`) and the Renko/Kagi/P&F transforms.
-- [`data`](src/data): the `DataSource` and `Datafeed` contracts, trades, depth and bar merging.
-- [`chart`](src/chart): rendering, hit-testing, coordinate mapping, overlays, `ChartBuilder` and `TradingChart`.
+- [`data`](src/data): the `Datafeed` contract, trades, depth and bar merging.
+- [`chart`](src/chart): rendering, hit-testing, coordinate mapping, overlays.
 - [`services`](src/services): traits a host implements for storage, symbol search, signals, alerts and a trading account; nothing calls them yet.
 - [`drawings`](src/drawings): drawing tools, selection, handles, undo/redo.
 - [`studies`](src/studies): technical indicators, the `Indicator` trait, and `IndicatorRegistry`.
 - [`scales`](src/scales): price and time scales, tick generators, formatters.
 - [`config`](src/config): chart configuration and options.
 - [`theme`](src/theme) / [`tokens`](src/tokens) / [`styles`](src/styles): the design-token theme system.
-- [`widget`](src/widget): the `Chart` egui widget, with pan and zoom, keyboard and drawing input, and indicator panes.
+- [`widget`](src/widget): the `Chart` egui widget and `ChartBuilder`, with pan and zoom, keyboard and drawing input, indicator panes and loading from a `Datafeed`.
 - [`ext`](src/ext): extension traits (`UiExt`, `ResponseExt`, widget builders), with the `ui` feature.
 - [`icons`](src/icons): compile-time embedded SVG icons.
 

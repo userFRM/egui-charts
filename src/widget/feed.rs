@@ -359,9 +359,9 @@ fn lock(wake: &Mutex<Option<ViewportId>>) -> std::sync::MutexGuard<'_, Option<Vi
 mod tests {
     use super::super::test_frames::frame;
     use super::*;
-    use crate::chart::builder::ChartBuilder;
     use crate::data::Sink;
     use crate::model::{Bar, BarData};
+    use crate::widget::ChartBuilder;
     use chrono::{DateTime, TimeDelta, Utc};
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -492,8 +492,8 @@ mod tests {
     fn fed(feed: &Arc<Script>, symbol: Option<&str>) -> Chart {
         let builder = ChartBuilder::new().with_feed(feed.clone());
         match symbol {
-            Some(symbol) => builder.with_symbol(symbol).build().chart,
-            None => builder.build().chart,
+            Some(symbol) => builder.with_symbol(symbol).build(),
+            None => builder.build(),
         }
     }
 
