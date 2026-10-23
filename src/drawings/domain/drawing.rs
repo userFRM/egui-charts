@@ -147,7 +147,14 @@ impl Drawing {
             extend_left: false,
             extend_right: false,
             arrow_start_style: ArrowStyle::None,
-            arrow_end_style: ArrowStyle::Arrow,
+            arrow_end_style: if matches!(
+                tool_type,
+                DrawingToolType::Arrow | DrawingToolType::ArrowMarker
+            ) {
+                ArrowStyle::Arrow
+            } else {
+                ArrowStyle::None
+            },
             timeframe_visibility: TimeframeVisibility::all(),
             position_size: None,
             fib_config: None,

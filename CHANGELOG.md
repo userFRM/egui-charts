@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Drawing renderers apply common dash styles, non-default widths and configured fills to their paint primitives, while preserving custom fork levels and position profit/loss colours. Annotation text uses its configured font size before sizing the surrounding box; bold adds synthetic weight using the host's existing font family and fallback glyphs. Line endpoints render all stored marker styles in anchor order, including reversed lines and path tangents. Info lines, angle lines and arrows also honour left/right extensions. Migration: new non-arrow tools default to no endpoint marker; saved endpoint settings now render as stored. ([#141](https://github.com/userFRM/egui-charts/issues/141))
+
 - Drawing selection also follows the clipped shapes emitted by the renderer, including text extents, position zones, data-driven tools, rings and cycle lines. The manager retains the last paint alongside the existing geometric hit tests; standalone interaction hosts can pass paint commands to `DrawingInteraction::hit_test_painted`. Moved anchors discard their stale painted hits. ([#137](https://github.com/userFRM/egui-charts/issues/137))
 
 - Strong drawing magnet snaps to the nearest open, high, low or close of the bar under the pointer even outside the weak magnet's pixel threshold. Weak magnet retains nearby bar, overlay and drawing targets. Both apply during placement and handle drags, and the drawing toolbar passes the selected strength to the chart. Migration: `DrawingManagerOptions` literals need `strong_magnet`, or `..Default::default()`; set it with `magnet_mode` for strong snapping. ([#139](https://github.com/userFRM/egui-charts/issues/139))
