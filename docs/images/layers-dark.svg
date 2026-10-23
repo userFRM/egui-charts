@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="476" viewBox="0 0 880 476" role="img" aria-labelledby="t">
+<title id="t">The four layers of egui-charts</title>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif;font-size:15px;fill:#c9d1d9}
+.h{font-size:17px;font-weight:600;fill:#f0f6fc}
+.f{font-size:14px;fill:#9ea7b3}
+.c{font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#79c0ff}
+.r4{fill:#151b23;stroke:#3d444d}
+.r3{fill:#1b232d;stroke:#444d58}
+.r2{fill:#222b36;stroke:#4c5664}
+.r1{fill:#0d1117;stroke:#4493f8;stroke-width:1.5}
+</style>
+<rect class="r4" x="0.5" y="0.5" width="879" height="475" rx="6"/>
+<rect class="r3" x="20.5" y="20.5" width="839" height="351" rx="6"/>
+<rect class="r2" x="40.5" y="40.5" width="799" height="227" rx="6"/>
+<rect class="r1" x="60.5" y="60.5" width="759" height="103" rx="6"/>
+<text class="h" x="80" y="94">Engine and chart widget</text>
+<text class="f c" x="800" y="94" text-anchor="end">default-features = false, features = ["widget"]</text>
+<text x="80" y="120">One chart in your egui app, fed by your Datafeed: chart types, scales, pan and zoom,</text>
+<text x="80" y="142">crosshair, markers, drawing tools, themes, and the Indicator trait for your own studies.</text>
+<text class="h" x="60" y="198">+ Studies and terminal</text>
+<text class="f" x="820" y="198" text-anchor="end">default build: <tspan class="c">ui</tspan>, which enables <tspan class="c">studies</tspan></text>
+<text x="60" y="224">Built-in studies, and the toolbars, panels and dialogs of a charting terminal,</text>
+<text x="60" y="246">with the symbol search and storage traits an app implements.</text>
+<text class="h" x="40" y="302">+ Trading</text>
+<text class="f" x="840" y="302" text-anchor="end">no feature yet</text>
+<text x="40" y="328">Trading from the chart: order panels and depth of market over a Broker trait.</text>
+<text x="40" y="350">Every build has the Broker trait; order panels and depth of market are planned.</text>
+<text class="h" x="20" y="406">+ Order flow</text>
+<text class="f" x="860" y="406" text-anchor="end">no feature yet</text>
+<text x="20" y="432">Footprint, TPO, volume profile, depth heatmap and cumulative delta.</text>
+<text x="20" y="454">The default build has TPO, volume profile and cumulative delta; the rest is planned.</text>
+</svg>
