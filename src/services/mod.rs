@@ -9,7 +9,7 @@
 mod alerts;
 mod broker;
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "ui")),
     expect(dead_code, reason = "only the terminal consumes the listener")
 )]
 mod events;
@@ -20,6 +20,8 @@ mod storage;
 pub use alerts::{AlertEvent, Alerts};
 pub use broker::{AccountEvent, Broker};
 pub use events::Events;
+#[cfg(feature = "ui")]
+pub(crate) use events::Listener;
 pub use search::{SymbolQuery, SymbolSearch};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{Storage, StoreKind};
