@@ -2,7 +2,7 @@
 //!
 //! Renders individual items (drawings, indicators) in the tree.
 
-use egui::{Color32, Rect, Sense, Stroke, Ui, vec2};
+use egui::{Rect, Sense, Stroke, Ui, vec2};
 
 use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons as embedded_icons};
@@ -11,6 +11,7 @@ use crate::theme::ThemeExt;
 
 use super::actions::ObjectTreeAction;
 use super::config::ObjectTreeConfig;
+use super::context_menu::render_item_menu;
 use super::state::ObjectTreeState;
 use super::types::{SourceItem, SourceType};
 use crate::ext::UiExt;
@@ -43,6 +44,17 @@ pub fn render_item_row(
     if ui.is_rect_visible(rect) {
         render_row_content(ui, rect, item, config, state, indent, &mut action);
     }
+
+    if config.enable_context_menu {
+        response.context_menu(|ui| {
+            let menu_action = render_item_menu(ui, item, state);
+            if !menu_action.is_none() {
+                action = menu_action;
+            }
+        });
+    }
+
+    response.on_hover_text(item.full_display_name());
 
     // Handle expand/collapse for items with properties
     if item.source_type == SourceType::Drawing && state.is_item_expanded(id) {
@@ -85,14 +97,6 @@ fn handle_interactions(
         action = ObjectTreeAction::ZoomTo(id);
     }
 
-    // Right-click context menu
-    if response.secondary_clicked()
-        && config.enable_context_menu
-        && let Some(pos) = response.interact_pointer_pos()
-    {
-        state.open_context_menu(pos, Some(id));
-    }
-
     // Drag start
     if config.enable_drag_drop
         && response.drag_started()
@@ -129,14 +133,10 @@ fn render_row_content(
     {
         let painter = ui.painter();
         let accent = ui.active_theme().ui.accent;
-        let accent_fill = {
-            let [r, g, b, _] = accent.to_array();
-            Color32::from_rgba_unmultiplied(r, g, b, 40)
-        };
 
         // Background
         if is_selected {
-            painter.rect_filled(rect, 0.0, accent_fill);
+            painter.rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
         } else if is_hovered && !is_dragging {
             painter.rect_filled(rect, 0.0, ui.style().visuals.widgets.hovered.bg_fill);
         }
@@ -216,18 +216,23 @@ fn render_row_content(
         }
 
         // Name
-        let name_color = if item.visible {
+        let name_color = if is_selected {
+            ui.visuals().selection.stroke.color
+        } else if item.visible {
             ui.style().visuals.text_color()
         } else {
             DESIGN_TOKENS.semantic.extended.gray
         };
-        painter.text(
-            egui::pos2(x, center_y),
-            egui::Align2::LEFT_CENTER,
+        let mut job = egui::text::LayoutJob::simple(
             item.full_display_name(),
             egui::FontId::proportional(typography::SM_MD),
             name_color,
+            (rect.right() - DESIGN_TOKENS.spacing.sm - 40.0 - x).max(0.0),
         );
+        job.wrap.max_rows = 1;
+        let galley = painter.layout_job(job);
+        let pos = egui::pos2(x, center_y - galley.size().y / 2.0);
+        painter.galley(pos, galley, name_color);
     } // painter dropped
 
     // Second pass: interactive elements
@@ -252,7 +257,9 @@ fn render_row_content(
     };
     let vis_response = ui.allocate_rect(vis_rect, Sense::click());
     if ui.is_rect_visible(vis_rect) {
-        let icon_color = if vis_response.hovered() {
+        let icon_color = if is_selected {
+            ui.visuals().selection.stroke.color
+        } else if vis_response.hovered() {
             ui.visuals().widgets.hovered.fg_stroke.color
         } else {
             ui.visuals().widgets.noninteractive.fg_stroke.color
@@ -277,7 +284,9 @@ fn render_row_content(
         };
         let lock_response = ui.allocate_rect(lock_rect, Sense::click());
         if ui.is_rect_visible(lock_rect) {
-            let icon_color = if lock_response.hovered() {
+            let icon_color = if is_selected {
+                ui.visuals().selection.stroke.color
+            } else if lock_response.hovered() {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
                 ui.visuals().widgets.noninteractive.fg_stroke.color
@@ -297,7 +306,15 @@ fn render_row_content(
 
     // Delete button
     let del_rect = Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-    let del_response = ui.put(del_rect, egui::Label::new("X").sense(Sense::click()));
+    let button_color = if is_selected {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().text_color()
+    };
+    let del_response = ui.put(
+        del_rect,
+        egui::Label::new(egui::RichText::new("X").color(button_color)).sense(Sense::click()),
+    );
     if del_response.clicked() {
         *action = if item.source_type == SourceType::Indicator {
             ObjectTreeAction::RemoveIndicator(item.id)
@@ -311,7 +328,10 @@ fn render_row_content(
     // Settings/Properties button
     let settings_rect =
         Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-    let settings_response = ui.put(settings_rect, egui::Label::new("S").sense(Sense::click()));
+    let settings_response = ui.put(
+        settings_rect,
+        egui::Label::new(egui::RichText::new("S").color(button_color)).sense(Sense::click()),
+    );
     if settings_response.clicked() {
         *action = if item.source_type == SourceType::Indicator {
             ObjectTreeAction::OpenIndicatorSettings(item.id)
@@ -392,5 +412,59 @@ fn get_tool_abbreviation(tool_type: DrawingToolType) -> &'static str {
         DrawingToolType::ElliottImpulse => "EI",
         DrawingToolType::Measure => "MS",
         _ => "••",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::Color32;
+
+    #[test]
+    fn selected_names_use_selection_colours_and_end_before_the_buttons() {
+        for (_, theme) in crate::theme::presets() {
+            for width in [220.0, 280.0] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 200.0))),
+                    ..Default::default()
+                };
+                let mut row = Rect::NOTHING;
+                let mut selection = egui::style::Selection::default();
+                let mut output = ctx.run_ui(input, |ui| {
+                    selection = ui.visuals().selection;
+                    let mut item =
+                        SourceItem::drawing(1, DrawingToolType::ElliottTripleCombo, Color32::BLUE);
+                    let mut state = ObjectTreeState::new();
+                    state.select(1);
+                    row = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 24.0));
+                    render_item_row(ui, &mut item, &ObjectTreeConfig::default(), &mut state, 0);
+                });
+                output.textures_delta.clear();
+                assert!(output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == row && rect.fill == selection.bg_fill)
+                }));
+                let name = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if text.galley.text().starts_with("Elliott Triple") =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(name.fallback_color, selection.stroke.color);
+                assert!(name.galley.elided);
+                assert!(
+                    name.pos.x + name.galley.rect.right()
+                        <= row.right() - DESIGN_TOKENS.spacing.sm - 40.0
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
     }
 }

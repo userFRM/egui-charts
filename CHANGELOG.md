@@ -107,6 +107,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Object tree rows open native context menus with menu rows, sentence case labels and ellipses. Menus stay within the window and close on Escape or any outside click. Migration: `ObjectTreeState` no longer exposes `context_menu_open`, `context_menu_pos`, `context_menu_target`, `open_context_menu` or `close_context_menu`; egui owns popup state. ([#530](https://github.com/userFRM/egui-charts/issues/530))
+
+- Object tree selections use the active theme's selection fill and text; hover state clears when the pointer leaves a row. Long names end with an ellipsis 4 px before the row buttons, with the full name in the row tooltip. ([#529](https://github.com/userFRM/egui-charts/issues/529), [#532](https://github.com/userFRM/egui-charts/issues/532))
+
 - Object tree shortcuts leave focused widgets and open popups alone, and consume handled keys so a chart cannot also act on them. ([#527](https://github.com/userFRM/egui-charts/issues/527))
 
 - The grouped object tree shows data sources above its groups and honours the Data Source filter, so the main series agrees with the flat view and object count. ([#526](https://github.com/userFRM/egui-charts/issues/526))
