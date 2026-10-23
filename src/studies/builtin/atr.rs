@@ -79,10 +79,7 @@ impl Indicator for ATR {
     fn calculate(&mut self, data: &[Bar]) {
         self.values.clear();
 
-        if data.len() < 2 {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
+        if data.is_empty() {
             return;
         }
 
@@ -180,5 +177,35 @@ mod tests {
         // Case 3: Gap down (|low - prev_close| is largest)
         let tr = ATR::true_range(&bar, 110.0);
         assert!((tr - 12.0).abs() < 0.001); // |low - prev| = |98 - 110| = 12
+    }
+
+    /// A bar's ATR does not depend on whether a later bar exists: with length 1 the first bar has its range.
+    #[test]
+    fn length_one_has_a_value_on_a_single_bar() {
+        let bar = |high, low, close| Bar {
+            time: Utc::now(),
+            open: close,
+            high,
+            low,
+            close,
+            volume: 1000.0,
+        };
+        let first = bar(102.0, 98.0, 100.0);
+        // Ranges by hand: 102 - 98 = 4; for the second bar max(103 - 99, |103 - 100|, |99 - 100|) = 4.
+        let cases: [(Vec<Bar>, Vec<f64>); 2] = [
+            (vec![first.clone()], vec![4.0]),
+            (vec![first, bar(103.0, 99.0, 101.0)], vec![4.0, 4.0]),
+        ];
+        for (data, expected) in cases {
+            let mut atr = ATR::new(1);
+            atr.calculate(&data);
+            assert_eq!(atr.values().len(), expected.len());
+            for (got, want) in atr.values().iter().zip(expected) {
+                assert!(
+                    matches!(got, IndicatorValue::Single(v) if (v - want).abs() < 1e-12),
+                    "{got:?} != {want}"
+                );
+            }
+        }
     }
 }

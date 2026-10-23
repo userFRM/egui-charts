@@ -178,6 +178,7 @@ All notable changes to this project are documented in this file. The format is b
 - Trend Detection Index follows Pee's definition, the absolute n-bar sum of n-bar momentum minus the excess of the 2n-bar over the n-bar sum of absolute momentum, and starts on bar 3n - 1. It returned the net move minus the path length, which is never positive. Migration: levels tuned on the old values need resetting, and the first value now comes 2n - 1 bars later.
 - The True Strength Index starts its averages at the first price change instead of a made-up zero change on the first bar, which skewed the index for dozens of bars after its warm-up, and draws its signal line.
 - ADX starts from the mean of the first n DX values, as Wilder defines it, instead of n - 1 values divided by n, so it no longer reads low after its warm-up.
+- ATR with length 1 has a value on a single bar, its range, instead of none until a second bar exists.
 
 ### Changed
 
