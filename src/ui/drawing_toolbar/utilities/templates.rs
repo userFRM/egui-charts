@@ -79,7 +79,8 @@ impl TemplatesButton {
     /// Render a standalone save-template name input dialog.
     ///
     /// Returns a `SaveTemplate` action if the user confirms,
-    /// or `None` if canceled or still editing.
+    /// [`DrawingToolbarAction::None`] if they cancel with the Cancel button or Escape, which
+    /// also clears `name_input`, and `None` while they are still editing.
     pub fn show_name_dialog(
         ui: &mut Ui,
         sidebar_rect: Rect,
@@ -140,8 +141,8 @@ impl TemplatesButton {
                             }
 
                             if ui.button("Cancel").clicked() {
-                                // Return None to signal close without saving
                                 name_input.clear();
+                                action = Some(DrawingToolbarAction::None);
                             }
                         });
 
@@ -157,6 +158,7 @@ impl TemplatesButton {
                         // Escape key to cancel
                         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                             name_input.clear();
+                            action = Some(DrawingToolbarAction::None);
                         }
 
                         ui.space_md();
