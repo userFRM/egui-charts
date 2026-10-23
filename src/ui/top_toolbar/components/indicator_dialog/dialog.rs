@@ -286,37 +286,37 @@ impl IndicatorDialog {
         response
     }
 
+    /// Whether `ind` belongs to the active tab and category and matches the search.
+    fn matches(&self, ind: &IndicatorInfo) -> bool {
+        if !self.search_query.is_empty() {
+            let query = self.search_query.to_lowercase();
+            if !ind.name.to_lowercase().contains(&query)
+                && !ind.desc.to_lowercase().contains(&query)
+                && !ind.id.to_lowercase().contains(&query)
+            {
+                return false;
+            }
+        }
+
+        match (self.active_tab, self.sel_category) {
+            (IndicatorTab::Indicators, IndicatorCategory::Favorites) => {
+                self.favorites.contains(&ind.id)
+            }
+            (IndicatorTab::Indicators, IndicatorCategory::BuiltIns) => !ind.is_premium,
+            (IndicatorTab::Indicators, IndicatorCategory::Premium) => ind.is_premium,
+            // No source supplies community indicators, saved profiles or patterns yet.
+            (IndicatorTab::Indicators, IndicatorCategory::Community)
+            | (IndicatorTab::Profiles | IndicatorTab::Patterns, _) => false,
+        }
+    }
+
     fn draw_indicator_list(&mut self, ui: &mut Ui) -> IndicatorDialogAction {
         let mut action = IndicatorDialogAction::None;
-
-        // Pre-filter indicators and clone to avoid borrow conflicts
-        let search_query = self.search_query.clone();
-        let sel_category = self.sel_category;
-        let favorites = self.favorites.clone();
 
         let filtered: Vec<IndicatorInfo> = self
             .indicators
             .iter()
-            .filter(|ind| {
-                // Filter by search
-                if !search_query.is_empty() {
-                    let query = search_query.to_lowercase();
-                    if !ind.name.to_lowercase().contains(&query)
-                        && !ind.desc.to_lowercase().contains(&query)
-                        && !ind.id.to_lowercase().contains(&query)
-                    {
-                        return false;
-                    }
-                }
-
-                // Filter by category
-                match sel_category {
-                    IndicatorCategory::Favorites => favorites.contains(&ind.id),
-                    IndicatorCategory::Premium => ind.is_premium,
-                    IndicatorCategory::BuiltIns => !ind.is_premium,
-                    _ => true,
-                }
-            })
+            .filter(|ind| self.matches(ind))
             .cloned()
             .collect();
 
@@ -687,6 +687,31 @@ impl IndicatorDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_tab_and_category_lists_only_its_own_indicators() {
+        use IndicatorCategory::*;
+        use IndicatorTab::*;
+        // (tab, category, whether every built-in is listed); the other rows list none.
+        let cases = [
+            (Indicators, BuiltIns, true),
+            (Indicators, Community, false),
+            (Profiles, BuiltIns, false),
+            (Patterns, BuiltIns, false),
+        ];
+        for (tab, category, all) in cases {
+            let mut dialog = IndicatorDialog::new();
+            dialog.active_tab = tab;
+            dialog.sel_category = category;
+            let listed = dialog
+                .indicators
+                .iter()
+                .filter(|i| dialog.matches(i))
+                .count();
+            let expected = if all { dialog.indicators.len() } else { 0 };
+            assert_eq!(listed, expected, "{tab:?} / {category:?}");
+        }
+    }
 
     #[test]
     fn momentum_entry_creates_the_momentum_study() {
