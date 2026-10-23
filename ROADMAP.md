@@ -304,7 +304,7 @@ All indicators use a **generic polyline renderer**. There is no indicator-specif
 - [x] Standard Error, Standard Error Bands
 
 ### Volume
-- [x] OBV, VWAP (optional reset on UTC date change; the indicator dialog builds it without reset, so it is cumulative), Anchored VWAP
+- [x] OBV, VWAP (restarts at each session, week or month in the exchange zone and trading hours, with deviation bands; the indicator dialog builds it without an instrument, so its sessions follow the UTC date), Anchored VWAP
 - [x] MFI, A/D Line, CMF, Klinger Oscillator
 - [x] Ease of Movement, Net Volume, Volume ROC, Volume Oscillator
 - [x] CVD: Cumulative Volume Delta, each bar's delta estimated from its close position, body ratio or direction, in its own pane
