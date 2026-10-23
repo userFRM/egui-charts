@@ -193,7 +193,7 @@ pub struct ChartConfig {
     pub show_vertical_grid: bool,
     /// Whether to show volume bars
     pub show_volume: bool,
-    /// Height of volume panel as fraction of total height
+    /// Volume height as a fraction of the price pane above its 12 point baseline inset
     pub volume_height_fraction: f32,
     /// Padding around the chart
     pub padding: f32,
@@ -319,8 +319,8 @@ impl Default for ChartConfig {
             grid_color: chart.grid_line,
             // Text color
             text_color: chart.axis_text,
-            // Candle style - wider bodies
-            candle_width: 0.8,
+            // Candle bodies leave room for the wider volume bars
+            candle_width: 0.6,
             // Wick - thin crisp lines
             wick_width: 1.0,
             // Candle border width (0 = filled candles, >0 = hollow with border)
@@ -329,7 +329,7 @@ impl Default for ChartConfig {
             show_horizontal_grid: true,
             show_vertical_grid: true,
             show_volume: true,
-            volume_height_fraction: 0.2,
+            volume_height_fraction: 0.12,
             padding: 40.0,
             show_time_labels: true,
             show_ohlc_info: true,

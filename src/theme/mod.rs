@@ -161,7 +161,7 @@ pub struct ChartColors {
     pub candle_up: Color32,
     /// Falling candles and bars: body, border and wick.
     pub candle_down: Color32,
-    /// Opacity of volume bars, which take the candle colours.
+    /// Opacity of the volume colours returned by [`Self::volume_up`] and [`Self::volume_down`].
     pub volume_alpha: u8,
 }
 
@@ -172,16 +172,14 @@ impl Default for ChartColors {
 }
 
 impl ChartColors {
-    /// Rising volume bars: `candle_up` at `volume_alpha`.
+    /// Rising volume bars: #26c6da at `volume_alpha`.
     pub fn volume_up(&self) -> Color32 {
-        let [r, g, b, _] = self.candle_up.to_array();
-        Color32::from_rgba_unmultiplied(r, g, b, self.volume_alpha)
+        Color32::from_rgba_unmultiplied(38, 198, 218, self.volume_alpha)
     }
 
-    /// Falling volume bars: `candle_down` at `volume_alpha`.
+    /// Falling volume bars: #ec407a at `volume_alpha`.
     pub fn volume_down(&self) -> Color32 {
-        let [r, g, b, _] = self.candle_down.to_array();
-        Color32::from_rgba_unmultiplied(r, g, b, self.volume_alpha)
+        Color32::from_rgba_unmultiplied(236, 64, 122, self.volume_alpha)
     }
 }
 

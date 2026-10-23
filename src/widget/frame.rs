@@ -419,16 +419,17 @@ impl Chart {
             return response;
         }
 
-        // Split chart area into price and volume sections
-        let (price_rect, volume_rect) = if show_volume {
-            let split_y =
-                chart_rect.min.y + chart_rect.height() * (1.0 - self.config.volume_height_fraction);
-            (
-                Rect::from_min_max(chart_rect.min, Pos2::new(chart_rect.max.x, split_y)),
-                Rect::from_min_max(Pos2::new(chart_rect.min.x, split_y), chart_rect.max),
+        // Volume shares the price pane, with room below its baseline.
+        let price_rect = chart_rect;
+        let volume_rect = if show_volume {
+            let bottom = chart_rect.bottom() - 12.0;
+            let height = (chart_rect.height() - 12.0) * self.config.volume_height_fraction;
+            Rect::from_min_max(
+                Pos2::new(chart_rect.left(), bottom - height),
+                Pos2::new(chart_rect.right(), bottom),
             )
         } else {
-            (chart_rect, Rect::ZERO)
+            Rect::ZERO
         };
 
         // Get visible range
@@ -1127,6 +1128,65 @@ mod tests {
                 })
                 .collect();
             assert_eq!(labels, [expected], "{case:?}");
+        }
+    }
+
+    #[test]
+    fn volume_uses_themes_alpha_and_pitch_above_an_inset_baseline() {
+        use crate::theme::{Theme, apply_to_egui};
+        use egui::Color32;
+
+        // At 60% opacity the premultiplied colours are (23,119,131) and (142,38,73).
+        // A second opacity proves that painting reads the applied theme on every frame.
+        for (alpha, candle_width, expected) in [
+            (153, 0.6, [[23, 119, 131, 153], [142, 38, 73, 153]]),
+            (51, 0.2, [[8, 40, 44, 51], [47, 13, 24, 51]]),
+        ] {
+            let ctx = egui::Context::default();
+            let mut theme = Theme::dark();
+            theme.chart.volume_alpha = alpha;
+            apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0], &[110.0]);
+            // The last visible bar falls, and has half the other bars' volume.
+            let mut bars = chart.state.data().bars.clone();
+            let last = bars.last_mut().unwrap();
+            last.open = 110.0;
+            last.close = 100.0;
+            last.volume = 0.5;
+            chart.set_data(crate::chart::selection::SeriesId::MAIN, bars);
+            chart.config.candle_width = candle_width;
+            let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+            let price = chart.last_rendered_price_rect;
+            let volume = chart.last_rendered_volume_rect;
+            assert!(
+                (volume.height() - (price.height() - 12.0) * 0.12).abs() < 0.001,
+                "{volume:?} in {price:?}"
+            );
+            assert_eq!(volume.bottom(), price.bottom() - 12.0);
+            let pitch = chart.state.time_scale().bar_spacing();
+            for (colour, fraction) in expected.into_iter().zip([1.0, 0.5]) {
+                let colour =
+                    Color32::from_rgba_premultiplied(colour[0], colour[1], colour[2], colour[3]);
+                let bars: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Rect(rect) if rect.fill == colour => Some(rect.rect),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!bars.is_empty(), "alpha {alpha}: missing volume {colour:?}");
+                for bar in bars {
+                    assert!(
+                        (bar.height() - volume.height() * fraction).abs() < 0.001,
+                        "{bar:?}"
+                    );
+                    assert_eq!(bar.bottom(), volume.bottom());
+                    assert!(
+                        (bar.width() - pitch * 0.8).abs() < 0.001,
+                        "{bar:?} at pitch {pitch}"
+                    );
+                }
+            }
         }
     }
 
