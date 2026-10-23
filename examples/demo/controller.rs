@@ -2282,7 +2282,7 @@ mod tests {
             output.drop_without_applying_deltas();
             let studies_visible = kind == ChartType::Candles;
             assert_eq!(
-                text.iter().any(|text| text == "SMA"),
+                text.iter().any(|text| text == "SMA: SMA(2)"),
                 studies_visible,
                 "{text:?}"
             );

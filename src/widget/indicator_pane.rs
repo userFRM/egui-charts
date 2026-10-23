@@ -618,9 +618,7 @@ impl IndicatorPane {
                 chart_rect.bottom(),
             );
         }
-        let controls = self
-            .legend_controls_rect(painter, chart_rect, indicator)
-            .map(|close| close);
+        let controls = self.legend_controls_rect(painter, chart_rect, indicator);
         let responses = controls.map(|controls| {
             let row = Rect::from_min_max(chart_rect.min, controls.right_bottom());
             crate::chart::renderers::study_controls(

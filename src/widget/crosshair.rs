@@ -35,7 +35,9 @@ impl Chart {
             .iter()
             .enumerate()
             .filter(|(at, study)| {
-                study.is_visible() && pane.map_or(study.is_overlay(), |pane| pane == *at)
+                !self.chart_type.is_time_independent()
+                    && study.is_visible()
+                    && pane.map_or(study.is_overlay(), |pane| pane == *at)
             })
             .flat_map(|(_, study)| {
                 (0..study.line_cnt())
