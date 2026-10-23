@@ -288,6 +288,7 @@ impl Chart {
         }
         link.pending.clear();
         link.instrument = None;
+        self.state.price_scale_mut().set_price_precision(None);
         link.trades = Trades::new(TRADE_CAPACITY);
         link.order_book = None;
         link.paging_stopped = false;
@@ -315,6 +316,9 @@ impl Chart {
 
     /// Subscribes to live updates once the symbol resolved, and asks for the recent trades.
     fn subscribe(&mut self, link: &mut FeedLink, instrument: Instrument) {
+        self.state
+            .price_scale_mut()
+            .set_price_precision(instrument.price_decimals);
         link.instrument = Some(instrument);
         link.rebuild_bubbles();
         let sink = link.inbox.subscribe(link.clock.clone(), TRADE_CAPACITY);
@@ -862,8 +866,17 @@ mod tests {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         frames.run(&mut chart);
-        feed.resolve().send(Ok(Instrument::new("A")));
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_price_decimals(3)));
         frames.run(&mut chart);
+        let precision = |chart: &Chart| {
+            chart
+                .state
+                .price_scale()
+                .map(crate::scales::PriceTransform::default(), 0.0, 100.0)
+                .price_precision()
+        };
+        assert_eq!(precision(&chart), Some(3), "f: supplied precision");
         let (old_sink, old_page) = (feed.sink(), feed.page());
         chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
         old_sink.push_tick(Tick::new(Utc::now(), 7.0, 1.0, None));
@@ -885,6 +898,7 @@ mod tests {
         old_page.send(page(bars(10), false));
         frames.run(&mut chart);
         assert_eq!(chart.bars(main), [], "f: nothing of the old key");
+        assert_eq!(precision(&chart), None, "f: old precision cleared");
         let bubbles = chart
             .feed_link
             .as_ref()

@@ -4,7 +4,7 @@ use crate::chart::rendering::draw_dashed_line;
 use crate::model::PriceLine;
 use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
-use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};
+use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
 /// Gap between the plot's right edge and the start of the price axis labels.
 pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
@@ -47,7 +47,16 @@ pub(crate) fn paint_axis_tag(
         tag.min.x = tag.min.x.min(covered.min.x);
         tag.max.x = tag.max.x.max(covered.max.x);
     }
-    painter.rect_filled(tag, theme.radius.xs, fill);
+    painter.rect_filled(
+        tag,
+        CornerRadius {
+            nw: 0,
+            sw: 0,
+            ne: theme.radius.xs as u8,
+            se: theme.radius.xs as u8,
+        },
+        fill,
+    );
     painter.galley(text_pos, galley, text_color);
     tag
 }
@@ -97,10 +106,12 @@ pub fn render_price_line(
     if !show_axis || !line.axis_label {
         return None;
     }
-    let label = transform.label(transform.to_scale(line.price), 2);
-    // Black or white, whichever reads better on the line colour.
-    let text_color = if contrast(Color32::WHITE, line.color) >= contrast(Color32::BLACK, line.color)
-    {
+    let label = transform.label(
+        transform.to_scale(line.price),
+        price_map.price_precision().unwrap_or(2),
+    );
+    // Keep white text on financial colours; pale custom fills still need dark text.
+    let text_color = if contrast(Color32::WHITE, line.color) >= 2.0 {
         Color32::WHITE
     } else {
         Color32::BLACK
@@ -227,5 +238,52 @@ mod tests {
             output.drop_without_applying_deltas();
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+        for (fill, expected) in [
+            (Color32::from_rgb(241, 54, 69), Color32::WHITE),
+            (Color32::WHITE, Color32::BLACK),
+        ] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                let map = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(700.0, 710.0),
+                    0.0,
+                    100.0,
+                    false,
+                )
+                .with_price_precision(Some(3));
+                render_price_line(
+                    ui.painter(),
+                    pane,
+                    &map,
+                    &PriceLine::new(704.125, fill),
+                    0.0,
+                    true,
+                    200.0,
+                );
+            });
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    Shape::Text(text) => Some(text),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(text.galley.text(), "704.125");
+            assert_eq!(text.fallback_color, expected);
+            let tag = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    Shape::Rect(rect) => Some(rect),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(tag.corner_radius.nw, 0);
+            assert_eq!(tag.corner_radius.sw, 0);
+            output.drop_without_applying_deltas();
+        }
     }
 }

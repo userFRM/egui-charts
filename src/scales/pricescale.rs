@@ -217,6 +217,7 @@ pub struct PriceScale {
     manual: bool,
     /// Larger magnitude of the data at the last fit, in scale units
     level: f64,
+    price_precision: Option<u8>,
 }
 
 impl PriceScale {
@@ -228,7 +229,14 @@ impl PriceScale {
             transform: PriceTransform::default(),
             manual: false,
             level: 0.0,
+            price_precision: None,
         }
+    }
+
+    /// Sets the decimals used by price ticks and tags. `None` derives them from the tick step.
+    /// Values above 16 use 16 decimals, the useful precision of an `f64` price.
+    pub fn set_price_precision(&mut self, decimals: Option<u8>) {
+        self.price_precision = decimals.map(|decimals| decimals.min(16));
     }
 
     /// Returns the options.
@@ -358,6 +366,7 @@ impl PriceScale {
             bottom,
             self.options.invert_scale,
         )
+        .with_price_precision(self.price_precision)
     }
 }
 
@@ -372,6 +381,7 @@ pub struct PriceMap {
     top: f32,
     bottom: f32,
     inverted: bool,
+    price_precision: Option<u8>,
 }
 
 impl PriceMap {
@@ -390,6 +400,24 @@ impl PriceMap {
             top,
             bottom,
             inverted,
+            price_precision: None,
+        }
+    }
+
+    /// Sets the price precision for this frame, capped at 16 decimals.
+    pub fn with_price_precision(mut self, decimals: Option<u8>) -> Self {
+        self.price_precision = decimals.map(|decimals| decimals.min(16));
+        self
+    }
+
+    /// Supplied price decimals, or `None` to derive them from the tick step.
+    /// Percentage and indexed axes keep their own precision.
+    pub fn price_precision(&self) -> Option<usize> {
+        match self.transform.mode {
+            PriceScaleMode::Normal | PriceScaleMode::Logarithmic => {
+                self.price_precision.map(usize::from)
+            }
+            _ => None,
         }
     }
 

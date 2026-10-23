@@ -70,6 +70,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Price ticks, price lines and crosshair price labels use the feed instrument's `price_decimals`, which clears when the feed reloads. Hosts without a feed can set `PriceScale::set_price_precision`; an unspecified precision keeps at least two decimals on price ticks. Default price marks stay at least 40 px apart. Price tags have square left corners and white text on financial colours, while pale custom fills retain dark text.
+
 - The export dialog stays open to show success with the file path or an error, and prevents duplicate requests while an export is pending. The demo reports file write results and offers PNG and CSV downloads in the browser. Image exports capture a frame after closing the dialog and report the result in a notice.
 - The drawing bar uses a 28 px icon grid and a 38 px button pitch, with 33 by 1 px #4a4a4a separators inset 9 px left and 10 px right. Resting icons use the theme's primary text colour, now #dbdbdb in the dark preset. Hover and selected fills stay 34 by 34 px.
 - `UiExt::error_label`, `warning_label`, `success_label` and `info_label` use the active theme's error, warning, success and info colours instead of fixed colours, so the export dialog's error message reads at 4.5:1 or better in every preset.
