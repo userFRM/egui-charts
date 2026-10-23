@@ -39,6 +39,17 @@ pub struct Drawing {
     /// Unique identifier for this drawing
     #[serde(skip)]
     pub id: usize,
+    /// Id of the stored record this drawing was restored from; `None` for a drawing never
+    /// stored, which is saved under its `id`
+    #[serde(skip)]
+    pub stored_id: Option<String>,
+    /// Creation time, in Unix milliseconds, of the stored record this drawing was restored
+    /// from; `None` for a drawing never stored, which is saved with the time of the save
+    #[serde(skip)]
+    pub created_at: Option<i64>,
+    /// User notes, saved with the drawing and restored from its stored record
+    #[serde(skip)]
+    pub notes: Option<String>,
     /// Type of drawing tool
     pub tool_type: DrawingToolType,
     /// Screen coordinates (updated each frame from chart_points)
@@ -105,6 +116,9 @@ impl Drawing {
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
         Self {
             id,
+            stored_id: None,
+            created_at: None,
+            notes: None,
             tool_type,
             points: Vec::new(),
             chart_points: Vec::new(),

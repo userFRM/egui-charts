@@ -21,6 +21,15 @@
 //! Screen points are not stored: [`Drawing::update_screen_coords`] rebuilds
 //! them from the anchors on the next frame.
 //!
+//! A restored drawing keeps the id, creation time and notes of its record in
+//! `Drawing::stored_id`, `created_at` and `notes`, and is saved back under
+//! them. Restore drawings through
+//! [`DrawingManager::add_synced_drawing`](crate::drawings::DrawingManager::add_synced_drawing)
+//! or by pushing them onto `DrawingManager::drawings`: either way the manager
+//! gives a new drawing an id that no restored drawing uses. Two managers
+//! restoring the same storage can still hand out the same id: one storage per
+//! manager is the supported use.
+//!
 //! # Storage format
 //!
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
@@ -516,7 +525,9 @@ mod v1 {
     }
 }
 
-/// Convert a Drawing to StoredDrawing, its anchors mapped from bar index to timestamp.
+/// Convert a Drawing to StoredDrawing, its anchors mapped from bar index to timestamp, under
+/// the drawing's stored id and creation time when it was restored from storage, and under its
+/// id and the current time otherwise.
 ///
 /// `bar_to_time` must accept fractional bar indices and extrapolate by the bar
 /// interval before index 0 and after the last bar instead of clamping: anchors
@@ -527,7 +538,10 @@ pub fn drawing_to_stored(drawing: &Drawing, bar_to_time: impl Fn(f32) -> i64) ->
     let mut settings = drawing.clone();
     settings.points.clear();
     settings.chart_points.clear();
-    let mut stored = StoredDrawing::new(drawing.id.to_string(), settings);
+    let id = drawing.stored_id.clone();
+    let mut stored = StoredDrawing::new(id.unwrap_or_else(|| drawing.id.to_string()), settings);
+    stored.created_at = drawing.created_at.unwrap_or(stored.created_at);
+    stored.notes.clone_from(&drawing.notes);
     stored.points = drawing
         .chart_points
         .iter()
@@ -536,9 +550,9 @@ pub fn drawing_to_stored(drawing: &Drawing, bar_to_time: impl Fn(f32) -> i64) ->
     stored
 }
 
-/// Convert StoredDrawing back to a completed Drawing, its anchors mapped from
-/// timestamp to bar index; the screen points follow on the next
-/// [`Drawing::update_screen_coords`].
+/// Convert StoredDrawing back to a completed Drawing with id `next_id`, its anchors mapped from
+/// timestamp to bar index and the record's id, creation time and notes kept; the screen points
+/// follow on the next [`Drawing::update_screen_coords`].
 ///
 /// `time_to_bar` must be the inverse of the `bar_to_time` passed to
 /// [`drawing_to_stored`]: it returns fractional bar indices and extrapolates
@@ -551,6 +565,9 @@ pub fn stored_to_drawing(
 ) -> Drawing {
     let mut drawing = stored.drawing.clone();
     drawing.id = next_id;
+    drawing.stored_id = Some(stored.id.clone());
+    drawing.created_at = Some(stored.created_at);
+    drawing.notes.clone_from(&stored.notes);
     drawing.chart_points = stored
         .points
         .iter()
@@ -583,9 +600,12 @@ mod tests {
         (500.0 - price * 2.0) as f32
     }
 
+    /// The drawing `stored` restores to, without the record's identity, which
+    /// `a_later_session_keeps_the_stored_drawings_and_their_ids` checks.
     fn restore(stored: &StoredDrawing, id: usize) -> Drawing {
         let mut drawing = stored_to_drawing(stored, time_to_bar, id);
         drawing.update_screen_coords(bar_to_x, price_to_y);
+        (drawing.stored_id, drawing.created_at, drawing.notes) = (None, None, None);
         drawing
     }
 
@@ -648,6 +668,64 @@ mod tests {
             let back = restore(&loaded.drawings()[0], drawing.id);
             assert_eq!(format!("{back:?}"), format!("{drawing:?}"), "{tool:?}");
         }
+    }
+
+    /// A later session that loads the storage, restores its drawings, copies one, adds one and
+    /// saves them all keeps every stored record as it was, with its layer, and stores the copy
+    /// and the new drawing under ids of their own, even where a stored id is a number the new
+    /// session could hand out.
+    #[test]
+    fn a_later_session_keeps_the_stored_drawings_and_their_ids() {
+        let mut storage = DrawingStorage::new("AAPL");
+        for (id, notes, z_order) in [("a1b2", Some("breakout level"), 1), ("2", None, 0)] {
+            let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
+            drawing.z_order = z_order;
+            let mut stored = StoredDrawing::new(id, drawing);
+            stored.points = vec![StoredCoord::new(T0, 100.0)];
+            stored.created_at = 1_700_000_000_000;
+            stored.notes = notes.map(String::from);
+            storage.add_drawing(stored);
+        }
+        let (mut storage, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+
+        let mut manager = DrawingManager::new();
+        for stored in storage.drawings() {
+            manager.add_synced_drawing(stored_to_drawing(stored, time_to_bar, 0));
+        }
+        manager.add_synced_drawing(manager.drawings[0].clone());
+        let (x_to_bar, y_to_price) = (|x: f32| x, |y: f32| f64::from(y));
+        let at = egui::Pos2::new(5.0, 90.0);
+        manager.start_drawing_with_coords(
+            DrawingToolType::HorizontalLine,
+            at,
+            x_to_bar,
+            y_to_price,
+        );
+        for drawing in &manager.drawings {
+            storage.add_drawing(drawing_to_stored(drawing, bar_to_time));
+        }
+        let (saved, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+
+        let records: Vec<_> = saved
+            .drawings()
+            .iter()
+            .map(|d| {
+                (
+                    d.id.as_str(),
+                    d.created_at,
+                    d.notes.as_deref(),
+                    d.drawing.z_order,
+                )
+            })
+            .collect();
+        assert_eq!(records.len(), 4, "{records:?}");
+        assert_eq!(
+            records[0],
+            ("a1b2", 1_700_000_000_000, Some("breakout level"), 1)
+        );
+        assert_eq!(records[1], ("2", 1_700_000_000_000, None, 0));
+        let ids: HashSet<_> = records.iter().map(|r| r.0).collect();
+        assert_eq!(ids.len(), 4, "{records:?}");
     }
 
     /// The version 1 fixture was written by the previous release and stands

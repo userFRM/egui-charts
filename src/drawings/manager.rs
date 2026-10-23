@@ -407,12 +407,9 @@ impl DrawingManager {
         self.set_active_tool(Some(DrawingToolType::FontIcon));
 
         // Create a new drawing with the icon name
-        let mut drawing = Drawing::with_color(
-            self.next_id,
-            DrawingToolType::FontIcon,
-            self.options.default_color,
-        );
-        self.next_id += 1;
+        let id = self.take_id();
+        let mut drawing =
+            Drawing::with_color(id, DrawingToolType::FontIcon, self.options.default_color);
 
         // Store the icon name in the text field
         drawing.text = Some(icon_name);
@@ -441,10 +438,9 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
-        let mut drawing = Drawing::with_color(self.next_id, tool_type, self.options.default_color);
+        let drawing_id = self.take_id();
+        let mut drawing = Drawing::with_color(drawing_id, tool_type, self.options.default_color);
         drawing.z_order = self.top_z_order();
-        let drawing_id = self.next_id;
-        self.next_id += 1;
         self.preview_point = false;
         drawing.add_point_with_chart_coords(point, x_to_bar, y_to_price);
 
@@ -566,9 +562,10 @@ impl DrawingManager {
         }
         if let Some(drawing) = self.drawings.iter().find(|d| d.id == id).cloned() {
             self.drawings.retain(|d| d.id != id);
+            let stored_id = drawing.stored_id.clone().unwrap_or_else(|| id.to_string());
             self.history.push_delete(drawing);
             if let Ok(mut sync) = self.pending_sync.lock() {
-                sync.push(DrawingSyncAction::Delete(id.to_string()));
+                sync.push(DrawingSyncAction::Delete(stored_id));
             }
         }
         if self.selection.primary() == Some(id) {
@@ -605,6 +602,30 @@ impl DrawingManager {
     /// Send a drawing to the back (drawn first, behind others), below the lowest z-order
     pub fn send_to_back(&mut self, id: usize) {
         ZOrderService::send_to_back(&mut self.drawings, id);
+    }
+
+    /// An id above every drawing's id and every numeric id a drawing is stored under, so a new
+    /// drawing is never saved over a stored one. A stored id too large to leave room above it
+    /// is not one this manager hands out, so it cannot collide and is left out.
+    fn take_id(&mut self) -> usize {
+        let floor = self
+            .drawings
+            .iter()
+            .flat_map(|d| {
+                [
+                    Some(d.id),
+                    d.stored_id
+                        .as_deref()
+                        .and_then(|s| s.parse().ok())
+                        .filter(|&id: &usize| id < usize::MAX / 2),
+                ]
+            })
+            .flatten()
+            .max()
+            .map_or(0, |id: usize| id.saturating_add(1));
+        let id = self.next_id.max(floor);
+        self.next_id = id.saturating_add(1);
+        id
     }
 
     /// The z-order that puts a drawing added now on top of the others.
@@ -739,11 +760,25 @@ impl DrawingManager {
         }
     }
 
-    /// Add a drawing from another source (for multi-chart sync)
+    /// Add a drawing from another source (for multi-chart sync, or restored from storage)
+    /// under a new id. A drawing restored from storage keeps its stored identity (`stored_id`,
+    /// `created_at`, `notes`) and its z-order. A drawing that was never stored goes on top, and
+    /// so does a copy, one stored under the id of a drawing already here, which is saved as a
+    /// new drawing.
     pub fn add_synced_drawing(&mut self, mut drawing: Drawing) {
+        if drawing.stored_id.is_some()
+            && self
+                .drawings
+                .iter()
+                .any(|d| d.stored_id == drawing.stored_id)
+        {
+            (drawing.stored_id, drawing.created_at) = (None, None);
+        }
+        if drawing.stored_id.is_none() {
+            drawing.z_order = self.top_z_order();
+        }
         // Assign a new ID to avoid conflicts
-        drawing.id = self.next_id;
-        self.next_id += 1;
+        drawing.id = self.take_id();
         self.drawings.push(drawing);
     }
 
@@ -868,7 +903,8 @@ mod tests {
     }
 
     /// Of two overlapping drawings, the one with the higher `z_order` is hit, whichever was
-    /// added last, and the manager's layer operations set `z_order`, which is what is saved.
+    /// added last, the manager's layer operations set `z_order`, which is what is saved, and a
+    /// drawing a host adds goes on top.
     #[test]
     fn z_order_decides_which_overlapping_drawing_is_hit() {
         use crate::drawings::services::ZOrderService;
@@ -893,6 +929,35 @@ mod tests {
         manager.bring_to_front(1);
         assert_eq!(manager.hit_test(on_both), Some(1));
         assert!(z(&manager, 1) > z(&manager, 2));
+
+        // A drawing a host adds, never stored, goes on top of one at z-order 5.
+        manager
+            .drawings
+            .iter_mut()
+            .find(|d| d.id == 1)
+            .unwrap()
+            .z_order = 5;
+        let mut fresh = Drawing::new(0, DrawingToolType::HorizontalLine);
+        fresh.chart_points = vec![ChartPoint::new(10.0, 50.0)];
+        fresh.update_screen_coords(|bar| bar, |price| price as f32);
+        manager.add_synced_drawing(fresh);
+        let fresh_id = manager.drawings.last().unwrap().id;
+        assert_eq!(manager.hit_test(on_both), Some(fresh_id));
+    }
+
+    /// Deleting a restored drawing asks the host to delete the record it is stored under.
+    #[test]
+    fn deleting_a_restored_drawing_queues_its_stored_id() {
+        let mut manager = DrawingManager::new();
+        let mut restored = Drawing::new(0, DrawingToolType::HorizontalLine);
+        restored.stored_id = Some("a1b2".into());
+        manager.add_synced_drawing(restored);
+        manager.delete_drawing(manager.drawings[0].id);
+        let queued = manager.pending_sync.lock().unwrap();
+        assert!(
+            matches!(queued.as_slice(), [DrawingSyncAction::Delete(id)] if id == "a1b2"),
+            "{queued:?}"
+        );
     }
 
     #[test]
