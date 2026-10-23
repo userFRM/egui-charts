@@ -44,6 +44,7 @@
 
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -76,6 +77,32 @@ impl BollingerBands {
             visible: true,
         }
     }
+
+    /// The values over `data`.
+    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+        let mut values = Vec::new();
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let prices: Vec<f64> = data[i + 1 - self.period..=i]
+                    .iter()
+                    .map(|bar| bar.close)
+                    .collect();
+
+                let sma = prices.iter().sum::<f64>() / self.period as f64;
+                let variance =
+                    prices.iter().map(|p| (p - sma).powi(2)).sum::<f64>() / self.period as f64;
+                let std = variance.sqrt();
+
+                let upper = sma + (std * self.std_dev);
+                let lower = sma - (std * self.std_dev);
+
+                values.push(IndicatorValue::Multiple(vec![upper, sma, lower]));
+            }
+        }
+        values
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -95,29 +122,23 @@ impl Indicator for BollingerBands {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let prices: Vec<f64> = data[i + 1 - self.period..=i]
-                    .iter()
-                    .map(|bar| bar.close)
-                    .collect();
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            usable_behind(self.period - 1, |_| true),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-                let sma = prices.iter().sum::<f64>() / self.period as f64;
-                let variance =
-                    prices.iter().map(|p| (p - sma).powi(2)).sum::<f64>() / self.period as f64;
-                let std = variance.sqrt();
-
-                let upper = sma + (std * self.std_dev);
-                let lower = sma - (std * self.std_dev);
-
-                self.values
-                    .push(IndicatorValue::Multiple(vec![upper, sma, lower]));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &[IndicatorValue] {

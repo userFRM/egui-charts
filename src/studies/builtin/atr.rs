@@ -16,8 +16,8 @@
 //! atr.calculate(&bars);
 //! ```
 
-use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -27,8 +27,26 @@ use egui::Color32;
 pub struct ATR {
     period: usize,
     values: Vec<IndicatorValue>,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone)]
+struct State {
+    previous: Option<f64>,
+    usable: usize,
+    atr: f64,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            previous: None,
+            usable: 0,
+            atr: -0.0,
+        }
+    }
 }
 
 impl ATR {
@@ -40,6 +58,7 @@ impl ATR {
         Self {
             period: period.max(1),
             values: Vec::new(),
+            stepper: Stepper::default(),
             color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
             visible: true,
         }
@@ -58,47 +77,6 @@ impl ATR {
         let hc = (bar.high - prev_close).abs();
         let lc = (bar.low - prev_close).abs();
         hl.max(hc).max(lc)
-    }
-
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
-
-        if data.is_empty() {
-            return values;
-        }
-
-        // Calculate True Range for all bars
-        let mut true_ranges = Vec::with_capacity(data.len());
-        true_ranges.push(data[0].high - data[0].low); // First TR is just high - low
-
-        for i in 1..data.len() {
-            let tr = Self::true_range(&data[i], data[i - 1].close);
-            true_ranges.push(tr);
-        }
-
-        // Calculate ATR using Wilder's smoothing method
-        let multiplier = 1.0 / self.period as f64;
-
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                values.push(IndicatorValue::None);
-            } else if i == self.period - 1 {
-                // Initial ATR is simple avg
-                let sum: f64 = true_ranges[..=i].iter().sum();
-                let atr = sum / self.period as f64;
-                values.push(IndicatorValue::Single(atr));
-            } else {
-                // Subsequent ATR uses smoothing
-                if let IndicatorValue::Single(prev_atr) = values[i - 1] {
-                    let atr = prev_atr + multiplier * (true_ranges[i] - prev_atr);
-                    values.push(IndicatorValue::Single(atr));
-                } else {
-                    values.push(IndicatorValue::None);
-                }
-            }
-        }
-        values
     }
 }
 
@@ -119,11 +97,37 @@ impl Indicator for ATR {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| [b.high, b.low, b.close].iter().all(|p| p.is_finite()),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let period = self.period;
+        let multiplier = 1.0 / period as f64;
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close].iter().all(|p| p.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let tr = state
+                    .previous
+                    .map_or(bar.high - bar.low, |close| Self::true_range(bar, close));
+                state.previous = Some(bar.close);
+                state.usable += 1;
+                if state.usable <= period {
+                    state.atr += tr;
+                    if state.usable < period {
+                        return IndicatorValue::None;
+                    }
+                    state.atr /= period as f64;
+                } else {
+                    state.atr += multiplier * (tr - state.atr);
+                }
+                IndicatorValue::Single(state.atr)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &[IndicatorValue] {

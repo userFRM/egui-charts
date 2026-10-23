@@ -23,7 +23,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::stepper::{rolling_max, rolling_min};
+use crate::studies::stepper::{rolling_max, rolling_min, update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -189,11 +189,27 @@ impl Indicator for Stochastic {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        let behind = (self.k_period - 1)
+            .saturating_add(self.k_smooth - 1)
+            .saturating_add(self.d_period - 1);
+        let usable = |b: &Bar| b.high.is_finite() && b.low.is_finite() && b.close.is_finite();
+        update_window(
+            &mut values,
             data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
+            from,
+            usable_behind(behind, usable),
+            |data| over_finite_bars(data, usable, |data| self.compute(data)),
         );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &[IndicatorValue] {

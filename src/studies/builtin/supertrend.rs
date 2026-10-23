@@ -24,8 +24,9 @@
 //! st.calculate(&bars);
 //! ```
 
-use super::{clamp_param, over_finite_bars};
+use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -36,9 +37,33 @@ pub struct SuperTrend {
     atr_period: usize,
     multiplier: f64,
     values: Vec<IndicatorValue>,
+    stepper: Stepper<State>,
     bullish_color: Color32,
     bearish_color: Color32,
     visible: bool,
+}
+
+#[derive(Clone)]
+struct State {
+    usable: usize,
+    previous: f64,
+    atr: f64,
+    upper: f64,
+    lower: f64,
+    trend: f64,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            usable: 0,
+            previous: 0.0,
+            atr: -0.0,
+            upper: 0.0,
+            lower: 0.0,
+            trend: 0.0,
+        }
+    }
 }
 
 impl SuperTrend {
@@ -52,6 +77,7 @@ impl SuperTrend {
             atr_period: atr_period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: Vec::new(),
+            stepper: Stepper::default(),
             bullish_color: DESIGN_TOKENS.semantic.extended.success, // Green
             bearish_color: DESIGN_TOKENS.semantic.extended.error,   // Red
             visible: true,
@@ -87,110 +113,6 @@ impl Default for SuperTrend {
     }
 }
 
-impl SuperTrend {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
-        if data.len() < self.atr_period.saturating_add(1) {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate ATR
-        let mut tr = Vec::with_capacity(data.len());
-        tr.push(data[0].high - data[0].low);
-
-        for i in 1..data.len() {
-            tr.push(Self::true_range(&data[i], data[i - 1].close));
-        }
-
-        // Calculate ATR using Wilder's smoothing
-        let mut atr = vec![0.0; data.len()];
-        let atr_mult = 1.0 / self.atr_period as f64;
-
-        // Initial ATR is simple avg
-        atr[self.atr_period - 1] =
-            tr[..self.atr_period].iter().sum::<f64>() / self.atr_period as f64;
-
-        for i in self.atr_period..data.len() {
-            atr[i] = atr[i - 1] + atr_mult * (tr[i] - atr[i - 1]);
-        }
-
-        // Calculate basic upper and lower bands
-        let mut basic_upper = vec![0.0; data.len()];
-        let mut basic_lower = vec![0.0; data.len()];
-
-        for i in 0..data.len() {
-            let hl2 = (data[i].high + data[i].low) / 2.0;
-            basic_upper[i] = hl2 + self.multiplier * atr[i];
-            basic_lower[i] = hl2 - self.multiplier * atr[i];
-        }
-
-        // Calculate final upper and lower bands
-        let mut final_upper = vec![0.0; data.len()];
-        let mut final_lower = vec![0.0; data.len()];
-        let mut supertrend = vec![0.0; data.len()];
-        let mut direction = vec![1i32; data.len()]; // 1 = bullish, -1 = bearish
-
-        // Initialize
-        final_upper[self.atr_period - 1] = basic_upper[self.atr_period - 1];
-        final_lower[self.atr_period - 1] = basic_lower[self.atr_period - 1];
-        supertrend[self.atr_period - 1] = final_lower[self.atr_period - 1];
-
-        for i in self.atr_period..data.len() {
-            // Final Upper Band
-            if basic_upper[i] < final_upper[i - 1] || data[i - 1].close > final_upper[i - 1] {
-                final_upper[i] = basic_upper[i];
-            } else {
-                final_upper[i] = final_upper[i - 1];
-            }
-
-            // Final Lower Band
-            if basic_lower[i] > final_lower[i - 1] || data[i - 1].close < final_lower[i - 1] {
-                final_lower[i] = basic_lower[i];
-            } else {
-                final_lower[i] = final_lower[i - 1];
-            }
-
-            // Determine SuperTrend and direction
-            if supertrend[i - 1] == final_upper[i - 1] {
-                // Previous was bearish
-                if data[i].close > final_upper[i] {
-                    supertrend[i] = final_lower[i];
-                    direction[i] = 1; // Bullish
-                } else {
-                    supertrend[i] = final_upper[i];
-                    direction[i] = -1; // Bearish
-                }
-            } else {
-                // Previous was bullish
-                if data[i].close < final_lower[i] {
-                    supertrend[i] = final_upper[i];
-                    direction[i] = -1; // Bearish
-                } else {
-                    supertrend[i] = final_lower[i];
-                    direction[i] = 1; // Bullish
-                }
-            }
-        }
-
-        // Build output values: [up trend, down trend]
-        for i in 0..data.len() {
-            if i < self.atr_period - 1 {
-                values.push(IndicatorValue::None);
-            } else if direction[i] == 1 {
-                values.push(IndicatorValue::Multiple(vec![supertrend[i], f64::NAN]));
-            } else {
-                values.push(IndicatorValue::Multiple(vec![f64::NAN, supertrend[i]]));
-            }
-        }
-
-        values
-    }
-}
-
 impl Indicator for SuperTrend {
     fn name(&self) -> &str {
         "SuperTrend"
@@ -201,11 +123,77 @@ impl Indicator for SuperTrend {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let period = self.atr_period;
+        let threshold = period.saturating_add(1);
+        // The batch warm-up hides even the seed bar until one more usable bar arrives.
+        let from = if self.stepper.state().usable < threshold {
+            0
+        } else {
+            from
+        };
+        let atr_mult = 1.0 / period as f64;
+        let multiplier = self.multiplier;
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.high.is_finite() || !bar.low.is_finite() || !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let tr = if state.usable == 0 {
+                    bar.high - bar.low
+                } else {
+                    Self::true_range(bar, state.previous)
+                };
+                let previous = state.previous;
+                state.previous = bar.close;
+                state.usable += 1;
+                if state.usable <= period {
+                    state.atr += tr;
+                    if state.usable < period {
+                        return IndicatorValue::None;
+                    }
+                    state.atr /= period as f64;
+                } else {
+                    state.atr += atr_mult * (tr - state.atr);
+                }
+                let hl2 = (bar.high + bar.low) / 2.0;
+                let upper = hl2 + multiplier * state.atr;
+                let lower = hl2 - multiplier * state.atr;
+                let bullish = if state.usable == period {
+                    state.upper = upper;
+                    state.lower = lower;
+                    true
+                } else {
+                    let was_upper = state.trend == state.upper;
+                    if upper < state.upper || previous > state.upper {
+                        state.upper = upper;
+                    }
+                    if lower > state.lower || previous < state.lower {
+                        state.lower = lower;
+                    }
+                    if was_upper {
+                        bar.close > state.upper
+                    } else {
+                        bar.close.partial_cmp(&state.lower) != Some(std::cmp::Ordering::Less)
+                    }
+                };
+                state.trend = if bullish { state.lower } else { state.upper };
+                if bullish {
+                    IndicatorValue::Multiple(vec![state.trend, f64::NAN])
+                } else {
+                    IndicatorValue::Multiple(vec![f64::NAN, state.trend])
+                }
+            });
+        if self.stepper.state().usable < threshold {
+            self.values.fill(IndicatorValue::None);
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &[IndicatorValue] {

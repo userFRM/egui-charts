@@ -35,6 +35,7 @@
 
 use super::clamp_param;
 use crate::model::{Bar, Session, SessionWindow, TimezoneId};
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Offset, TimeZone, Utc};
@@ -96,6 +97,11 @@ fn trading_day(time: DateTime<Utc>, zone: Tz, windows: &[SessionWindow]) -> Naiv
 #[derive(Clone)]
 pub struct VolumeWeightedAvgPrice {
     values: Vec<IndicatorValue>,
+    stepper: Stepper<State>,
+    /// First bar sharing the preceding bar's UTC date, if any.
+    shared: Option<usize>,
+    /// Whether no two consecutive bars shared a UTC date at the last update.
+    daily: bool,
     /// One per line: the VWAP, then the upper and lower band of each multiplier.
     colors: Vec<Color32>,
     visible: bool,
@@ -105,11 +111,22 @@ pub struct VolumeWeightedAvgPrice {
     bands: Vec<f64>,
 }
 
+#[derive(Clone, Default)]
+struct State {
+    period: Option<(i32, u32)>,
+    volume: f64,
+    tp_volume: f64,
+    tp2_volume: f64,
+}
+
 impl VolumeWeightedAvgPrice {
     /// A VWAP restarted at each session, in UTC with no session windows, without bands.
     pub fn new() -> Self {
         Self {
             values: Vec::new(),
+            stepper: Stepper::default(),
+            shared: None,
+            daily: true,
             colors: vec![DESIGN_TOKENS.semantic.extended.favorite_gold], // Amber
             visible: true,
             anchor: VwapAnchor::Session,
@@ -180,63 +197,75 @@ impl Indicator for VolumeWeightedAvgPrice {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let from = from.min(self.values.len()).min(data.len());
+        // The daily rule reads all bars, including those with unusable prices or volume.
+        self.shared = self.shared.filter(|&at| at < from).or_else(|| {
+            (from.max(1)..data.len())
+                .find(|&at| data[at - 1].time.date_naive() == data[at].time.date_naive())
+        });
+        let daily = self.shared.is_none();
+        let from = if daily != self.daily { 0 } else { from };
+        self.daily = daily;
         let zone = self.time_zone.tz();
-        // A feed stamps a bar of a day or longer inside its UTC period, so it counts on its
-        // UTC date. The interval is read from the bars: a chart holds at most one such bar
-        // per UTC date, so no two consecutive bars on one UTC date means daily or longer.
-        let daily = data
-            .windows(2)
-            .all(|w| w[0].time.date_naive() != w[1].time.date_naive());
-        let mut period = None;
-        let (mut volume, mut tp_volume, mut tp2_volume) = (0.0, 0.0, 0.0);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                // A bar with a non-finite price or volume has no value and adds nothing.
+                if ![bar.high, bar.low, bar.close, bar.volume]
+                    .iter()
+                    .all(|x| x.is_finite())
+                {
+                    return IndicatorValue::None;
+                }
+                let day = if daily {
+                    bar.time.date_naive()
+                } else {
+                    trading_day(bar.time, zone, &self.windows)
+                };
+                let current = Some(self.anchor.period(day));
+                if current != state.period {
+                    state.period = current;
+                    (state.volume, state.tp_volume, state.tp2_volume) = (0.0, 0.0, 0.0);
+                }
 
-        for bar in data {
-            // A bar with a non-finite price or volume has no value and adds nothing.
-            if ![bar.high, bar.low, bar.close, bar.volume]
-                .iter()
-                .all(|x| x.is_finite())
-            {
-                self.values.push(IndicatorValue::None);
-                continue;
-            }
-            let day = if daily {
-                bar.time.date_naive()
-            } else {
-                trading_day(bar.time, zone, &self.windows)
-            };
-            let current = Some(self.anchor.period(day));
-            if current != period {
-                period = current;
-                (volume, tp_volume, tp2_volume) = (0.0, 0.0, 0.0);
-            }
+                let tp = bar.typical_price();
+                state.volume += bar.volume;
+                state.tp_volume += tp * bar.volume;
+                state.tp2_volume += tp * tp * bar.volume;
 
-            let tp = bar.typical_price();
-            volume += bar.volume;
-            tp_volume += tp * bar.volume;
-            tp2_volume += tp * tp * bar.volume;
-
-            let (vwap, sigma) = if volume.abs() < 1e-10 {
-                (tp, 0.0)
-            } else {
-                let vwap = tp_volume / volume;
-                // Clamped: cancellation can leave a tiny negative variance.
-                (vwap, (tp2_volume / volume - vwap * vwap).max(0.0).sqrt())
-            };
-            self.values.push(if self.bands.is_empty() {
-                IndicatorValue::Single(vwap)
-            } else {
-                IndicatorValue::Multiple(
-                    std::iter::once(vwap)
-                        .chain(
-                            self.bands
-                                .iter()
-                                .flat_map(|k| [vwap + k * sigma, vwap - k * sigma]),
-                        )
-                        .collect(),
-                )
+                let (vwap, sigma) = if state.volume.abs() < 1e-10 {
+                    (tp, 0.0)
+                } else {
+                    let vwap = state.tp_volume / state.volume;
+                    // Clamped: cancellation can leave a tiny negative variance.
+                    (
+                        vwap,
+                        (state.tp2_volume / state.volume - vwap * vwap)
+                            .max(0.0)
+                            .sqrt(),
+                    )
+                };
+                if self.bands.is_empty() {
+                    IndicatorValue::Single(vwap)
+                } else {
+                    IndicatorValue::Multiple(
+                        std::iter::once(vwap)
+                            .chain(
+                                self.bands
+                                    .iter()
+                                    .flat_map(|k| [vwap + k * sigma, vwap - k * sigma]),
+                            )
+                            .collect(),
+                    )
+                }
             });
-        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &[IndicatorValue] {

@@ -16,6 +16,11 @@ pub(crate) struct Stepper<S> {
 }
 
 impl<S: Clone + Default> Stepper<S> {
+    /// The state after the previous run's last bar.
+    pub(crate) fn state(&self) -> &S {
+        &self.state
+    }
+
     /// Recomputes `out[from..]`, given that `data[..from]` is unchanged since the previous run.
     /// Resumes when `from >= len - 1` (last bar changed or bars appended), restarts from bar 0
     /// otherwise (correction deep in history, prepended page, removed bars).
@@ -43,6 +48,41 @@ impl<S: Clone + Default> Stepper<S> {
             out.push(step(&mut self.state, bar));
         }
         self.len = data.len();
+    }
+}
+
+/// Recomputes `values[from..]` of a window study, given that `data[..from]` is unchanged, from
+/// `compute(&data[read..])`, where `read = read_from(data, from)` is the first bar the values
+/// from `from` on depend on. Equals a full `compute` bit for bit when `compute` evaluates every
+/// window afresh and no value from `from` on depends on a bar before `read`.
+pub(crate) fn update_window(
+    values: &mut Vec<IndicatorValue>,
+    data: &[Bar],
+    from: usize,
+    read_from: impl FnOnce(&[Bar], usize) -> usize,
+    compute: impl FnOnce(&[Bar]) -> Vec<IndicatorValue>,
+) {
+    let from = from.min(values.len()).min(data.len());
+    values.truncate(from);
+    if from < data.len() {
+        let read = read_from(data, from).min(from);
+        values.extend(compute(&data[read..]).into_iter().skip(from - read));
+    }
+}
+
+/// `read_from` for a study whose value at a bar depends on that bar and the `count` usable bars
+/// before it.
+pub(crate) fn usable_behind(
+    count: usize,
+    usable: impl Fn(&Bar) -> bool,
+) -> impl FnOnce(&[Bar], usize) -> usize {
+    move |data, from| {
+        let (mut read, mut left) = (from, count);
+        while left > 0 && read > 0 {
+            read -= 1;
+            left -= usize::from(usable(&data[read]));
+        }
+        read
     }
 }
 

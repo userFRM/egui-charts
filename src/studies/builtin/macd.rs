@@ -42,8 +42,8 @@
 //! }
 //! ```
 
-use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -58,8 +58,17 @@ pub struct MACD {
     slow_period: usize,
     signal_period: usize,
     values: Vec<IndicatorValue>,
+    stepper: Stepper<State>,
     colors: Vec<Color32>,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    usable: usize,
+    fast: f64,
+    slow: f64,
+    signal: f64,
 }
 
 impl MACD {
@@ -75,6 +84,7 @@ impl MACD {
             slow_period: slow_period.max(1),
             signal_period: signal_period.max(1),
             values: Vec::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 DESIGN_TOKENS.semantic.indicators.macd_line, // MACD line
                 DESIGN_TOKENS.semantic.indicators.macd_signal, // Signal line
@@ -82,70 +92,6 @@ impl MACD {
             ],
             visible: true,
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
-
-        if data.len() < self.slow_period {
-            values.resize(data.len(), IndicatorValue::None);
-            return values;
-        }
-
-        // Calculate fast EMA
-        let fast_mult = 2.0 / (self.fast_period as f64 + 1.0);
-        let mut fast_ema = data[0].close;
-        let mut fast_emas = vec![fast_ema];
-
-        for bar in data.iter().skip(1) {
-            fast_ema = (bar.close - fast_ema) * fast_mult + fast_ema;
-            fast_emas.push(fast_ema);
-        }
-
-        // Calculate slow EMA
-        let slow_mult = 2.0 / (self.slow_period as f64 + 1.0);
-        let mut slow_ema = data[0].close;
-        let mut slow_emas = vec![slow_ema];
-
-        for bar in data.iter().skip(1) {
-            slow_ema = (bar.close - slow_ema) * slow_mult + slow_ema;
-            slow_emas.push(slow_ema);
-        }
-
-        // Calculate MACD line
-        let macd_line: Vec<f64> = fast_emas
-            .iter()
-            .zip(slow_emas.iter())
-            .map(|(fast, slow)| fast - slow)
-            .collect();
-
-        // Calculate signal line (EMA of MACD)
-        if macd_line.len() < self.signal_period {
-            values.resize(data.len(), IndicatorValue::None);
-            return values;
-        }
-
-        let signal_mult = 2.0 / (self.signal_period as f64 + 1.0);
-        let mut signal_ema = macd_line[0];
-        let mut signal_line = vec![signal_ema];
-
-        for &macd_val in macd_line.iter().skip(1) {
-            signal_ema = (macd_val - signal_ema) * signal_mult + signal_ema;
-            signal_line.push(signal_ema);
-        }
-
-        // Calculate histogram
-        for i in 0..macd_line.len() {
-            let histogram = macd_line[i] - signal_line[i];
-            values.push(IndicatorValue::Multiple(vec![
-                macd_line[i],
-                signal_line[i],
-                histogram,
-            ]));
-        }
-
-        values
     }
 }
 
@@ -166,7 +112,48 @@ impl Indicator for MACD {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let threshold = self.slow_period.max(self.signal_period);
+        // Crossing the whole-series threshold reveals values on earlier bars too.
+        let from = if self.stepper.state().usable < threshold {
+            0
+        } else {
+            from
+        };
+        let fast_mult = 2.0 / (self.fast_period as f64 + 1.0);
+        let slow_mult = 2.0 / (self.slow_period as f64 + 1.0);
+        let signal_mult = 2.0 / (self.signal_period as f64 + 1.0);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                if state.usable == 0 {
+                    state.fast = bar.close;
+                    state.slow = bar.close;
+                } else {
+                    state.fast = (bar.close - state.fast) * fast_mult + state.fast;
+                    state.slow = (bar.close - state.slow) * slow_mult + state.slow;
+                }
+                let macd = state.fast - state.slow;
+                state.signal = if state.usable == 0 {
+                    macd
+                } else {
+                    (macd - state.signal) * signal_mult + state.signal
+                };
+                state.usable += 1;
+                IndicatorValue::Multiple(vec![macd, state.signal, macd - state.signal])
+            });
+        if self.stepper.state().usable < threshold {
+            self.values.fill(IndicatorValue::None);
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &[IndicatorValue] {
