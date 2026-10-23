@@ -2,8 +2,11 @@
 //! renderer. The demo's controller and sample data are compiled in unchanged. Each scene sets its state through the
 //! controller's own action handlers and the public chart API, so no step depends on where a control is drawn.
 //!
-//! Run from this directory: `cargo run --release -- ../images [scene-filter]`
-//! Output: `<scene>-<theme>@<scale>x.png` for the dark and light themes at 1x and 2x.
+//! Run from this directory: `cargo run --release -- <out-dir> [scene-filter]`
+//! Output: `<scene>-<theme>@2x.png` for the dark and light themes. The light images set `Theme::light()` on the app
+//! and on the chart config before the first step. `docs/images` holds the chart scenes as written. `hero-<theme>.png`
+//! and `themes-<theme>.png` are the `hero` and `themes` window captures placed in a frame after capture, without
+//! changing a pixel inside the windows.
 
 #[path = "../../examples/demo/controller.rs"]
 #[expect(dead_code, reason = "the capture tool uses part of the demo")]
@@ -14,10 +17,11 @@ mod sampledata;
 
 use controller::DemoApp;
 use egui::containers::panel::PanelState;
-use egui::{Context, Id, Rect, Vec2, vec2};
+use egui::{Context, Rect, Vec2, ViewportId, vec2};
 use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
-use egui_charts::model::Bar;
+use egui_charts::model::{Bar, Timeframe};
 use egui_charts::studies::{self, Indicator};
+use egui_charts::theme::Theme;
 use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
 use egui_charts::ui::top_toolbar::TopToolbarAction;
 use egui_kittest::Harness;
@@ -33,7 +37,7 @@ enum Step {
     /// Switch symbol, as picking one in symbol search does.
     Symbol(&'static str),
     /// Pick an interval in the top toolbar's interval menu.
-    Interval(&'static str),
+    Interval(Timeframe),
     /// Pick a style in the top toolbar's chart type menu.
     ChartType(&'static str),
     /// "Remove all indicators" in the drawing toolbar.
@@ -65,7 +69,7 @@ fn study<T: Indicator + Default + 'static>() -> Box<dyn Indicator> {
 
 /// Logical window sizes: a full-width README image, and one of a pair shown side by side.
 const WIDE: Vec2 = vec2(1100.0, 700.0);
-const HALF: Vec2 = vec2(760.0, 500.0);
+const HALF: Vec2 = vec2(900.0, 560.0);
 
 fn scenes() -> Vec<Scene> {
     use Step::*;
@@ -98,7 +102,7 @@ fn scenes() -> Vec<Scene> {
             pointer: Some(vec2(0.62, 0.3)),
         },
         chart_type("type-heikin-ashi", "Heikin Ashi"),
-        chart_type("type-renko", "Renko"),
+        chart_type("type-baseline", "Baseline"),
         chart_type("type-kagi", "Kagi"),
         chart_type("type-point-and-figure", "Point and Figure"),
         scene(
@@ -117,12 +121,23 @@ fn scenes() -> Vec<Scene> {
             vec![Symbol(SAMPLE), ClearStudies, Drawings(analysis)],
         ),
         scene(
+            "themes",
+            WIDE,
+            Crop::Window,
+            vec![
+                Symbol(SAMPLE),
+                ClearStudies,
+                Study(study::<studies::SuperTrend>),
+                Study(study::<studies::RSI>),
+            ],
+        ),
+        scene(
             "tpo",
             HALF,
             Crop::Chart,
             vec![
                 Symbol(SAMPLE),
-                Interval("30"),
+                Interval(Timeframe::Min30),
                 ClearStudies,
                 ChartType("TPO"),
             ],
@@ -133,7 +148,7 @@ fn scenes() -> Vec<Scene> {
             Crop::Chart,
             vec![
                 Symbol(SAMPLE),
-                Interval("30"),
+                Interval(Timeframe::Min30),
                 ClearStudies,
                 Study(study::<studies::CVD>),
                 Drawings(profile),
@@ -229,25 +244,19 @@ fn profile(bars: &[Bar]) -> Vec<Drawing> {
 fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
     match step {
         Step::Symbol(s) => app.switch_symbol(s),
-        Step::Interval(i) => {
-            app.handle_top_toolbar(ctx, TopToolbarAction::IntervalSelected((*i).into()))
-        }
+        Step::Interval(tf) => app.handle_top_toolbar(ctx, TopToolbarAction::IntervalSelected(*tf)),
         Step::ChartType(t) => {
             app.handle_top_toolbar(ctx, TopToolbarAction::ChartStyleSelected((*t).into()))
         }
         Step::ClearStudies => app.handle_drawing_toolbar(DrawingToolbarAction::RemoveAllIndicators),
         Step::Study(make) => {
-            app.trading_chart.indicators.add(make());
-            app.trading_chart.indicators.calculate_all(&app.bars);
+            app.chart.add_indicator(make());
         }
         Step::Drawings(place) => {
-            let drawings = place(&app.bars);
-            let dm = app
-                .trading_chart
-                .drawing_manager
-                .as_mut()
-                .expect("the demo chart has drawing tools");
-            drawings.into_iter().for_each(|d| dm.add_synced_drawing(d));
+            let dm = app.chart.drawings_mut();
+            place(&app.bars)
+                .into_iter()
+                .for_each(|d| dm.add_synced_drawing(d));
         }
     }
 }
@@ -255,9 +264,10 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
 /// The chart area: the window minus the demo's toolbars and side bars, from the panel rects egui stored last frame.
 fn chart_rect(ctx: &Context) -> Rect {
     let panel = |id: &str| {
-        PanelState::load(ctx, Id::new(id))
+        // The demo shows its panels in the root Ui, and egui keys a panel's state by its parent Ui.
+        PanelState::load(ctx, ViewportId::ROOT.root_ui_id().with(id))
             .unwrap_or_else(|| panic!("no demo panel `{id}`"))
-            .rect
+            .outer_rect
     };
     let mut r = ctx.content_rect();
     r.min.y = panel("symbol_header").max.y.max(panel("toolbar").max.y);
@@ -271,6 +281,12 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     let mut h = Harness::builder()
         .with_size(scene.size)
         .with_pixels_per_point(scale)
+        // The chart draws its own crosshair; kittest would paint a pointer arrow over it.
+        .with_render_cursor(false)
+        // Glyphs no bundled font has (arrows, small triangles in the toolbars) stay boxes, as the demo shows them.
+        .allow_missing_glyphs()
+        // A capture run, not an accessibility test: the demo has icon buttons without an accessible name.
+        .with_accessibility_check(false)
         .with_max_steps(10_000)
         .wgpu()
         .build_eframe(|cc| DemoApp::new(cc));
@@ -278,7 +294,10 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     let ctx = h.ctx.clone();
     let app = h.state_mut();
     if light {
-        app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
+        // The whole light theme, not the demo's toggle, which recolours only part of the chart.
+        app.theme = Theme::light();
+        let config = app.theme.apply_to_config(app.chart.config().clone());
+        *app.chart.config_mut() = config;
     }
     for step in &scene.steps {
         apply(app, &ctx, step);
@@ -327,9 +346,7 @@ fn main() {
     std::fs::create_dir_all(out).unwrap();
     for scene in scenes().iter().filter(|s| s.name.contains(filter)) {
         for light in [false, true] {
-            for scale in [1.0, 2.0] {
-                shoot(scene, light, scale, out);
-            }
+            shoot(scene, light, 2.0, out);
         }
         eprintln!("captured {}", scene.name);
     }
