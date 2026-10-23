@@ -24,26 +24,23 @@ impl RankCorrelationIndex {
         }
     }
 
-    /// Compute ranks for a slice of f64 values (average rank for ties).
-    fn rank(values: &[f64]) -> Vec<f64> {
-        let n = values.len();
-        let mut indexed: Vec<(usize, f64)> = values.iter().copied().enumerate().collect();
-        indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-        let mut ranks = vec![0.0; n];
+    /// Fill average ranks for ties, reusing the sorting and output buffers.
+    fn rank(data: &[Bar], indexed: &mut Vec<(usize, f64)>, ranks: &mut [f64]) {
+        indexed.clear();
+        indexed.extend(data.iter().enumerate().map(|(i, b)| (i, b.close)));
+        indexed.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         let mut i = 0;
-        while i < n {
-            let mut j = i;
-            while j < n - 1 && (indexed[j + 1].1 - indexed[j].1).abs() < 1e-15 {
-                j += 1;
+        while i < indexed.len() {
+            let mut end = i + 1;
+            while end < indexed.len() && indexed[end].1 == indexed[i].1 {
+                end += 1;
             }
-            let avg_rank = (i + j) as f64 / 2.0 + 1.0;
-            for k in i..=j {
-                ranks[indexed[k].0] = avg_rank;
+            let rank = (i + end + 1) as f64 / 2.0;
+            for &(at, _) in &indexed[i..end] {
+                ranks[at] = rank;
             }
-            i = j + 1;
+            i = end;
         }
-        ranks
     }
 }
 
@@ -61,6 +58,8 @@ impl RankCorrelationIndex {
             return values;
         }
 
+        let mut indexed = Vec::with_capacity(self.period.min(data.len()));
+        let mut ranks = vec![0.0; self.period.min(data.len())];
         for i in 0..data.len() {
             if i + 1 < self.period {
                 values.push(IndicatorValue::None);
@@ -68,26 +67,21 @@ impl RankCorrelationIndex {
             }
 
             let start = i + 1 - self.period;
-            let prices: Vec<f64> = data[start..=i].iter().map(|b| b.close).collect();
+            Self::rank(&data[start..=i], &mut indexed, &mut ranks);
             let n = self.period as f64;
-
-            let price_ranks = Self::rank(&prices);
-            // Time ranks are simply 1, 2, ..., n
-            let time_ranks: Vec<f64> = (1..=self.period).map(|t| t as f64).collect();
-
-            // Spearman = 1 - 6 * sum(d^2) / (n * (n^2 - 1))
-            let sum_d2: f64 = price_ranks
+            let mean = (n + 1.0) / 2.0;
+            let covariance: f64 = ranks
                 .iter()
-                .zip(time_ranks.iter())
-                .map(|(pr, tr)| (pr - tr).powi(2))
+                .enumerate()
+                .map(|(i, rank)| (i as f64 + 1.0 - mean) * (rank - mean))
                 .sum();
-
-            let denom = n * (n * n - 1.0);
-            let spearman = if denom.abs() < 1e-15 {
-                0.0
-            } else {
-                1.0 - 6.0 * sum_d2 / denom
-            };
+            let variance: f64 = ranks.iter().map(|rank| (rank - mean).powi(2)).sum();
+            if variance == 0.0 {
+                values.push(IndicatorValue::None);
+                continue;
+            }
+            // Spearman is Pearson correlation of the ranks, including ties.
+            let spearman = covariance / (variance * n * (n * n - 1.0) / 12.0).sqrt();
 
             // Scale to [-100, 100]
             values.push(IndicatorValue::Single(

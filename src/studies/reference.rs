@@ -31,7 +31,6 @@
 //! second bar, the first with a previous close.
 
 use crate::model::Bar;
-use crate::studies::StochasticRSI;
 use crate::studies::{
     ADX, ATR, AccumulationDistribution, Aroon, AwesomeOscillator, BalanceOfPower, BollingerBands,
     BollingerBandsWidth, CCI, ChaikinMoneyFlow, ChaikinVolatility, ChandeMomentumOscillator,
@@ -44,6 +43,7 @@ use crate::studies::{
     UltimateOscillator, VWMA, VortexIndicator, WMA, Week52HighLow, Week52HighLowLevels,
     WeightedClose, WilliamsR, ZeroTrendVol,
 };
+use crate::studies::{KnowSureThing, RankCorrelationIndex, RelativeVigorIndex, StochasticRSI};
 use chrono::{TimeZone, Utc};
 
 const EXPECTED: &str = include_str!("reference/expected.txt");
@@ -254,7 +254,33 @@ fn staple_studies_match_published_definitions() {
         .enumerate()
         .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
         .collect();
+    let doubling: Vec<_> = [1.0, 2.0, 4.0, 2.0, 4.0, 8.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
+        .collect();
+    let vigor: Vec<_> = [1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| Bar::new(bars[i].time, 0.0, 10.0, 0.0, c, 1.0))
+        .collect();
+    let ties: Vec<_> = [1.0, 1.0, 2.0, 2.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
+        .collect();
     studies.extend([
+        (
+            "KST-hand",
+            Box::new(KnowSureThing::new().with_params([1; 4], [2; 4], 2)) as Box<dyn Indicator>,
+            doubling,
+        ),
+        ("RVI-hand", Box::new(RelativeVigorIndex::new(2)), vigor),
+        (
+            "Rank-ties-hand",
+            Box::new(RankCorrelationIndex::new(4)),
+            ties,
+        ),
         (
             "StochRSI-hand",
             Box::new(StochasticRSI::new(2, 2, 2, 2)) as Box<dyn Indicator>,

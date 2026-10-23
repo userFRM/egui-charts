@@ -92,6 +92,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- KST and RVI use running means of complete windows, STC shares the linear rolling extrema, and RankCorr reuses its sorting buffers and computes Pearson correlation of average ranks for ties. Migration: KST first appears at `max(roc_period + sma_period - 1)`, with its signal `signal_period - 1` bars later; RVI starts at bar `period + 2`, its signal at `period + 5`. Incomplete windows no longer produce averages. RankCorr values on tied prices follow the rank correlation definition; flat windows have no value. ([#179](https://github.com/userFRM/egui-charts/issues/179))
+- KAMA keeps a running sum of its last `period` absolute price changes and resumes last-bar updates and appends through the shared study driver. Full calculations are linear in history length and no longer allocate a price window for every bar. Its SMA seed, efficiency ratio, smoothing and handling of non-finite closes are unchanged. ([#179](https://github.com/userFRM/egui-charts/issues/179))
+
 - Stochastic RSI returns its first value as soon as RSI, stochastic, %K and %D have warmed up, including histories of 32 and 33 bars at the default lengths. ([#714](https://github.com/userFRM/egui-charts/issues/714))
 
 - DEMA and TEMA seed each inner exponential average with its own first full window, so constant input stays constant and the warm-up remains `2 * period - 2` and `3 * period - 3` bars. ([#713](https://github.com/userFRM/egui-charts/issues/713))
