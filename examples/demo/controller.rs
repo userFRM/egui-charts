@@ -1679,6 +1679,20 @@ impl DemoApp {
                     charts.insert(self.layout_slot, &mut self.chart);
                     self.layout.show(ui, &mut charts);
                 }
+                if self.replay.is_none() { self.alert_host.evaluate(&self.chart, chrono::Utc::now()); }
+                let mapping = self.chart.get_chart_mapping();
+                if self.settings_state.alerts.show_alerts {
+                    let decimals = self.chart.instrument().and_then(egui_charts::scales::instrument_price_precision).map(usize::from).unwrap_or(2);
+                    let currency = self.chart.instrument().and_then(|i| i.currency.as_deref()).unwrap_or("");
+                    if let Some(alert) = egui_charts::chart::render_alert_levels(
+                        ui, &mapping, self.alerts.alerts().iter().filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
+                        self.settings_state.alerts.alert_color, self.settings_state.alerts.show_alert_labels,
+                        |price| format!("{price:.decimals$} {currency}"),
+                    ) { self.alerts.save(alert); }
+                }
+                if let Some(price) = egui_charts::chart::alert_shortcut_price(ui, &mapping) {
+                    self.quick_price_alert(self.chart.symbol().to_owned(), price);
+                }
                 if let Some(id) = self.chart.take_indicator_settings_request() {
                     self.open_indicator_settings(id);
                 }
@@ -2036,6 +2050,98 @@ fn apply_settings_state(
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn alt_a_creates_a_host_alert_at_the_hovered_price_and_dragging_submits_its_new_level() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let frame = |app: &mut DemoApp, events: Vec<egui::Event>, _modifiers: egui::Modifiers| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.show_chart(ui, egui::Color32::BLACK);
+                },
+            )
+            .drop_without_applying_deltas();
+            app.alerts.poll(&ctx, &mut app.toasts);
+        };
+        frame(&mut app, vec![], egui::Modifiers::NONE);
+        frame(&mut app, vec![], egui::Modifiers::NONE);
+        let map = app.chart.get_chart_mapping();
+        let point = egui::pos2(map.rect.center().x, map.rect.center().y);
+        let expected = map.y_to_price(point.y);
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::ALT,
+                },
+            ],
+            egui::Modifiers::ALT,
+        );
+        assert_eq!(app.alerts.alerts().len(), 1);
+        assert_eq!(
+            app.alerts.alerts()[0].condition,
+            AlertCondition::Crossing(expected)
+        );
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            egui::Modifiers::NONE,
+        );
+        let target = point + egui::vec2(0.0, 45.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let scale = app.chart.get_time_scale_state();
+        frame(&mut app, vec![button(point, true)], egui::Modifiers::NONE);
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(point + egui::vec2(0.0, 5.0))],
+            egui::Modifiers::NONE,
+        );
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(target)],
+            egui::Modifiers::NONE,
+        );
+        frame(&mut app, vec![button(target, false)], egui::Modifiers::NONE);
+        let AlertCondition::Crossing(level) = app.alerts.alerts()[0].condition else {
+            panic!("expected crossing");
+        };
+        assert!(
+            (level - map.y_to_price(target.y)).abs() < 1e-6,
+            "{level} expected {}",
+            map.y_to_price(target.y)
+        );
+        assert_eq!(
+            app.chart.get_time_scale_state(),
+            scale,
+            "dragging an alert must not pan the chart"
+        );
+    }
 
     /// External chart modes and completed drawings are reflected before the toolbar is painted.
     #[test]
