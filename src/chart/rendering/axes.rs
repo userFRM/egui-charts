@@ -13,7 +13,7 @@ pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
 pub(crate) const TIME_LABEL_GAP: f32 = 5.0;
 
 /// Padding between an axis tag's text and its edge.
-const TAG_PADDING: Vec2 = Vec2::new(4.0, 2.0);
+const TAG_PADDING: Vec2 = Vec2::new(8.0, 1.5);
 
 /// The font of every axis label and tag: the theme's label text.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
@@ -87,7 +87,12 @@ pub fn render_price_line(
     let start = Pos2::new(x0, y);
     let end = Pos2::new(price_rect.max.x, y);
     let stroke = Stroke::new(line.width, line.color);
-    if let Some((dash, gap)) = line.style.dash_pattern() {
+    let pattern = match line.style {
+        crate::model::LineStyle::Dashed => Some((4.0, 4.0)),
+        crate::model::LineStyle::Dotted => Some((1.0, 3.0)),
+        crate::model::LineStyle::Solid => None,
+    };
+    if let Some((dash, gap)) = pattern {
         draw_dashed_line(painter, start, end, stroke, dash, gap);
     } else {
         painter.line_segment([start, end], stroke);
@@ -110,15 +115,10 @@ pub fn render_price_line(
         transform.to_scale(line.price),
         price_map.price_precision().unwrap_or(2),
     );
-    // Keep white text on financial colours; pale custom fills still need dark text.
-    let text_color = if contrast(Color32::WHITE, line.color) >= 2.0 {
-        Color32::WHITE
-    } else {
-        Color32::BLACK
-    };
+    let text_color = tag_text_color(line.color);
     Some(paint_axis_tag(
         painter,
-        Pos2::new(price_rect.max.x + PRICE_LABEL_GAP, y),
+        Pos2::new(price_rect.max.x + 5.0 + TAG_PADDING.x, y),
         Align2::LEFT_CENTER,
         axis_right,
         None,
@@ -126,6 +126,219 @@ pub fn render_price_line(
         text_color,
         line.color,
     ))
+}
+
+// Keep white text on financial colours; pale custom fills still need dark text.
+fn tag_text_color(fill: Color32) -> Color32 {
+    if contrast(Color32::WHITE, fill) >= 2.0 {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
+}
+
+/// Paints a hover tag within the plot's horizontal bounds, reserving its action cell.
+pub(crate) fn paint_crosshair_tag(
+    painter: &Painter,
+    anchor: Pos2,
+    align: Align2,
+    bounds: std::ops::RangeInclusive<f32>,
+    text: String,
+    colors: (Color32, Color32),
+    height: f32,
+    action_width: f32,
+    covered: Option<Rect>,
+) -> Rect {
+    let (text_color, fill) = colors;
+    let galley = painter.layout_no_wrap(text, axis_font(painter.ctx()), text_color);
+    let size = Vec2::new(
+        galley.size().x
+            + if action_width > 0.0 {
+                16.0 + action_width
+            } else {
+                32.0
+            },
+        height.max(galley.size().y),
+    );
+    let mut tag = align.anchor_size(anchor, size);
+    tag = tag.translate(Vec2::new((bounds.end() - tag.right()).min(0.0), 0.0));
+    tag = tag.translate(Vec2::new((bounds.start() - tag.left()).max(0.0), 0.0));
+    if let Some(covered) = covered.filter(|covered| covered.intersects(tag)) {
+        tag.min.x = tag.min.x.min(covered.min.x);
+        tag.max.x = tag.max.x.max(covered.max.x);
+    }
+    painter.rect_filled(tag, 1.0, fill);
+    let text_pos = Pos2::new(
+        tag.left() + action_width + if action_width > 0.0 { 10.0 } else { 16.0 },
+        tag.center().y - galley.size().y / 2.0,
+    );
+    painter.galley(text_pos, galley, text_color);
+    tag
+}
+
+/// Width of the current price labels and tags, including their plot gap and right clearance.
+/// Hosts use this when allocating a price axis instead of a fixed oversized column.
+pub fn price_axis_width(painter: &Painter, price_map: &PriceMap) -> f32 {
+    crate::scales::PriceMarkGenerator::new()
+        .generate_marks(price_map)
+        .into_iter()
+        .map(|mark| {
+            painter
+                .layout_no_wrap(mark.label, axis_font(painter.ctx()), Color32::WHITE)
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max)
+        + 5.0
+        + TAG_PADDING.x * 2.0
+        + 2.0
+}
+
+/// Paints independent current close, session and volume readouts, returning their rectangles
+/// in that order. Pass all three rectangles to tick occlusion and pointer routing.
+///
+/// Session lines stay at their data price. Tags move apart only to keep the rows readable;
+/// volume is a value readout above the price rows, never a price coordinate. The caller supplies
+/// the current values and colours independently of the historical bar under the pointer.
+pub fn render_quote_tags(
+    painter: &Painter,
+    price_rect: Rect,
+    price_map: &PriceMap,
+    close: &PriceLine,
+    session: Option<(&crate::model::quote::SessionQuote, Color32)>,
+    volume: Option<(f64, Color32)>,
+    axis_right: f32,
+) -> [Option<Rect>; 3] {
+    use crate::scales::{PriceFormatter, VolumeFormatter};
+    let mut tags = [None; 3];
+    if !price_map
+        .range()
+        .contains(price_map.transform().to_scale(close.price))
+    {
+        return tags;
+    }
+    let height = 17.0;
+    let close_y = price_map.price_to_y(close.price);
+    let session = session.filter(|(quote, _)| {
+        price_map
+            .range()
+            .contains(price_map.transform().to_scale(quote.price))
+    });
+    let session_y = session.map(|(quote, _)| {
+        let y = price_map.price_to_y(quote.price);
+        if (y - close_y).abs() < height {
+            close_y - height
+        } else {
+            y
+        }
+    });
+    let volume = volume.filter(|(value, _)| value.is_finite() && *value >= 0.0);
+    let volume_y = close_y.min(session_y.unwrap_or(close_y)) - height;
+    let top = volume
+        .filter(|_| volume_y.is_finite())
+        .map_or(session_y.unwrap_or(close_y).min(close_y), |_| volume_y)
+        - height / 2.0;
+    let bottom = close_y.max(session_y.unwrap_or(close_y)) + height / 2.0;
+    let shift = (price_rect.top() - top).max(0.0) - (bottom - price_rect.bottom()).max(0.0);
+    let transform = price_map.transform();
+    let decimals = price_map.price_precision().unwrap_or(2);
+    let mut draw = |slot: usize, y: f32, text: String, fill: Color32| {
+        tags[slot] = Some(paint_axis_tag(
+            painter,
+            Pos2::new(price_rect.right() + 5.0 + TAG_PADDING.x, y + shift),
+            Align2::LEFT_CENTER,
+            axis_right,
+            None,
+            text,
+            tag_text_color(fill),
+            fill,
+        ));
+    };
+    let mut line = close.clone();
+    line.axis_label = false;
+    render_price_line(
+        painter,
+        price_rect,
+        price_map,
+        &line,
+        price_rect.left(),
+        false,
+        axis_right,
+    );
+    draw(
+        0,
+        close_y,
+        transform.label(transform.to_scale(close.price), decimals),
+        close.color,
+    );
+    if let Some(((quote, color), y)) = session.zip(session_y) {
+        let line = PriceLine::new(quote.price, color)
+            .with_style(crate::model::LineStyle::Dotted)
+            .with_axis_label(false)
+            .with_width(0.7);
+        render_price_line(
+            painter,
+            price_rect,
+            price_map,
+            &line,
+            price_rect.left(),
+            false,
+            axis_right,
+        );
+        let label = transform.label(transform.to_scale(quote.price), decimals);
+        draw(1, y, format!("{} {label}", quote.qualifier), color);
+    }
+    if let Some((value, color)) = volume {
+        draw(2, volume_y, VolumeFormatter::default().format(value), color);
+    }
+    tags
+}
+
+/// Draws and routes the add cell of a crosshair price tag. A click returns the tagged price
+/// for the host's alert, order or price-line menu. Call before handling price-axis drags.
+#[cfg(feature = "icons")]
+pub fn crosshair_price_action(ui: &mut egui::Ui, tag: Rect, price: f64) -> Option<f64> {
+    let cell = Rect::from_min_size(tag.min, Vec2::new(21.0, tag.height()));
+    let response = ui.interact(
+        cell,
+        ui.scope_id().with("crosshair_price_action"),
+        egui::Sense::click(),
+    );
+    let foreground = Color32::WHITE;
+    ui.painter().line_segment(
+        [cell.right_top(), cell.right_bottom()],
+        Stroke::new(0.5, foreground),
+    );
+    ui.painter()
+        .circle_stroke(cell.center(), 7.0, Stroke::new(0.8, foreground));
+    crate::icons::icons::PLUS
+        .as_image_tinted(Vec2::splat(14.0), foreground)
+        .paint_at(ui, Rect::from_center_size(cell.center(), Vec2::splat(14.0)));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Add at price"));
+    response
+        .on_hover_text("Add at price")
+        .clicked()
+        .then_some(price)
+}
+
+/// A 24-point scale-settings target in the price/time-axis corner. The caller opens its
+/// existing scale menu when the returned response is clicked, before handling scale drags.
+#[cfg(feature = "icons")]
+pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
+    let target = Rect::from_center_size(corner.center(), Vec2::splat(24.0)).intersect(corner);
+    let response = ui.interact(
+        target,
+        ui.scope_id().with("axis_settings"),
+        egui::Sense::click(),
+    );
+    crate::icons::icons::SETTINGS
+        .as_image_tinted(Vec2::splat(16.0), ui.ctx().active_theme().chart.axis_text)
+        .paint_at(
+            ui,
+            Rect::from_center_size(target.center(), Vec2::splat(16.0)),
+        );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Scale settings"));
+    response.on_hover_text("Scale settings")
 }
 
 #[cfg(test)]
@@ -285,5 +498,112 @@ mod tests {
             assert_eq!(tag.corner_radius.sw, 0);
             output.drop_without_applying_deltas();
         }
+    }
+    /// Current values stay independent and ordered when price coordinates coincide.
+    #[test]
+    fn quote_tags_separate_colliding_prices_and_volume() {
+        use crate::model::quote::SessionQuote;
+        use chrono::{TimeZone, Utc};
+        for (close, session_price) in [(704.61, 704.64), (709.99, 709.99), (700.01, 700.01)] {
+            let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 100.0));
+            let map = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(700.0, 710.0),
+                0.0,
+                100.0,
+                false,
+            )
+            .with_price_precision(Some(2));
+            let session = SessionQuote::new(
+                Utc.with_ymd_and_hms(2024, 10, 1, 0, 0, 0).unwrap(),
+                session_price,
+                "EXT",
+            );
+            let ctx = Context::default();
+            let mut tags = [None; 3];
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                tags = render_quote_tags(
+                    ui.painter(),
+                    pane,
+                    &map,
+                    &PriceLine::new(close, Color32::RED),
+                    Some((&session, Color32::from_rgb(251, 142, 1))),
+                    Some((1_590_000.0, Color32::RED)),
+                    200.0,
+                );
+                if let Some(tag) = tags[0] {
+                    assert!(price_axis_width(ui.painter(), &map) >= tag.width() + 5.0);
+                }
+            });
+            let rects: Vec<_> = tags.into_iter().flatten().collect();
+            assert_eq!(rects.len(), 3);
+
+            assert!(
+                rects
+                    .iter()
+                    .all(|rect| rect.top() >= 0.0 && rect.bottom() <= 100.0)
+            );
+            assert!(
+                rects[2].bottom() <= rects[1].top() && rects[1].bottom() <= rects[0].top(),
+                "{rects:?}"
+            );
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                labels,
+                [
+                    format!("{close:.2}"),
+                    format!("EXT {session_price:.2}"),
+                    "1.59M".into()
+                ]
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    /// Add and settings cells emit their own clicks without a chart drag.
+    #[cfg(feature = "icons")]
+    #[test]
+    fn axis_controls_emit_their_actions() {
+        use egui::{Event, Modifiers, PointerButton};
+        let ctx = Context::default();
+        let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
+        let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
+        let mut actions = Vec::new();
+        for (pos, expected) in [
+            (Pos2::new(110.0, 110.0), "add"),
+            (corner.center(), "settings"),
+        ] {
+            for pressed in [None, Some(true), Some(false)] {
+                let mut input = RawInput::default();
+                input.events.push(Event::PointerMoved(pos));
+                if let Some(pressed) = pressed {
+                    input.events.push(Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    });
+                }
+                let output = ctx.run_ui(input, |ui| {
+                    if let Some(price) = crosshair_price_action(ui, tag, 704.64) {
+                        assert_eq!(price, 704.64);
+                        actions.push("add");
+                    }
+                    if axis_settings_button(ui, corner).clicked() {
+                        actions.push("settings");
+                    }
+                });
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(actions.last(), Some(&expected));
+        }
+        assert_eq!(actions, ["add", "settings"]);
     }
 }

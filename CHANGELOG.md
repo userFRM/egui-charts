@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `chart::render_quote_tags` paints independent current close, host-supplied `model::quote::SessionQuote` and abbreviated volume readouts, separating colliding tags and returning each rectangle for input and tick occlusion. `chart::price_axis_width` measures the formatted labels. Hosts composing their own axes can route `chart::crosshair_price_action` to an add-at-price menu and `chart::axis_settings_button` to scale settings; the two controls require `icons` and return clicks to the host.
+
 - `Chart::set_price_lines(series, lines)` draws horizontal lines at prices on a series, such as an entry, a stop or a target. A `model::PriceLine` has a price, a colour, a width, a line style, an optional title and a price axis label that can be turned off. The lines follow the series' price scale in every mode, are hidden while their price is off the scale or not finite, and label the axis in the scale's units. Only `SeriesId::MAIN` has price lines; another id is ignored with a warning. `model::LineStyle` is the line style of drawings and price lines; `drawings::LineStyle` remains a re-export of the same type.
 - `Chart::scroll_to_time` scrolls the bar nearest a time to the centre of the chart without changing the zoom. A time outside the data shows the nearest end, and with a feed, an older time loads history until it is reached. The demo's go-to-date dialog uses it.
 - The chart draws navigation buttons in a row at the bottom of the main pane: zoom out, zoom in, scroll left, scroll right, reset, and auto-scale, logarithmic and percent toggles that show the price scale's current state. Zoom moves by `KeyboardOptions::zoom_step` around the right edge, scrolling by the visible bar count. `ChartConfig::navigation_buttons` (`NavigationButtons::Always`, `OnHover` or `Never`, `OnHover` by default) sets when they show, and the chart settings dialog's Navigation row edits it. Migration: `ChartConfig` struct literals must set `navigation_buttons` or use `..ChartConfig::default()`.
@@ -69,6 +71,8 @@ All notable changes to this project are documented in this file. The format is b
 - `ToolbarState::lock_all` and `ToolbarState::hide_drawings`, `hide_indicators`, `hide_positions` and `hide_orders` hold what the Lock button and the Hide menu show: the lock button is filled with a closed padlock while `lock_all` is set, and the Hide menu checks each hidden group. The bar sets them from the clicks it reports; a host that changes the chart's state elsewhere sets them too. Migration: struct literals of `ToolbarState` set the five fields or use `..ToolbarState::default()`.
 
 ### Fixed
+
+- Price lines use 4 px dashes with 4 px gaps, and dotted price lines use 1 px dots with 3 px gaps. Drawing line patterns keep their existing lengths. Price tags are about 17 px high at the default axis font size.
 
 - Intraday time marks use actual session bars and the formatter's timezone for calendar boundaries, so closed hours and missing weekends take no slots and month labels name the new month. Day labels show the day number. `TimeFormatter::wall_time` supplies calendar fields and `format_crosshair` supplies a hover readout; both have defaults for existing custom formatters. Intraday hover dates include weekday, day, month, short year and time, with fractional seconds preserved through timezone conversion.
 
