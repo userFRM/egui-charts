@@ -6,7 +6,7 @@
 
 // Application state trait for UI synchronization
 pub mod app_state;
-pub use app_state::ChartAppState;
+pub use app_state::{ChartAppState, Control};
 
 // Shared UI domain model
 pub mod model;

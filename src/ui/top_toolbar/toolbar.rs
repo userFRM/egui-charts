@@ -26,6 +26,8 @@ use super::{
 };
 use crate::model::ChartType;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::Control;
+use std::collections::HashSet;
 
 /// A place in the strip, holding one control.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -64,12 +66,7 @@ const LEFT: &[&[Slot]] = &[
 /// Right-aligned part of the strip, in groups divided by separators.
 const RIGHT: &[&[Slot]] = &[
     &[S::Theme, S::Layouts, S::Save],
-    &[
-        S::QuickSearch,
-        S::Settings,
-        S::Fullscreen,
-        S::Screenshot,
-    ],
+    &[S::QuickSearch, S::Settings, S::Fullscreen, S::Screenshot],
 ];
 
 /// Controls that move into the overflow menu when the strip is too narrow, the first to go
@@ -166,6 +163,18 @@ impl Slot {
     fn compacts(self) -> bool {
         matches!(self, S::Indicators | S::Alert | S::Replay)
     }
+
+    /// The host control that hides this slot, if any.
+    fn host_control(self) -> Option<Control> {
+        match self {
+            S::Compare => Some(Control::Compare),
+            S::Templates => Some(Control::Templates),
+            S::Alert => Some(Control::Alerts),
+            S::Replay => Some(Control::Replay),
+            S::Save | S::Layouts => Some(Control::Layouts),
+            _ => None,
+        }
+    }
 }
 
 /// Top toolbar widget
@@ -178,6 +187,8 @@ pub struct TopToolbar {
     pub chart_type_selector: ChartTypeSelector,
     /// Layout selector dropdown
     pub layout_menu: LayoutMenu,
+    /// Controls the host hid.
+    host_hidden: HashSet<Control>,
 }
 
 impl Default for TopToolbar {
@@ -188,6 +199,7 @@ impl Default for TopToolbar {
             timeframe_selector: TimeframeSelector::new(Timeframe::new(1, TimeframeUnit::Day)),
             chart_type_selector: ChartTypeSelector::new(ChartType::Candles),
             layout_menu: LayoutMenu::new(),
+            host_hidden: HashSet::new(),
         }
     }
 }
@@ -202,6 +214,18 @@ impl TopToolbar {
     pub fn with_config(mut self, config: TopToolbarConfig) -> Self {
         self.config = config;
         self
+    }
+
+    /// Shows or hides the buttons of `control`: Compare, Templates, Alerts, Replay, and
+    /// Layouts (the Save and Layout setup buttons). The toolbar ignores the other controls.
+    pub fn set_control_visible(&mut self, control: Control, visible: bool) {
+        crate::ui::app_state::set_control_visible(&mut self.host_hidden, control, visible);
+    }
+
+    /// Whether the host left `slot` visible.
+    fn is_shown(&self, slot: Slot) -> bool {
+        slot.host_control()
+            .is_none_or(|control| !self.host_hidden.contains(&control))
     }
 
     /// Show the full toolbar, reading the active symbol from app state.
@@ -245,7 +269,11 @@ impl TopToolbar {
         let available = ui.available_width();
         let fits =
             |compact, hidden: &[Slot]| self.strip_width(ui, symbol, compact, hidden) <= available;
-        let order = &OVERFLOW_ORDER[..];
+        // Host-hidden slots never reach the overflow menu.
+        let order: Vec<Slot> = OVERFLOW_ORDER
+            .into_iter()
+            .filter(|&c| self.is_shown(c))
+            .collect();
         let (compact, hidden) = if fits(false, &[]) {
             (false, &order[..0])
         } else {
@@ -298,7 +326,9 @@ impl TopToolbar {
         let mut width = 0.0;
         let mut shown = 0_usize;
         for group in groups {
-            let visible = group.iter().filter(|&c| !hidden.contains(c));
+            let visible = group
+                .iter()
+                .filter(|&&c| !hidden.contains(&c) && self.is_shown(c));
             let (mut group_width, mut count) = (0.0, 0);
             for &control in visible {
                 group_width += self.control_width(ui, control, compact, symbol);
@@ -340,15 +370,19 @@ impl TopToolbar {
     ) {
         let mut first_group = true;
         for group in groups {
-            let mut visible = group.iter().filter(|&c| !hidden.contains(c)).peekable();
-            if visible.peek().is_none() {
+            let visible: Vec<Slot> = group
+                .iter()
+                .copied()
+                .filter(|&c| !hidden.contains(&c) && self.is_shown(c))
+                .collect();
+            if visible.is_empty() {
                 continue;
             }
             if !first_group {
                 ui.toolbar_separator();
             }
             first_group = false;
-            for (i, &control) in visible.enumerate() {
+            for (i, control) in visible.into_iter().enumerate() {
                 if i > 0 {
                     ui.add_space(gap());
                 }
@@ -498,18 +532,48 @@ mod tests {
     }
 
     #[test]
-    fn undo_and_redo_ignore_clicks_while_there_is_nothing_to_undo_or_redo() {
+    fn controls_that_are_off_emit_nothing() {
+        type Off = fn(&mut TopToolbar);
+        let rows: [(Off, &[TopToolbarAction]); 7] = [
+            (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
+            (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
+            (
+                |t| t.set_control_visible(Control::Compare, false),
+                &[TopToolbarAction::OpenCompare],
+            ),
+            (
+                |t| t.set_control_visible(Control::Templates, false),
+                &[TopToolbarAction::OpenIndicatorTemplates],
+            ),
+            (
+                |t| t.set_control_visible(Control::Alerts, false),
+                &[TopToolbarAction::CreateAlert],
+            ),
+            (
+                |t| t.set_control_visible(Control::Replay, false),
+                &[TopToolbarAction::ToggleReplay],
+            ),
+            (
+                |t| t.set_control_visible(Control::Layouts, false),
+                &[
+                    TopToolbarAction::Save,
+                    TopToolbarAction::Layout(LayoutAction::OpenMenu),
+                ],
+            ),
+        ];
         let ctx = egui::Context::default();
-        let mut toolbar = TopToolbar::default();
-        let actions = click_along(&ctx, &mut toolbar);
-        assert!(actions.contains(&TopToolbarAction::Undo));
-        assert!(actions.contains(&TopToolbarAction::Redo));
-
-        toolbar.state.can_undo = false;
-        toolbar.state.can_redo = false;
-        let actions = click_along(&ctx, &mut toolbar);
-        assert!(!actions.contains(&TopToolbarAction::Undo));
-        assert!(!actions.contains(&TopToolbarAction::Redo));
-        assert!(actions.contains(&TopToolbarAction::ToggleReplay));
+        let on = click_along(&ctx, &mut TopToolbar::default());
+        for (turn_off, gone) in rows {
+            for action in gone {
+                assert!(on.contains(action), "{action:?} missing while on");
+            }
+            let mut toolbar = TopToolbar::default();
+            turn_off(&mut toolbar);
+            let off = click_along(&ctx, &mut toolbar);
+            for action in gone {
+                assert!(!off.contains(action), "{action:?} emitted while off");
+            }
+            assert!(off.contains(&TopToolbarAction::OpenIndicators));
+        }
     }
 }

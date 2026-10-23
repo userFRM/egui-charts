@@ -3,12 +3,15 @@
 //! Right-click context menu for the chart area. Provides trading actions,
 //! clipboard operations, chart management, and navigation options.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::chart::selection::{ChartElementId, SeriesId};
 use crate::config::KeyboardAction;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::{Theme, ThemeExt};
+use crate::ui::Control;
+use crate::ui::app_state::set_control_visible;
 use crate::ui::dialogs::{
     DrawingContextMenu, DrawingContextMenuAction, SeriesContextMenu, SeriesContextMenuAction,
 };
@@ -111,7 +114,6 @@ impl<A> MenuItem<A> {
         self.danger = true;
         self
     }
-
 }
 
 /// Menu entry - either an item or separator
@@ -219,9 +221,8 @@ pub(crate) fn show_menu<A: Clone>(
         .map(|entry| match entry {
             MenuEntry::Item(item) => Some((
                 layout(item.label.clone(), t.font_size, MAX_LABEL_WIDTH),
-                item.shortcut.map(|s| {
-                    layout(ctx.format_shortcut(&s), t.shortcut_font_size, f32::INFINITY)
-                }),
+                item.shortcut
+                    .map(|s| layout(ctx.format_shortcut(&s), t.shortcut_font_size, f32::INFINITY)),
             )),
             MenuEntry::Separator => None,
         })
@@ -403,6 +404,8 @@ pub struct ChartContextMenu {
     pub last_action: ContextMenuAction,
     /// Skip close detection on first frame after opening
     just_opened: bool,
+    /// Controls the host hid, set through [`ChartMenus::set_control_visible`].
+    pub(crate) hidden: HashSet<Control>,
 }
 
 impl Default for ChartContextMenu {
@@ -421,6 +424,7 @@ impl ChartContextMenu {
             indicator_cnt: 0,
             last_action: ContextMenuAction::None,
             just_opened: false,
+            hidden: HashSet::new(),
         }
     }
 
@@ -475,19 +479,22 @@ impl ChartContextMenu {
             MenuEntry::Separator,
         ];
         // Trading items need an instrument, so they are offered only with a symbol.
-        if !symbol.is_empty() {
-            items.extend([
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add alert on {symbol} at {price_str}…"),
-                        ContextMenuAction::AddAlert {
-                            symbol: symbol.clone(),
-                            price: self.click_price,
-                        },
-                    )
-                    .with_icon(&embedded_icons::ALERTS)
-                    .with_shortcut(KeyboardAction::CreateAlert.shortcut()),
-                ),
+        let mut trading = Vec::new();
+        if !symbol.is_empty() && !self.hidden.contains(&Control::Alerts) {
+            trading.push(MenuEntry::Item(
+                MenuItem::new(
+                    format!("Add alert on {symbol} at {price_str}…"),
+                    ContextMenuAction::AddAlert {
+                        symbol: symbol.clone(),
+                        price: self.click_price,
+                    },
+                )
+                .with_icon(&embedded_icons::ALERTS)
+                .with_shortcut(KeyboardAction::CreateAlert.shortcut()),
+            ));
+        }
+        if !symbol.is_empty() && !self.hidden.contains(&Control::Trading) {
+            trading.extend([
                 MenuEntry::Item(
                     MenuItem::new(
                         format!("Sell 1 {symbol} @ {price_str} limit"),
@@ -510,8 +517,11 @@ impl ChartContextMenu {
                     )
                     .with_icon(&embedded_icons::LONG_POS),
                 ),
-                MenuEntry::Separator,
             ]);
+        }
+        if !trading.is_empty() {
+            items.extend(trading);
+            items.push(MenuEntry::Separator);
         }
         items.extend([
             // View section
@@ -616,6 +626,14 @@ pub struct ChartMenus {
 }
 
 impl ChartMenus {
+    /// Shows or hides `control`: Alerts (the add alert rows of the chart and series menus)
+    /// and Trading (the chart menu's sell limit and buy stop rows). The menus ignore the other
+    /// controls.
+    pub fn set_control_visible(&mut self, control: Control, visible: bool) {
+        set_control_visible(&mut self.chart.hidden, control, visible);
+        set_control_visible(&mut self.series.hidden, control, visible);
+    }
+
     /// Opens the menu for the chart's last right-click, shows the open one and returns the
     /// chosen action. While a menu is open the chart draws no crosshair or tooltip under it.
     pub fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ChartContextAction> {

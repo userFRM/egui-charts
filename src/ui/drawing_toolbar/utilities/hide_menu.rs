@@ -29,11 +29,12 @@ impl HideMenu {
         (false, arrow_clicked, response.rect)
     }
 
-    /// Render the hide dropdown submenu.
+    /// Render the hide dropdown submenu, with the positions and orders rows when `trading`.
     pub fn show_submenu(
         ui: &mut Ui,
         sidebar_rect: Rect,
         category_rect: Option<Rect>,
+        trading: bool,
     ) -> Option<DrawingToolbarAction> {
         let mut builder = SubmenuBuilder::new(ui, sidebar_rect)
             .with_width(DESIGN_TOKENS.sizing.drawing_toolbar_ext.submenu_width_lg);
@@ -42,7 +43,7 @@ impl HideMenu {
             builder = builder.with_category_rect(cat_rect);
         }
 
-        builder
+        builder = builder
             .add_text_item_with_action(
                 "Hide All Drawings",
                 "Hide all drawing tools from chart",
@@ -50,13 +51,16 @@ impl HideMenu {
             )
             .add_text_item_with_action("Hide Indicators", "Hide all indicators from chart", || {
                 Some(DrawingToolbarAction::HideAllIndicators)
-            })
-            .add_text_item_with_action("Hide Poss", "Hide all positions from chart", || {
-                Some(DrawingToolbarAction::HideAllPoss)
-            })
-            .add_text_item_with_action("Hide Orders", "Hide all orders from chart", || {
-                Some(DrawingToolbarAction::HideAllOrders)
-            })
-            .show()
+            });
+        if trading {
+            builder = builder
+                .add_text_item_with_action("Hide Poss", "Hide all positions from chart", || {
+                    Some(DrawingToolbarAction::HideAllPoss)
+                })
+                .add_text_item_with_action("Hide Orders", "Hide all orders from chart", || {
+                    Some(DrawingToolbarAction::HideAllOrders)
+                });
+        }
+        builder.show()
     }
 }

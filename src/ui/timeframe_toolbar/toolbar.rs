@@ -10,8 +10,10 @@ use crate::icons::icons as embedded_icons;
 use crate::styles::{icons as icon_sizes, stroke, typography};
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::Control;
 use crate::ui_kit::toolbar::ResponsiveToolbar;
 use egui::{Color32, FontId, Response, Sense, Stroke, Ui, Vec2};
+use std::collections::HashSet;
 
 /// Bottom panel component
 pub struct TimeframeToolbar {
@@ -21,6 +23,8 @@ pub struct TimeframeToolbar {
     pub config: TimeframeToolbarConfig,
     /// Theme and config `config` was last derived from; `None` when the caller supplied it.
     config_theme: Option<(Theme, TimeframeToolbarConfig)>,
+    /// Controls the host hid.
+    hidden: HashSet<Control>,
 }
 
 /// Configuration for the bottom panel appearance
@@ -108,6 +112,7 @@ impl TimeframeToolbar {
             state: TimeframeToolbarState::default(),
             config: TimeframeToolbarConfig::default(),
             config_theme: Some((Theme::dark(), TimeframeToolbarConfig::default())),
+            hidden: HashSet::new(),
         }
     }
 
@@ -117,7 +122,14 @@ impl TimeframeToolbar {
             state: TimeframeToolbarState::default(),
             config,
             config_theme: None,
+            hidden: HashSet::new(),
         }
+    }
+
+    /// Shows or hides `control`: TimeZone, Session and DividendAdjustment. The toolbar
+    /// ignores the other controls.
+    pub fn set_control_visible(&mut self, control: Control, visible: bool) {
+        crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
     }
 
     /// Update the current time display
@@ -173,46 +185,62 @@ impl TimeframeToolbar {
                 result_action = TimeframeToolbarAction::OpenDatePicker;
             }
 
-            // Flexible spacer - push right section to the right
-            let remaining =
-                ui.available_width() - DESIGN_TOKENS.sizing.timeframe_toolbar.right_section_width;
+            // Flexible spacer - push right section to the right. Hidden controls give back
+            // their share of the reservation, so the rest stays flush right.
+            let spacing = &DESIGN_TOKENS.spacing;
+            let mut reserved = DESIGN_TOKENS.sizing.timeframe_toolbar.right_section_width;
+            if self.hidden.contains(&Control::TimeZone) {
+                reserved -= self.text_btn_width(&self.state.formatted_time()) + spacing.lg;
+            }
+            if self.hidden.contains(&Control::Session) {
+                reserved -= self.text_btn_width(self.state.session_type.label());
+            }
+            if self.hidden.contains(&Control::DividendAdjustment) {
+                reserved -= 2.0 * spacing.sm + stroke::HAIRLINE + self.text_btn_width("ADJ");
+            }
+            let remaining = ui.available_width() - reserved;
             if remaining > 0.0 {
                 ui.add_space(remaining);
             }
 
             // Right section: Timezone, Session, Dividends
             // Timezone button with time
-            let time_text = self.state.formatted_time();
-            if self.text_btn(ui, &time_text, "Timezone", false).clicked() {
-                result_action = TimeframeToolbarAction::OpenTimezoneMenu;
+            if !self.hidden.contains(&Control::TimeZone) {
+                let time_text = self.state.formatted_time();
+                if self.text_btn(ui, &time_text, "Timezone", false).clicked() {
+                    result_action = TimeframeToolbarAction::OpenTimezoneMenu;
+                }
+                ui.space_lg();
             }
-
-            ui.space_lg();
 
             // RTH/Session button
-            let session_label = self.state.session_type.label();
-            let session_tooltip = self.state.session_type.tooltip();
-            if self
-                .text_btn(ui, session_label, session_tooltip, false)
-                .clicked()
-            {
-                result_action = TimeframeToolbarAction::OpenSessionMenu;
+            if !self.hidden.contains(&Control::Session) {
+                let session_label = self.state.session_type.label();
+                let session_tooltip = self.state.session_type.tooltip();
+                if self
+                    .text_btn(ui, session_label, session_tooltip, false)
+                    .clicked()
+                {
+                    result_action = TimeframeToolbarAction::OpenSessionMenu;
+                }
             }
 
-            // Separator before ADJ
-            ui.space_sm();
-            self.separator(ui);
-            ui.space_sm();
+            // ADJ button, after a separator
+            if !self.hidden.contains(&Control::DividendAdjustment) {
+                ui.space_sm();
+                self.separator(ui);
+                ui.space_sm();
 
-            // ADJ button
-            let adj_active = self.state.adjust_for_dividends;
-            if self
-                .text_btn(ui, "ADJ", "Adjust data for dividends", adj_active)
-                .clicked()
-            {
-                self.state.adjust_for_dividends = !adj_active;
-                result_action =
-                    TimeframeToolbarAction::AdjustDividendsToggled(self.state.adjust_for_dividends);
+                let adj_active = self.state.adjust_for_dividends;
+                if self
+                    .text_btn(ui, "ADJ", "Adjust data for dividends", adj_active)
+                    .clicked()
+                {
+                    self.state.adjust_for_dividends = !adj_active;
+                    result_action = TimeframeToolbarAction::AdjustDividendsToggled(
+                        self.state.adjust_for_dividends,
+                    );
+                }
             }
 
             ui.space_lg();
@@ -262,17 +290,20 @@ impl TimeframeToolbar {
     }
 
     /// Render a text button
-    fn text_btn(&self, ui: &mut Ui, text: &str, tooltip: &str, is_active: bool) -> Response {
-        let font_id = FontId::proportional(self.config.font_size);
-
-        // Calculate size (~0.6 * font_size per character for proportional font)
+    /// Width of a [`text_btn`](Self::text_btn) labelled `text`.
+    fn text_btn_width(&self, text: &str) -> f32 {
+        // ~0.6 * font_size per character for proportional font
         let char_width = self.config.font_size * 0.6;
         let text_size = char_width * text.len() as f32;
-        let btn_width = text_size + self.config.btn_padding_h * 2.0;
+        (text_size + self.config.btn_padding_h * 2.0).max(DESIGN_TOKENS.sizing.button_xl)
+    }
+
+    fn text_btn(&self, ui: &mut Ui, text: &str, tooltip: &str, is_active: bool) -> Response {
+        let font_id = FontId::proportional(self.config.font_size);
         let btn_height = self.config.panel_height - DESIGN_TOKENS.spacing.sm;
 
         let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(btn_width.max(DESIGN_TOKENS.sizing.button_xl), btn_height),
+            Vec2::new(self.text_btn_width(text), btn_height),
             Sense::click(),
         );
 

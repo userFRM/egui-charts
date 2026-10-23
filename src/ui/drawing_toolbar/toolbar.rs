@@ -13,7 +13,9 @@ use crate::styles::responsive::LayoutContext;
 use crate::styles::{icons as icon_sizes, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::Control;
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use std::collections::HashSet;
 
 /// Data struct for passing cursor state to submenu via context
 #[derive(Clone, Copy, Debug)]
@@ -60,6 +62,8 @@ pub struct DrawingToolbar {
     pub config: DrawingToolbarConfig,
     /// Pos of the expanded category button (for submenu alignment)
     expanded_category_rect: Option<Rect>,
+    /// Controls the host hid.
+    hidden: HashSet<Control>,
 }
 
 impl DrawingToolbar {
@@ -71,6 +75,18 @@ impl DrawingToolbar {
     pub fn with_config(mut self, config: DrawingToolbarConfig) -> Self {
         self.config = config;
         self
+    }
+
+    /// Shows or hides `control`: Trading (the hide positions and orders rows) and Templates
+    /// (the templates button and its menu). The toolbar ignores the other controls.
+    pub fn set_control_visible(&mut self, control: Control, visible: bool) {
+        crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
+        if control == Control::Templates && !visible {
+            if self.state.expanded_category.as_deref() == Some("Templates") {
+                self.state.expanded_category = None;
+            }
+            self.state.show_template_name_input = false;
+        }
     }
 
     // === State Sync Methods ===
@@ -451,17 +467,20 @@ impl DrawingToolbar {
         ui.space_md();
 
         // Templates
-        let is_templates_expanded = self.state.expanded_category.as_deref() == Some("Templates");
-        let (_templates_icon_clicked, templates_arrow_clicked, templates_rect) =
-            TemplatesButton::show(ui);
+        if !self.hidden.contains(&Control::Templates) {
+            let is_templates_expanded =
+                self.state.expanded_category.as_deref() == Some("Templates");
+            let (_templates_icon_clicked, templates_arrow_clicked, templates_rect) =
+                TemplatesButton::show(ui);
 
-        if templates_arrow_clicked {
-            self.toggle_category("Templates", templates_rect);
+            if templates_arrow_clicked {
+                self.toggle_category("Templates", templates_rect);
+            }
+            if is_templates_expanded {
+                self.expanded_category_rect = Some(templates_rect);
+            }
+            ui.space_md();
         }
-        if is_templates_expanded {
-            self.expanded_category_rect = Some(templates_rect);
-        }
-        ui.space_md();
 
         // Hide dropdown
         let is_hide_expanded = self.state.expanded_category.as_deref() == Some("Hide");
@@ -535,7 +554,15 @@ impl DrawingToolbar {
             "Magnet" => {
                 return MagnetButton::show_submenu(ui, sidebar_rect, self.expanded_category_rect);
             }
-            "Hide" => return HideMenu::show_submenu(ui, sidebar_rect, self.expanded_category_rect),
+            "Hide" => {
+                let trading = !self.hidden.contains(&Control::Trading);
+                return HideMenu::show_submenu(
+                    ui,
+                    sidebar_rect,
+                    self.expanded_category_rect,
+                    trading,
+                );
+            }
             "Remove" => {
                 return RemoveMenu::show_submenu(ui, sidebar_rect, self.expanded_category_rect);
             }

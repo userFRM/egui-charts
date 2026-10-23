@@ -19,11 +19,13 @@ use crate::styles::{stroke, typography};
 use crate::theme::Theme;
 use crate::theme::components::SettingsDialogStyle;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::Control;
 use crate::ui::model::{LayoutStyle, TemplateManager};
 use crate::ui_kit::ColorPickerState;
 use egui::{
     Color32, Context, FontId, Pos2, Rect, Response, RichText, Sense, Stroke, Ui, Vec2, Window,
 };
+use std::collections::HashSet;
 
 // ============================================================================
 // Settings Dialog (Modal)
@@ -54,6 +56,8 @@ pub struct SettingsDialog {
     margin_right_str: String,
     /// Current layout style (Modern or Classic)
     layout_style: LayoutStyle,
+    /// Controls the host hid.
+    hidden: HashSet<Control>,
 }
 
 #[derive(Clone, Default)]
@@ -132,6 +136,16 @@ impl SettingsDialog {
             ],
             config: SettingsDialogConfig::default(),
             layout_style: LayoutStyle::Classic,
+            hidden: HashSet::new(),
+        }
+    }
+
+    /// Shows or hides `control`: Templates (the template button and menu; Reset to defaults
+    /// then takes the button's place). The dialog ignores the other controls.
+    pub fn set_control_visible(&mut self, control: Control, visible: bool) {
+        crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
+        if control == Control::Templates && !visible {
+            self.template_menu_open = false;
         }
     }
 
@@ -555,15 +569,20 @@ impl SettingsDialog {
             .horizontal(|ui| {
                 ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.footer_padding_h);
 
-                let template_btn = self.draw_template_button(ui, style);
-                if template_btn.clicked() {
-                    self.template_menu_open = !self.template_menu_open;
-                }
-
-                let action = if self.template_menu_open {
-                    self.draw_template_menu(ui, style, &template_btn, action)
-                } else {
+                let action = if self.hidden.contains(&Control::Templates) {
+                    // Reset to defaults lives in the template menu; keep it without templates.
+                    self.draw_reset_button(ui);
                     action
+                } else {
+                    let template_btn = self.draw_template_button(ui, style);
+                    if template_btn.clicked() {
+                        self.template_menu_open = !self.template_menu_open;
+                    }
+                    if self.template_menu_open {
+                        self.draw_template_menu(ui, style, &template_btn, action)
+                    } else {
+                        action
+                    }
                 };
 
                 self.draw_footer_action_buttons(ui, style, action)

@@ -58,6 +58,7 @@ All notable changes to this project are documented in this file. The format is b
 - `Chart::set_timeframe`, `Chart::symbol`, `Chart::timeframe` and `Chart::instrument`.
 - `Chart::trades` and `Chart::order_book` hold the trades and the order book the feed pushes; the chart asks the feed once for recent trades (`Datafeed::trades`) and for a new book snapshot when the book is lost.
 - `examples/live_feed.rs`: a feed that serves pages of history and streams trades from a thread.
+- `ui::Control` and `set_control_visible` on `TopToolbar`, `DrawingToolbar`, `TimeframeToolbar`, `WidgetBar`, `ChartMenus` and `SettingsDialog`: a host hides the controls it has no service for, such as alerts, trading, replay, layouts, templates, compare, time zone, session or dividend adjustment. A hidden control is not drawn and emits nothing, and a menu of it that is open closes; every control starts visible. In the chart settings dialog, Reset to defaults takes the place of the hidden template button.
 
 ### Fixed
 

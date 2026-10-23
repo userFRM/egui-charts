@@ -6,7 +6,9 @@ use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::{icons as icon_sizes, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::Control;
 use egui::{Pos2, Rect, Sense, Ui, Vec2};
+use std::collections::HashSet;
 
 /// Section grouping for widget bar icons
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +100,16 @@ pub struct WidgetBar {
     pub icons: Vec<RightBarIcon>,
     pub active_icon: Option<RightBarIcon>,
     pub notification_counts: std::collections::HashMap<RightBarIcon, u32>,
+    /// Controls the host hid.
+    hidden: HashSet<Control>,
+}
+
+/// The host control that hides `icon`, if any.
+fn control(icon: RightBarIcon) -> Option<Control> {
+    match icon {
+        RightBarIcon::Alerts => Some(Control::Alerts),
+        RightBarIcon::ObjectTree | RightBarIcon::Help => None,
+    }
 }
 
 impl Default for WidgetBar {
@@ -113,6 +125,7 @@ impl Default for WidgetBar {
             ],
             active_icon: None,
             notification_counts: std::collections::HashMap::new(),
+            hidden: HashSet::new(),
         }
     }
 }
@@ -125,6 +138,14 @@ impl WidgetBar {
     pub fn with_config(mut self, config: WidgetBarConfig) -> Self {
         self.config = config;
         self
+    }
+
+    /// Shows or hides `control`: Alerts (the Alerts icon). The bar ignores the other controls.
+    pub fn set_control_visible(&mut self, control: Control, visible: bool) {
+        crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
+        if !visible && self.active_icon.and_then(self::control) == Some(control) {
+            self.active_icon = None;
+        }
     }
 
     pub fn set_notification_cnt(&mut self, icon: RightBarIcon, count: u32) {
@@ -166,6 +187,7 @@ impl WidgetBar {
             .icons
             .iter()
             .filter(|i| i.section() == WidgetBarSection::Top)
+            .filter(|&&i| control(i).is_none_or(|c| !self.hidden.contains(&c)))
             .copied()
             .collect();
         let bottom_icons: Vec<_> = self

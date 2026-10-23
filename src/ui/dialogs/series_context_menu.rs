@@ -6,9 +6,11 @@ use crate::chart::series::SeriesId;
 use crate::config::KeyboardAction;
 use crate::icons::icons as embedded_icons;
 use crate::theme::Theme;
+use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, POINTER_GAP, format_price, show_menu};
 
 use egui::{Context, Id, Pos2};
+use std::collections::HashSet;
 
 // ============================================================================
 // SERIES CONTEXT MENU ACTIONS
@@ -47,6 +49,9 @@ pub struct SeriesContextMenu {
     pub last_action: SeriesContextMenuAction,
     /// Skip close detection on first frame
     just_opened: bool,
+    /// Controls the host hid, set through
+    /// [`ChartMenus::set_control_visible`](crate::ui::context_menu::ChartMenus::set_control_visible).
+    pub(crate) hidden: HashSet<Control>,
 }
 
 impl Default for SeriesContextMenu {
@@ -66,6 +71,7 @@ impl SeriesContextMenu {
             click_price: 0.0,
             last_action: SeriesContextMenuAction::None,
             just_opened: false,
+            hidden: HashSet::new(),
         }
     }
 
@@ -114,7 +120,7 @@ impl SeriesContextMenu {
 
         let mut items = Vec::new();
         // An alert needs an instrument.
-        if has_symbol {
+        if has_symbol && !self.hidden.contains(&Control::Alerts) {
             items.push(MenuEntry::Item(
                 MenuItem::new(
                     format!("Add alert on {symbol} at {price_str}…"),
