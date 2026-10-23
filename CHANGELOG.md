@@ -107,6 +107,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Active widget rail entries use the selection colour pair and show the pressed step when held. Alert counts use `danger_bg` with `danger_text` instead of mixing a status foreground with the badge text. ([#387](https://github.com/userFRM/egui-charts/issues/387), [#531](https://github.com/userFRM/egui-charts/issues/531))
+
 - List action buttons and `UiExt` primary, secondary and danger helpers share the kit variants, including opaque themed state shades and their matching text. The dark primary blue now meets 4.5:1 with white. Ghost and Outlined controls use egui's hover and pressed fills, and neutral button glyphs use the same foreground states across button types. ([#435](https://github.com/userFRM/egui-charts/issues/435), [#582](https://github.com/userFRM/egui-charts/issues/582))
 
 - Deserialising incomplete theme colour palettes reports a missing-field error instead of silently filling a light theme with dark colours. Text, spacing and radius scales still default independently. Migration: save the complete `Theme` value; hand-written theme files must include `dark`, `ui` and `chart` with all colour fields. ([#434](https://github.com/userFRM/egui-charts/issues/434))
