@@ -12,14 +12,9 @@ Financial charts for [egui](https://github.com/emilk/egui), from a single chart 
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
 [![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](#minimum-supported-rust-version)
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/hero-dark.png">
-  <img alt="The demo application on sample data: candlesticks with two moving averages, Bollinger Bands, volume and a Fibonacci retracement, the crosshair and its tooltip, RSI and MACD panes below, and the drawing and chart toolbars" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/hero-light.png" width="880">
-</picture>
-
 </div>
 
-Pure Rust, native and WebAssembly from the same code. Take it as far as you need: one chart in your own egui app, or the chart with studies, drawing tools, toolbars and dialogs around it. The images on this page are captured from the [demo](examples/demo) by [`docs/capture`](docs/capture) and show the demo's synthetic sample data; the first image and the themes image place those window captures in a frame.
+Pure Rust, native and WebAssembly from the same code. Take it as far as you need: one chart in your own egui app, or the chart with studies, drawing tools, toolbars and dialogs around it.
 
 ## A chart in ten lines
 
@@ -121,24 +116,7 @@ The [demo](examples/demo) connects the top, drawing and timeframe toolbars, the 
 
 ## Chart types
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/type-heikin-ashi-dark@2x.png">
-  <img alt="Heikin Ashi candles with volume" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/type-heikin-ashi-light@2x.png" width="49%">
-</picture>
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/type-baseline-dark@2x.png">
-  <img alt="A baseline chart, filled above and below its base price" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/type-baseline-light@2x.png" width="49%">
-</picture>
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/type-kagi-dark@2x.png">
-  <img alt="Kagi lines" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/type-kagi-light@2x.png" width="49%">
-</picture>
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/type-point-and-figure-dark@2x.png">
-  <img alt="Point and Figure columns of X and O" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/type-point-and-figure-light@2x.png" width="49%">
-</picture>
-
-Heikin Ashi, Baseline, Kagi and Point and Figure on the same sample data. `ChartType` offers these types, in the groups of `ChartTypeCategory`:
+`ChartType` offers these types, in the groups of `ChartTypeCategory`:
 
 | Group | Types |
 |---|---|
@@ -150,11 +128,6 @@ Heikin Ashi, Baseline, Kagi and Point and Figure on the same sample data. `Chart
 | Advanced | Market Profile (TPO) |
 
 ## Studies
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/studies-dark@2x.png">
-  <img alt="Ichimoku Cloud over candlesticks, with Stochastic and ADX in their own panes" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/studies-light@2x.png" width="880">
-</picture>
 
 A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 119 indicator names, each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Six more types are built directly instead of registered: five compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
 
@@ -182,31 +155,15 @@ The built-in studies and `IndicatorFactory` are in the `studies` feature, which 
 
 ## Drawing tools
 
-<img alt="A Fibonacci retracement, a trend line and a rectangle on a candlestick chart, next to the drawing toolbar, in the dark theme" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/drawings-dark@2x.png" width="880">
-
 `DrawingToolType` defines 94 drawing tool types, counting four cursor modes, which the drawing toolbar groups into cursors, lines, Fibonacci, patterns, projections, shapes, annotations and icons. Drawings are anchored to bar and price, so they stay in place through pan and zoom, and undo and redo are built in. Some tools are placeholders or approximations; [ROADMAP.md](ROADMAP.md) lists the status of each.
 
 Magnet snapping is not applied yet. `drawings::persistence` saves drawings to JSON, with their anchors as timestamps and every setting, and restores them; the chart does not call it, so the application decides when to save and load.
 
 ## Order flow
 
-<img alt="Market Profile (TPO) letters per session on 30 minute bars, in the dark theme" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/tpo-dark@2x.png" width="49%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/volume-profile-dark@2x.png">
-  <img alt="A fixed range volume profile over the last 48 bars with its point of control, and cumulative volume delta in its own pane" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/volume-profile-light@2x.png" width="49%">
-</picture>
-
 The Market Profile (TPO) chart type, fixed range and anchored volume profiles, and cumulative volume delta, estimated from each bar's prices. A `Datafeed` can already push trades and order book depth; a footprint chart ([#231](https://github.com/userFRM/egui-charts/issues/231)) and a liquidity heatmap of the order book ([#235](https://github.com/userFRM/egui-charts/issues/235)) are planned.
 
-<!-- image slot: footprint-{dark,light}@2x.png, captured once #231 lands -->
-<!-- image slot: depth-heatmap-{dark,light}@2x.png, captured once #235 lands -->
-
 ## Themes
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/themes-dark.png">
-  <img alt="The demo in the light and the dark theme, one window over the other" src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/themes-light.png" width="880">
-</picture>
 
 A `Theme` is one value with public fields: UI colours (`theme.ui`), chart colours (`theme.chart`), and the type, spacing and corner radius scales. It comes in dark, light and high-contrast presets. Start from one, override what you need, and apply it at startup and after every change:
 
@@ -227,13 +184,13 @@ let classic = Theme { chart: Theme::dark().chart, ..Theme::light() };
 
 With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a theme can be stored in any serde format; fields missing from the input take the dark theme's values. Some surfaces still keep dark colours in the light theme ([#275](https://github.com/userFRM/egui-charts/issues/275)).
 
-<!-- section slot: multi-chart layouts with one image, once #115 lands -->
+<!-- section slot: multi-chart layouts, once #115 lands -->
 
 ## Layers and feature flags
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/layers-dark.svg">
-  <img alt="Four nested layers, each containing the ones inside it. Innermost, the engine and chart widget, built with default features off and the widget feature: one chart in your egui app, fed by your Datafeed, with chart types, scales, pan and zoom, crosshair, markers, drawing tools, themes and the Indicator trait. Around it, studies and terminal, the default build (ui, which enables studies): the built-in studies, the toolbars, panels and dialogs, and the symbol search and storage traits. Then trading, with no feature yet: every build has the Broker trait, and order panels and depth of market are planned. Outermost, order flow, with no feature yet: the default build has TPO, volume profile and cumulative delta, and footprint and depth heatmap are planned." src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/images/layers-light.svg" width="880">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-dark.svg">
+  <img alt="Four nested layers, each containing the ones inside it. Innermost, the engine and chart widget, built with default features off and the widget feature: one chart in your egui app, fed by your Datafeed, with chart types, scales, pan and zoom, crosshair, markers, drawing tools, themes and the Indicator trait. Around it, studies and terminal, the default build (ui, which enables studies): the built-in studies, the toolbars, panels and dialogs, and the symbol search and storage traits. Then trading, with no feature yet: every build has the Broker trait, and order panels and depth of market are planned. Outermost, order flow, with no feature yet: the default build has TPO, volume profile and cumulative delta, and footprint and depth heatmap are planned." src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-light.svg" width="880">
 </picture>
 
 | Layer | What it gives | Feature |
