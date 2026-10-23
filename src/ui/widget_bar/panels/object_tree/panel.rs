@@ -9,7 +9,7 @@ use egui::{Frame, RichText, TextEdit, Ui, Vec2, vec2};
 
 use super::actions::ObjectTreeAction;
 use super::config::ObjectTreeConfig;
-use super::context_menu::{handle_keyboard_shortcuts, render_context_menu};
+use super::context_menu::handle_keyboard_shortcuts;
 use super::data_window::show_data_window;
 use super::source_tree::render_source_tree;
 use super::state::ObjectTreeState;
@@ -142,14 +142,6 @@ impl ObjectTreePanel {
             ui.separator();
             self.show_footer(ui, sources);
         });
-
-        // Context menu (rendered on top)
-        if self.state.context_menu_open {
-            let menu_action = render_context_menu(ui, sources, &mut self.state);
-            if !menu_action.is_none() {
-                action = menu_action;
-            }
-        }
 
         // Handle selection state updates
         self.handle_selection_action(&action, sources);
