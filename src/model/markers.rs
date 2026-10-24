@@ -57,6 +57,44 @@ pub enum MarkerPos {
     AbsoluteDown,
     /// Absolute pixel position (centered)
     Absolute,
+    /// Just above [`Marker::price`], the shape's lower edge on the price.
+    AtPriceTop,
+    /// Just below [`Marker::price`], the shape's upper edge on the price.
+    AtPriceBottom,
+    /// Centred on [`Marker::price`].
+    AtPriceMiddle,
+}
+
+/// Where a series' markers are painted among the other content of the price pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarkerZOrder {
+    /// With their series: over it, under the series added after it and under the studies.
+    #[default]
+    Normal,
+    /// Over every series and study, under the price lines and drawings.
+    AboveSeries,
+    /// Over the series, studies, price lines and drawings.
+    Top,
+}
+
+/// How the markers of one series are fitted and layered; see `Chart::set_marker_options`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkerOptions {
+    /// Whether the prices of the [`MarkerPos::AtPriceTop`], [`AtPriceBottom`](MarkerPos::AtPriceBottom)
+    /// and [`AtPriceMiddle`](MarkerPos::AtPriceMiddle) markers in view widen the autoscaled price
+    /// range, so that they are not cut off. Default true.
+    pub auto_scale: bool,
+    /// Default [`MarkerZOrder::Normal`].
+    pub z_order: MarkerZOrder,
+}
+
+impl Default for MarkerOptions {
+    fn default() -> Self {
+        Self {
+            auto_scale: true,
+            z_order: MarkerZOrder::default(),
+        }
+    }
 }
 
 /// Marker for chart annotations
@@ -79,6 +117,8 @@ pub struct Marker {
     pub size: f32,
     /// Unique ID for the marker (for removal/editing)
     pub id: Option<String>,
+    /// Price of the `AtPrice` positions, in the series' units; without one they use the close.
+    pub price: Option<f64>,
 }
 
 impl Marker {
@@ -93,6 +133,7 @@ impl Marker {
             tooltip: None,
             size: 1.0,
             id: None,
+            price: None,
         }
     }
 
@@ -142,6 +183,14 @@ impl Marker {
     #[must_use]
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = Some(id.into());
+        self
+    }
+
+    /// Anchors the marker to `price` at `position`, one of the `AtPrice` positions.
+    #[must_use]
+    pub fn at_price(mut self, price: f64, position: MarkerPos) -> Self {
+        self.price = Some(price);
+        self.position = position;
         self
     }
 

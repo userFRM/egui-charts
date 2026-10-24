@@ -241,6 +241,7 @@ impl Chart {
                 bars: series.bars.clone(),
                 feed: series.feed.clone(),
                 markers: series.markers.clone(),
+                marker_options: series.marker_options,
                 lines: series.lines.clone(),
             })
             .collect();
@@ -258,6 +259,7 @@ impl Chart {
         chart.drawings.drawings = self.drawings.drawings.clone();
         chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
         chart.marks = self.marks.clone();
+        chart.marker_options = self.marker_options;
         chart.price_lines = self.price_lines.clone();
         chart.events = self.events.clone();
         chart.time_scale_events = self.time_scale_events.clone();

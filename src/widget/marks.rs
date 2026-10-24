@@ -1,8 +1,10 @@
 //! Visible-range requests for host-owned annotations and events.
 
 use super::Chart;
+use crate::chart::coords::ChartMapping;
+use crate::chart::renderers::RenderContext;
 use crate::data::{FeedError, inbox::Inbox};
-use crate::model::{EventVisibility, TimeScaleEvent};
+use crate::model::{EventVisibility, MarkerZOrder, TimeScaleEvent};
 use crate::services::{Marks, MarksPage, MarksRequest};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -16,6 +18,64 @@ pub(super) struct MarkSource {
 }
 
 impl Chart {
+    /// Paints the markers of the visible bar series whose `MarkerOptions` place them at
+    /// `layer`: the main series' own and source bar marks, and those of the added series.
+    pub(super) fn paint_marks(
+        &self,
+        ctx: &RenderContext,
+        coords: &ChartMapping,
+        layer: MarkerZOrder,
+    ) {
+        // Normal markers of added series are painted with each series.
+        for item in self.price_series.iter().filter(|item| {
+            item.visible && layer != MarkerZOrder::Normal && item.marker_options.z_order == layer
+        }) {
+            self.paint_series_markers(ctx.painter, ctx.rect, item);
+        }
+        if self.marker_options.z_order != layer || !self.main_series_visible {
+            return;
+        }
+        let source_marks = self.mark_source.as_ref().map(|source| &source.page);
+        let combined_marks;
+        let bar_marks = if let Some(source) = source_marks.filter(|p| !p.bar_marks.is_empty()) {
+            combined_marks = self
+                .marks
+                .iter()
+                .chain(&source.bar_marks)
+                .cloned()
+                .collect::<Vec<_>>();
+            &combined_marks
+        } else {
+            &self.marks
+        };
+        if bar_marks.is_empty() {
+            return;
+        }
+        let markers;
+        let marks = if self.chart_type.is_time_independent() {
+            markers = crate::chart::rendering::candles::price_based::markers(
+                bar_marks,
+                &self.state,
+                self.chart_type,
+                &self.chart_type_params,
+                self.older_bars_drawn,
+            );
+            &markers
+        } else {
+            bar_marks
+        };
+        crate::chart::renderers::render_markers(
+            ctx,
+            marks,
+            self.state.shown(),
+            &coords.price,
+            &ChartMapping {
+                start_idx: 0,
+                ..*coords
+            },
+        );
+    }
+
     /// Connects a source of bar marks and time-axis events. Replacing or removing the source
     /// clears its marks and pending replies; manually supplied annotations are retained.
     pub fn set_mark_source(&mut self, source: Option<Arc<dyn Marks>>) {

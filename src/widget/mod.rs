@@ -357,6 +357,8 @@ pub struct Chart {
     // =========================================================================
     /// Bar marks (annotations on chart bars, e.g., trade signals); see [`Chart::set_markers`].
     pub(crate) marks: Vec<crate::model::Marker>,
+    /// Fit and layer of the main series' marks; see [`Chart::set_marker_options`].
+    marker_options: crate::model::MarkerOptions,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
     price_lines: Vec<(PriceLineId, crate::model::PriceLine)>,
     /// The number of price line handles issued.

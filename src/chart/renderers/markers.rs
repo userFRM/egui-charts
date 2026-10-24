@@ -14,6 +14,8 @@ pub fn render_markers(
     price_scale: &PriceMap,
     coords: &ChartMapping,
 ) {
+    let price_y =
+        |marker: &Marker, bar: &Bar| price_scale.price_to_y(marker.price.unwrap_or(bar.close));
     let mut tooltip_shown = false;
     for (marker_index, marker) in markers.iter().enumerate() {
         if !marker.size.is_finite() || marker.size <= 0.0 {
@@ -46,7 +48,14 @@ pub fn render_markers(
                 }
                 MarkerPos::AbsoluteUp => top - 10.0 * marker.size,
                 MarkerPos::AbsoluteDown => bottom + 10.0 * marker.size,
+                // Offset by the shape's half size, 8 points at size 1.
+                MarkerPos::AtPriceTop => price_y(marker, bar) - 8.0 * marker.size,
+                MarkerPos::AtPriceBottom => price_y(marker, bar) + 8.0 * marker.size,
+                MarkerPos::AtPriceMiddle => price_y(marker, bar),
             };
+            if !y.is_finite() {
+                continue;
+            }
 
             let pos = Pos2::new(x, y);
 
@@ -345,7 +354,8 @@ mod tests {
 
     /// A bar from 95 to 105 on a 90..110 scale over 500 px spans y 125..375 in
     /// either orientation, so each marker lands at the same y: above positions
-    /// offset up from 125, below positions down from 375.
+    /// offset up from 125, below positions down from 375. Price 100, not the close
+    /// of 104, is at y 250, with a size-1 shape's 8 point half size above, below or across it.
     #[test]
     fn markers_sit_outside_the_bar_on_either_scale_orientation() {
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(160.0, 500.0));
@@ -356,7 +366,7 @@ mod tests {
                 100.0,
                 105.0,
                 95.0,
-                100.0,
+                104.0,
                 1.0,
             )
         });
@@ -374,12 +384,22 @@ mod tests {
                 (MarkerPos::BelowBar, 395.0),
                 (MarkerPos::AbsoluteUp, 115.0),
                 (MarkerPos::AbsoluteDown, 385.0),
+                (MarkerPos::AtPriceTop, 242.0),
+                (MarkerPos::AtPriceBottom, 258.0),
+                (MarkerPos::AtPriceMiddle, 250.0),
             ] {
                 for seconds in [-2, 0, 1, 3] {
                     let marker = Marker::new(t + chrono::Duration::seconds(seconds))
                         .with_tooltip("Host bar annotation")
                         .with_pos(position)
                         .with_shape(MarkerShape::Circle);
+                    // Price 100 is the scale's middle in either orientation.
+                    let marker = match position {
+                        MarkerPos::AtPriceTop
+                        | MarkerPos::AtPriceBottom
+                        | MarkerPos::AtPriceMiddle => marker.at_price(100.0, position),
+                        _ => marker,
+                    };
                     let ctx = egui::Context::default();
                     let hover = Pos2::new(coords.idx_to_x(12) + seconds as f32 * 5.0, want);
                     let mut output = egui::FullOutput::default();

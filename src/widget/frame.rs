@@ -7,7 +7,7 @@ use crate::chart::renderers::{self, ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
 use crate::data::Footprint;
-use crate::model::PriceLine;
+use crate::model::{MarkerZOrder, PriceLine};
 use crate::scales::TimeFormatterBuilder;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
@@ -754,6 +754,17 @@ impl Chart {
 
         // Fit the price scale, then apply this frame's price zoom
         let series_values = self.fit_secondary_series();
+        let source_marks = self
+            .mark_source
+            .as_ref()
+            .map(|source| &source.page.bar_marks);
+        let marker_prices = self
+            .marker_prices(
+                self.marks.iter().chain(source_marks.into_iter().flatten()),
+                self.marker_options,
+            )
+            .filter(|_| self.main_series_visible && time_based)
+            .collect::<Vec<_>>();
         let transform = self.state.fit_price_scale_with_series(
             (if self.chart_type.is_time_independent() {
                 &self.element_studies.studies
@@ -766,6 +777,7 @@ impl Chart {
             .filter(|(study, autoscale)| **autoscale && !study.is_volume())
             .map(|(study, _)| study.as_ref()),
             self.main_series_visible,
+            marker_prices,
             series_values,
         );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
@@ -983,6 +995,7 @@ impl Chart {
             }
         }
 
+        self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Normal);
         self.paint_secondary_series(&painter, price_rect);
 
         if let Some(bubbles) = self
@@ -1164,45 +1177,7 @@ impl Chart {
         // the main chart (overlay indicator line or series data points).
         self.render_main_chart_selection(&painter, &coords, visible_data, main_visible_range);
 
-        // Render bar marks (Widget API annotations)
-        let source_marks = self.mark_source.as_ref().map(|source| &source.page);
-        let combined_marks;
-        let bar_marks = if let Some(source) = source_marks.filter(|p| !p.bar_marks.is_empty()) {
-            combined_marks = self
-                .marks
-                .iter()
-                .chain(&source.bar_marks)
-                .cloned()
-                .collect::<Vec<_>>();
-            &combined_marks
-        } else {
-            &self.marks
-        };
-        if self.main_series_visible && !bar_marks.is_empty() {
-            let markers;
-            let marks = if time_based {
-                bar_marks
-            } else {
-                markers = rendering::candles::price_based::markers(
-                    bar_marks,
-                    &self.state,
-                    self.chart_type,
-                    &self.chart_type_params,
-                    self.older_bars_drawn,
-                );
-                &markers
-            };
-            renderers::render_markers(
-                &clipped_price_ctx,
-                marks,
-                self.state.shown(),
-                &price_map,
-                &crate::chart::coords::ChartMapping {
-                    start_idx: 0,
-                    ..coords
-                },
-            );
-        }
+        self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::AboveSeries);
 
         // The axis labels go at these depths, painted once the crosshair's tags are placed
         let price_labels = painter.add(egui::Shape::Noop);
@@ -1554,6 +1529,7 @@ impl Chart {
             self.history
                 .finish_drawing_action(&mut self.drawings, drawing_history);
         }
+        self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Top);
 
         // Render "Jump to Latest" button
         if self.config.show_realtime_btn {

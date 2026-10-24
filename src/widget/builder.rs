@@ -177,6 +177,7 @@ impl Chart {
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Vec::new(),
+            marker_options: Default::default(),
             price_lines: Vec::new(),
             next_price_line: 0,
             #[cfg(feature = "ui")]
