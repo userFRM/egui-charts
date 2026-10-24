@@ -122,6 +122,7 @@ use crate::chart::state;
 
 mod anchors;
 pub mod builder;
+mod change_marks;
 mod clipboard;
 mod crosshair;
 mod events;
@@ -359,6 +360,8 @@ pub struct Chart {
     pub(crate) marks: Vec<crate::model::Marker>,
     /// Fit and layer of the main series' marks; see [`Chart::set_marker_options`].
     marker_options: crate::model::MarkerOptions,
+    /// Marks of the main series' recent changes; see [`Chart::set_change_markers`].
+    change_marks: Option<change_marks::ChangeMarks>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
     price_lines: Vec<(PriceLineId, crate::model::PriceLine)>,
     /// The number of price line handles issued.

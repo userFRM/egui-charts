@@ -77,7 +77,8 @@ pub use line_break::{
     detect_signal as detect_line_break_signal, to_line_break_lines,
 };
 pub use markers::{
-    LineStyle, Marker, MarkerOptions, MarkerPos, MarkerShape, MarkerZOrder, PriceLine,
+    ChangeMarkers, LineStyle, Marker, MarkerOptions, MarkerPos, MarkerShape, MarkerZOrder,
+    PriceLine,
 };
 pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_columns};
 pub use price_source::PriceSource;

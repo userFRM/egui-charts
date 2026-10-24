@@ -111,6 +111,22 @@ pub fn render_markers(
     }
 }
 
+/// Draws a change mark at `pos`: a dot with a chevron above it for a rise or below it for a
+/// fall.
+pub(crate) fn render_change_mark(painter: &Painter, pos: Pos2, up: bool, color: Color32) {
+    painter.circle_filled(pos, 4.0, color);
+    let sign = if up { 1.0 } else { -1.0 };
+    let y = pos.y - 7.0 * sign;
+    painter.add(Shape::line(
+        vec![
+            Pos2::new(pos.x - 4.7, y),
+            Pos2::new(pos.x, y - 3.5 * sign),
+            Pos2::new(pos.x + 4.7, y),
+        ],
+        Stroke::new(2.0, color),
+    ));
+}
+
 /// Draws host-supplied event badges just above `baseline`, using the chart's time mapping.
 /// An event between bars uses the first bar at or after its time; whitespace extrapolates the
 /// nearest bar interval. Colliding badges stack upward. Returns the clicked event ID;

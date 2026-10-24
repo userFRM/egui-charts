@@ -178,6 +178,7 @@ impl Chart {
             // Marks (Widget API)
             marks: Vec::new(),
             marker_options: Default::default(),
+            change_marks: None,
             price_lines: Vec::new(),
             next_price_line: 0,
             #[cfg(feature = "ui")]

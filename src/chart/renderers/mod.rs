@@ -38,6 +38,7 @@ pub use labels::{
     render_time_labels,
 };
 pub(crate) use labels::{price_decimals, render_time_grid, study_controls};
+pub(crate) use markers::render_change_mark;
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,

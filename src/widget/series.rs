@@ -1,6 +1,7 @@
 //! The chart's bars, merged by one set of rules for history and live updates, and the studies
 //! computed from them.
 
+use super::change_marks::ChangeMarks;
 use super::{Chart, ChartElementId, SeriesId};
 use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
@@ -40,6 +41,9 @@ impl Chart {
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
             let (bars, rejected) = clean(bars, &self.clock());
             self.price_series[at].bars = bars;
+            if let Some(marks) = &mut self.price_series[at].change_marks {
+                marks.clear();
+            }
             self.price_series[at].feed.rejected_bars += rejected;
             self.data_loaded(series);
             return;
@@ -55,6 +59,9 @@ impl Chart {
         let (bars, rejected) = clean(bars, &self.clock());
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();
+        if let Some(marks) = &mut self.change_marks {
+            marks.clear();
+        }
         self.pending_box_sizes = self
             .chart_type_params
             .size_methods()
@@ -85,13 +92,13 @@ impl Chart {
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
             let clock = self.clock();
             let item = &mut self.price_series[at];
-            let merged = merge(
-                &mut item.bars,
-                &mut BTreeSet::new(),
-                &clock,
-                vec![(bar, Origin::Live)],
-            );
+            let incoming = vec![(bar, Origin::Live)];
+            let before = ChangeMarks::before(&item.bars, &clock, &incoming);
+            let merged = merge(&mut item.bars, &mut BTreeSet::new(), &clock, incoming);
             item.feed.rejected_bars += merged.rejected;
+            if let Some(marks) = &mut item.change_marks {
+                marks.record(&item.bars, &clock, before);
+            }
             return;
         }
         if self.main_series_present && holds_bars(series, "update") {
@@ -241,11 +248,18 @@ impl Chart {
         let tail = before.tail.as_ref().map(|bar| bar.time);
         self.anchor_drawing_points();
         let from_ticks = &mut self.from_ticks;
+        let closes = self
+            .change_marks
+            .as_ref()
+            .map(|_| ChangeMarks::before(&self.state.data().bars, clock, &incoming));
         let mut merged = Merged::default();
         self.state.edit_bars(|bars| {
             merged = merge(bars, from_ticks, clock, incoming);
             merged.first_changed
         });
+        if let (Some(marks), Some(closes)) = (&mut self.change_marks, closes) {
+            marks.record(&self.state.data().bars, clock, closes);
+        }
         self.feed.rejected_bars += merged.rejected;
         self.project_drawing_points();
         if !self.bars_changed(before, merged.first_changed)
@@ -618,7 +632,7 @@ pub(super) fn clean(bars: Vec<Bar>, clock: &BarClock) -> (Vec<Bar>, u64) {
 }
 
 /// Warn about an id that was not handled as a secondary bar series.
-fn holds_bars(series: SeriesId, call: &str) -> bool {
+pub(super) fn holds_bars(series: SeriesId, call: &str) -> bool {
     if series != SeriesId::MAIN {
         log::warn!("Chart::{call} ignored: {series:?} is not a present bar series");
     }
@@ -1322,5 +1336,84 @@ mod tests {
                 "{z_order:?}: marker {mark}, series {series_line:?}, price line {price_line:?}"
             );
         }
+    }
+
+    /// A live update that raises or lowers the close of a stored bar marks its new close in the
+    /// rise or the fall colour, replacing the bar's previous mark, on the main and on an added
+    /// series. An unchanged close, a new bar and replaced history add no mark, and a mark goes
+    /// once its duration has passed.
+    #[test]
+    fn change_markers_mark_rises_and_falls_of_the_close() {
+        use crate::model::ChangeMarkers;
+        use crate::widget::test_frames::{chart, shapes};
+        use egui::{Color32, Pos2, Shape};
+
+        let (up, down) = (Color32::from_rgb(1, 200, 1), Color32::from_rgb(200, 1, 1));
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        let options = ChangeMarkers {
+            up_color: up,
+            down_color: down,
+            duration: Duration::from_secs(600),
+        };
+        chart.set_change_markers(SeriesId::MAIN, Some(options));
+        let series = chart.add_series(crate::widget::SeriesOptions::default());
+        let bars = chart.bars(SeriesId::MAIN).to_vec();
+        chart.set_data(series, bars.clone());
+        chart.set_change_markers(series, Some(options));
+        let last = bars.last().unwrap().time;
+        let bar = |close: f64| Bar::new(last, 100.0, close.max(110.0), 100.0, close, 1.0);
+        let marks = |chart: &mut Chart| {
+            shapes(&ctx, chart, 0.0, Vec::new())
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    Shape::Circle(c) if c.radius == 4.0 && (c.fill == up || c.fill == down) => {
+                        Some((c.center, c.fill))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        marks(&mut chart);
+        let at = |chart: &Chart, close| {
+            Pos2::new(
+                chart.get_chart_mapping().idx_to_x(99),
+                chart.last_price_map.price_to_y(close),
+            )
+        };
+        for (close, color) in [(108.0, down), (109.0, up), (109.0, up)] {
+            chart.update(SeriesId::MAIN, bar(close));
+            let painted = marks(&mut chart);
+            assert_eq!(painted, vec![(at(&chart, close), color)], "close {close}");
+        }
+        chart.update(
+            SeriesId::MAIN,
+            Bar::new(last + TimeDelta::days(1), 1.0, 2.0, 1.0, 2.0, 1.0),
+        );
+        assert_eq!(marks(&mut chart).len(), 1, "a new bar is not a change");
+        chart.update(series, bar(120.0));
+        assert_eq!(
+            marks(&mut chart).iter().filter(|mark| mark.1 == up).count(),
+            2
+        );
+        chart.set_data(SeriesId::MAIN, bars.clone());
+        chart.set_data(series, bars);
+        assert!(
+            marks(&mut chart).is_empty(),
+            "replaced history drops the marks"
+        );
+        chart.set_change_markers(
+            SeriesId::MAIN,
+            Some(ChangeMarkers {
+                duration: Duration::ZERO,
+                ..options
+            }),
+        );
+        chart.update(SeriesId::MAIN, bar(105.0));
+        assert!(
+            marks(&mut chart).is_empty(),
+            "an expired mark is not painted"
+        );
     }
 }

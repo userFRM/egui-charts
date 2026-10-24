@@ -32,7 +32,22 @@ impl Chart {
         }) {
             self.paint_series_markers(ctx.painter, ctx.rect, item);
         }
-        if self.marker_options.z_order != layer || !self.main_series_visible {
+        if !self.main_series_visible {
+            return;
+        }
+        if layer == MarkerZOrder::Normal
+            && let Some(marks) = self
+                .change_marks
+                .as_ref()
+                .filter(|_| !self.chart_type.is_time_independent())
+        {
+            marks.paint(ctx.painter, |time, close| {
+                let index = super::sync::index_at(self.state.shown(), time)?;
+                let x = coords.idx_to_x(0) + index as f32 * coords.bar_spacing;
+                Some(egui::Pos2::new(x, coords.price.price_to_y(close)))
+            });
+        }
+        if self.marker_options.z_order != layer {
             return;
         }
         let source_marks = self.mark_source.as_ref().map(|source| &source.page);

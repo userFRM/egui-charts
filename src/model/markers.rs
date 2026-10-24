@@ -222,6 +222,28 @@ impl Marker {
     }
 }
 
+/// Colours and lifetime of the marks that show where the close of a series rose or fell
+/// between live updates; see `Chart::set_change_markers`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChangeMarkers {
+    /// Colour of a rise.
+    pub up_color: Color32,
+    /// Colour of a fall.
+    pub down_color: Color32,
+    /// How long a mark stays after the update that made it. Default 5 seconds.
+    pub duration: std::time::Duration,
+}
+
+impl Default for ChangeMarkers {
+    fn default() -> Self {
+        Self {
+            up_color: DESIGN_TOKENS.semantic.extended.bullish,
+            down_color: DESIGN_TOKENS.semantic.extended.bearish,
+            duration: std::time::Duration::from_secs(5),
+        }
+    }
+}
+
 /// Line style of drawings and price lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 pub enum LineStyle {

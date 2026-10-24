@@ -242,6 +242,7 @@ impl Chart {
                 feed: series.feed.clone(),
                 markers: series.markers.clone(),
                 marker_options: series.marker_options,
+                change_marks: None,
                 lines: series.lines.clone(),
             })
             .collect();

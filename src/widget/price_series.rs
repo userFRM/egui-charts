@@ -40,6 +40,7 @@ pub(super) struct PriceSeries {
     pub feed: FeedState,
     pub markers: Vec<Marker>,
     pub marker_options: MarkerOptions,
+    pub change_marks: Option<super::change_marks::ChangeMarks>,
     pub lines: Vec<(super::PriceLineId, PriceLine)>,
 }
 
@@ -62,6 +63,7 @@ impl Chart {
             feed: FeedState::default(),
             markers: Vec::new(),
             marker_options: MarkerOptions::default(),
+            change_marks: None,
             lines: Vec::new(),
         });
         id
@@ -397,6 +399,17 @@ impl Chart {
                     false,
                     rect.right(),
                 );
+            }
+            if let Some(marks) = &item.change_marks {
+                marks.paint(&plot, |time, close| {
+                    let index = super::sync::index_at(main, time)?;
+                    let x = self.state.time_scale().idx_to_coord_precise(
+                        index as f32,
+                        rect.left(),
+                        rect.width(),
+                    );
+                    Some(Pos2::new(x, map.price_to_y(close)))
+                });
             }
             if item.marker_options.z_order == MarkerZOrder::Normal {
                 self.paint_series_markers(&plot, rect, item);
