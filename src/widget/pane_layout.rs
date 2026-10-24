@@ -3,13 +3,13 @@
 use super::{Chart, SeriesId};
 use egui::{Pos2, Rect, Sense, Ui};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct PaneLayout {
     pub(super) panes: Vec<Pane>,
     pub(super) maximized: Option<SeriesId>,
-    pub(super) first_axis_frame: Option<u64>,
 }
 
+#[derive(Clone)]
 pub(super) struct Pane {
     pub(super) id: SeriesId,
     pub(super) studies: Vec<SeriesId>,
@@ -27,6 +27,14 @@ impl Chart {
                     .position(|study| study == id)
                     .is_some_and(|idx| !self.studies.indicators()[idx].is_overlay())
             });
+            if !pane.studies.contains(&pane.id)
+                && let Some(id) = pane.studies.first().copied()
+            {
+                if self.pane_layout.maximized == Some(pane.id) {
+                    self.pane_layout.maximized = Some(id);
+                }
+                pane.id = id;
+            }
         }
         self.pane_layout
             .panes
@@ -90,6 +98,7 @@ impl Chart {
         if target != SeriesId::MAIN && target != study && destination.is_none() {
             return false;
         }
+        self.record_study(study);
         if !self.studies.indicators_mut()[idx].set_overlay(target == SeriesId::MAIN) {
             return false;
         }
@@ -157,42 +166,51 @@ impl Chart {
             );
             ui.ctx().request_repaint();
         }
-        if response.double_clicked() {
-            pane.scale.reset();
+        if response.double_clicked()
+            && self
+                .chart_options
+                .handle_scale
+                .axis_double_click_reset
+                .price
+        {
+            self.user_action(|chart| chart.pane_layout.panes[idx].scale.reset());
             ui.ctx().request_repaint();
         }
         response.context_menu(|ui| {
-            if ui
-                .selectable_label(!pane.scale.is_manual(), "Auto scale")
-                .clicked()
-            {
-                pane.scale.reset();
-                ui.close();
-            }
-            ui.separator();
-            use crate::scales::PriceScaleMode;
-            for mode in [
-                PriceScaleMode::Normal,
-                PriceScaleMode::Logarithmic,
-                PriceScaleMode::Percentage,
-                PriceScaleMode::IndexedTo100,
-            ] {
+            self.user_action(|chart| {
+                let pane = &mut chart.pane_layout.panes[idx];
                 if ui
-                    .selectable_label(pane.scale.options().mode == mode, mode.to_string())
+                    .selectable_label(!pane.scale.is_manual(), "Auto scale")
                     .clicked()
                 {
-                    pane.scale.options_mut().mode = mode;
                     pane.scale.reset();
                     ui.close();
                 }
-            }
-            ui.separator();
-            if ui
-                .checkbox(&mut pane.scale.options_mut().invert_scale, "Invert scale")
-                .changed()
-            {
-                ui.close();
-            }
+                ui.separator();
+                use crate::scales::PriceScaleMode;
+                for mode in [
+                    PriceScaleMode::Normal,
+                    PriceScaleMode::Logarithmic,
+                    PriceScaleMode::Percentage,
+                    PriceScaleMode::IndexedTo100,
+                ] {
+                    if ui
+                        .selectable_label(pane.scale.options().mode == mode, mode.to_string())
+                        .clicked()
+                    {
+                        pane.scale.options_mut().mode = mode;
+                        pane.scale.reset();
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui
+                    .checkbox(&mut pane.scale.options_mut().invert_scale, "Invert scale")
+                    .changed()
+                {
+                    ui.close();
+                }
+            });
         });
     }
 
@@ -256,7 +274,7 @@ impl Chart {
             }
         });
         if let Some((study, target)) = moved {
-            self.move_indicator_to_pane(study, target);
+            self.user_action(|chart| chart.move_indicator_to_pane(study, target));
         }
     }
 
@@ -295,7 +313,9 @@ impl Chart {
             );
         }
         if response.clicked() {
-            self.pane_layout.maximized = if maximized { None } else { Some(id) };
+            self.user_action(|chart| {
+                chart.pane_layout.maximized = if maximized { None } else { Some(id) };
+            });
             ui.ctx().request_repaint();
         }
     }
@@ -376,6 +396,9 @@ impl Chart {
                 });
             }
         });
+        if action.is_some() {
+            self.begin_user_action();
+        }
         match action {
             Some(0) => self.pane_layout.panes.swap(pane_idx, pane_idx - 1),
             Some(1) => self.pane_layout.panes.swap(pane_idx, pane_idx + 1),
@@ -410,6 +433,7 @@ impl Chart {
             _ => {}
         }
         if action.is_some() {
+            self.end_user_action();
             ui.ctx().request_repaint();
         }
     }

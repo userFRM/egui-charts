@@ -27,7 +27,6 @@ impl Chart {
         let host_spacing = std::mem::take(&mut ui.spacing_mut().item_spacing);
 
         let available = ui.available_rect_before_wrap();
-        self.sync_panes();
         let maximized = self.pane_layout.maximized;
         let mut panes: Vec<_> = self
             .pane_layout
@@ -154,6 +153,7 @@ impl Chart {
         // Study whose pane legend "x" was clicked this frame, if any.
         // Removed after the immutable study borrow ends.
         let mut pending_indicator_action = None;
+        let mut pending_pane_collapse = None;
         let current_selection = self.selection.selected_id();
 
         let mut pane_rects = Vec::new();
@@ -187,11 +187,16 @@ impl Chart {
                 .find_map(|id| {
                     let idx = self.study_ids.iter().position(|study| study == id)?;
                     let study = self.studies.indicators()[idx].as_ref();
-                    (0..study.line_cnt()).find_map(|line| {
-                        visible_range
-                            .clone()
-                            .find_map(|bar| study.values().value(line, bar))
-                    })
+                    if !study.is_visible() {
+                        return None;
+                    }
+                    (0..study.line_cnt())
+                        .filter(|line| study.plot_style(*line).visible)
+                        .find_map(|line| {
+                            visible_range
+                                .clone()
+                                .find_map(|bar| study.values().value(line, bar))
+                        })
                 })
                 .filter(|base| *base != 0.0)
                 .unwrap_or(1.0);
@@ -398,7 +403,7 @@ impl Chart {
                             "Collapse pane"
                         });
                     if toggle.clicked() && !control_clicked {
-                        self.pane_layout.panes[pane_idx].collapsed = Some(!collapsed);
+                        pending_pane_collapse = Some((pane_id, !collapsed));
                         ui.ctx().request_repaint();
                     }
                     let mut pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
@@ -414,16 +419,21 @@ impl Chart {
                         && pane_response.clicked()
                         && let Some(click_pos) = pane_response.interact_pointer_pos()
                     {
-                        let hit = hit_test_pane_indicator(
-                            click_pos,
-                            indicator.as_ref(),
-                            idx,
-                            visible_range.clone(),
-                            chart_rect,
-                            y_min,
-                            y_max,
-                            &pane_coords,
-                        );
+                        let hit = self.pane_layout.panes[pane_idx]
+                            .studies
+                            .iter()
+                            .rev()
+                            .find_map(|id| {
+                                let idx = self.study_ids.iter().position(|study| study == id)?;
+                                hit_test_pane_indicator(
+                                    click_pos,
+                                    self.studies.indicators()[idx].as_ref(),
+                                    idx,
+                                    visible_range.clone(),
+                                    chart_rect,
+                                    &pane_coords,
+                                )
+                            });
                         if hit.is_some() || pending_pane_selection.is_none() {
                             pending_pane_selection = Some(hit.map(|h| {
                                 ChartElementId::Indicator(self.study_ids[h.indicator_idx])
@@ -485,6 +495,18 @@ impl Chart {
         }
 
         // The panes reflow on the next frame.
+        if let Some((id, collapsed)) = pending_pane_collapse {
+            self.user_action(|chart| {
+                if let Some(pane) = chart
+                    .pane_layout
+                    .panes
+                    .iter_mut()
+                    .find(|pane| pane.id == id)
+                {
+                    pane.collapsed = Some(collapsed);
+                }
+            });
+        }
         if let Some(action) = pending_indicator_action {
             self.apply_study_action(action);
         }
@@ -703,6 +725,17 @@ mod tests {
             .range();
         assert!(after.max - after.min > before.max - before.min);
         assert!(chart.pane_layout.panes[0].scale.is_manual());
+        for enabled in [false, true] {
+            chart
+                .chart_options
+                .handle_scale
+                .axis_double_click_reset
+                .price = enabled;
+            for pressed in [None, Some(true), Some(false), Some(true), Some(false)] {
+                pointer(&ctx, &mut chart, axis, pressed);
+            }
+            assert_eq!(chart.pane_layout.panes[0].scale.is_manual(), !enabled);
+        }
         #[cfg(feature = "ui")]
         {
             let mut menus = crate::ui::context_menu::ChartMenus::default();
@@ -751,6 +784,7 @@ mod tests {
                 egui::Shape::Text(text) if text.galley.text() == "Lock price to bar ratio")),
                 "the main-axis menu must not open over a study axis"
             );
+            egui::Popup::close_all(&ctx);
         }
         // The same engine maps 10 and 1000 around 100 at the midpoint in logarithmic units.
         let scale = &mut chart.pane_layout.panes[0].scale;
@@ -808,6 +842,61 @@ mod tests {
             chart.get_rendered_indicator_panes()[1].panel_rect
         );
         assert!(!chart.move_indicator_to_pane(first, crate::widget::SeriesId(usize::MAX)));
+        // Splitting the original member must leave independent pane controls.
+        assert!(chart.move_indicator_to_pane(first, first));
+        assert_ne!(chart.pane_layout.panes[0].id, chart.pane_layout.panes[1].id);
+        crate::widget::test_frames::frame(&ctx, &mut chart, 20.0, Vec::new());
+        let pane = &chart.get_rendered_indicator_panes()[1];
+        let maximize = Pos2::new(pane.chart_rect.right() - 12.0, pane.panel_rect.top() + 12.0);
+        click(&ctx, &mut chart, maximize);
+        assert_eq!(chart.get_rendered_indicator_panes().len(), 1);
+        assert_eq!(chart.get_rendered_indicator_panes()[0].indicator_idx, 0);
+        for id in [first, second] {
+            chart.set_indicator_visible(id, false);
+        }
+        crate::widget::test_frames::frame(&ctx, &mut chart, 25.0, Vec::new());
+        assert_eq!(chart.pane_layout.maximized, None);
+        assert!(chart.get_rendered_price_rect().height() > 500.0);
+    }
+
+    #[test]
+    fn merged_panes_select_visible_lines_and_scale_from_visible_values() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0], &[110.0]);
+            let studies: Vec<_> = [20.0, 40.0]
+                .into_iter()
+                .map(|value| {
+                    chart.add_indicator(Box::new(
+                        CustomIndicator::new("Line", move |bars| {
+                            vec![IndicatorValue::Single(value); bars.len()]
+                        })
+                        .with_overlay(false),
+                    ))
+                })
+                .collect();
+            assert!(chart.move_indicator_to_pane(studies[1], studies[0]));
+            chart.pane_layout.panes[0].scale.set_range(0.0, 60.0);
+            crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+            for (id, value) in studies.iter().copied().zip([20.0, 40.0]) {
+                let pane = &chart.get_rendered_indicator_panes()[0];
+                let pos = Pos2::new(pane.mapping.idx_to_x(70), pane.mapping.price_to_y(value));
+                click(&ctx, &mut chart, pos);
+                assert_eq!(
+                    chart.selection.selected_id(),
+                    Some(crate::chart::selection::ChartElementId::Indicator(id))
+                );
+            }
+            chart.set_indicator_visible(studies[0], false);
+            chart.pane_layout.panes[0].scale.options_mut().mode =
+                crate::scales::PriceScaleMode::Percentage;
+            chart.pane_layout.panes[0].scale.reset();
+            crate::widget::test_frames::frame(&ctx, &mut chart, 5.0, Vec::new());
+            let pane = &chart.get_rendered_indicator_panes()[0];
+            assert_eq!(pane.mapping.price.transform().to_scale(40.0), 0.0);
+        }
     }
 
     #[test]
@@ -818,12 +907,15 @@ mod tests {
                 (1440.0, 868.0),
                 (720.0, 450.0),
                 (640.0, 450.0),
+                (240.0, 450.0),
+                (320.0, 450.0),
                 (600.0, 400.0),
                 (600.0, 180.0),
             ] {
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+                chart.state.time_scale_mut().set_right_offset(0.0);
                 let rsi = chart.add_indicator(Box::new(RSI::new(14)));
                 chart.config.show_indicator_inputs = true;
                 chart.study_inputs[0] =
@@ -911,7 +1003,10 @@ mod tests {
                         egui::Shape::Text(text)
                             if text.galley.text().contains("Jan")
                                 || text.galley.text().contains("Dec")
-                                || text.galley.text().contains("Feb") =>
+                                || text.galley.text().contains("Feb")
+                                || text.galley.text().contains(':')
+                                || (text.pos.y >= bottom
+                                    && text.galley.text().chars().all(|c| c.is_ascii_digit())) =>
                         {
                             assert!(
                                 text.pos.y >= bottom,

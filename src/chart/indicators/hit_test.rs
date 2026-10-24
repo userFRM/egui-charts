@@ -136,8 +136,6 @@ pub fn hit_test_pane_indicator(
     indicator_idx: usize,
     visible_range: std::ops::Range<usize>,
     chart_rect: Rect,
-    _y_min: f64,
-    _y_max: f64,
     coords: &ChartMapping,
 ) -> Option<IndicatorHitResult> {
     // Only test non-overlay indicators
@@ -214,7 +212,7 @@ mod tests {
                 let found = if overlay {
                     hit_test_indicator(point, &study, 3, 0..2, &coords, |v| 100.0 - v as f32)
                 } else {
-                    hit_test_pane_indicator(point, &study, 3, 0..2, rect, 0.0, 100.0, &coords)
+                    hit_test_pane_indicator(point, &study, 3, 0..2, rect, &coords)
                 };
                 assert_eq!(
                     found.is_some(),

@@ -305,6 +305,7 @@ impl Chart {
         self.show_elements();
         let previous_axis_width = self.measured_axis_width;
         self.last_rendered_indicator_panes.clear();
+        self.sync_panes();
         // Pane studies share the available height and the lowest time axis.
         let has_panes = self
             .studies
@@ -323,7 +324,7 @@ impl Chart {
                 .price_rect
                 .width();
             let frame = ui.ctx().cumulative_frame_nr();
-            let first_frame = *self.pane_layout.first_axis_frame.get_or_insert(frame);
+            let first_frame = *self.first_layout_frame.get_or_insert(frame);
             // Initial sizing passes retain the requested zoom while axis labels settle.
             if (frame != first_frame || self.desired_visible_bars.is_some())
                 && previous_axis_width > 0.0
