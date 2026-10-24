@@ -316,53 +316,64 @@ fn draw_baseline_segments(
         ),
         style.above.line_type,
     );
+    // A segment that crosses the base line is split there, in screen space, where the line is
+    // straight on every price scale. Each part keeps its distance along the path for the dashes.
+    let mut parts = Vec::with_capacity(points.len());
     let mut distance = 0.0;
     for pair in points.windows(2) {
         let (prev, curr) = (pair[0], pair[1]);
-        // A segment that crosses the base line is split there, in screen space, where the
-        // line is straight on every price scale.
         let crossing = (prev.y < baseline_y && curr.y > baseline_y)
             || (prev.y > baseline_y && curr.y < baseline_y);
         if crossing {
             let t = (baseline_y - prev.y) / (curr.y - prev.y);
             let cross = Pos2::new(prev.x + (curr.x - prev.x) * t, baseline_y);
-            draw_baseline_part(painter, coords, prev, cross, baseline_y, style, distance);
-            draw_baseline_part(
-                painter,
-                coords,
-                cross,
-                curr,
-                baseline_y,
-                style,
-                distance + f64::from(prev.distance(cross)),
-            );
+            parts.push((prev, cross, distance));
+            parts.push((cross, curr, distance + f64::from(prev.distance(cross))));
         } else {
-            draw_baseline_part(painter, coords, prev, curr, baseline_y, style, distance);
+            parts.push((prev, curr, distance));
         }
         distance += f64::from(prev.distance(curr));
     }
-}
-
-/// A part of a segment that does not cross the base line: its line and its fill down to the base.
-fn draw_baseline_part(
-    painter: &Painter,
-    coords: &PriceMap,
-    a: Pos2,
-    b: Pos2,
-    baseline_y: f32,
-    style: &BaselineStyle,
-    distance: f64,
-) {
     // The side is decided by value, so an inverted price scale keeps its colours; a part that
     // only touches the base line takes its other side.
-    let (line, fill) =
-        if coords.y_to_price(f32::midpoint(a.y, b.y)) >= coords.y_to_price(baseline_y) {
-            (&style.above, style.above_fill)
+    let above = |a: Pos2, b: Pos2| {
+        coords.y_to_price(f32::midpoint(a.y, b.y)) >= coords.y_to_price(baseline_y)
+    };
+    // One unfeathered mesh, so adjacent parts of a densely sampled path leave no seams.
+    let mut fill = egui::Mesh::default();
+    for &(a, b, _) in &parts {
+        let color = if above(a, b) {
+            style.above_fill
         } else {
-            (&style.below, style.below_fill)
+            style.below_fill
         };
-    let fill_points = vec![a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)];
-    painter.add(Shape::convex_polygon(fill_points, fill, Stroke::NONE));
+        let n = fill.vertices.len() as u32;
+        for point in [a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)] {
+            fill.colored_vertex(point, color);
+        }
+        fill.add_triangle(n, n + 1, n + 2);
+        fill.add_triangle(n, n + 2, n + 3);
+    }
+    painter.add(fill);
+    for &(a, b, distance) in &parts {
+        let line = if above(a, b) {
+            &style.above
+        } else {
+            &style.below
+        };
+        draw_baseline_line_part(painter, a, b, line, distance);
+    }
+}
+
+/// The line of a part of the path that does not cross the base line, with its dashes `distance`
+/// along the path.
+fn draw_baseline_line_part(
+    painter: &Painter,
+    a: Pos2,
+    b: Pos2,
+    line: &crate::model::LinePlotStyle,
+    distance: f64,
+) {
     if !line.width.is_finite() || line.width <= 0.0 {
         return;
     }
