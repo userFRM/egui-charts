@@ -39,6 +39,8 @@ pub(super) struct PriceSeries {
     pub feed: FeedState,
     pub markers: Vec<Marker>,
     pub lines: Vec<PriceLine>,
+    /// Counts the changes of `bars`, for the primitives attached to the series.
+    pub revision: u64,
 }
 
 impl Chart {
@@ -60,6 +62,7 @@ impl Chart {
             feed: FeedState::default(),
             markers: Vec::new(),
             lines: Vec::new(),
+            revision: 0,
         });
         id
     }
@@ -235,8 +238,9 @@ impl Chart {
                 f64::INFINITY,
                 f64::NEG_INFINITY,
             ));
-            for bar in &item.bars[range] {
-                let value = transform.to_scale(bar.close);
+            let prices = item.bars[range].iter().map(|bar| bar.close);
+            for value in prices.chain(self.primitive_prices(item.id)) {
+                let value = transform.to_scale(value);
                 if value.is_finite() {
                     if !entry.1.is_finite() {
                         entry.0 = transform;
@@ -267,7 +271,7 @@ impl Chart {
         main
     }
 
-    fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
+    pub(super) fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
         self.secondary_scale(item.options.scale).map(
             self.series_transform(item),
             rect.top(),

@@ -36,6 +36,7 @@ impl Chart {
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
             let (bars, rejected) = clean(bars, &self.clock());
             self.price_series[at].bars = bars;
+            self.price_series[at].revision += 1;
             self.price_series[at].feed.rejected_bars += rejected;
             self.data_loaded(series);
             return;
@@ -88,6 +89,7 @@ impl Chart {
                 vec![(bar, Origin::Live)],
             );
             item.feed.rejected_bars += merged.rejected;
+            item.revision += 1;
             return;
         }
         if self.main_series_present && holds_bars(series, "update") {

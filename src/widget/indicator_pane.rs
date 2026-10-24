@@ -506,9 +506,11 @@ impl IndicatorPane {
             false,
             Some(crate::scales::PriceScaleId::Right),
             None,
+            &[],
         )
     }
 
+    /// Shows the pane with the `primitives` attached to `indicator`, which draw in its passes.
     pub(super) fn show_aligned_interactive_in(
         &mut self,
         ui: &mut Ui,
@@ -519,6 +521,7 @@ impl IndicatorPane {
         collapsed: bool,
         axis: Option<crate::scales::PriceScaleId>,
         hover: Option<(Pos2, crate::config::CrosshairOptions)>,
+        primitives: &[&super::primitives::Attached],
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
             return None;
@@ -583,6 +586,22 @@ impl IndicatorPane {
         if let Some(map) = self.price_map {
             mapping.price = map;
         }
+        let view = primitives
+            .first()
+            .map(|item| crate::chart::primitives::PrimitiveView {
+                series: item.series,
+                study: Some(indicator),
+                mapping,
+                bars,
+                visible: displayed_range.clone(),
+            });
+        let draw = |painter: &egui::Painter, pass| {
+            if let Some(view) = &view {
+                for item in primitives {
+                    item.get().draw(painter, view, pass);
+                }
+            }
+        };
         let crosshair = hover.map(|(mut pos, options)| {
             if let Some(index) = self.bar_index {
                 pos.x = mapping.idx_to_x(index);
@@ -632,17 +651,61 @@ impl IndicatorPane {
                 self.draw_vertical_grid_aligned(plot_painter, chart_rect, &coords, grid_color);
             }
 
-            // Draw indicator lines with aligned coordinates
-            self.draw_indicator_lines_aligned(
-                plot_painter,
-                chart_rect,
-                indicator,
-                bars,
-                y_min,
-                y_max,
-                &coords,
-            );
+            use crate::chart::primitives::PrimitivePass;
+            draw(plot_painter, PrimitivePass::Below);
+            // Draw indicator lines with aligned coordinates, unless a renderer draws them
+            if !primitives.iter().any(|item| item.replaces) {
+                self.draw_indicator_lines_aligned(
+                    plot_painter,
+                    chart_rect,
+                    indicator,
+                    bars,
+                    y_min,
+                    y_max,
+                    &coords,
+                );
+            }
+            draw(plot_painter, PrimitivePass::Series);
+            draw(plot_painter, PrimitivePass::Above);
 
+            if let (Some(view), Some(side)) = (&view, axis)
+                && indicator.scale() != crate::studies::StudyScale::None
+            {
+                let (axis_rect, axis_edge) = if side == crate::scales::PriceScaleId::Left {
+                    (
+                        Rect::from_x_y_ranges(rect.left()..=chart_rect.left(), rect.y_range()),
+                        chart_rect.left(),
+                    )
+                } else {
+                    (
+                        Rect::from_x_y_ranges(chart_rect.right()..=rect.right(), rect.y_range()),
+                        rect.right(),
+                    )
+                };
+                let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis_rect));
+                for item in primitives {
+                    let primitive = item.get();
+                    primitive.draw_price_axis(&axis_painter, axis_rect, view);
+                    for label in primitive.price_axis_labels(view) {
+                        let map = mapping.price;
+                        if map.range().contains(map.transform().to_scale(label.price)) {
+                            let tag = crate::chart::rendering::axes::render_axis_value(
+                                painter,
+                                chart_rect,
+                                axis_edge,
+                                map.price_to_y(label.price),
+                                label.text,
+                                (
+                                    crate::chart::rendering::axes::tag_text_color(label.color),
+                                    label.color,
+                                ),
+                                &self.axis_tags,
+                            );
+                            self.axis_tags.push(tag);
+                        }
+                    }
+                }
+            }
             let context = crate::chart::renderers::RenderContext::new(painter, chart_rect);
             let tag = crosshair.and_then(|(pos, options)| {
                 crate::chart::renderers::render_crosshair_lines(

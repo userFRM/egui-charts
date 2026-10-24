@@ -129,8 +129,9 @@ impl Chart {
         Ok(String::from_utf8(writer.into_inner()?)?)
     }
 
-    /// Renders an isolated image frame using the same chart, studies, drawings and scales as the
-    /// widget. Does not poll feeds, change live viewport state or capture host panels/dialogs.
+    /// Renders an isolated image frame using the same chart, studies, primitives, drawings and
+    /// scales as the widget. Does not poll feeds, change live viewport state, call the lifecycle
+    /// hooks of primitives or capture host panels/dialogs.
     /// `ctx` supplies the host's fonts and style after its first frame. Images use one pixel per point and dimensions
     /// between 100 and 7680 on each axis, with at most 33,177,600 pixels.
     /// Pass the returned frame to an egui renderer; see [`ChartImage`] for delivery responsibilities.
@@ -242,6 +243,7 @@ impl Chart {
                 feed: series.feed.clone(),
                 markers: series.markers.clone(),
                 lines: series.lines.clone(),
+                revision: series.revision,
             })
             .collect();
         chart.series_scales = self.series_scales.clone();
@@ -288,6 +290,9 @@ impl Chart {
             chart.volume_study = self.volume_study;
             chart.volume_setting = self.volume_setting;
         }
+        chart.primitives = self.primitives.clone();
+        chart.next_primitive = self.next_primitive;
+        chart.settle_primitives();
         chart
     }
 }

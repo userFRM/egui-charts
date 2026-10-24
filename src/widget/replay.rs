@@ -38,6 +38,7 @@ impl Chart {
                         self.replace_main_data(bars);
                     } else if let Some(item) = self.price_series.iter_mut().find(|s| s.id == id) {
                         item.bars = bars;
+                        item.revision += 1;
                     }
                 }
                 self.quote = replay.quote;
@@ -145,6 +146,7 @@ impl Chart {
         for item in &mut self.price_series {
             if let Some(bars) = replay.bars.get(&item.id) {
                 item.bars = completed(bars, &clock, replay.time).to_vec();
+                item.revision += 1;
             }
         }
         self.replay = Some(replay);

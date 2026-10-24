@@ -176,6 +176,7 @@ impl Chart {
             );
             let members = self.pane_layout.panes[pane_idx].studies.clone();
             let mut shared_range = (f64::INFINITY, f64::NEG_INFINITY);
+            let mut primitive_prices = Vec::new();
             for id in &members {
                 let idx = self.study_ids.iter().position(|study| study == id).unwrap();
                 let study = studies.indicators()[idx].as_ref();
@@ -184,7 +185,12 @@ impl Chart {
                         .calculate_y_range(study, &displayed_range);
                     shared_range.0 = shared_range.0.min(range.0);
                     shared_range.1 = shared_range.1.max(range.1);
+                    primitive_prices.extend(self.primitive_prices(*id));
                 }
+            }
+            for price in primitive_prices.iter().filter(|price| price.is_finite()) {
+                shared_range.0 = shared_range.0.min(*price);
+                shared_range.1 = shared_range.1.max(*price);
             }
             let pane_scale = &mut self.pane_layout.panes[pane_idx].scale;
             let mode = pane_scale.options().mode;
@@ -242,6 +248,10 @@ impl Chart {
                             }
                         }
                     }
+                }
+                for price in primitive_prices.iter().filter(|price| **price > 0.0) {
+                    shared_range.0 = shared_range.0.min(*price);
+                    shared_range.1 = shared_range.1.max(*price);
                 }
             }
             pane_scale.autoscale(
@@ -375,6 +385,7 @@ impl Chart {
                         None
                     },
                     hover.map(|pos| (pos, crosshair_options)),
+                    &self.primitives_of(id).collect::<Vec<_>>(),
                 ) {
                     self.measured_axis_width =
                         self.measured_axis_width.max(panel.measured_axis_width);
@@ -436,16 +447,53 @@ impl Chart {
                     }
                     let mut pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
                     pane_coords.price = map;
+                    // Primitives are hit tested at the pointer, before the chart state is
+                    // borrowed mutably.
+                    let pointer = ui
+                        .input(|input| input.pointer.interact_pos())
+                        .filter(|pos| chart_rect.contains(*pos));
+                    let pane_primitives = || {
+                        self.primitives
+                            .iter()
+                            .filter(|item| {
+                                self.pane_layout.panes[pane_idx]
+                                    .studies
+                                    .contains(&item.series)
+                                    && self.is_series_visible(item.series)
+                            })
+                            .map(|item| (item, self.primitive_view(item.series, pane_coords)))
+                    };
+                    let primitive_hit = pointer
+                        .and_then(|pos| super::primitives::primitive_at(pane_primitives(), pos));
+                    let renderer_hit = pointer.and_then(|pos| {
+                        super::primitives::primitive_at(
+                            pane_primitives().filter(|(item, _)| item.replaces),
+                            pos,
+                        )
+                    });
+                    let rendered: Vec<_> = self.pane_layout.panes[pane_idx]
+                        .studies
+                        .iter()
+                        .copied()
+                        .filter(|id| self.has_renderer(*id))
+                        .collect();
 
                     // Resolve a click on this pane: a hit on the line selects
                     // it, an empty-pane click clears the whole selection. A
                     // close-"x" click is handled above and must not also
                     // change the selection.
                     let study_at = |pos| {
+                        if let Some(super::PointerTarget::Element(id)) = renderer_hit
+                            .filter(|_| Some(pos) == pointer)
+                            .map(|hit| hit.target)
+                        {
+                            return Some(id);
+                        }
                         self.pane_layout.panes[pane_idx]
                             .studies
                             .iter()
                             .rev()
+                            .filter(|id| !rendered.contains(id))
                             .find_map(|id| {
                                 let idx = self.study_ids.iter().position(|study| study == id)?;
                                 hit_test_pane_indicator(
@@ -473,15 +521,20 @@ impl Chart {
                         }
                     }
                     // What the pointer is over, for host pointer events: drawings sit on top.
-                    if !collapsed
-                        && let Some(pos) = ui
-                            .input(|input| input.pointer.interact_pos())
-                            .filter(|pos| chart_rect.contains(*pos))
-                    {
-                        self.host_events.target = self
-                            .drawings
-                            .hit_test(pos)
+                    if !collapsed && let Some(pos) = pointer {
+                        let drawing = self.drawings.hit_test(pos);
+                        if let Some(hit) = primitive_hit.filter(|_| {
+                            drawing.is_none()
+                                && pane_response.hovered()
+                                && !pane_response.dragged()
+                                && !self.drawings.eraser_mode
+                                && self.drawings.active_tool.is_none()
+                        }) {
+                            ui.ctx().set_cursor_icon(hit.cursor);
+                        }
+                        self.host_events.target = drawing
                             .map(super::PointerTarget::Drawing)
+                            .or(primitive_hit.map(|hit| hit.target))
                             .or_else(|| study_at(pos).map(super::PointerTarget::Element));
                     }
 

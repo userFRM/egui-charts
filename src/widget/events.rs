@@ -49,6 +49,8 @@ pub enum PointerTarget {
     Element(ChartElementId),
     /// A drawing, by its [`crate::drawings::DrawingManager`] id.
     Drawing(usize),
+    /// A primitive whose [`hit_test`](super::Primitive::hit_test) reports the pointer.
+    Primitive(super::PrimitiveId),
 }
 
 /// The device behind a [`ChartPointer`].

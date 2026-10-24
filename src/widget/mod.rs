@@ -139,10 +139,14 @@ pub(crate) mod pan_zoom;
 mod pane_layout;
 mod panes;
 mod price_series;
+mod primitives;
 mod readout;
 mod replay;
 mod selection;
 mod series;
+pub use crate::chart::primitives::{
+    PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
+};
 pub use price_series::SeriesOptions;
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
@@ -293,6 +297,10 @@ pub struct Chart {
     pub(crate) next_refresh: Vec<f64>,
     /// Id of the next study added.
     pub(crate) next_series: usize,
+    /// Host primitives, in the order they were attached.
+    primitives: Vec<primitives::Attached>,
+    /// Id of the next primitive attached.
+    next_primitive: u64,
     /// The chart's drawings and the active drawing tool.
     pub(crate) drawings: DrawingManager,
     symbol_drawings: std::collections::HashMap<String, (DrawingManager, Vec<crate::model::Marker>)>,

@@ -128,6 +128,8 @@ impl Chart {
             next_refresh: Vec::new(),
             // 0 and 1 are the main and volume series.
             next_series: 2,
+            primitives: Vec::new(),
+            next_primitive: 0,
             drawings: DrawingManager::new(),
             symbol_drawings: Default::default(),
             history: super::history::ChartHistory::default(),

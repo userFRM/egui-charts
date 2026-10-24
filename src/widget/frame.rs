@@ -1,7 +1,7 @@
 //! Frame rendering: the `show` entry points and the per-frame paint and interaction pass.
 
 use super::selection::hit_test_main_chart;
-use super::{Chart, RightClickTarget};
+use super::{Chart, PrimitivePass, RightClickTarget, primitives};
 use crate::chart::overlays::FootprintConfig;
 use crate::chart::renderers::{self, ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering;
@@ -331,6 +331,7 @@ impl Chart {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
+        self.sync_primitives(ui.ctx());
         let frame = ui.ctx().cumulative_frame_nr();
         let width = ui.available_width();
         let resized = self
@@ -757,7 +758,8 @@ impl Chart {
 
         // Fit the price scale, then apply this frame's price zoom
         let series_values = self.fit_secondary_series();
-        let transform = self.state.fit_price_scale_with_series(
+        let primitive_prices = self.main_primitive_prices();
+        let transform = self.state.fit_price_scale_with_prices(
             (if self.chart_type.is_time_independent() {
                 &self.element_studies.studies
             } else {
@@ -769,6 +771,7 @@ impl Chart {
             .filter(|(study, autoscale)| **autoscale && !study.is_volume())
             .map(|(study, _)| study.as_ref()),
             self.main_series_visible,
+            primitive_prices,
             series_values,
         );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
@@ -970,6 +973,7 @@ impl Chart {
             self.config.price_source,
         );
 
+        self.paint_primitives(&painter, &coords, PrimitivePass::Below);
         if self.main_series_visible {
             if let Some((flow, config)) = footprint.filter(|_| time_based) {
                 if show_volume && !cfg!(feature = "studies") {
@@ -1086,13 +1090,18 @@ impl Chart {
                 self.config.bearish_color,
             );
         }
-        renderers::IndicatorRenderer::render(
-            &price_ctx,
-            studies.indicators(),
-            visible_data,
-            &price_map,
-            &coords,
-        );
+        for (study, id) in studies.indicators().iter().zip(&self.study_ids) {
+            if !self.has_renderer(*id) {
+                renderers::IndicatorRenderer::render(
+                    &price_ctx,
+                    std::slice::from_ref(study),
+                    visible_data,
+                    &price_map,
+                    &coords,
+                );
+            }
+        }
+        self.paint_primitives(&painter, &coords, PrimitivePass::Series);
 
         // Resolve a click on the main chart area into a selection. Overlay
         // indicators take priority over the series beneath them; an empty-area
@@ -1100,7 +1109,33 @@ impl Chart {
         // where the panes are rendered, outside this rect.
         let main_visible_range = start_idx..(start_idx + visible_data.len());
         let volume_coords = show_volume.then(|| coords.with_rect(volume_rect));
-        let element_at = |pos| {
+        // Primitives are hit tested at the pointer, before the chart state is borrowed mutably.
+        let pointer = ui
+            .input(|input| input.pointer.interact_pos())
+            .filter(|pos| chart_rect.contains(*pos));
+        let primitive_hit =
+            pointer.and_then(|pos| primitives::primitive_at(self.main_primitives(&coords), pos));
+        let renderer_hit = pointer.and_then(|pos| {
+            primitives::primitive_at(
+                self.main_primitives(&coords)
+                    .filter(|(item, _)| item.replaces),
+                pos,
+            )
+        });
+        let rendered: Vec<_> = self
+            .study_ids
+            .iter()
+            .copied()
+            .filter(|id| self.has_renderer(*id))
+            .collect();
+        let last_bar = self.state.shown().len().saturating_sub(1);
+        let element_at = |pos: Pos2| {
+            if let Some(super::PointerTarget::Element(id)) = renderer_hit
+                .filter(|_| Some(pos) == pointer)
+                .map(|hit| hit.target)
+            {
+                return Some((id, coords.x_to_idx(pos.x).min(last_bar)));
+            }
             hit_test_main_chart(
                 pos,
                 studies,
@@ -1111,9 +1146,10 @@ impl Chart {
                 max_volume,
                 main_visible_range.clone(),
             )
-            .filter(|(id, _)| {
-                self.main_series_visible
-                    || matches!(id, crate::widget::ChartElementId::Indicator(_))
+            .filter(|(id, _)| match id {
+                // A renderer hit tests its custom series in place of the study's plots.
+                crate::widget::ChartElementId::Indicator(study) => !rendered.contains(study),
+                _ => self.main_series_visible,
             })
         };
         if response.clicked()
@@ -1180,14 +1216,21 @@ impl Chart {
         }
 
         // What the pointer is over, for host pointer events, in the right-click priority.
-        if let Some(pos) = ui
-            .input(|input| input.pointer.interact_pos())
-            .filter(|pos| chart_rect.contains(*pos))
-        {
-            self.host_events.target = self
-                .drawings
-                .hit_test(pos)
+        if let Some(pos) = pointer {
+            let drawing = self.drawings.hit_test(pos);
+            if let Some(hit) = primitive_hit.filter(|_| {
+                drawing.is_none()
+                    && response.hovered()
+                    && !response.dragged()
+                    && !self.zoom_mode_active
+                    && !self.drawings.eraser_mode
+                    && self.drawings.active_tool.is_none()
+            }) {
+                ui.ctx().set_cursor_icon(hit.cursor);
+            }
+            self.host_events.target = drawing
                 .map(super::PointerTarget::Drawing)
+                .or(primitive_hit.map(|hit| hit.target))
                 .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
         }
 
@@ -1233,6 +1276,15 @@ impl Chart {
                     ..coords
                 },
             );
+        }
+
+        if self.config.show_right_axis || self.config.show_left_axis {
+            let axis_painter =
+                painter.with_clip_rect(painter.clip_rect().intersect(price_axis_rect));
+            for (item, view) in self.main_primitives(&coords) {
+                item.get()
+                    .draw_price_axis(&axis_painter, price_axis_rect, &view);
+            }
         }
 
         // The axis labels go at these depths, painted once the crosshair's tags are placed
@@ -1398,6 +1450,29 @@ impl Chart {
                 ));
             }
         }
+        if show_price_axis {
+            let labels: Vec<_> = self
+                .main_primitives(&coords)
+                .flat_map(|(item, view)| {
+                    let map = view.mapping.price;
+                    let labels = item.get().price_axis_labels(&view);
+                    labels.into_iter().map(move |label| (label, map))
+                })
+                .collect();
+            for (label, map) in labels {
+                if map.range().contains(map.transform().to_scale(label.price)) {
+                    tags.push(rendering::axes::render_axis_value(
+                        &painter,
+                        price_rect,
+                        axis_edge,
+                        map.price_to_y(label.price),
+                        label.text,
+                        (rendering::axes::tag_text_color(label.color), label.color),
+                        &tags,
+                    ));
+                }
+            }
+        }
         let mut independent_axis_width =
             self.paint_series_axes(ui, &painter, rect, price_rect, &colors);
         if show_price_axis {
@@ -1549,7 +1624,42 @@ impl Chart {
             }
         }
 
+        if self.config.show_time_labels {
+            let axis = self.time_axis_rect;
+            let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis));
+            for (item, view) in self.time_axis_primitives(&coords) {
+                item.get().draw_time_axis(&axis_painter, axis, &view);
+            }
+        }
         let time_labels = painter.add(egui::Shape::Noop);
+        // Kept apart from the price tags, which size the price axis.
+        let mut time_tags = Vec::new();
+        if self.config.show_time_labels {
+            let labels: Vec<_> = self
+                .time_axis_primitives(&coords)
+                .flat_map(|(item, view)| {
+                    let labels = item.get().time_axis_labels(&view);
+                    labels
+                        .into_iter()
+                        .filter_map(|label| Some((view.time_to_x(label.time)?, label)))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            for (x, label) in labels {
+                if chart_rect.x_range().contains(x) {
+                    time_tags.push(Some(rendering::axes::paint_crosshair_tag(
+                        &painter,
+                        Pos2::new(x, time_axis_top + 1.5),
+                        egui::Align2::CENTER_TOP,
+                        chart_rect.left()..=chart_rect.right(),
+                        label.text,
+                        (rendering::axes::tag_text_color(label.color), label.color),
+                        25.0,
+                        None,
+                    )));
+                }
+            }
+        }
 
         // Handle drawing tools
         {
@@ -1581,6 +1691,7 @@ impl Chart {
             self.history
                 .finish_drawing_action(&mut self.drawings, drawing_history);
         }
+        self.paint_primitives(&painter, &coords, PrimitivePass::Above);
 
         // Render "Jump to Latest" button
         if self.config.show_realtime_btn {
@@ -1995,6 +2106,7 @@ impl Chart {
 
         // Draw the axis labels, leaving out those the tags overlap
         tags.extend(crosshair_tags);
+        time_tags.extend_from_slice(&tags);
         if self.config.show_right_axis {
             rendering::render_price_labels(&price_ctx, &price_map, &colors, &tags, price_labels);
         } else if self.config.show_left_axis {
@@ -2017,7 +2129,7 @@ impl Chart {
                 &coords,
                 &colors,
                 formatter.as_ref(),
-                &tags,
+                &time_tags,
                 &self.chart_options.time_scale,
                 time_labels,
             );
