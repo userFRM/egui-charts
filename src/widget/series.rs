@@ -1449,9 +1449,11 @@ mod tests {
                 continue;
             }
             let line = |color| {
-                let at = |shape: &Shape| {
-                    matches!(shape,
-                    Shape::LineSegment { stroke, .. } if stroke.color == color)
+                // The series line is one path, a price line a segment.
+                let at = |shape: &Shape| match shape {
+                    Shape::LineSegment { stroke, .. } => stroke.color == color,
+                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                    _ => false,
                 };
                 (
                     painted.iter().position(at).unwrap(),
