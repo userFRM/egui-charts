@@ -418,6 +418,17 @@ impl ChartState {
                             })
                             .flat_map(|candle| [candle.bar.low, candle.bar.high]),
                     )
+                    .chain(
+                        study
+                            .zones()
+                            .iter()
+                            .filter(|zone| {
+                                zone.bars.end > study_start.max(start)
+                                    && zone.bars.start < study_end.max(end)
+                                    && study.plot_style(zone.plot).visible
+                            })
+                            .flat_map(|zone| [zone.bottom, zone.top]),
+                    )
             });
         let main = main_visible
             .then(|| {
