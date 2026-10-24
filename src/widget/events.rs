@@ -564,6 +564,14 @@ mod tests {
             frame(&ctx, &mut chart, 1.97, vec![Event::PointerMoved(pos)]);
             let events = chart.drain_events().collect::<Vec<_>>();
             assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == below && point.pane == 2)), "{events:?}");
+            // Panes count from the top as drawn, so the price pane moved to the bottom is third.
+            assert!(chart.move_pane(super::super::PaneId::MAIN, usize::MAX));
+            frame(&ctx, &mut chart, 1.98, vec![Event::PointerGone]);
+            chart.drain_events().for_each(drop);
+            let pos = chart.last_rendered_price_rect.center();
+            frame(&ctx, &mut chart, 1.99, vec![Event::PointerMoved(pos)]);
+            let events = chart.drain_events().collect::<Vec<_>>();
+            assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == SeriesId::MAIN && point.pane == 2)), "{events:?}");
             chart.remove_series(below);
             chart.remove_series(other);
             chart.remove_series(id);
