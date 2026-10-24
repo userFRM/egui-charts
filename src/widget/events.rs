@@ -116,27 +116,45 @@ impl Chart {
             .find(|pane| pane.chart_rect.contains(pos))
         {
             let id = *self.study_ids.get(pane.indicator_idx)?;
-            let study = self
-                .rendered_studies()
-                .indicators()
-                .get(pane.indicator_idx)?;
-            let values = (0..study.line_cnt())
-                .filter(|line| {
-                    let plot = study.plot_style(*line);
-                    plot.visible
-                        && !matches!(
-                            plot.plot_type,
-                            crate::studies::PlotType::BarColor
-                                | crate::studies::PlotType::BackgroundColor
-                        )
+            let group = self
+                .pane_layout
+                .panes
+                .iter()
+                .find(|group| group.studies.contains(&id))?;
+            let values = group
+                .studies
+                .iter()
+                .filter_map(|id| self.study_ids.iter().position(|study| study == id))
+                .map(|index| &self.rendered_studies().indicators()[index])
+                .filter(|study| study.is_visible())
+                .flat_map(|study| {
+                    (0..study.line_cnt())
+                        .filter(|line| {
+                            let plot = study.plot_style(*line);
+                            plot.visible
+                                && !matches!(
+                                    plot.plot_type,
+                                    crate::studies::PlotType::BarColor
+                                        | crate::studies::PlotType::BackgroundColor
+                                )
+                        })
+                        .filter_map(move |line| {
+                            (index >= 0.0 && index < self.state.shown().len() as f64)
+                                .then(|| study.plot_value(line, index as usize))
+                                .flatten()
+                        })
                 })
-                .filter_map(|line| study.plot_value(line, index as usize))
                 .collect::<Vec<_>>();
-            (id, pane.mapping.price, values)
+            (group.id, pane.mapping.price, values)
         } else if self.last_rendered_volume_rect.contains(pos)
             && let Some(map) = self.host_events.volume_map
         {
-            (SeriesId::VOLUME, map, Vec::new())
+            let values = if index >= 0.0 && index < self.state.shown().len() as f64 {
+                vec![self.state.shown()[index as usize].volume]
+            } else {
+                Vec::new()
+            };
+            (SeriesId::VOLUME, map, values)
         } else if plot.contains(pos) {
             let snapped = if index >= 0.0 && index < self.state.shown().len() as f64 {
                 self.snap_crosshair(pos, &self.last_price_map, index as usize)
@@ -152,9 +170,7 @@ impl Chart {
         } else {
             return None;
         };
-        let price = if self.chart_options.crosshair.mode == crate::config::CrosshairMode::Magnet
-            && series != SeriesId::VOLUME
-        {
+        let price = if self.chart_options.crosshair.mode == crate::config::CrosshairMode::Magnet {
             crate::chart::renderers::snap_to_values(pos.y, &map, values)
                 .unwrap_or_else(|| map.y_to_price(pos.y))
         } else {
@@ -368,23 +384,79 @@ mod tests {
                     position: expected,
                     button: PointerButton::Primary
                 }));
-            chart.remove_series(id);
+            let other = chart.add_indicator(Box::new(
+                crate::studies::CustomIndicator::new("Other", |bars| {
+                    bars.iter()
+                        .map(|_| crate::studies::IndicatorValue::Single(75.0))
+                        .collect()
+                })
+                .with_overlay(false),
+            ));
+            assert!(chart.move_indicator_to_pane(other, id));
+            chart.set_crosshair_mode(crate::config::CrosshairMode::Magnet);
             frame(&ctx, &mut chart, 1.8, vec![Event::PointerGone]);
             chart.drain_events().for_each(drop);
+            let pane = &chart.last_rendered_indicator_panes[0];
+            let pos = Pos2::new(pane.mapping.idx_to_x(70), pane.mapping.price_to_y(74.0));
+            frame(&ctx, &mut chart, 1.9, vec![Event::PointerMoved(pos)]);
+            let events = chart.drain_events().collect::<Vec<_>>();
+            assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == id && (point.price - 75.0).abs() < 0.001)), "{events:?}");
+            chart.remove_series(other);
+            chart.remove_series(id);
+            chart.set_crosshair_mode(crate::config::CrosshairMode::Normal);
+            frame(&ctx, &mut chart, 2.0, vec![Event::PointerGone]);
+            chart.drain_events().for_each(drop);
         }
+        chart.config.show_volume = true;
+        frame(&ctx, &mut chart, 2.1, vec![]);
+        chart.drain_events().for_each(drop);
+        let volume = chart.last_rendered_volume_rect;
+        let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(70), volume.center().y);
+        for (step, (mode, price)) in [
+            (crate::config::CrosshairMode::Normal, 0.5),
+            (crate::config::CrosshairMode::Magnet, 1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            chart.set_crosshair_mode(mode);
+            frame(
+                &ctx,
+                &mut chart,
+                2.2 + step as f64,
+                vec![Event::PointerMoved(pos)],
+            );
+            chart.drain_events().for_each(drop);
+            for pressed in [true, false] {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    2.3 + step as f64,
+                    vec![Event::PointerButton {
+                        pos,
+                        button: PointerButton::Secondary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                );
+            }
+            assert!(chart.drain_events().any(|event| matches!(event, ChartEvent::Click { position, button: PointerButton::Secondary } if position.series == SeriesId::VOLUME && (position.price - price).abs() < 0.001)));
+        }
+        frame(&ctx, &mut chart, 3.5, vec![Event::PointerGone]);
+        chart.drain_events().for_each(drop);
         let range = chart.visible_time_range().unwrap();
         chart.apply_synced_time_range(VisibleTimeRange {
             from: range.from + chrono::Duration::days(1),
             to: range.to + chrono::Duration::days(1),
         });
-        frame(&ctx, &mut chart, 2.0, vec![]);
+        frame(&ctx, &mut chart, 4.0, vec![]);
         assert!(
             chart
                 .drain_events()
                 .any(|event| matches!(event, ChartEvent::VisibleRangeChanged(Some(_))))
         );
         chart.set_data(SeriesId::MAIN, vec![]);
-        frame(&ctx, &mut chart, 2.1, vec![]);
+        frame(&ctx, &mut chart, 4.1, vec![]);
         assert_eq!(
             chart.drain_events().collect::<Vec<_>>(),
             vec![

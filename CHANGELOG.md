@@ -169,6 +169,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Host pointer events use every visible magnet target in a merged study pane and retain the volume overlay mapping when a secondary click opens a menu. Volume magnet events report the bar volume rather than the raw pointer value. ([#201](https://github.com/userFRM/egui-charts/issues/201))
+
 - Command palette labels and descriptions stay clear of categories and shortcuts in narrow windows. Long text is shortened to fit its column. ([#308](https://github.com/userFRM/egui-charts/issues/308))
 - Shared comparison scales retain manual bounds when members are hidden, removed or reassigned. Comparison lines remain visible beyond the main history, relative axes retain their units in whitespace, and hidden study axes no longer consume comparison gutters. Removing the main series keeps its feed stopped when playback resumes. Copied layouts remap drawing pane ownership to the copied studies. ([#87](https://github.com/userFRM/egui-charts/issues/87))
 
