@@ -744,7 +744,8 @@ mod tests {
             ],
         ];
         let bars = sample_bars();
-        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
+        // Wider than every span, so paint that reaches a pane edge lands outside it.
+        let pane = Rect::from_min_max(Pos2::new(-2000., 0.), Pos2::new(2500., 400.));
         let mut wrong = Vec::new();
         for &tool in DrawingToolType::all() {
             for layout in layouts {
