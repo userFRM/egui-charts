@@ -15,7 +15,10 @@
 //! for BBTrend; Chaikin for the Chaikin Oscillator; Elder for Bull Bear Power; Martin 1989 for
 //! the Ulcer Index; the simple average of the bar range for the Average Daily Range; up and down
 //! bars against their open for the Advance/Decline Ratio of bars; the detrended price oscillator
-//! of the conventional definition, aligned and centred) on the same fixture, and rounded to 12 significant digits. Volume signs use exact integer comparisons; the
+//! of the conventional definition, aligned and centred; Swenlin for the Price Momentum Oscillator; Pring
+//! for the Special K; Spearman for the RCI Ribbon; Dorsey for the Relative Volatility Index; Blau for the SMI Ergodic lines; Lambert's CCI of
+//! the close for Woodies CCI) on the same fixture, and rounded to 12 significant digits. The Special K
+//! needs 725 bars, so its row uses a 1000-bar series of its own. Volume signs use exact integer comparisons; the
 //! volatility rows use decimal logarithms at 50-digit precision. Calendar-window rows are
 //! hand-calculated over an inclusive 364-day window.
 //!
@@ -24,8 +27,10 @@
 //! seed their EMAs with the mean of the first values and their signal with the mean of the first
 //! values of the oscillator, Force Index, Elder Ray, Bull Bear Power, TRIX and the Mass Index seed their EMAs with the mean of
 //! their first values, the Envelopes EMA and the Chaikin volatility and Chaikin Oscillator EMAs seed with their first input, an
-//! Accumulation/Distribution bar with a high equal to its low adds nothing, and Parabolic SAR reverses when the price
-//! crosses it, not on a touch), otherwise a published one (Wilder's first true range is high minus
+//! Accumulation/Distribution bar with a high equal to its low adds nothing, the Price Momentum Oscillator's smoothings
+//! and signal seed with the mean of their first inputs, the Relative Volatility Index and SMI Ergodic EMAs seed with
+//! their first input and an unchanged close counts as a falling bar in the Relative Volatility Index, and Parabolic
+//! SAR reverses when the price crosses it, not on a touch), otherwise a published one (Wilder's first true range is high minus
 //! low, Keltner's EMA seeds with the SMA of the first closes). Where no published rule settles it,
 //! the series pins the study's current behaviour: Supertrend starts bullish, an Aroon tie counts
 //! the most recent bar, and Parabolic SAR takes its first direction from the first two closes (up
@@ -52,6 +57,10 @@ use crate::studies::{
     AcceleratorOscillator, AdvanceDeclineRatioBars, AroonOscillator, AverageDailyRange, BBTrend,
     BullBearPower, ChaikinOscillator, DetrendedPriceOscillator, KnowSureThing,
     RankCorrelationIndex, RelativeVigorIndex, StochasticRSI, UlcerIndex,
+};
+use crate::studies::{
+    PriceMomentumOscillator, PringsSpecialK, RciRibbon, RelativeVolatilityIndex,
+    SMIErgodicIndicator, SMIErgodicOscillator, WoodiesCCI,
 };
 use chrono::{TimeZone, Utc};
 
@@ -287,6 +296,15 @@ fn staple_studies_match_published_definitions() {
             "DPO(21,centered)",
             Box::new(DetrendedPriceOscillator::new(21).with_centered(true)),
         ),
+        (
+            "PMO(35,20,10)",
+            Box::new(PriceMomentumOscillator::default()),
+        ),
+        ("RCIRibbon(10,30,50)", Box::new(RciRibbon::default())),
+        ("RVI(10)", Box::new(RelativeVolatilityIndex::default())),
+        ("SMIEI(20,5,5)", Box::new(SMIErgodicIndicator::default())),
+        ("SMIEO(20,5,5)", Box::new(SMIErgodicOscillator::default())),
+        ("Woodies(6,14)", Box::new(WoodiesCCI::default())),
     ];
     let mut studies: Vec<_> = studies
         .into_iter()
@@ -373,6 +391,21 @@ fn staple_studies_match_published_definitions() {
         .into_iter()
         .enumerate()
         .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
+        .collect();
+    // 1000 closes in eighths of a tick: a 600-bar triangle wave with a ripple, long enough for every
+    // Special K component and both signal smoothings.
+    let long: Vec<_> = (0..1000_i64)
+        .map(|i| {
+            let c = (1600 + 2 * (i % 600 - 300).abs() + (i * 37) % 29) as f64 / 4.0;
+            Bar::new(
+                Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        })
         .collect();
     use crate::studies::{AverageLine, AverageType, MACombination};
     let combination_bars: Vec<_> = [2.0, 4.0, 8.0, 6.0, 10.0, 5.0]
@@ -506,6 +539,11 @@ fn staple_studies_match_published_definitions() {
         ),
         ("52W%-minutes", Box::new(Week52HighLow::default()), minutes),
         ("52W%-weekly", Box::new(Week52HighLow::default()), weekly),
+        (
+            "SpecialK-long",
+            Box::new(PringsSpecialK::default()) as Box<dyn Indicator>,
+            long,
+        ),
     ]);
     for (_, study, data) in &mut studies {
         study.calculate(data);

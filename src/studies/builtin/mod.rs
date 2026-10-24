@@ -22,7 +22,8 @@
 //! [`ChandeMomentumOscillator`], [`TrueStrengthIndex`],
 //! [`StochasticMomentumIndex`], [`SchaffTrendCycle`], [`PriceOscillator`],
 //! [`PercentageVolumeOscillator`], [`AcceleratorOscillator`], [`AroonOscillator`],
-//! [`BullBearPower`], [`AdvanceDeclineRatioBars`]
+//! [`BullBearPower`], [`AdvanceDeclineRatioBars`], [`PriceMomentumOscillator`], [`PringsSpecialK`],
+//! [`SMIErgodicIndicator`], [`SMIErgodicOscillator`], [`WoodiesCCI`]
 //!
 //! ## Trend
 //! [`ADX`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
@@ -32,7 +33,7 @@
 //! [`BollingerBands`], [`ATR`], [`KeltnerChannels`], [`DonchianChannels`],
 //! [`StandardDeviation`], [`HistoricalVolatility`], [`ChaikinVolatility`],
 //! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`], [`ParkinsonVol`], [`ZeroTrendVol`],
-//! [`AverageDailyRange`], [`BBTrend`], [`UlcerIndex`]
+//! [`AverageDailyRange`], [`BBTrend`], [`UlcerIndex`], [`RelativeVolatilityIndex`]
 //!
 //! ## Volume
 //! [`OnBalanceVolume`], [`VolumeWeightedAvgPrice`], [`MoneyFlowIndex`],
@@ -45,7 +46,7 @@
 //!
 //! ## Statistics
 //! [`LinearRegression`], [`StandardError`],
-//! [`RankCorrelationIndex`], [`MajorityRule`]
+//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`]
 
 use crate::model::Bar;
 
@@ -226,6 +227,13 @@ mod bbtrend;
 mod bull_bear_power;
 mod chaikin_oscillator;
 mod ulcer_index;
+// Standard oscillators
+mod price_momentum_oscillator;
+mod rci_ribbon;
+mod relative_volatility_index;
+mod smi_ergodic;
+mod special_k;
+mod woodies_cci;
 
 // Re-exports - Original indicators
 pub use bollinger_bands::BollingerBands;
@@ -397,6 +405,13 @@ pub use bbtrend::BBTrend;
 pub use bull_bear_power::BullBearPower;
 pub use chaikin_oscillator::ChaikinOscillator;
 pub use ulcer_index::UlcerIndex;
+// Re-exports - Standard oscillators
+pub use price_momentum_oscillator::PriceMomentumOscillator;
+pub use rci_ribbon::RciRibbon;
+pub use relative_volatility_index::RelativeVolatilityIndex;
+pub use smi_ergodic::{SMIErgodic, SMIErgodicIndicator, SMIErgodicOscillator};
+pub use special_k::PringsSpecialK;
+pub use woodies_cci::WoodiesCCI;
 
 /// A float parameter clamped into `min..=max`, NaN to `min`, the way constructors
 /// raise a length of 0 to 1.

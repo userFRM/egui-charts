@@ -152,6 +152,11 @@ impl IndicatorFactory {
                 AroonOscillator,
                 BullBearPower,
                 AdvanceDeclineRatioBars,
+                PriceMomentumOscillator,
+                PringsSpecialK,
+                SMIErgodicIndicator,
+                SMIErgodicOscillator,
+                WoodiesCCI,
             ],
             "Trend" => [
                 ADX,
@@ -188,6 +193,7 @@ impl IndicatorFactory {
                 AverageDailyRange,
                 BBTrend,
                 UlcerIndex,
+                RelativeVolatilityIndex,
             ],
             "Volume" => [
                 Volume,
@@ -221,6 +227,7 @@ impl IndicatorFactory {
                 StandardError,
                 StandardErrorBands,
                 RankCorrelationIndex,
+                RciRibbon,
                 MajorityRule,
                 AccumulationSwingIndex,
             ],
@@ -477,6 +484,11 @@ mod tests {
             Box::new(VolumeOscillator::new(l(0), l(1))),
             Box::new(BalanceOfPower::new(l(0))),
             Box::new(EaseOfMovement::new(l(0)).with_divisor(x(1e4))),
+            Box::new(PriceMomentumOscillator::new(l(0), l(1), l(2))),
+            Box::new(PringsSpecialK::new(l(0), l(1))),
+            Box::new(SMIErgodicIndicator::new(l(0), l(1), l(2))),
+            Box::new(SMIErgodicOscillator::new(l(0), l(1), l(2))),
+            Box::new(WoodiesCCI::new(l(0), l(1))),
             Box::new(ADX::new(l(0))),
             Box::new(SuperTrend::new(l(0), x(3.0))),
             Box::new(IchimokuCloud::new(l(0), l(1), l(2))),
@@ -510,6 +522,7 @@ mod tests {
             Box::new(OhlcVolatility::new(l(0))),
             Box::new(ParkinsonVol::new(l(0))),
             Box::new(ZeroTrendVol::new(l(0))),
+            Box::new(RelativeVolatilityIndex::new(l(0))),
             Box::new(
                 CommoditySelectionIndex::new(l(0))
                     .with_point_value(x(1.0))
@@ -544,6 +557,7 @@ mod tests {
             Box::new(StandardError::new(l(0))),
             Box::new(StandardErrorBands::new(l(0), x(2.0))),
             Box::new(RankCorrelationIndex::new(l(0))),
+            Box::new(RciRibbon::new(l(0), l(1), l(2))),
             Box::new(MajorityRule::new(l(0))),
             Box::new(AccumulationSwingIndex::new(x(0.5))),
             Box::new(HigherIntervalCandles::default()),
