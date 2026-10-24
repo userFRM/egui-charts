@@ -1,0 +1,160 @@
+//! Named templates stored by the host, without accounts or a storage backend in the library.
+
+mod dialog;
+mod store;
+
+pub use dialog::TemplateDialog;
+pub use store::TemplateStore;
+
+use crate::studies::{ConfiguredStudy, Indicator, IndicatorFactory, InputValue, StudySettings};
+
+/// Serializable inputs and presentation of one study. Hosts may resolve `name` through their
+/// own study factory when they supply custom studies.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct StudyTemplate {
+    /// Study factory name.
+    pub name: String,
+    /// Typed inputs keyed by their stable study-local identifiers.
+    pub inputs: Vec<(String, InputValue)>,
+    /// Plot styles, precision and interval visibility.
+    pub settings: StudySettings,
+    /// Whether the study is visible.
+    pub visible: bool,
+}
+
+impl StudyTemplate {
+    /// Capture the current calculation inputs and presentation, without computed values.
+    pub fn from_study(study: &dyn Indicator) -> Self {
+        Self {
+            name: study.name().into(),
+            inputs: study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect(),
+            settings: study.settings(),
+            visible: study.is_visible(),
+        }
+    }
+
+    /// Reconstruct a built-in study. Unknown names or invalid inputs leave the host chart intact.
+    /// Hosts reconstruct the entire set successfully before replacing their current studies.
+    pub fn create(&self) -> Result<Box<dyn Indicator>, String> {
+        let study = IndicatorFactory::new()
+            .create(&self.name)
+            .ok_or_else(|| format!("Unknown study: {}", self.name))?;
+        let mut study = ConfiguredStudy::new(study);
+        study
+            .apply_settings(&self.inputs, self.settings.clone())
+            .map_err(str::to_owned)?;
+        study.set_visible(self.visible);
+        Ok(Box::new(study))
+    }
+}
+
+/// Drawing properties without anchors or record identity. Apply to an existing drawing of the
+/// same type; its coordinates, name, notes, layer and persistence identity stay intact.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DrawingTemplate {
+    /// Tool and reusable properties. Serialization omits anchors and record identity.
+    pub settings: crate::drawings::Drawing,
+}
+
+impl DrawingTemplate {
+    /// Capture the properties of a selected drawing.
+    pub fn from_drawing(drawing: &crate::drawings::Drawing) -> Self {
+        let mut settings = drawing.clone();
+        settings.id = 0;
+        settings.stored_id = None;
+        settings.created_at = None;
+        settings.notes = None;
+        settings.label = None;
+        settings.points.clear();
+        settings.chart_points.clear();
+        settings.level_ys.clear();
+        settings.completed = false;
+        Self { settings }
+    }
+
+    /// Apply properties without moving or replacing the selected drawing. Hosts wrap this edit
+    /// in their drawing manager's `edit_drawing` to retain undo and persistence notifications.
+    pub fn apply_to(&self, drawing: &mut crate::drawings::Drawing) -> Result<(), &'static str> {
+        if self.settings.tool_type != drawing.tool_type {
+            return Err("Select a drawing of the template's type");
+        }
+        if !self.settings.stroke_width.is_finite()
+            || self.settings.stroke_width <= 0.0
+            || !self.settings.font_size.is_finite()
+            || self.settings.font_size <= 0.0
+        {
+            return Err("Invalid drawing template dimensions");
+        }
+        *drawing = crate::drawings::Drawing {
+            id: drawing.id,
+            stored_id: drawing.stored_id.clone(),
+            created_at: drawing.created_at,
+            notes: drawing.notes.clone(),
+            label: drawing.label.clone(),
+            points: drawing.points.clone(),
+            chart_points: drawing.chart_points.clone(),
+            level_ys: drawing.level_ys.clone(),
+            completed: drawing.completed,
+            z_order: drawing.z_order,
+            ..self.settings.clone()
+        };
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+
+    #[test]
+    fn templates_round_trip_settings_study_inputs_and_drawing_properties_without_geometry() {
+        let mut settings =
+            crate::ui::top_toolbar::components::settings_menu::ChartSettingsState::default();
+        settings.margins.top_percent = 12.5;
+        let json = serde_json::to_string(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_str::<
+                crate::ui::top_toolbar::components::settings_menu::ChartSettingsState,
+            >(&json)
+            .unwrap(),
+            settings
+        );
+        let mut study = ConfiguredStudy::new(Box::new(crate::studies::SMA::new(7)));
+        let mut style = study.settings();
+        style.plots[0].color = egui::Color32::YELLOW;
+        study.apply_settings(&[], style.clone()).unwrap();
+        study.set_visible(false);
+        let recipe = StudyTemplate::from_study(&study);
+        let recipe: StudyTemplate =
+            serde_json::from_str(&serde_json::to_string(&recipe).unwrap()).unwrap();
+        let restored = recipe.create().unwrap();
+        assert_eq!(restored.inputs()[0].value, study.inputs()[0].value);
+        assert_eq!(restored.settings(), style);
+        assert!(!restored.is_visible());
+        let mut drawing = Drawing::new(17, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(3.0, 100.0), ChartPoint::new(5.0, 200.0)];
+        drawing.completed = true;
+        drawing.stored_id = Some("host-id".into());
+        drawing.notes = Some("note".into());
+        drawing.label = Some("name".into());
+        let mut template = DrawingTemplate::from_drawing(&drawing);
+        template.settings.stroke_width = 4.0;
+        let template: DrawingTemplate =
+            serde_json::from_str(&serde_json::to_string(&template).unwrap()).unwrap();
+        assert!(template.settings.chart_points.is_empty());
+        template.apply_to(&mut drawing).unwrap();
+        assert_eq!(drawing.stroke_width, 4.0);
+        assert_eq!(drawing.id, 17);
+        assert_eq!(drawing.stored_id.as_deref(), Some("host-id"));
+        assert_eq!(drawing.notes.as_deref(), Some("note"));
+        assert_eq!(drawing.label.as_deref(), Some("name"));
+        assert_eq!(drawing.chart_points.len(), 2);
+        assert_eq!(drawing.chart_points[0].bar_idx, 3.0);
+        assert!(drawing.completed);
+    }
+}

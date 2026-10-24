@@ -72,8 +72,10 @@ pub enum DrawingToolbarAction {
         /// Template ID to load
         template_id: String,
     },
-    /// Open the template management menu
+    /// Open the template name input.
     OpenTemplateMenu,
+    /// Open the host's drawing template catalog for loading and deletion.
+    ManageTemplates,
     /// An icon or emoji was picked in the Icons/Emojis menu; the host calls
     /// `DrawingManager::start_icon_insertion` with it, and the next click places it.
     InsertEmoji {

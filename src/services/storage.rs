@@ -13,6 +13,12 @@ pub enum StoreKind {
     Drawings,
     /// Named alert presets in a versioned JSON document.
     AlertPresets,
+    /// Named chart display settings templates.
+    ChartTemplates,
+    /// Named sets of study inputs and presentation settings.
+    StudyTemplates,
+    /// Named drawing property templates, without chart anchors.
+    DrawingTemplates,
 }
 
 /// Where the library keeps settings and drawings between sessions: files, browser storage or a
