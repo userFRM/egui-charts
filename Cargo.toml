@@ -95,6 +95,17 @@ ui = ["icons", "studies", "dep:thiserror"]
 ## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
 serde = []
 
+# The web builds: `trunk build --release` of `examples/demo`, whose own profile matches this one,
+# and of the bare chart in `scripts/web-size.sh`. Whole-program optimisation for size: at `s` the
+# frame of `benches/bare_chart.rs` costs 30% more instructions than at `release`, at `z` 60% more
+# for a download only 1.5% smaller. `panic` and `strip` stay as they are: wasm32-unknown-unknown
+# aborts on panic anyway, and the web build keeps no symbols.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+
 [dev-dependencies]
 # The bundled examples are standalone `eframe` apps; they need a windowing
 # backend to run natively.  `glow` keeps the default-feature build buildable on
