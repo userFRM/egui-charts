@@ -240,6 +240,9 @@ impl Indicator for ConfiguredStudy {
     fn markers(&self) -> &[super::IndicatorMarker] {
         self.study.markers()
     }
+    fn zones(&self) -> &[super::StudyZone] {
+        self.study.zones()
+    }
     fn extend_right(&self) -> bool {
         self.study.extend_right()
     }
