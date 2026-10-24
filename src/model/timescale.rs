@@ -12,7 +12,7 @@
 /// `left` and `right` may extend beyond `[0, bar_count)` when the chart is
 /// scrolled past the data edges.  Use [`to_strict_range`](LogicalRange::to_strict_range)
 /// to clamp to valid array indices.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogicalRange {
     /// Leftmost visible bar index (may be negative when scrolled past the start).
     pub left: f32,
@@ -130,7 +130,7 @@ impl TimeScale {
 
     /// The configured right offset in bars at the current spacing; the pixel
     /// option has priority over bars.
-    fn live_edge_offset(&self) -> f32 {
+    pub(crate) fn live_edge_offset(&self) -> f32 {
         self.live_right_offset_pixels
             .map_or(self.live_right_offset, |px| px / self.bar_spacing)
     }
@@ -328,12 +328,15 @@ impl TimeScale {
         }
     }
 
-    /// Fit all data in view
+    /// Fit all data in view, then restore the configured right offset.
+    ///
+    /// The bars share the width less a configured pixel offset; an offset in bars is applied
+    /// after fitting, so it scrolls that many of the oldest bars out of view.
     pub fn fit_content(&mut self) {
         if self.bar_cnt > 0 {
-            let spacing = self.width / self.bar_cnt as f32;
-            self.set_bar_spacing(spacing);
-            self.right_offset = 0.0;
+            let pixels = self.live_right_offset_pixels.unwrap_or(0.0);
+            self.set_bar_spacing((self.width - pixels) / self.bar_cnt as f32);
+            self.scroll_to_realtime();
         }
     }
 

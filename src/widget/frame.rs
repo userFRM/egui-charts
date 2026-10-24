@@ -354,13 +354,7 @@ impl Chart {
             let mut coords = self.get_chart_mapping();
             coords.start_idx = 0;
             let baseline = if has_panes {
-                let axis_height = if self.config.show_time_labels {
-                    crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME
-                        .min(response.rect.height())
-                } else {
-                    0.0
-                };
-                response.rect.bottom() - axis_height
+                response.rect.bottom() - self.time_axis_height().min(response.rect.height())
             } else {
                 coords.rect.bottom()
             };
@@ -519,6 +513,7 @@ impl Chart {
         // to calculate constraint bounds. Without this, drawings drift during zoom
         // because constraints are calculated with stale width values.
         self.apply_timescale_config(chart_width);
+        self.advance_scroll_animation(ui);
 
         let navigation_rect = self.navigation_rect(ui, chart_rect);
         let navigation = navigation_rect
@@ -611,6 +606,13 @@ impl Chart {
                 Pos2::new(chart_rect.max.x, rect.max.y),
             )
         });
+        self.time_axis_rect = Rect::from_min_size(
+            time_axis_rect.min,
+            Vec2::new(
+                time_axis_rect.width(),
+                self.time_axis_height().min(time_axis_rect.height()),
+            ),
+        );
 
         // Handle double-click to reset axes
         self.handle_double_click(&response, price_axis_rect, time_axis_rect);
@@ -854,6 +856,7 @@ impl Chart {
                     visible_data,
                     &coords,
                     formatter.as_ref(),
+                    &self.chart_options.time_scale,
                     self.config
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
@@ -1986,7 +1989,7 @@ impl Chart {
                 &colors,
                 formatter.as_ref(),
                 &tags,
-                self.chart_options.time_scale.ticks_visible,
+                &self.chart_options.time_scale,
                 time_labels,
             );
         }
@@ -2776,6 +2779,57 @@ mod tests {
             );
             let ticks = painted.iter().filter(|shape| matches!(shape, Shape::LineSegment { points, .. } if (points[0].y - map.rect.bottom()).abs() < 0.1 && (points[1].y - points[0].y - 3.0).abs() < 0.1)).count();
             assert_eq!(ticks > 0, ticks_visible, "tick visibility: {seconds}");
+        }
+    }
+
+    /// Daily bars put bold day and month labels on the axis; 20 characters space them at
+    /// least 200 points apart, which the default 8 (80 points) does not.
+    #[test]
+    fn time_scale_options_style_and_space_the_axis_labels() {
+        for (bold, border, characters) in [(true, false, 8), (false, true, 8), (true, false, 20)] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0], &[105.0]);
+            chart.config.show_volume = false;
+            let options = &mut chart.chart_options.time_scale;
+            options.allow_bold_labels = bold;
+            options.border_visible = border;
+            options.border_color = Some(egui::Color32::RED);
+            options.tick_mark_max_character_length = characters;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.y > plot.bottom() && text.pos.x < plot.right() =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let bolds = labels.iter().any(|text| {
+                text.galley
+                    .job
+                    .sections
+                    .iter()
+                    .any(|section| section.format.coords != Default::default())
+            });
+            assert_eq!(bolds, bold, "{characters} characters");
+            let borders = painted.iter().any(|shape| matches!(shape, Shape::LineSegment { points, stroke } if stroke.color == egui::Color32::RED && points[0].y == points[1].y && (points[0].y - plot.bottom()).abs() < 1.0 && points[1].x - points[0].x == plot.width()));
+            assert_eq!(borders, border);
+            let mut centres: Vec<_> = labels
+                .iter()
+                .map(|text| text.visual_bounding_rect().center().x)
+                .collect();
+            centres.sort_by(f32::total_cmp);
+            assert!(centres.len() >= 2, "{centres:?}");
+            let gap = centres
+                .windows(2)
+                .map(|pair| pair[1] - pair[0])
+                .fold(f32::INFINITY, f32::min);
+            assert_eq!(gap >= 200.0, characters == 20, "{centres:?}");
         }
     }
 
