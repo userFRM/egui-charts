@@ -36,7 +36,8 @@ pub struct BarsInRange {
 }
 
 impl Chart {
-    /// Take the study settings request from a legend button or a double-click in a study pane.
+    /// Take the settings request from a legend button or a double-click in a pane: a study, or
+    /// a bar series shown in a pane other than the main one.
     pub fn take_indicator_settings_request(&mut self) -> Option<SeriesId> {
         self.indicator_settings_request.take()
     }

@@ -758,6 +758,8 @@ impl DemoApp {
         {
             self.indicator_settings
                 .open(id, study, self.chart.timeframe());
+        } else if self.chart.series().any(|(series, _)| series == id) {
+            self.compare_dialog.open();
         }
     }
 
