@@ -1,6 +1,6 @@
 //! Study readouts for host data windows and chart tooltips.
 
-use super::Chart;
+use super::{Chart, SeriesId};
 use crate::chart::renderers::StudyValue;
 
 impl Chart {
@@ -8,20 +8,28 @@ impl Chart {
     /// Gaps remain `None`; price-based charts use studies calculated from element OHLC.
     /// Call after [`Self::show`] to use refreshed studies.
     pub fn study_values_at(&self, index: usize) -> Vec<StudyValue> {
+        self.study_rows_at(index)
+            .into_iter()
+            .map(|(_, row)| row)
+            .collect()
+    }
+
+    /// [`Self::study_values_at`] with the id of each row's study.
+    pub(super) fn study_rows_at(&self, index: usize) -> Vec<(SeriesId, StudyValue)> {
         if index >= self.state.shown().len() {
             return Vec::new();
         }
         let mut rows = Vec::new();
-        for study in self
-            .rendered_studies()
-            .indicators()
+        for (&id, study) in self
+            .study_ids
             .iter()
-            .filter(|study| study.is_visible())
+            .zip(self.rendered_studies().indicators())
+            .filter(|(_, study)| study.is_visible())
         {
             let names = study.line_names();
             let colors = study.colors();
             for line in (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible) {
-                rows.push(StudyValue {
+                let row = StudyValue {
                     study: study.name().to_owned(),
                     format: study.value_format(),
                     plot: names.get(line).cloned().unwrap_or_default(),
@@ -44,7 +52,8 @@ impl Chart {
                             _ => 2,
                         }),
                     color: colors.get(line).copied().unwrap_or(self.config.text_color),
-                });
+                };
+                rows.push((id, row));
             }
         }
         rows

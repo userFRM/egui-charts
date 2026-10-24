@@ -13,7 +13,19 @@ impl Chart {
     }
 
     pub(super) fn snap_crosshair(&self, mut pos: Pos2, map: &PriceMap, index: usize) -> Pos2 {
-        if self.chart_options.crosshair.mode != CrosshairMode::Magnet {
+        let mode = self.chart_options.crosshair.mode;
+        if !mode.snaps() {
+            return pos;
+        }
+        if mode == CrosshairMode::MagnetClose {
+            if let Some(bar) = self
+                .state
+                .shown()
+                .get(index)
+                .filter(|_| self.main_series_visible)
+            {
+                pos.y = map.price_to_y(bar.close);
+            }
             return pos;
         }
         let ohlc = self
