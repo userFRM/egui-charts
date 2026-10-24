@@ -410,3 +410,25 @@ impl Indicator for PivotPoints {
         .to_vec()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Auto takes the session up to 15 minutes, the week below a day, the month below a week
+    /// and the year from a week up.
+    #[test]
+    fn auto_follows_the_chart_interval() {
+        let mut pivots = PivotPoints::new();
+        for (interval, period) in [
+            (Timeframe::Min15, AnchorPeriod::Session),
+            (Timeframe::Min30, AnchorPeriod::Week),
+            (Timeframe::Hour4, AnchorPeriod::Week),
+            (Timeframe::Day1, AnchorPeriod::Month),
+            (Timeframe::Week1, AnchorPeriod::Year),
+        ] {
+            pivots.set_timeframe(interval);
+            assert_eq!(pivots.period(), period, "{interval:?}");
+        }
+    }
+}
