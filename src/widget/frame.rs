@@ -476,6 +476,7 @@ impl Chart {
             let loaders_installed = egui::Id::unique("egui_charts::image_loaders_installed");
             if !ctx.data(|d| d.get_temp::<bool>(loaders_installed).unwrap_or(false)) {
                 egui_extras::install_image_loaders(&ctx);
+                crate::icons::install_loader(&ctx);
                 ctx.data_mut(|d| d.insert_temp(loaders_installed, true));
             }
         }

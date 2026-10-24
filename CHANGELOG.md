@@ -193,6 +193,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - The main menu button of the top toolbar stays at the left edge while the narrow strip scrolls; only the controls after it move. ([#810](https://github.com/userFRM/egui-charts/issues/810))
 
+- Icons draw their strokes one logical pixel wide at every icon size, two physical pixels at 2x, with horizontal and vertical segments on the pixel grid, so toolbar, rail and menu icons match the weight of separators and text instead of blurring across two or three pixels. Filled shapes keep their look. The chart installs the icon loader beside egui_extras' loaders; an app that shows icons without a chart keeps rasterising them with egui_extras' SVG loader as before. ([#816](https://github.com/userFRM/egui-charts/issues/816))
+
 - The top toolbar keeps every control in its original group and order at narrow widths, scrolling horizontally with touch drags and horizontal wheel or trackpad input. The scroll bar and overflow dropdown are removed. A drag beginning on a button scrolls without activating it; taps and keyboard focus keep working, and focused controls scroll into view. ([#806](https://github.com/userFRM/egui-charts/issues/806))
 
 - The web demo follows the dynamic viewport with a legacy height fallback, hides its right rail below 600 points with panels reachable from the main menu, and shows layout tabs only when there is more than one layout. Narrow legends show close and change instead of four OHLC fields, reserve space for pane actions, and keep title controls clear of values during hover. Study controls appear on pointer hover, keyboard focus or a touch row selection and dismiss on an outside tap. ([#806](https://github.com/userFRM/egui-charts/issues/806))
