@@ -118,7 +118,6 @@ impl Slot {
                 "Toggle Theme",
                 A::ThemeToggle,
             ),
-            S::Layouts | S::LayoutName => (&embedded_icons::LAYOUT_GRID, "Chart layout", A::None),
             S::Save => (&embedded_icons::DATABASE, "Save chart", A::Save),
             S::QuickSearch => (
                 &embedded_icons::QUICK_SEARCH,
@@ -132,7 +131,7 @@ impl Slot {
                 A::ToggleFullscreen,
             ),
             S::Screenshot => (&embedded_icons::CAMERA, "Snapshot", A::TakeScreenshot),
-            S::Interval | S::ChartType => return None,
+            S::Interval | S::ChartType | S::Layouts | S::LayoutName => return None,
         })
     }
 
