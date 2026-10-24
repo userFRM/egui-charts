@@ -24,6 +24,80 @@ pub(crate) fn paint_study_plot(
         painter.clip_rect().bottom()
     };
     match plot.plot_type {
+        PlotType::StepLine => {
+            let mut steps = Vec::new();
+            for (i, point) in points.iter().enumerate() {
+                if i > 0 {
+                    steps.push(Pos2::new(point.x, points[i - 1].y));
+                }
+                steps.push(*point);
+            }
+            paint_study_plot(
+                painter,
+                &steps,
+                PlotStyle {
+                    plot_type: PlotType::Line,
+                    ..plot
+                },
+                baseline,
+            );
+        }
+        PlotType::Area => {
+            for pair in points.windows(2) {
+                paint_band(
+                    painter,
+                    pair[0],
+                    pair[1],
+                    Pos2::new(pair[0].x, baseline),
+                    Pos2::new(pair[1].x, baseline),
+                    plot.color,
+                    None,
+                );
+            }
+        }
+        PlotType::Crosses => {
+            for &point in points {
+                for delta in [
+                    egui::vec2(plot.width + 1.0, 0.0),
+                    egui::vec2(0.0, plot.width + 1.0),
+                ] {
+                    painter
+                        .line_segment([point - delta, point + delta], Stroke::new(1.0, plot.color));
+                }
+            }
+        }
+        PlotType::TriangleUp | PlotType::TriangleDown => {
+            let sign = if plot.plot_type == PlotType::TriangleUp {
+                -1.0
+            } else {
+                1.0
+            };
+            for &point in points {
+                let size = plot.width + 2.0;
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        point + egui::vec2(0.0, sign * size),
+                        point + egui::vec2(-size, -sign * size),
+                        point + egui::vec2(size, -sign * size),
+                    ],
+                    plot.color,
+                    Stroke::NONE,
+                ));
+            }
+        }
+        PlotType::BackgroundColor => {
+            for point in points {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        Pos2::new(point.x - plot.width * 0.5, painter.clip_rect().top()),
+                        Pos2::new(point.x + plot.width * 0.5, painter.clip_rect().bottom()),
+                    ),
+                    0.0,
+                    plot.color,
+                );
+            }
+        }
+        PlotType::BarColor => {}
         PlotType::Line => match plot.pattern {
             PlotPattern::Solid => {
                 painter.add(egui::Shape::line(
@@ -48,7 +122,7 @@ pub(crate) fn paint_study_plot(
                 ));
             }
         },
-        PlotType::Histogram => {
+        PlotType::Histogram | PlotType::Columns => {
             for point in points {
                 painter.rect_filled(
                     egui::Rect::from_two_pos(
@@ -63,6 +137,85 @@ pub(crate) fn paint_study_plot(
         PlotType::Circles => {
             for point in points {
                 painter.circle_filled(*point, plot.width, plot.color);
+            }
+        }
+    }
+}
+
+/// Split crossing boundaries at their intersection, so neither triangle crosses the band.
+fn paint_band(
+    painter: &egui::Painter,
+    a: Pos2,
+    b: Pos2,
+    c: Pos2,
+    d: Pos2,
+    color: Color32,
+    inverted: Option<Color32>,
+) {
+    let polygon = |points: Vec<Pos2>, below: bool| {
+        painter.add(egui::Shape::convex_polygon(
+            points,
+            if below {
+                inverted.unwrap_or(color)
+            } else {
+                color
+            },
+            Stroke::NONE,
+        ));
+    };
+    let (left, right) = (a.y - c.y, b.y - d.y);
+    if (left < 0.0 && right > 0.0) || (left > 0.0 && right < 0.0) {
+        let t = left / (left - right);
+        let crossing = a.lerp(b, t);
+        polygon(vec![a, crossing, c], left > 0.0);
+        polygon(vec![crossing, b, d], right > 0.0);
+    } else {
+        polygon(vec![a, b, d, c], left + right > 0.0);
+    }
+}
+
+fn paint_fills(
+    painter: &egui::Painter,
+    study: &dyn Indicator,
+    range: std::ops::Range<usize>,
+    map: &PriceMap,
+    coords: &ChartMapping,
+) {
+    use crate::studies::FillBoundary;
+    for fill in study.fills() {
+        let value = |boundary, bar| match boundary {
+            FillBoundary::Level(value) => value.is_finite().then_some(value),
+            FillBoundary::Plot(line) => (line < study.line_cnt() && study.plot_style(line).visible)
+                .then(|| study.plot_value(line, bar))
+                .flatten(),
+        };
+        for bar in range.start..range.end.saturating_sub(1) {
+            let Some((a, b, c, d)) = value(fill.first, bar)
+                .zip(value(fill.first, bar + 1))
+                .zip(value(fill.second, bar))
+                .zip(value(fill.second, bar + 1))
+                .map(|(((a, b), c), d)| (a, b, c, d))
+            else {
+                continue;
+            };
+            let (x, next_x) = (coords.idx_to_x(bar), coords.idx_to_x(bar + 1));
+            let points = [
+                Pos2::new(x, map.price_to_y(a)),
+                Pos2::new(next_x, map.price_to_y(b)),
+                Pos2::new(x, map.price_to_y(c)),
+                Pos2::new(next_x, map.price_to_y(d)),
+            ];
+            if points.iter().all(|point| point.is_finite()) {
+                // Colour selection uses values so inverted price maps retain the same meaning.
+                let colors =
+                    if map.y_to_price(coords.rect.top()) < map.y_to_price(coords.rect.bottom()) {
+                        (fill.inverted_color.unwrap_or(fill.color), Some(fill.color))
+                    } else {
+                        (fill.color, fill.inverted_color)
+                    };
+                paint_band(
+                    painter, points[0], points[1], points[2], points[3], colors.0, colors.1,
+                );
             }
         }
     }
@@ -86,149 +239,242 @@ impl IndicatorRenderer {
                 continue;
             }
 
-            let values = indicator.values();
-            let colors = indicator.colors();
+            Self::render_study(
+                context,
+                indicator.as_ref(),
+                bars,
+                coords.start_idx,
+                price_scale,
+                coords,
+            );
+        }
+    }
 
-            // Handle multi-line indicators
-            let line_cnt = indicator.line_cnt();
+    /// Shared study geometry for overlays and indicator panes.
+    pub(crate) fn render_study(
+        context: &RenderContext,
+        indicator: &dyn Indicator,
+        bars: &[Bar],
+        bars_start: usize,
+        price_scale: &PriceMap,
+        coords: &ChartMapping,
+    ) {
+        let values = indicator.values();
+        let painter = context.painter.with_clip_rect(context.rect);
+        let display_start = coords
+            .start_idx
+            .min(coords.x_to_idx(context.rect.left()).saturating_sub(1));
+        let display_end = coords.x_to_idx(context.rect.right()).saturating_add(2);
+        paint_fills(
+            &painter,
+            indicator,
+            display_start..display_end,
+            price_scale,
+            coords,
+        );
 
-            for line_idx in 0..line_cnt {
-                let plot = indicator.plot_style(line_idx);
-                if !plot.visible {
-                    continue;
-                }
-                let color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
+        // Handle multi-line indicators
+        let line_cnt = indicator.line_cnt();
 
-                let style = indicator.line_style(line_idx);
-                let mut points = Vec::new();
-
-                // values[i] belongs to bar i of the full series and `bars` are the
-                // visible ones from coords.start_idx, so only that slice is walked.
-                let visible_end = (coords.start_idx + bars.len()).min(values.len());
-                for i in coords.start_idx..visible_end {
-                    let x = coords.idx_to_x(i);
-                    let price = values.value(line_idx, i);
-
-                    if let Some(price) = price {
-                        // Convert price to screen Y coord
-                        let y = price_scale.price_to_y(price);
-
-                        // Keep off-scale endpoints: clipping must retain segments crossing the plot.
-                        if y.is_finite() {
-                            points.push((Pos2::new(x, y), price));
-                        }
+        for line_idx in 0..line_cnt {
+            let mut plot = indicator.plot_style(line_idx);
+            if matches!(
+                plot.plot_type,
+                PlotType::Columns | PlotType::BackgroundColor
+            ) {
+                plot.width = coords.bar_spacing
+                    * if plot.plot_type == PlotType::Columns {
+                        0.8
                     } else {
-                        // Break the line if we have a None value
-                        if !points.is_empty() {
-                            Self::draw_line(
-                                context,
-                                &points,
-                                color,
-                                style,
-                                plot,
-                                price_scale.price_to_y(0.0),
-                            );
-                        }
-                        points.clear();
-                    }
-                }
+                        1.0
+                    };
+            }
+            if !plot.visible {
+                continue;
+            }
+            let mut color = plot.color;
+            let offset = indicator.plot_offset(line_idx);
+            let source_start = display_start
+                .checked_add_signed(offset.saturating_neg())
+                .unwrap_or(0);
+            let source_end = display_end
+                .checked_add_signed(offset.saturating_neg())
+                .unwrap_or(0)
+                .min(values.len());
 
-                if plot.plot_type == PlotType::Line
-                    && indicator.extend_right()
-                    && visible_end == values.len()
-                    && points.len() >= 2
-                {
-                    let ((a, pa), (b, pb)) = (points[points.len() - 2], points[points.len() - 1]);
-                    if b.x > a.x && b.x < context.rect.right() {
-                        let painter = context.painter.with_clip_rect(context.rect);
-                        let mut previous = b;
-                        let mut extension = vec![b];
-                        // Project prices before mapping them, so a logarithmic axis preserves the fit.
-                        for step in 1..=((context.rect.right() - b.x).ceil() as usize) {
-                            let x = (b.x + step as f32).min(context.rect.right());
-                            let price = pb + (pb - pa) * ((x - b.x) / (b.x - a.x)) as f64;
-                            let point = Pos2::new(x, price_scale.price_to_y(price));
-                            if point.y.is_finite() && previous.y.is_finite() {
-                                if plot.pattern == PlotPattern::Solid {
-                                    painter.line_segment(
-                                        [previous, point],
-                                        Stroke::new(style.width, color),
-                                    );
-                                } else {
-                                    extension.push(point);
-                                }
-                            }
-                            previous = point;
-                        }
-                        if plot.pattern != PlotPattern::Solid {
-                            paint_study_plot(
-                                &painter,
-                                &extension,
-                                plot,
-                                price_scale.price_to_y(0.0),
-                            );
-                        }
-                    }
-                }
-                if let Some((line, label)) = indicator.plot_label()
-                    && line == line_idx
-                    && let Some(last) = points.last()
-                {
-                    let at = Pos2::new(
-                        last.0
-                            .x
-                            .min(context.rect.right() - 90.0)
-                            .max(context.rect.left()),
-                        last.0.y,
-                    );
-                    context.painter.with_clip_rect(context.rect).text(
-                        at,
-                        egui::Align2::LEFT_BOTTOM,
-                        label,
-                        egui::FontId::proportional(12.0),
-                        color,
-                    );
-                }
+            let style = indicator.line_style(line_idx);
+            let mut points = Vec::new();
 
-                // Draw final segment
-                if !points.is_empty() {
+            // values[i] belongs to bar i of the full series and `bars` are the
+            // visible ones from coords.start_idx, so only that slice is walked.
+            let visible_end = source_end;
+            for i in source_start..source_end {
+                let Some(display_bar) = i.checked_add_signed(offset) else {
+                    continue;
+                };
+                let x = coords.idx_to_x(display_bar);
+                let next_color = indicator.plot_color(line_idx, i).unwrap_or(plot.color);
+                if next_color != color && !points.is_empty() {
                     Self::draw_line(
                         context,
                         &points,
                         color,
                         style,
-                        plot,
+                        PlotStyle { color, ..plot },
                         price_scale.price_to_y(0.0),
                     );
+                    let last = points.last().copied();
+                    points.clear();
+                    if matches!(
+                        plot.plot_type,
+                        PlotType::Line | PlotType::StepLine | PlotType::Area
+                    ) {
+                        points.extend(last);
+                    }
                 }
-            }
-            let painter = context.painter.with_clip_rect(context.rect);
-            for marker in indicator
-                .markers()
-                .iter()
-                .filter(|_| (0..line_cnt).any(|line| indicator.plot_style(line).visible))
-            {
-                if marker.bar < coords.start_idx
-                    || marker.bar >= coords.start_idx + bars.len()
-                    || !marker.value.is_finite()
-                {
+                color = next_color;
+                if plot.plot_type == PlotType::BarColor {
+                    if values.value(line_idx, i).is_some()
+                        && let Some(bar) = i.checked_sub(bars_start).and_then(|i| bars.get(i))
+                    {
+                        let width = coords.bar_spacing * 0.8;
+                        let top = price_scale.price_to_y(bar.open.max(bar.close));
+                        let bottom = price_scale.price_to_y(bar.open.min(bar.close));
+                        let high = price_scale.price_to_y(bar.high);
+                        let low = price_scale.price_to_y(bar.low);
+                        if [top, bottom, high, low].iter().all(|y| y.is_finite()) {
+                            painter.line_segment(
+                                [Pos2::new(x, high), Pos2::new(x, low)],
+                                Stroke::new(1.0, color),
+                            );
+                            painter.rect_filled(
+                                egui::Rect::from_two_pos(
+                                    Pos2::new(x - width * 0.5, top),
+                                    Pos2::new(x + width * 0.5, bottom.max(top + 1.0)),
+                                ),
+                                0.0,
+                                color,
+                            );
+                        }
+                    }
                     continue;
                 }
-                let at = Pos2::new(
-                    coords.idx_to_x(marker.bar),
-                    price_scale.price_to_y(marker.value),
-                );
-                let (sign, color) = match marker.direction {
-                    CrossDirection::Up => (1.0, DESIGN_TOKENS.semantic.extended.success),
-                    CrossDirection::Down => (-1.0, DESIGN_TOKENS.semantic.extended.error),
-                };
-                let triangle = vec![
-                    at + egui::vec2(0.0, sign * 4.0),
-                    at + egui::vec2(-4.0, sign * 11.0),
-                    at + egui::vec2(4.0, sign * 11.0),
-                ];
-                painter.add(egui::Shape::convex_polygon(triangle, color, Stroke::NONE));
+                let price = values.value(line_idx, i);
+
+                if let Some(price) = price {
+                    // Convert price to screen Y coord
+                    let y = price_scale.price_to_y(price);
+
+                    // Keep off-scale endpoints: clipping must retain segments crossing the plot.
+                    if y.is_finite() {
+                        points.push((Pos2::new(x, y), price));
+                    }
+                } else {
+                    // Break the line if we have a None value
+                    if !points.is_empty() {
+                        Self::draw_line(
+                            context,
+                            &points,
+                            color,
+                            style,
+                            plot,
+                            price_scale.price_to_y(0.0),
+                        );
+                    }
+                    points.clear();
+                }
             }
+
+            if plot.plot_type == PlotType::Line
+                && indicator.extend_right()
+                && visible_end == values.len()
+                && points.len() >= 2
+            {
+                let ((a, pa), (b, pb)) = (points[points.len() - 2], points[points.len() - 1]);
+                if b.x > a.x && b.x < context.rect.right() {
+                    let painter = context.painter.with_clip_rect(context.rect);
+                    let mut previous = b;
+                    let mut extension = vec![b];
+                    // Project prices before mapping them, so a logarithmic axis preserves the fit.
+                    for step in 1..=((context.rect.right() - b.x).ceil() as usize) {
+                        let x = (b.x + step as f32).min(context.rect.right());
+                        let price = pb + (pb - pa) * ((x - b.x) / (b.x - a.x)) as f64;
+                        let point = Pos2::new(x, price_scale.price_to_y(price));
+                        if point.y.is_finite() && previous.y.is_finite() {
+                            if plot.pattern == PlotPattern::Solid {
+                                painter.line_segment(
+                                    [previous, point],
+                                    Stroke::new(style.width, color),
+                                );
+                            } else {
+                                extension.push(point);
+                            }
+                        }
+                        previous = point;
+                    }
+                    if plot.pattern != PlotPattern::Solid {
+                        paint_study_plot(&painter, &extension, plot, price_scale.price_to_y(0.0));
+                    }
+                }
+            }
+            if let Some((line, label)) = indicator.plot_label()
+                && line == line_idx
+                && let Some(last) = points.last()
+            {
+                let at = Pos2::new(
+                    last.0
+                        .x
+                        .min(context.rect.right() - 90.0)
+                        .max(context.rect.left()),
+                    last.0.y,
+                );
+                context.painter.with_clip_rect(context.rect).text(
+                    at,
+                    egui::Align2::LEFT_BOTTOM,
+                    label,
+                    egui::FontId::proportional(12.0),
+                    color,
+                );
+            }
+
+            // Draw final segment
+            if !points.is_empty() {
+                Self::draw_line(
+                    context,
+                    &points,
+                    color,
+                    style,
+                    plot,
+                    price_scale.price_to_y(0.0),
+                );
+            }
+        }
+        let painter = context.painter.with_clip_rect(context.rect);
+        for marker in indicator
+            .markers()
+            .iter()
+            .filter(|_| (0..line_cnt).any(|line| indicator.plot_style(line).visible))
+        {
+            if marker.bar < coords.start_idx
+                || marker.bar >= coords.start_idx + bars.len()
+                || !marker.value.is_finite()
+            {
+                continue;
+            }
+            let at = Pos2::new(
+                coords.idx_to_x(marker.bar),
+                price_scale.price_to_y(marker.value),
+            );
+            let (sign, color) = match marker.direction {
+                CrossDirection::Up => (1.0, DESIGN_TOKENS.semantic.extended.success),
+                CrossDirection::Down => (-1.0, DESIGN_TOKENS.semantic.extended.error),
+            };
+            let triangle = vec![
+                at + egui::vec2(0.0, sign * 4.0),
+                at + egui::vec2(-4.0, sign * 11.0),
+                at + egui::vec2(4.0, sign * 11.0),
+            ];
+            painter.add(egui::Shape::convex_polygon(triangle, color, Stroke::NONE));
         }
     }
 
@@ -241,6 +487,7 @@ impl IndicatorRenderer {
         baseline: f32,
     ) {
         let painter = context.painter.with_clip_rect(context.rect);
+        let plot = PlotStyle { color, ..plot };
         if plot.plot_type != PlotType::Line || plot.pattern != PlotPattern::Solid {
             let positions: Vec<_> = points.iter().map(|(point, _)| *point).collect();
             paint_study_plot(&painter, &positions, plot, baseline);
@@ -307,6 +554,13 @@ mod tests {
         let points = [Pos2::new(10.0, 15.0), Pos2::new(20.0, 5.0)];
         for (plot_type, pattern) in [
             (PlotType::Histogram, PlotPattern::Solid),
+            (PlotType::Columns, PlotPattern::Solid),
+            (PlotType::StepLine, PlotPattern::Solid),
+            (PlotType::Crosses, PlotPattern::Solid),
+            (PlotType::TriangleUp, PlotPattern::Solid),
+            (PlotType::TriangleDown, PlotPattern::Solid),
+            (PlotType::Area, PlotPattern::Solid),
+            (PlotType::BackgroundColor, PlotPattern::Solid),
             (PlotType::Circles, PlotPattern::Solid),
             (PlotType::Line, PlotPattern::Dashed),
             (PlotType::Line, PlotPattern::Dotted),
@@ -332,7 +586,7 @@ mod tests {
                 .collect();
             output.drop_without_applying_deltas();
             match plot_type {
-                PlotType::Histogram => {
+                PlotType::Histogram | PlotType::Columns => {
                     let rects: Vec<_> = painted
                         .iter()
                         .filter_map(|s| match s {
@@ -359,7 +613,24 @@ mod tests {
                         matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color && stroke.width == 4.0)
                     }));
                 }
-                PlotType::Line => {
+                PlotType::StepLine => {
+                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+                        if path.points == [points[0], Pos2::new(20.0, 15.0), points[1]])));
+                }
+                PlotType::Crosses => {
+                    assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::LineSegment { stroke, .. } if stroke.color == color)).count(), 4);
+                }
+                PlotType::TriangleUp | PlotType::TriangleDown => {
+                    assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Path(path) if path.points.len() == 3 && path.fill == color)).count(), 2);
+                }
+                PlotType::Area => {
+                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+                        if path.points == [points[0], points[1], Pos2::new(20.0, 20.0), Pos2::new(10.0, 20.0)] && path.fill == color)));
+                }
+                PlotType::BackgroundColor => {
+                    assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == color && rect.rect.height() == 100.0)).count(), 2);
+                }
+                _ => {
                     assert!(painted.iter().any(|s| {
                         matches!(s, Shape::Circle(c) if c.fill == color && c.radius == 2.0)
                     }));
@@ -397,7 +668,16 @@ mod tests {
             let mut chart = chart(&[100.0], &[110.0]);
             chart.add_indicator(study);
             let ctx = Context::default();
-            let strokes: Vec<_> = shapes(&ctx, &mut chart, 0.0, Vec::new())
+            let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+            if name == "BB" {
+                assert!(
+                    painted
+                        .iter()
+                        .any(|shape| matches!(shape, Shape::Path(path) if path.fill.a() == 51)),
+                    "band between the outer lines"
+                );
+            }
+            let strokes: Vec<_> = painted
                 .into_iter()
                 .filter_map(|shape| match shape {
                     Shape::LineSegment { stroke, .. } if colours.contains(&stroke.color) => {

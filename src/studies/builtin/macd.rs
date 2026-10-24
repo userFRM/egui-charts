@@ -109,6 +109,20 @@ impl Indicator for MACD {
         signal_period: length("Signal period", 1, usize::MAX)
     ; {});
 
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors[line],
+            width: 1.0,
+            pattern: crate::studies::PlotPattern::Solid,
+            plot_type: if line == 2 {
+                crate::studies::PlotType::Columns
+            } else {
+                crate::studies::PlotType::Line
+            },
+            visible: true,
+        }
+    }
+
     fn name(&self) -> &str {
         "MACD"
     }

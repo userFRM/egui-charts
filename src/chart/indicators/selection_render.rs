@@ -49,7 +49,6 @@ pub fn render_indicator_selection_dots<F>(
     if !indicator.plot_style(line_idx).visible {
         return;
     }
-    let values = indicator.values();
 
     // Draw dots at regular intervals
     for i in visible_range.clone() {
@@ -58,7 +57,7 @@ pub fn render_indicator_selection_dots<F>(
             continue;
         }
 
-        let value = values.value(line_idx, i);
+        let value = indicator.plot_value(line_idx, i);
 
         let Some(value) = value else { continue };
 

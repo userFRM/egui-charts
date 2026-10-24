@@ -82,6 +82,26 @@ impl Indicator for AwesomeOscillator {
         slow_period: length("Slow period", 1, usize::MAX)
     ; {});
 
+    fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.positive_color,
+            width: 1.0,
+            pattern: crate::studies::PlotPattern::Solid,
+            plot_type: crate::studies::PlotType::Columns,
+            visible: true,
+        }
+    }
+
+    fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
+        let value = self.values.value(0, bar)?;
+        let previous = bar.checked_sub(1).and_then(|bar| self.values.value(0, bar));
+        Some(if previous.is_some_and(|previous| value < previous) {
+            self.negative_color
+        } else {
+            self.positive_color
+        })
+    }
+
     fn name(&self) -> &str {
         "AO"
     }

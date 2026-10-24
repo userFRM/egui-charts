@@ -41,6 +41,9 @@ use std::sync::Arc;
 /// [`IndicatorValue`] per bar.
 pub type CalculateFn = Arc<dyn Fn(&[Bar]) -> Vec<IndicatorValue> + Send + Sync>;
 
+/// Per-bar colour callback, receiving the output line, source bar and calculated columns.
+pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Color32> + Send + Sync>;
+
 /// An indicator defined at runtime via a calculation closure.
 ///
 /// Build one with [`new`](Self::new) and customise it with the builder
@@ -56,6 +59,10 @@ pub struct CustomIndicator {
     line_cnt: usize,
     line_names: Vec<String>,
     visible: bool,
+    plot_types: Vec<super::PlotType>,
+    offsets: Vec<isize>,
+    fills: Vec<super::StudyFill>,
+    plot_color: Option<PlotColorFn>,
 }
 
 impl CustomIndicator {
@@ -81,6 +88,10 @@ impl CustomIndicator {
             is_overlay: true,
             line_cnt: 1,
             visible: true,
+            plot_types: Vec::new(),
+            offsets: Vec::new(),
+            fills: Vec::new(),
+            plot_color: None,
         }
     }
 
@@ -115,6 +126,33 @@ impl CustomIndicator {
         self
     }
 
+    /// Set geometry per output; omitted outputs remain lines.
+    pub fn with_plot_types(mut self, types: Vec<super::PlotType>) -> Self {
+        self.plot_types = types;
+        self
+    }
+
+    /// Set displacement per output; omitted outputs stay on their source bars.
+    pub fn with_offsets(mut self, offsets: Vec<isize>) -> Self {
+        self.offsets = offsets;
+        self
+    }
+
+    /// Set filled bands between output lines or constant levels.
+    pub fn with_fills(mut self, fills: Vec<super::StudyFill>) -> Self {
+        self.fills = fills;
+        self
+    }
+
+    /// Set a per-bar colour callback. Returning `None` uses the plot colour.
+    pub fn with_plot_color<F>(mut self, color: F) -> Self
+    where
+        F: Fn(usize, usize, &IndicatorValues) -> Option<Color32> + Send + Sync + 'static,
+    {
+        self.plot_color = Some(Arc::new(color));
+        self
+    }
+
     /// Set display names for each line (used in legends).
     pub fn with_line_names(mut self, names: Vec<String>) -> Self {
         self.line_names = names;
@@ -123,6 +161,30 @@ impl CustomIndicator {
 }
 
 impl Indicator for CustomIndicator {
+    fn plot_style(&self, line: usize) -> super::PlotStyle {
+        super::PlotStyle {
+            color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
+            width: 1.0,
+            pattern: super::PlotPattern::Solid,
+            plot_type: self.plot_types.get(line).copied().unwrap_or_default(),
+            visible: true,
+        }
+    }
+
+    fn plot_offset(&self, line: usize) -> isize {
+        self.offsets.get(line).copied().unwrap_or(0)
+    }
+
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        self.plot_color
+            .as_ref()
+            .and_then(|color| color(line, bar, &self.values))
+    }
+
+    fn fills(&self) -> Vec<super::StudyFill> {
+        self.fills.clone()
+    }
+
     fn name(&self) -> &str {
         &self.name
     }

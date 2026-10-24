@@ -36,7 +36,7 @@ impl Chart {
             .flat_map(|study| {
                 (0..study.line_cnt())
                     .filter(|line| study.plot_style(*line).visible)
-                    .filter_map(move |line| study.values().value(line, index))
+                    .filter_map(move |line| study.plot_value(line, index))
             });
         if let Some(value) = snap_to_values(pos.y, map, ohlc.chain(studies)) {
             pos.y = map.price_to_y(value);

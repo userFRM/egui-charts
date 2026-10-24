@@ -118,6 +118,16 @@ impl Indicator for BollingerBands {
         std_dev: number("Std dev", 0.0, f64::MAX)
     ; {});
 
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        let color = self.colors[0];
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(0),
+            second: crate::studies::FillBoundary::Plot(2),
+            color: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 51),
+            inverted_color: None,
+        }]
+    }
+
     fn name(&self) -> &str {
         "BB"
     }

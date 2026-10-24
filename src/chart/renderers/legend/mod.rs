@@ -391,10 +391,7 @@ impl<'a> Legend<'a> {
                             && study.is_visible()
                             && study.plot_style(*index).visible
                     }) {
-                        let value = study
-                            .values()
-                            .value(index, self.bar_index)
-                            .unwrap_or(f64::NAN);
+                        let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
                         let text = if value.is_finite() {
                             format!("{value:.precision$}")
                         } else {

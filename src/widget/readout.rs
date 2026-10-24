@@ -24,7 +24,7 @@ impl Chart {
                 rows.push(StudyValue {
                     study: study.name().to_owned(),
                     plot: names.get(line).cloned().unwrap_or_default(),
-                    value: study.values().value(line, index),
+                    value: study.plot_value(line, index),
                     precision: study.precision().unwrap_or_else(|| {
                         if study.is_overlay() {
                             self.instrument()

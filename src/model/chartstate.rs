@@ -351,21 +351,26 @@ impl ChartState {
             .into_iter()
             .filter(|study| study.is_visible() && study.is_overlay())
             .flat_map(|study| {
-                let (values, lines) = (study.values(), study.line_cnt());
-                values
-                    .columns()
-                    .iter()
-                    .enumerate()
-                    .take(lines)
-                    .filter(|(index, _)| study.plot_style(*index).visible)
-                    .flat_map(move |(index, line)| {
-                        line.get(start..end.min(line.len()))
-                            .unwrap_or_default()
-                            .iter()
-                            .copied()
+                (0..study.line_cnt())
+                    .filter(|&index| {
+                        let plot = study.plot_style(index);
+                        plot.visible
+                            && !matches!(
+                                plot.plot_type,
+                                crate::studies::PlotType::BarColor
+                                    | crate::studies::PlotType::BackgroundColor
+                            )
+                    })
+                    .flat_map(move |index| {
+                        (start..end)
+                            .filter_map(move |bar| study.plot_value(index, bar))
                             .chain(std::iter::once(0.0).filter(move |_| {
-                                study.plot_style(index).plot_type
-                                    == crate::studies::PlotType::Histogram
+                                matches!(
+                                    study.plot_style(index).plot_type,
+                                    crate::studies::PlotType::Histogram
+                                        | crate::studies::PlotType::Columns
+                                        | crate::studies::PlotType::Area
+                                )
                             }))
                     })
             });
