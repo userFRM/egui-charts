@@ -772,6 +772,15 @@ impl IndicatorPane {
             max_val = max_val.max(candle.bar.high);
         }
 
+        for zone in indicator.zones().iter().filter(|zone| {
+            zone.bars.end > visible_range.start
+                && zone.bars.start < visible_range.end
+                && indicator.plot_style(zone.plot).visible
+        }) {
+            min_val = min_val.min(zone.bottom);
+            max_val = max_val.max(zone.top);
+        }
+
         if min_val != f64::MAX
             && (0..indicator.line_cnt()).any(|line| {
                 let plot = indicator.plot_style(line);

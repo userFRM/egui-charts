@@ -408,6 +408,17 @@ impl ChartState {
                             })
                             .flat_map(|candle| [candle.bar.low, candle.bar.high]),
                     )
+                    .chain(
+                        study
+                            .zones()
+                            .iter()
+                            .filter(|zone| {
+                                zone.bars.end > study_start.max(start)
+                                    && zone.bars.start < study_end.max(end)
+                                    && study.plot_style(zone.plot).visible
+                            })
+                            .flat_map(|zone| [zone.bottom, zone.top]),
+                    )
             });
         let (min, max) = visible
             .iter()
@@ -562,6 +573,31 @@ mod tests {
                 "{mode:?}: ({min}, {max})"
             );
         }
+    }
+
+    /// A study zone that spans the visible bars widens the auto range to its edges, as a
+    /// per-bar value would, although the bars it began on are out of view.
+    #[test]
+    fn visible_study_zones_auto_scale() {
+        // Fourteen bars around 100, a bar that leaves a gap from 101 to 102, then bars at 150.
+        let bars: Vec<Bar> = [100.0; 14]
+            .into_iter()
+            .chain([103.0])
+            .chain([150.0; 100])
+            .enumerate()
+            .map(|(i, p)| {
+                let t = Utc.timestamp_opt(1_700_000_000 + i as i64 * 60, 0).unwrap();
+                Bar::new(t, p, p + 1.0, p - 1.0, p, 1.0)
+            })
+            .collect();
+        let mut gaps = crate::studies::Gaps::default();
+        gaps.calculate(&bars);
+        let mut state = ChartState::new(BarData::from_bars(bars));
+        state.time_scale_mut().set_width(80.0);
+        state.time_scale_mut().set_bar_spacing(8.0);
+        let transform = state.fit_price_scale([&gaps as &dyn Indicator]);
+        let range = state.price_scale().range();
+        assert!(transform.to_price(range.min) <= 101.0, "{range:?}");
     }
 
     /// A range scaled by hand keeps every price at its pixel while the chart scrolls,
