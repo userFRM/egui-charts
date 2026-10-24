@@ -61,8 +61,9 @@
 //! ## Feature flags
 //!
 //! The default build includes the chart widget, the icons, the built-in
-//! studies and the application-level UI components. An application that only
-//! shows charts uses `default-features = false, features = ["widget"]`. With
+//! studies, the application-level UI components and the localized month and
+//! weekday names. An application that only shows charts uses
+//! `default-features = false, features = ["widget"]`. With
 //! `default-features = false` alone the crate is the headless engine, which
 //! does not depend on egui.
 //!
