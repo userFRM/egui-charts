@@ -206,6 +206,8 @@ pub struct DemoApp {
     feed_before_footprint: bool,
     menus: ChartMenus,
     last_chart_click: Option<egui_charts::widget::ChartPointer>,
+    /// The latest crosshair payload of the active chart, from which the data window reads.
+    crosshair: Option<egui_charts::widget::ChartPointer>,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     pub theme: Theme,
@@ -404,6 +406,7 @@ impl DemoApp {
             feed_before_footprint: false,
             menus,
             last_chart_click: None,
+            crosshair: None,
             state: DemoAppState {
                 symbol: symbol.into(),
                 timeframe,
@@ -1204,7 +1207,7 @@ impl DemoApp {
                     ctx.copy_text(self.chart.symbol().to_string());
                 }
                 if id == "research" {
-                    if let Some(click) = self.last_chart_click {
+                    if let Some(click) = &self.last_chart_click {
                         self.toasts.info(format!(
                             "Host action: {id}, last chart click: {}, price: {:.4}",
                             click.time.to_rfc3339(),
@@ -1624,8 +1627,31 @@ impl DemoApp {
         items
     }
 
+    /// Reads the hovered values from the crosshair payload alone; off the bars, the chart's
+    /// own readout shows the latest bar.
     fn build_data_window(&self) -> DataWindowInfo {
-        DataWindowInfo::from_chart(&self.chart)
+        let Some((pointer, bar)) = self
+            .crosshair
+            .as_ref()
+            .and_then(|pointer| Some((pointer, pointer.bar.as_ref()?)))
+        else {
+            return DataWindowInfo::from_chart(&self.chart);
+        };
+        let mut info = DataWindowInfo::new(self.chart.symbol()).with_timeframe(
+            self.chart
+                .timeframe()
+                .map(|tf| tf.as_str())
+                .unwrap_or_default(),
+        );
+        if let Some(instrument) = self.chart.instrument() {
+            info = info.with_instrument(instrument);
+        }
+        info = info
+            .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
+            .with_timestamp(self.chart.format_time(bar.time))
+            .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
+        info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
+        info
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
@@ -1993,14 +2019,32 @@ impl DemoApp {
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
         }
+        self.drain_chart_events(ui.ctx());
+        // Right-click context actions resolve after the chart is shown. Order entries rest with
+        // the rest of trading during replay.
+        self.menus
+            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
+        self.menus
+            .set_order_entries(self.trading.quantity, self.trading.capabilities());
+        if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
+            self.handle_context_action(action);
+        }
+    }
+
+    fn drain_chart_events(&mut self, ctx: &egui::Context) {
         let mut replay_click = None;
         for event in self.chart.drain_events() {
             match event {
+                egui_charts::widget::ChartEvent::CrosshairMoved(pointer) => {
+                    self.crosshair = pointer;
+                    // The data window was drawn before the chart; show the new values now.
+                    ctx.request_repaint();
+                }
                 egui_charts::widget::ChartEvent::Click { position, button } => {
-                    self.last_chart_click = Some(position);
                     if button == egui::PointerButton::Primary && position.series == SeriesId::MAIN {
                         replay_click.get_or_insert(position.time);
                     }
+                    self.last_chart_click = Some(position);
                 }
                 egui_charts::widget::ChartEvent::SymbolChanged(_)
                 | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
@@ -2010,16 +2054,7 @@ impl DemoApp {
             }
         }
         if let Some(time) = replay_click {
-            self.handle_replay_bar_click(ui.ctx(), time);
-        }
-        // Right-click context actions resolve after the chart is shown. Order entries rest with
-        // the rest of trading during replay.
-        self.menus
-            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
-        self.menus
-            .set_order_entries(self.trading.quantity, self.trading.capabilities());
-        if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
-            self.handle_context_action(action);
+            self.handle_replay_bar_click(ctx, time);
         }
     }
 
@@ -2509,7 +2544,7 @@ mod tests {
         let replay = app.replay.as_ref().unwrap();
         assert_eq!(replay.state.curr_bar, index);
         assert!(!replay.state.is_playing());
-        assert_eq!(app.last_chart_click.unwrap().time, time);
+        assert_eq!(app.last_chart_click.as_ref().unwrap().time, time);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Host("research".into()));
         let message = &app.toasts.toasts().last().unwrap().message;
         assert!(message.contains(&time.to_rfc3339()), "{message}");
@@ -4687,6 +4722,7 @@ mod tests {
                     },
                     |ui| {
                         app.chart.show(ui);
+                        app.drain_chart_events(ui.ctx());
                     },
                 )
                 .drop_without_applying_deltas();

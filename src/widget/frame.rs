@@ -317,6 +317,7 @@ impl Chart {
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
         self.host_events.volume_map = None;
+        self.host_events.target = None;
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
@@ -1058,16 +1059,10 @@ impl Chart {
         // click clears the selection. Clicks in a study's pane are resolved
         // where the panes are rendered, outside this rect.
         let main_visible_range = start_idx..(start_idx + visible_data.len());
-        if response.clicked()
-            && let Some(click_pos) = response.interact_pointer_pos()
-        {
-            let volume_coords = if show_volume {
-                Some(coords.with_rect(volume_rect))
-            } else {
-                None
-            };
-            let hit = hit_test_main_chart(
-                click_pos,
+        let volume_coords = show_volume.then(|| coords.with_rect(volume_rect));
+        let element_at = |pos| {
+            hit_test_main_chart(
+                pos,
                 studies,
                 &self.study_ids,
                 &coords,
@@ -1079,8 +1074,12 @@ impl Chart {
             .filter(|(id, _)| {
                 self.main_series_visible
                     || matches!(id, crate::widget::ChartElementId::Indicator(_))
-            });
-            match hit {
+            })
+        };
+        if response.clicked()
+            && let Some(click_pos) = response.interact_pointer_pos()
+        {
+            match element_at(click_pos) {
                 Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
                 None => self.selection.deselect(),
             }
@@ -1119,26 +1118,7 @@ impl Chart {
                     pos: click_pos,
                 }
             } else {
-                let volume_coords = if show_volume {
-                    Some(coords.with_rect(volume_rect))
-                } else {
-                    None
-                };
-                let element_hit = hit_test_main_chart(
-                    click_pos,
-                    studies,
-                    &self.study_ids,
-                    &coords,
-                    volume_coords.as_ref(),
-                    self.state.shown(),
-                    max_volume,
-                    main_visible_range.clone(),
-                )
-                .filter(|(id, _)| {
-                    self.main_series_visible
-                        || matches!(id, crate::widget::ChartElementId::Indicator(_))
-                });
-                match element_hit {
+                match element_at(click_pos) {
                     Some((id, bar_idx)) => {
                         self.selection.select(id, Some(bar_idx));
                         RightClickTarget::Element {
@@ -1157,6 +1137,18 @@ impl Chart {
                     }
                 }
             });
+        }
+
+        // What the pointer is over, for host pointer events, in the right-click priority.
+        if let Some(pos) = ui
+            .input(|input| input.pointer.interact_pos())
+            .filter(|pos| chart_rect.contains(*pos))
+        {
+            self.host_events.target = self
+                .drawings
+                .hit_test(pos)
+                .map(super::PointerTarget::Drawing)
+                .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
         }
 
         // Draw selection handles for whichever element is currently selected on

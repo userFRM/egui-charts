@@ -445,6 +445,24 @@ impl Chart {
                     // it, an empty-pane click clears the whole selection. A
                     // close-"x" click is handled above and must not also
                     // change the selection.
+                    let study_at = |pos| {
+                        self.pane_layout.panes[pane_idx]
+                            .studies
+                            .iter()
+                            .rev()
+                            .find_map(|id| {
+                                let idx = self.study_ids.iter().position(|study| study == id)?;
+                                hit_test_pane_indicator(
+                                    pos,
+                                    studies.indicators()[idx].as_ref(),
+                                    idx,
+                                    visible_range.clone(),
+                                    chart_rect,
+                                    &pane_coords,
+                                )
+                            })
+                            .map(|hit| ChartElementId::Indicator(self.study_ids[hit.indicator_idx]))
+                    };
                     if !collapsed
                         && !toggle.clicked()
                         && !control_clicked
@@ -453,26 +471,22 @@ impl Chart {
                         && !self.drawings.eraser_mode
                         && let Some(click_pos) = pane_response.interact_pointer_pos()
                     {
-                        let hit = self.pane_layout.panes[pane_idx]
-                            .studies
-                            .iter()
-                            .rev()
-                            .find_map(|id| {
-                                let idx = self.study_ids.iter().position(|study| study == id)?;
-                                hit_test_pane_indicator(
-                                    click_pos,
-                                    studies.indicators()[idx].as_ref(),
-                                    idx,
-                                    visible_range.clone(),
-                                    chart_rect,
-                                    &pane_coords,
-                                )
-                            });
+                        let hit = study_at(click_pos);
                         if hit.is_some() || pending_pane_selection.is_none() {
-                            pending_pane_selection = Some(hit.map(|h| {
-                                ChartElementId::Indicator(self.study_ids[h.indicator_idx])
-                            }));
+                            pending_pane_selection = Some(hit);
                         }
+                    }
+                    // What the pointer is over, for host pointer events: drawings sit on top.
+                    if !collapsed
+                        && let Some(pos) = ui
+                            .input(|input| input.pointer.interact_pos())
+                            .filter(|pos| chart_rect.contains(*pos))
+                    {
+                        self.host_events.target = self
+                            .drawings
+                            .hit_test(pos)
+                            .map(super::PointerTarget::Drawing)
+                            .or_else(|| study_at(pos).map(super::PointerTarget::Element));
                     }
 
                     // Draw selection handles when this pane is selected.

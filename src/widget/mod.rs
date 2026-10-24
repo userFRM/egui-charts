@@ -127,7 +127,7 @@ mod crosshair;
 mod events;
 mod feed;
 mod marks;
-pub use events::{ChartEvent, ChartPointer};
+pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
 pub mod export;
 mod frame;
 mod history;
