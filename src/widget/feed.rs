@@ -11,7 +11,7 @@ use crate::data::inbox::{Answer, Inbox};
 use crate::data::merge::Origin;
 use crate::data::trades::Trades;
 use crate::data::{
-    Datafeed, FeedError, FeedState, HistoryPage, HistoryRequest, Reply, Subscription,
+    Datafeed, DepthHistory, FeedError, FeedState, HistoryPage, HistoryRequest, Reply, Subscription,
     SubscriptionId, TradePage, TradeRequest,
 };
 use crate::model::{BarClock, Instrument, OrderBook, Tick, Timeframe};
@@ -51,6 +51,8 @@ pub(crate) struct FeedLink {
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
     order_book: Option<OrderBook>,
+    /// The order book over time, when the host turned it on.
+    depth_history: Option<DepthHistory>,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
 }
@@ -121,6 +123,7 @@ impl Chart {
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
             order_book: None,
+            depth_history: None,
             paging_stopped: false,
         });
     }
@@ -300,6 +303,32 @@ impl Chart {
         link.order_book.as_ref()
     }
 
+    /// Keeps `history` of the order book the feed sends, sampled from the next update, or stops
+    /// with `None`. The history starts empty and is cleared when the symbol or interval changes.
+    /// It needs the instrument's tick size, and keeps no columns without one or without a feed.
+    /// The chart takes the columns sampled since its last frame when it is drawn: while it is not,
+    /// at most [`columns`](crate::data::DepthHistoryConfig::columns) of them wait, the oldest
+    /// making room for new ones.
+    pub fn set_depth_history(&mut self, history: Option<DepthHistory>) {
+        if let Some(link) = &mut self.feed_link {
+            if let Some(id) = link.subscription {
+                let config = history.as_ref().map(|history| history.config().clone());
+                link.inbox.sample_depth(id, config);
+            }
+            link.depth_history = history;
+        }
+    }
+
+    /// The order book history of `series`, if [`set_depth_history`](Self::set_depth_history)
+    /// turned it on.
+    pub fn depth_history(&self, series: SeriesId) -> Option<&DepthHistory> {
+        let link = self
+            .feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)?;
+        link.depth_history.as_ref()
+    }
+
     /// Calendar boundaries selected by the chart, including the resolved exchange or local zone.
     pub fn bar_clock(&self) -> BarClock {
         let clock = BarClock::new(self.timeframe.unwrap_or_default());
@@ -421,6 +450,12 @@ impl Chart {
             };
             link.trades.append(updates.trades, fold);
             link.order_book = updates.depth.or(link.order_book.take());
+            if let Some(history) = &mut link.depth_history {
+                updates
+                    .depth_columns
+                    .into_iter()
+                    .for_each(|c| history.push(c));
+            }
             resnapshot |= updates.resnapshot;
         }
         if resnapshot && let Some(id) = link.subscription {
@@ -478,6 +513,7 @@ impl Chart {
         self.state.price_scale_mut().set_price_precision(None);
         link.trades = Trades::new(TRADE_CAPACITY);
         link.order_book = None;
+        link.depth_history.iter_mut().for_each(DepthHistory::clear);
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
@@ -545,9 +581,15 @@ impl Chart {
         if withheld {
             self.request_latest(link);
         }
-        let sink = link
-            .inbox
-            .subscribe(self.symbol.clone(), link.clock.clone(), TRADE_CAPACITY);
+        let tick_size = link.instrument.as_ref().and_then(|i| i.tick_size);
+        let sink = link.inbox.subscribe(
+            self.symbol.clone(),
+            link.clock.clone(),
+            TRADE_CAPACITY,
+            tick_size,
+        );
+        let config = link.depth_history.as_ref().map(|h| h.config().clone());
+        link.inbox.sample_depth(sink.id, config);
         link.subscription = Some(sink.id);
         let subscription = Subscription {
             id: sink.id,

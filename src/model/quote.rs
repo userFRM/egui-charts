@@ -294,6 +294,16 @@ impl OrderBook {
         bid_vol / total
     }
 
+    /// Whether the best bid is above the best ask. Bids and asks overlap during pre-open and
+    /// auction phases, while a venue publishes an indicative opening price, and in books
+    /// consolidated from several venues, so a crossed book is valid data: the chart keeps it as
+    /// the feed sends it. A best bid equal to the best ask is locked, not crossed.
+    pub fn is_crossed(&self) -> bool {
+        self.best_bid()
+            .zip(self.best_ask())
+            .is_some_and(|(bid, ask)| bid.price > ask.price)
+    }
+
     /// Get mid price from best bid/ask
     pub fn mid_price(&self) -> Option<f64> {
         let bid = self.best_bid()?.price;

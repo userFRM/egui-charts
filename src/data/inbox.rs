@@ -6,6 +6,7 @@
 //! subscription's book.
 
 use super::depth::{Book, Lost};
+use super::depth_history::{DepthColumn, DepthHistoryConfig, Sampler};
 use super::merge::{Origin, fold, valid};
 use super::trades::{self, Trades};
 use super::{FeedError, FeedStatus, SubscriptionId};
@@ -42,7 +43,7 @@ pub fn aggregate_trades(
         return Ok(Vec::new());
     };
     let inbox = Arc::new(Inbox::default());
-    let sink = inbox.subscribe(String::new(), clock.into(), trades.len());
+    let sink = inbox.subscribe(String::new(), clock.into(), trades.len(), None);
     sink.set_server_time(last.ts);
     for trade in trades {
         sink.push_tick(trade.clone());
@@ -85,6 +86,8 @@ struct Live {
     last_close: Option<f64>,
     empty: bool,
     book: Book,
+    /// Samples the book for the chart's depth history, when it keeps one.
+    sampler: Option<Sampler>,
     taken: TakenIds,
     updates: Updates,
 }
@@ -125,6 +128,9 @@ pub(crate) struct Updates {
     pub(crate) trades: Trades,
     /// The order book, if it changed.
     pub(crate) depth: Option<OrderBook>,
+    /// Columns sampled for the depth history, oldest first, as many as its newest resolution
+    /// holds: the oldest make room for new ones.
+    pub(crate) depth_columns: VecDeque<DepthColumn>,
     /// Latest top-of-book quote pushed in this frame.
     pub(crate) quote: Option<Level1Quote>,
     /// The book lost its snapshot: call `Datafeed::request_depth_snapshot`.
@@ -149,6 +155,7 @@ impl Updates {
             bars: BTreeMap::new(),
             trades,
             depth: None,
+            depth_columns: VecDeque::new(),
             quote: None,
             resnapshot: false,
             symbols_changed: false,
@@ -185,12 +192,13 @@ impl Inbox {
     }
 
     /// A sink for a new subscription, whose ticks fold into bars of `clock` and wait in a store of
-    /// `trade_capacity`.
+    /// `trade_capacity`, and whose book keys prices by integer ticks of `tick_size`.
     pub(crate) fn subscribe(
         self: &Arc<Self>,
         symbol: String,
         clock: BarClock,
         trade_capacity: usize,
+        tick_size: Option<f64>,
     ) -> Sink {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let id = SubscriptionId(NEXT.fetch_add(1, Ordering::Relaxed));
@@ -203,7 +211,8 @@ impl Inbox {
             last_trade: None,
             last_close: None,
             empty: false,
-            book: Book::default(),
+            book: Book::new(tick_size),
+            sampler: None,
             taken: TakenIds {
                 order: VecDeque::new(),
                 ids: HashSet::new(),
@@ -215,6 +224,13 @@ impl Inbox {
         Sink {
             inbox: Arc::clone(self),
             id,
+        }
+    }
+
+    /// Samples the book of `id` into depth history columns from its next update, or stops.
+    pub(crate) fn sample_depth(&self, id: SubscriptionId, config: Option<DepthHistoryConfig>) {
+        if let Some(live) = self.state().subscriptions.get_mut(&id) {
+            live.sampler = config.map(Sampler::new);
         }
     }
 
@@ -540,9 +556,12 @@ impl Sink {
     }
 
     /// The whole order book, numbered `sequence`, at most 10,000 levels per side: a deeper book is
-    /// rejected. It replaces the book; the next delta carries `sequence + 1`.
+    /// rejected. It replaces the book; the next delta carries `sequence + 1`. Levels are keyed by
+    /// the nearest integer tick of the instrument's [`tick_size`](crate::model::Instrument::tick_size),
+    /// when it has one, so prices that differ by a rounding error are one level and the latest
+    /// size pushed for it holds. A crossed book is kept as pushed.
     pub fn push_depth_snapshot(&self, sequence: u64, book: OrderBook) {
-        self.update(|live| live.depth(|depth| depth.snapshot(sequence, book)));
+        self.update(|live| live.depth(book.ts, |depth| depth.snapshot(sequence, book)));
     }
 
     /// The levels that changed since the update numbered `sequence - 1`, each with its new size; a
@@ -559,12 +578,13 @@ impl Sink {
     ///
     /// [`Datafeed::request_depth_snapshot`]: super::Datafeed::request_depth_snapshot
     pub fn push_depth_delta(&self, sequence: u64, changes: &OrderBook) {
-        self.update(|live| live.depth(|depth| depth.delta(sequence, changes)));
+        self.update(|live| live.depth(changes.ts, |depth| depth.delta(sequence, changes)));
     }
 
     /// Latest best bid and ask. Bursts coalesce to the newest timestamp (last arrival on a tie).
-    /// Non-finite prices, negative or non-finite sizes and crossed quotes are rejected without
-    /// replacing the pending quote. Times obey the feed-clock rule of [`Self::set_server_time`].
+    /// Non-finite prices and negative or non-finite sizes are rejected without replacing the
+    /// pending quote. A crossed quote, its bid above its ask, is kept, as the top of a crossed
+    /// book (see [`OrderBook::is_crossed`]). Times obey the feed-clock rule of [`Self::set_server_time`].
     /// The subscription supplies the instrument identity; the
     /// sink ignores a quote whose symbol differs from its subscribed symbol.
     pub fn push_quote(&self, quote: Level1Quote) {
@@ -575,7 +595,6 @@ impl Sink {
             }
             if !quote.bid.is_finite()
                 || !quote.ask.is_finite()
-                || quote.bid > quote.ask
                 || !quote.bid_size.is_finite()
                 || !quote.ask_size.is_finite()
                 || quote.bid_size < 0.0
@@ -677,7 +696,18 @@ impl Live {
                 .is_some_and(|before| self.clock.bar_open(before) > self.clock.bar_open(now))
     }
 
-    fn depth(&mut self, apply: impl FnOnce(&mut Book) -> Result<(), Lost>) {
+    /// Applies a depth update stamped `ts`, sampling the book as it stood before when the update
+    /// opens a new period of the depth history.
+    fn depth(&mut self, ts: DateTime<Utc>, apply: impl FnOnce(&mut Book) -> Result<(), Lost>) {
+        if let Some(sampler) = &mut self.sampler
+            && let Some(column) = sampler.sample(ts, &self.book)
+        {
+            let columns = &mut self.updates.depth_columns;
+            if columns.len() == sampler.config.columns {
+                columns.pop_front();
+            }
+            columns.push_back(column);
+        }
         match apply(&mut self.book) {
             // The book holds a snapshot newer than any loss, so a pending request is moot.
             Ok(()) => self.updates.resnapshot = false,
@@ -714,7 +744,7 @@ mod tests {
     }
 
     fn subscribe(inbox: &Arc<Inbox>) -> Sink {
-        inbox.subscribe("ES".into(), BarClock::new(Timeframe::Min1), 100)
+        inbox.subscribe("ES".into(), BarClock::new(Timeframe::Min1), 100, None)
     }
 
     /// Count bars must keep their progress across drains, count only accepted trades, and
@@ -725,7 +755,7 @@ mod tests {
             let timeframe = format!("{count}t").parse().unwrap();
             let inbox = Arc::new(Inbox::default());
             let clock = BarClock::new(timeframe);
-            let sink = inbox.subscribe("ES".into(), clock.clone(), 10_000);
+            let sink = inbox.subscribe("ES".into(), clock.clone(), 10_000, None);
             let mut bars = BTreeMap::new();
             let mut merged = Vec::new();
             let mut from_ticks = std::collections::BTreeSet::new();
@@ -775,7 +805,7 @@ mod tests {
         for timeframe in [Timeframe::Sec1, Timeframe::Min1, "45s".parse().unwrap()] {
             let clock = BarClock::new(timeframe);
             let inbox = Arc::new(Inbox::default());
-            let sink = inbox.subscribe("ES".into(), clock.clone(), 100);
+            let sink = inbox.subscribe("ES".into(), clock.clone(), 100, None);
             let start = at(0, 0);
             let boundary = start + timeframe.duration();
             sink.push_tick(tick(start, 100.0, 2.0));
@@ -845,6 +875,7 @@ mod tests {
         sink.push_quote(quote(0, 99.0));
         sink.push_quote(quote(1, 100.0));
         sink.push_quote(quote(0, 98.0)); // older must not replace the latest
+        sink.push_quote(quote(1, 102.0)); // crossed, as in an auction: kept
         sink.push_quote(quote(2, f64::NAN)); // invalid must not replace it either
         let mut future = quote(2, 100.0);
         future.ts = DateTime::from_timestamp(1_710_496_805_000, 0).unwrap();
@@ -873,7 +904,7 @@ mod tests {
         assert_eq!((updates.late_ticks, updates.rejected), (1, 1));
         assert_eq!(
             updates.quote.as_ref().map(|q| (q.ts, q.bid)),
-            Some((at(1, 1), 100.0))
+            Some((at(1, 1), 102.0))
         );
         assert_eq!(updates.status, Some(FeedStatus::Live));
         assert_eq!(updates.error, Some(FeedError::Network("timeout".into())));
@@ -946,7 +977,7 @@ mod tests {
 
         // A store of two trades remembers the last two ids: 1 is forgotten once 3 is folded.
         let inbox = Arc::new(Inbox::default());
-        let sink = inbox.subscribe("ES".into(), BarClock::new(Timeframe::Min1), 2);
+        let sink = inbox.subscribe("ES".into(), BarClock::new(Timeframe::Min1), 2, None);
         for (second, id) in [(1, 1), (2, 2), (3, 3), (4, 1), (5, 3)] {
             sink.push_tick(tick(at(0, second), 100.0, 1.0).with_id(id));
         }
@@ -1000,7 +1031,7 @@ mod tests {
         ];
         for (timeframe, now, bars, pushes, kept, rejected) in cases {
             let inbox = Arc::new(Inbox::default());
-            let sink = inbox.subscribe("ES".into(), BarClock::new(timeframe), 100);
+            let sink = inbox.subscribe("ES".into(), BarClock::new(timeframe), 100, None);
             sink.set_server_time(time(now));
             for &push in pushes {
                 let ts = time(push);
@@ -1064,5 +1095,63 @@ mod tests {
             })
             .collect();
         assert_eq!(answers, [(1, Ok(page)), (2, Err(FeedError::Unanswered))]);
+    }
+
+    /// Guards the depth history samples: the book keys prices by integer ticks (a level removed
+    /// at a price computed with a rounding error must leave, or the history shows liquidity that
+    /// left), rows group ticks downwards, sum their sizes and keep the nearest `rows`, and a
+    /// period that ends gives one column of the book as it stood before the update that opened
+    /// the next period, spanning every period it did not change in. An update stamped before the
+    /// open period samples nothing.
+    #[test]
+    fn depth_columns_sample_the_book_at_the_end_of_each_period() {
+        let inbox = Arc::new(Inbox::default());
+        let clock = BarClock::new(Timeframe::Min1);
+        let sink = inbox.subscribe("ES".into(), clock, 100, Some(0.1));
+        let config = DepthHistoryConfig {
+            cadence: TimeDelta::seconds(1),
+            rows: 2,
+            ticks_per_row: 2,
+            columns: 10,
+        };
+        inbox.sample_depth(sink.id, Some(config));
+        let level = |price, size| OrderBookLevel {
+            price,
+            size,
+            order_cnt: None,
+        };
+        let book = |second, bids, asks| OrderBook {
+            ts: at(0, second),
+            symbol: "ES".into(),
+            bids,
+            asks,
+        };
+        let bids = vec![
+            level(0.3, 1.0),
+            level(0.2, 2.0),
+            level(-0.1, 4.0),
+            level(-0.3, 8.0),
+        ];
+        sink.push_depth_snapshot(1, book(0, bids, vec![level(0.5, 3.0)]));
+        sink.push_depth_delta(2, &book(0, vec![level(0.1 + 0.2, 0.0)], vec![]));
+        let bids = vec![level(0.2, 5.0), level(0.3, 1.0)];
+        sink.push_depth_delta(3, &book(3, bids, vec![]));
+        sink.push_depth_delta(4, &book(2, vec![], vec![level(0.5, 0.0)]));
+        sink.push_depth_delta(5, &book(4, vec![], vec![]));
+
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        let column = |second, span, bids: &[(i64, f64)], asks: &[(i64, f64)]| DepthColumn {
+            time: at(0, second),
+            span: TimeDelta::seconds(span),
+            bids: bids.to_vec(),
+            asks: asks.to_vec(),
+        };
+        assert_eq!(
+            Vec::from(updates.depth_columns),
+            [
+                column(0, 3, &[(1, 2.0), (-1, 4.0)], &[(2, 3.0)]),
+                column(3, 1, &[(1, 6.0), (-1, 4.0)], &[]),
+            ]
+        );
     }
 }

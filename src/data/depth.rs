@@ -11,7 +11,8 @@ pub(crate) const MAX_LEVELS: usize = 10_000;
 
 /// One side of the book, ascending by key with the best level last, so that the frequent changes
 /// near the touch shift few levels and reuse the side's capacity instead of allocating. Bids are
-/// keyed by [`key`] of their price and asks by its complement, which orders them the other way.
+/// keyed by [`key`] of their price and asks by its complement, which orders them the other
+/// way.
 type Side = Vec<(u64, OrderBookLevel)>;
 
 /// A book built from a snapshot and the deltas that follow it. Without a snapshot, or after a
@@ -19,6 +20,10 @@ type Side = Vec<(u64, OrderBookLevel)>;
 /// for that snapshot to apply.
 #[derive(Default)]
 pub(crate) struct Book {
+    /// The instrument's tick size, positive and finite: prices are keyed by the nearest integer
+    /// tick, so prices a feed computed with rounding errors land on one level. `None` keys them
+    /// exactly.
+    tick: Option<f64>,
     /// Sequence of the last snapshot or delta applied. `None` while the book has no snapshot.
     sequence: Option<u64>,
     /// A snapshot was asked for since the book lost its snapshot.
@@ -46,6 +51,15 @@ pub(crate) struct Lost {
 }
 
 impl Book {
+    /// An empty book of an instrument of tick size `tick`, if it is positive and finite.
+    pub(crate) fn new(tick: Option<f64>) -> Self {
+        let tick = tick.filter(|tick| tick.is_finite() && *tick > 0.0);
+        Self {
+            tick,
+            ..Self::default()
+        }
+    }
+
     /// Replaces the book with `book`, numbered `sequence`, and applies the held deltas numbered
     /// above it, so a snapshot fetched while deltas kept arriving heals the book.
     pub(crate) fn snapshot(&mut self, sequence: u64, book: OrderBook) -> Result<(), Lost> {
@@ -59,7 +73,7 @@ impl Book {
             side.clear();
             // Reversed so that, after the stable sort, the first of equal keys is the last pushed.
             let levels = levels.into_iter().rev().filter(|level| level.size > 0.0);
-            side.extend(levels.map(|level| (key(level.price) ^ order, level)));
+            side.extend(levels.map(|level| (key(self.tick, level.price) ^ order, level)));
             side.sort_by_key(|(key, _)| *key);
             side.dedup_by_key(|(key, _)| *key);
         }
@@ -98,7 +112,7 @@ impl Book {
             (&mut self.asks, &changes.asks, u64::MAX),
         ] {
             for level in levels {
-                let key = key(level.price) ^ order;
+                let key = key(self.tick, level.price) ^ order;
                 match side.binary_search_by_key(&key, |(key, _)| *key) {
                     Ok(at) if level.size > 0.0 => side[at].1 = level.clone(),
                     Ok(at) => _ = side.remove(at),
@@ -123,6 +137,29 @@ impl Book {
             bids: levels(&self.bids),
             asks: levels(&self.asks),
         })
+    }
+
+    /// The best `rows` price rows of each side, bids then asks, each best first, as the row of
+    /// `ticks_per_row` integer ticks the levels fall in, rounding down, and the sum of their
+    /// sizes. `None` for a book without a tick size.
+    pub(crate) fn rows(&self, ticks_per_row: u32, rows: usize) -> Option<[Vec<(i64, f64)>; 2]> {
+        self.tick?;
+        let group = |side: &Side, order: u64| {
+            let mut grouped: Vec<(i64, f64)> = Vec::with_capacity(rows.min(side.len()));
+            for (key, level) in side.iter().rev() {
+                let row = ((key ^ order ^ 1 << 63) as i64).div_euclid(i64::from(ticks_per_row));
+                let full = grouped.len() == rows;
+                match grouped.last_mut() {
+                    Some((last, size)) if *last == row => {
+                        *size = (*size + level.size).min(f64::MAX)
+                    }
+                    _ if full => break,
+                    _ => grouped.push((row, level.size)),
+                }
+            }
+            grouped
+        };
+        Some([group(&self.bids, 0), group(&self.asks, u64::MAX)])
     }
 
     /// Holds `changes` for the next snapshot. A delta that does not extend the held run starts a
@@ -164,8 +201,12 @@ fn valid(book: &OrderBook) -> bool {
         .all(|level| level.price.is_finite() && level.size.is_finite() && level.size >= 0.0)
 }
 
-/// Orders finite prices like `f64::total_cmp`, with -0.0 and 0.0 as one price.
-fn key(price: f64) -> u64 {
+/// Orders finite prices: by their nearest integer multiple of `tick`, as an `i64` with its sign
+/// bit flipped, or like `f64::total_cmp` without a tick, with -0.0 and 0.0 as one price.
+fn key(tick: Option<f64>, price: f64) -> u64 {
+    if let Some(tick) = tick {
+        return (price / tick).round() as i64 as u64 ^ 1 << 63;
+    }
     let bits = (price + 0.0).to_bits();
     if bits >> 63 == 0 {
         bits | 1 << 63
