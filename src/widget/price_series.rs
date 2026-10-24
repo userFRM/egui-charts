@@ -1028,8 +1028,9 @@ mod tests {
         assert_eq!(chart.bars(second), &data[1..]);
     }
 
-    /// Columns of 200 and 220 over a base of 150 fit 150 to 220 with 10% margins, 143 to 227; a
-    /// provider's 0 to 1,000 fits -100 to 1,100, and the main series' 50 to 60 fits 49 to 61.
+    /// Columns of 200 and 220 over a base of 150 fit 150 to 220 in the middle 80% of the pane,
+    /// 141.25 to 228.75; a provider's 0 to 1,000 fits -125 to 1,125, and the main series' 50 to
+    /// 60 fits 48.75 to 61.25.
     /// The price line, the base line of a percentage scale at the first visible close and the
     /// last value label follow the series style.
     #[test]
@@ -1045,7 +1046,7 @@ mod tests {
         chart.set_data(id, bars(&[200.0, 220.0]));
         let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
         let range = chart.series_price_scale(id).unwrap().range();
-        assert!((range.min - 143.0).abs() < 1e-10 && (range.max - 227.0).abs() < 1e-10);
+        assert!((range.min - 141.25).abs() < 1e-10 && (range.max - 228.75).abs() < 1e-10);
         let map = chart.series_map(&chart.price_series[0], chart.last_rendered_price_rect);
         let columns: Vec<_> = painted
             .iter()
@@ -1088,9 +1089,9 @@ mod tests {
             map.transform().to_price(range.min),
             map.transform().to_price(range.max),
         );
-        assert!((fitted.0 + 100.0).abs() < 1e-9 && (fitted.1 - 1100.0).abs() < 1e-9);
+        assert!((fitted.0 + 125.0).abs() < 1e-9 && (fitted.1 - 1125.0).abs() < 1e-9);
         let range = chart.state.price_scale().range();
-        assert!((range.min - 49.0).abs() < 1e-10 && (range.max - 61.0).abs() < 1e-10);
+        assert!((range.min - 48.75).abs() < 1e-10 && (range.max - 61.25).abs() < 1e-10);
         for (price, color) in [
             (220.0, Color32::GOLD),
             (200.0, DESIGN_TOKENS.semantic.extended.gray),
