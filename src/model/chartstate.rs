@@ -347,6 +347,7 @@ impl ChartState {
         } else {
             PriceTransform::default()
         };
+        let (study_start, study_end) = self.time_scale.visible_logical_range().to_strict_range();
         let study_values = indicators
             .into_iter()
             .filter(|study| {
@@ -366,7 +367,12 @@ impl ChartState {
                             )
                     })
                     .flat_map(move |index| {
-                        (start..end)
+                        let available_end = study
+                            .values()
+                            .len()
+                            .checked_add_signed(study.plot_offset(index))
+                            .unwrap_or(0);
+                        (study_start.max(start)..study_end.max(end).min(available_end))
                             .filter_map(move |bar| study.plot_value(index, bar))
                             .chain(std::iter::once(0.0).filter(move |_| {
                                 matches!(

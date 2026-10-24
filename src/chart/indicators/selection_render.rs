@@ -51,7 +51,11 @@ pub fn render_indicator_selection_dots<F>(
     }
 
     // Draw dots at regular intervals
-    for i in visible_range.clone() {
+    for i in visible_range.start
+        ..visible_range
+            .end
+            .max(coords.x_to_idx(coords.rect.right()).saturating_add(1))
+    {
         // Only draw at intervals
         if i % config.dot_interval != 0 {
             continue;

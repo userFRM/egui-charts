@@ -6,9 +6,9 @@
 //! # Components
 //! - Tenkan-sen (Conversion Line): (9-period high + 9-period low) / 2
 //! - Kijun-sen (Base Line): (26-period high + 26-period low) / 2
-//! - Senkou Span A (Leading Span A): (Tenkan + Kijun) / 2, plotted 26 periods ahead
-//! - Senkou Span B (Leading Span B): (52-period high + 52-period low) / 2, plotted 26 periods ahead
-//! - Chikou Span (Lagging Span): Close plotted 26 periods back
+//! - Senkou Span A (Leading Span A): (Tenkan + Kijun) / 2, plotted 25 bars ahead with displacement 26
+//! - Senkou Span B (Leading Span B): (52-period high + 52-period low) / 2, plotted 25 bars ahead with displacement 26
+//! - Chikou Span (Lagging Span): Close plotted 25 bars back with displacement 26
 //!
 //! # Interpretation
 //! - Price above cloud: Bullish trend

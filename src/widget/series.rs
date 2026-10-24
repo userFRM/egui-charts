@@ -465,6 +465,7 @@ mod tests {
                 "renko",
                 "independent",
                 "no_scale",
+                "displaced_future",
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
@@ -478,11 +479,31 @@ mod tests {
                 frame(&ctx, &mut chart, 0.02, Vec::new());
                 let (start, end) = chart.state.visible_range();
                 assert!(start > 0 && end < 100);
+                if case == "displaced_future" {
+                    chart.set_start_idx(85);
+                    frame(&ctx, &mut chart, 0.025, Vec::new());
+                    chart.state.time_scale_mut().set_right_offset(8.0);
+                    assert!(
+                        chart
+                            .state
+                            .time_scale()
+                            .visible_logical_range()
+                            .to_strict_range()
+                            .1
+                            > 104
+                    );
+                }
                 let study = CustomIndicator::new("Overlay", move |bars| {
                     let len = if case == "short" { start } else { bars.len() };
                     (0..len)
                         .map(|i| {
-                            if i < start {
+                            if case == "displaced_future" {
+                                if i + 1 == bars.len() {
+                                    IndicatorValue::Single(120.0)
+                                } else {
+                                    IndicatorValue::None
+                                }
+                            } else if i < start {
                                 IndicatorValue::Single(-10_000.0)
                             } else if i >= end {
                                 IndicatorValue::Single(10_000.0)
@@ -502,6 +523,7 @@ mod tests {
                 })
                 .with_line_cnt(if case == "multiple" { 5 } else { 1 })
                 .with_overlay(case != "pane")
+                .with_offsets(vec![if case == "displaced_future" { 5 } else { 0 }])
                 .with_scale(match case {
                     "independent" => crate::studies::StudyScale::Independent,
                     "no_scale" => crate::studies::StudyScale::None,
@@ -532,7 +554,7 @@ mod tests {
                 chart.set_indicator_visible(id, case != "hidden");
                 assert!(chart.set_indicator_autoscale(id, case != "excluded"));
                 frame(&ctx, &mut chart, 0.04, Vec::new());
-                let expected = if matches!(case, "single" | "multiple") {
+                let expected = if matches!(case, "single" | "multiple" | "displaced_future") {
                     fitted
                 } else {
                     bars_only

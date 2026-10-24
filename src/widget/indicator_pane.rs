@@ -406,7 +406,10 @@ impl IndicatorPane {
         );
 
         // Determine y-axis range
-        let (y_min, y_max) = self.calculate_y_range(indicator, &visible_range);
+        let horizontal = coords.to_mapping(chart_rect, 0.0, 1.0);
+        let displayed_range = horizontal.x_to_idx(chart_rect.left())
+            ..horizontal.x_to_idx(chart_rect.right()).saturating_add(1);
+        let (y_min, y_max) = self.calculate_y_range(indicator, &displayed_range);
 
         // Draw zone fills (colored bands)
         if self.config.show_zones && self.config.zones.len() >= 2 {
@@ -538,7 +541,10 @@ impl IndicatorPane {
         );
 
         // Determine y-axis range
-        let (y_min, y_max) = self.calculate_y_range(indicator, &visible_range);
+        let horizontal = coords.to_mapping(chart_rect, 0.0, 1.0);
+        let displayed_range = horizontal.x_to_idx(chart_rect.left())
+            ..horizontal.x_to_idx(chart_rect.right()).saturating_add(1);
+        let (y_min, y_max) = self.calculate_y_range(indicator, &displayed_range);
 
         let mapping = coords.to_mapping(chart_rect, y_min, y_max);
         let crosshair = hover.map(|(mut pos, options)| {
