@@ -97,6 +97,22 @@
 //! 4. Apply a theme at startup with [`theme::apply_to_egui`] to propagate
 //!    design tokens into egui's visual system.
 //!
+//! ## Building for the web
+//!
+//! The download of a `wasm32` build shrinks with:
+//!
+//! - the `[profile.wasm-release]` of this crate's `Cargo.toml` (`opt-level = "s"`,
+//!   `lto = "fat"`, `codegen-units = 1`) and `wasm-opt -Oz`;
+//! - eframe's `glow` renderer instead of `wgpu`;
+//! - eframe without its `default_fonts` feature: [`theme::apply_to_egui`] installs the
+//!   one font the chart draws with;
+//! - chrono-tz's `filter-by-regex` feature with a `CHRONO_TZ_TIMEZONE_FILTER` that
+//!   keeps the zones the application uses and the ones this crate names: `UTC`,
+//!   `America/New_York`, `Europe/London`, `Asia/Tokyo` and `Asia/Hong_Kong`.
+//!
+//! `scripts/web-size.sh` builds `examples/bare_chart.rs`, which takes the first three,
+//! and the demo for the web and prints their sizes.
+//!
 //! ## Crate-level re-exports
 //!
 //! The most commonly used types are re-exported at the crate root for
