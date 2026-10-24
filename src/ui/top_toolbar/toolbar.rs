@@ -1,9 +1,8 @@
 //! Top Toolbar Widget
 //!
-//! The symbol search pill, interval and chart type dropdowns, indicators, alert, replay,
-//! undo and redo on the left; layouts, save, settings, fullscreen and screenshot
-//! on the right. When the strip is too narrow, Indicators, Alert and Replay
-//! lose their labels, then the least important controls move into an overflow menu at the right.
+//! Symbol search, interval, chart type, indicators, undo and redo on the left;
+//! save, quick search, settings, fullscreen and screenshot on the right. Layouts,
+//! alerts and replay live in the overflow menu, alongside controls that leave a narrow strip.
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::ThemeExt;
@@ -66,12 +65,13 @@ const LEFT: &[&[Slot]] = &[
 /// Right-aligned part of the strip, in groups divided by separators.
 const RIGHT: &[&[Slot]] = &[
     &[S::LayoutName, S::Save],
-    &[S::Settings, S::Fullscreen, S::Screenshot],
+    &[S::QuickSearch, S::Settings, S::Fullscreen, S::Screenshot],
 ];
 
 /// Controls that move into the overflow menu when the strip is too narrow, the first to go
 /// first.
-const OVERFLOW_ORDER: [Slot; 13] = [
+const OVERFLOW_ORDER: [Slot; 14] = [
+    S::QuickSearch,
     S::Compare,
     S::Templates,
     S::Save,
@@ -103,7 +103,7 @@ fn show_separator(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 22.0), egui::Sense::hover());
     let theme = ui.active_theme();
     let color = if theme.dark {
-        theme.ui.border
+        theme.ui.border.lerp_to_gamma(theme.ui.text, 0.18)
     } else {
         theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.085)
     };
@@ -142,7 +142,7 @@ impl Slot {
             S::QuickSearch => (
                 &embedded_icons::QUICK_SEARCH,
                 "Quick Search",
-                A::OpenSymbolSearch,
+                A::OpenQuickSearch,
             ),
             S::Settings => (&embedded_icons::SETTINGS_GEAR, "Settings", A::OpenSettings),
             S::Fullscreen => (
@@ -303,7 +303,7 @@ impl TopToolbar {
     }
 
     fn show_menu(ui: &mut Ui, action: &mut TopToolbarAction) {
-        let response = IconButton::new(&embedded_icons::MENU)
+        let response = IconButton::new(&super::buttons::MENU_ICON)
             .icon_scale(24.0 / 28.0)
             .tooltip("Menu")
             .show(ui);
@@ -333,12 +333,18 @@ impl TopToolbar {
 
         // The widest arrangement that fits: full, then icon-only labels, then overflow.
         let available = ui.available_width();
-        let fits =
-            |compact, hidden: &[Slot]| self.strip_width(ui, symbol, compact, hidden) <= available;
+        let menu: Vec<_> = [S::Alert, S::Replay, S::Layouts, S::LayoutName]
+            .into_iter()
+            .filter(|&c| self.is_shown(c))
+            .collect();
+        let fits = |compact, hidden: &[Slot]| {
+            let hidden: Vec<_> = menu.iter().chain(hidden).copied().collect();
+            self.strip_width(ui, symbol, compact, &hidden) <= available
+        };
         // Host-hidden slots never reach the overflow menu.
         let order: Vec<Slot> = OVERFLOW_ORDER
             .into_iter()
-            .filter(|&c| self.is_shown(c))
+            .filter(|&c| self.is_shown(c) && !menu.contains(&c))
             .collect();
         let (compact, hidden) = if fits(false, &[]) {
             (false, &order[..0])
@@ -349,6 +355,8 @@ impl TopToolbar {
             (true, &order[..n])
         };
 
+        let hidden: Vec<_> = menu.iter().chain(hidden).copied().collect();
+        let hidden = hidden.as_slice();
         ui.add_space(DESIGN_TOKENS.spacing.lg);
         self.show_groups(ui, LEFT, compact, hidden, symbol, &mut action);
         let right = self.groups_width(ui, RIGHT, compact, hidden, symbol)
@@ -523,19 +531,14 @@ impl TopToolbar {
                 );
                 crate::styles::focus::draw_focus_ring(ui, &arrow, self.config.rounding);
                 egui::Popup::menu(&arrow)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .align(egui::RectAlign::BOTTOM_START)
                     .align_alternatives(&[])
                     .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
                     .show(|ui| {
-                        ui.set_width(200.0);
-                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
-                        if ListItem::new()
-                            .height(32.0)
-                            .show_with_icon(ui, "Export chart…", &embedded_icons::IMAGE)
-                            .clicked()
-                        {
-                            *action = TopToolbarAction::Save;
-                            ui.close();
+                        let layout_action = self.layout_menu.show_menu(ui);
+                        if layout_action != LayoutAction::None {
+                            *action = TopToolbarAction::Layout(layout_action);
                         }
                     });
                 if arrow.clicked() {
@@ -674,7 +677,7 @@ impl TopToolbar {
 
     fn symbol_trigger(symbol: &str) -> Trigger<'static> {
         Trigger {
-            icon: Some(&embedded_icons::CHART_CANDLES),
+            icon: Some(&embedded_icons::QUICK_SEARCH),
             label: symbol.to_owned(),
             name: "Symbol search".to_owned(),
             min_width: 128.0,
@@ -866,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn export_menus_require_a_choice() {
+    fn toolbar_menus_require_a_choice() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
@@ -877,7 +880,11 @@ mod tests {
                         "Download image",
                         TopToolbarAction::TakeScreenshot,
                     ),
-                    (S::Save, "Export chart…", TopToolbarAction::Save),
+                    (
+                        S::Save,
+                        "Save layout",
+                        TopToolbarAction::Layout(LayoutAction::Save),
+                    ),
                     (
                         S::Layouts,
                         "2x2 Grid",
@@ -1044,20 +1051,12 @@ mod tests {
     #[test]
     fn controls_that_are_off_emit_nothing() {
         type Off = fn(&mut TopToolbar);
-        let rows: [(Off, &[TopToolbarAction]); 6] = [
+        let rows: [(Off, &[TopToolbarAction]); 4] = [
             (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
             (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
             (
                 |t| t.set_control_visible(Control::Compare, false),
                 &[TopToolbarAction::OpenCompare],
-            ),
-            (
-                |t| t.set_control_visible(Control::Alerts, false),
-                &[TopToolbarAction::CreateAlert],
-            ),
-            (
-                |t| t.set_control_visible(Control::Replay, false),
-                &[TopToolbarAction::ToggleReplay],
             ),
             (
                 |t| t.set_control_visible(Control::Layouts, false),

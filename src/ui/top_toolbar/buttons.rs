@@ -13,6 +13,9 @@ use crate::ext::UiExt;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 
+/// Menu glyph with three 18 px bars spanning 14 px on the toolbar's 24 px icon grid.
+pub const MENU_ICON: Icon = Icon::new("top-toolbar-menu.svg", include_bytes!("menu.svg"));
+
 /// Small icon-only button (config-driven size)
 ///
 /// Used for: undo, redo, settings, theme, fullscreen, screenshot, save, etc.
@@ -355,7 +358,7 @@ pub(crate) struct Trigger<'a> {
     pub name: String,
     /// The trigger is at least this wide.
     pub min_width: f32,
-    /// Filled symbol pill with a semibold label and a trailing icon.
+    /// Filled symbol pill with a semibold label and a leading icon.
     pub filled: bool,
 }
 
@@ -453,19 +456,15 @@ impl Trigger<'_> {
                     0.0
                 };
             let x = if self.filled {
-                rect.min.x + theme.spacing.lg + theme.spacing.sm
+                rect.min.x + theme.spacing.lg
             } else {
                 rect.center().x - content_width / 2.0
             };
-            let label_pos = Pos2::new(x, rect.center().y - galley.size().y / 2.0);
+            let label_x = x + self.icon.map_or(0.0, |_| icon_sizes::LG + theme.spacing.sm);
+            let label_pos = Pos2::new(label_x, rect.center().y - galley.size().y / 2.0);
             ui.painter().galley(label_pos, galley, theme.ui.text);
             if let Some(icon) = self.icon {
-                let icon_x = if self.filled {
-                    rect.max.x - theme.spacing.sm - icon_sizes::LG
-                } else {
-                    x
-                };
-                paint_icon(icon, icon_x, icon_sizes::LG);
+                paint_icon(icon, x, icon_sizes::LG);
             }
         }
 

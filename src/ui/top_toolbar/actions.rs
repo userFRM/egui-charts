@@ -9,6 +9,8 @@ pub enum TopToolbarAction {
     None,
     /// Open symbol search dialog
     OpenSymbolSearch,
+    /// Open the host command palette.
+    OpenQuickSearch,
     /// Open compare/add symbol dialog
     OpenCompare,
     /// Chart interval chosen in the interval menu, a preset or a custom interval

@@ -356,9 +356,7 @@ impl DemoApp {
                     tab.name = new;
                 }
             }
-            LayoutAction::Save => {
-                self.notify("Layout kept for this session; persistent storage is host-owned")
-            }
+            LayoutAction::Save => self.new_layout(Some("Saved layout".into())),
             LayoutAction::DownloadImage => self.export_dialog.open(),
             LayoutAction::None => {}
         }
