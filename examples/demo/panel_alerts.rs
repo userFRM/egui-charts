@@ -240,8 +240,7 @@ fn source_value(
             .indicators()
             .find(|(key, _)| key.0.to_string() == *id)?
             .1
-            .values()
-            .value(*output, index)?,
+            .plot_value(*output, index)?,
         AlertSource::Drawing(id) => {
             use egui_charts::drawings::DrawingToolType;
             let drawing = chart

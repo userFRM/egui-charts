@@ -96,6 +96,10 @@ impl Indicator for VolProfileFixed {
         row_count: length("Row count", 1, usize::MAX)
     ; {});
 
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Volume
+    }
+
     fn name(&self) -> &str {
         "Vol Profile FR"
     }

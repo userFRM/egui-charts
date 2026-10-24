@@ -104,6 +104,10 @@ impl Indicator for VolumeOscillator {
         long_period: length("Long period", 1, usize::MAX)
     ; {});
 
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Percent
+    }
+
     fn name(&self) -> &str {
         "Volume Osc"
     }

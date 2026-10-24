@@ -92,6 +92,7 @@ pub fn render_crosshair_with_options(
         &options,
         axis_right,
         last_price_tag,
+        None,
     );
     let time_tag = bar
         .filter(|_| options.label_visible && options.vert_line_visible)
@@ -167,6 +168,7 @@ pub(crate) fn render_crosshair_price_tag(
     options: &CrosshairOptions,
     axis_right: f32,
     last_price_tag: Option<Rect>,
+    label: Option<String>,
 ) -> Option<Rect> {
     if !options.label_visible
         || !options.horz_line_visible
@@ -176,7 +178,9 @@ pub(crate) fn render_crosshair_price_tag(
     }
     let price = price_scale.y_to_price(pos.y);
     let transform = price_scale.transform();
-    let label = if matches!(
+    let label = if let Some(label) = label {
+        label
+    } else if matches!(
         transform.mode,
         PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
     ) {

@@ -385,18 +385,18 @@ impl<'a> Legend<'a> {
                         );
                     }
                     let study_colors = study.colors();
-                    let precision = study.precision().unwrap_or(precision);
+                    let precision = study.precision().or_else(|| {
+                        (study.value_format() == crate::studies::StudyFormat::Price)
+                            .then_some(precision)
+                    });
                     for index in (0..study.line_cnt()).filter(|index| {
                         self.show_indicator_values
                             && study.is_visible()
                             && study.plot_style(*index).visible
                     }) {
-                        let value = study
-                            .values()
-                            .value(index, self.bar_index)
-                            .unwrap_or(f64::NAN);
+                        let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
                         let text = if value.is_finite() {
-                            format!("{value:.precision$}")
+                            study.value_format().format(value, precision)
                         } else {
                             "∅".to_owned()
                         };

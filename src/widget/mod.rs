@@ -576,6 +576,26 @@ impl Chart {
             .padding
             .max(0.0)
             .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
+        let study_axes = if !self.chart_type.is_time_independent()
+            && (self.config.show_left_axis || self.config.show_right_axis)
+        {
+            self.studies
+                .indicators()
+                .iter()
+                .filter(|study| {
+                    study.is_visible()
+                        && study.is_overlay()
+                        && !study.is_volume()
+                        && study.scale() == crate::studies::StudyScale::Independent
+                })
+                .count() as f32
+                * self
+                    .measured_axis_width
+                    .max(self.config.right_axis_width)
+                    .max(self.config.left_axis_width)
+        } else {
+            0.0
+        };
         let left_axis = if self.config.show_left_axis {
             self.config.left_axis_width.max(self.measured_axis_width)
         } else {
@@ -586,6 +606,9 @@ impl Chart {
         } else {
             0.0
         };
+        let study_axes = study_axes
+            .min((widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0) * 0.5);
+        let left_axis = left_axis + study_axes;
         let bottom_padding = if show_time_labels {
             sizing::BOTTOM_PADDING_WITH_TIME
         } else {

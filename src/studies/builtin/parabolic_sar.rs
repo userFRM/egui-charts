@@ -200,6 +200,16 @@ impl Indicator for ParabolicSAR {
         max_af: number("Max af", 0.001, 1.0)
     ; { self.max_af = self.max_af.max(self.initial_af); });
 
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors()[line],
+            width: 1.0,
+            pattern: crate::studies::PlotPattern::Solid,
+            plot_type: crate::studies::PlotType::Circles,
+            visible: true,
+        }
+    }
+
     fn name(&self) -> &str {
         "PSAR"
     }

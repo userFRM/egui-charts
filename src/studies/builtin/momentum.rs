@@ -48,6 +48,10 @@ impl Indicator for Momentum {
         period: length("Period", 1, usize::MAX)
     ; {});
 
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "Momentum"
     }

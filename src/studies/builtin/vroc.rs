@@ -43,6 +43,10 @@ impl Indicator for VolumeRateOfChange {
         period: length("Period", 1, usize::MAX)
     ; {});
 
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Percent
+    }
+
     fn name(&self) -> &str {
         "VROC"
     }

@@ -32,11 +32,20 @@ impl Chart {
                     && study.is_visible()
                     && study.is_overlay()
                     && !study.is_volume()
+                    && study.scale() == crate::studies::StudyScale::Main
             })
             .flat_map(|study| {
                 (0..study.line_cnt())
-                    .filter(|line| study.plot_style(*line).visible)
-                    .filter_map(move |line| study.values().value(line, index))
+                    .filter(|line| {
+                        let plot = study.plot_style(*line);
+                        plot.visible
+                            && !matches!(
+                                plot.plot_type,
+                                crate::studies::PlotType::BarColor
+                                    | crate::studies::PlotType::BackgroundColor
+                            )
+                    })
+                    .filter_map(move |line| study.plot_value(line, index))
             });
         if let Some(value) = snap_to_values(pos.y, map, ohlc.chain(studies)) {
             pos.y = map.price_to_y(value);

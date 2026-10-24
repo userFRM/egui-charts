@@ -60,6 +60,10 @@ impl Default for VolumePriceTrend {
 }
 
 impl Indicator for VolumePriceTrend {
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Volume
+    }
+
     fn name(&self) -> &str {
         "VPT"
     }

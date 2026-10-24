@@ -23,24 +23,26 @@ impl Chart {
             for line in (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible) {
                 rows.push(StudyValue {
                     study: study.name().to_owned(),
+                    format: study.value_format(),
                     plot: names.get(line).cloned().unwrap_or_default(),
-                    value: study.values().value(line, index),
-                    precision: study.precision().unwrap_or_else(|| {
-                        if study.is_overlay() {
-                            self.instrument()
+                    value: study.plot_value(line, index),
+                    precision: study
+                        .precision()
+                        .unwrap_or_else(|| match study.value_format() {
+                            crate::studies::StudyFormat::Price => self
+                                .instrument()
                                 .and_then(crate::scales::instrument_price_precision)
-                                .map_or_else(
-                                    || {
-                                        crate::chart::renderers::price_decimals(
-                                            self.state.shown()[index].close,
-                                        )
-                                    },
-                                    usize::from,
-                                )
-                        } else {
-                            2
-                        }
-                    }),
+                                .map_or(2, usize::from),
+                            crate::studies::StudyFormat::Fixed(decimals) => decimals.min(12),
+                            crate::studies::StudyFormat::Volume
+                                if study
+                                    .plot_value(line, index)
+                                    .is_some_and(|value| value.abs() < 1_000.0) =>
+                            {
+                                0
+                            }
+                            _ => 2,
+                        }),
                     color: colors.get(line).copied().unwrap_or(self.config.text_color),
                 });
             }

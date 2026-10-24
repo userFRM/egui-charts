@@ -53,6 +53,10 @@ impl Week52HighLow {
 }
 
 impl Indicator for Week52HighLow {
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Percent
+    }
+
     fn name(&self) -> &str {
         "52W HL%"
     }

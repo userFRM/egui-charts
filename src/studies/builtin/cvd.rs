@@ -123,6 +123,10 @@ impl Indicator for CVD {
         mode: choice("Mode", [CVDMode::ClosePosition, CVDMode::BodyRatio, CVDMode::Simple])
     ; {});
 
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Volume
+    }
+
     fn name(&self) -> &str {
         "CVD"
     }

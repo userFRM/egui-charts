@@ -394,8 +394,8 @@ impl IndicatorPane {
         &mut self,
         ui: &mut Ui,
         indicator: &dyn Indicator,
-        _bars: &[Bar],
-        visible_range: Range<usize>,
+        bars: &[Bar],
+        _visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) {
         if !indicator.is_visible() {
@@ -435,7 +435,10 @@ impl IndicatorPane {
         );
 
         // Determine y-axis range
-        let (y_min, y_max) = self.calculate_y_range(indicator, &visible_range);
+        let horizontal = coords.to_mapping(chart_rect, 0.0, 1.0);
+        let displayed_range = horizontal.x_to_idx(chart_rect.left())
+            ..horizontal.x_to_idx(chart_rect.right()).saturating_add(1);
+        let (y_min, y_max) = self.calculate_y_range(indicator, &displayed_range);
 
         // Draw zone fills (colored bands)
         if self.config.show_zones && self.config.zones.len() >= 2 {
@@ -454,13 +457,7 @@ impl IndicatorPane {
 
         // Draw indicator lines with aligned coordinates
         self.draw_indicator_lines_aligned(
-            painter,
-            chart_rect,
-            indicator,
-            &visible_range,
-            y_min,
-            y_max,
-            &coords,
+            painter, chart_rect, indicator, bars, y_min, y_max, &coords,
         );
 
         // Draw y-axis labels
@@ -496,14 +493,14 @@ impl IndicatorPane {
         &mut self,
         ui: &mut Ui,
         indicator: &dyn Indicator,
-        _bars: &[Bar],
-        visible_range: Range<usize>,
+        bars: &[Bar],
+        _visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) -> Option<PaneInteraction> {
         self.show_aligned_interactive_in(
             ui,
             indicator,
-            visible_range,
+            bars,
             coords,
             None,
             false,
@@ -516,7 +513,7 @@ impl IndicatorPane {
         &mut self,
         ui: &mut Ui,
         indicator: &dyn Indicator,
-        visible_range: Range<usize>,
+        bars: &[Bar],
         coords: IndicatorCoordParams,
         plot_x: Option<egui::emath::Rangef>,
         collapsed: bool,
@@ -569,8 +566,11 @@ impl IndicatorPane {
         );
 
         // Determine y-axis range
+        let horizontal = coords.to_mapping(chart_rect, 0.0, 1.0);
+        let displayed_range = horizontal.x_to_idx(chart_rect.left())
+            ..horizontal.x_to_idx(chart_rect.right()).saturating_add(1);
         let (y_min, y_max) = self.price_map.map_or_else(
-            || self.calculate_y_range(indicator, &visible_range),
+            || self.calculate_y_range(indicator, &displayed_range),
             |map| {
                 (
                     map.transform().to_price(map.range().min),
@@ -592,8 +592,16 @@ impl IndicatorPane {
                         pos.y,
                         &mapping.price,
                         (0..indicator.line_cnt())
-                            .filter(|line| indicator.plot_style(*line).visible)
-                            .filter_map(|line| indicator.values().value(line, index)),
+                            .filter(|line| {
+                                let plot = indicator.plot_style(*line);
+                                plot.visible
+                                    && !matches!(
+                                        plot.plot_type,
+                                        crate::studies::PlotType::BarColor
+                                            | crate::studies::PlotType::BackgroundColor
+                                    )
+                            })
+                            .filter_map(|line| indicator.plot_value(line, index)),
                     )
                 {
                     pos.y = mapping.price_to_y(value);
@@ -629,7 +637,7 @@ impl IndicatorPane {
                 plot_painter,
                 chart_rect,
                 indicator,
-                &visible_range,
+                bars,
                 y_min,
                 y_max,
                 &coords,
@@ -644,6 +652,9 @@ impl IndicatorPane {
                     chart_rect.bottom(),
                 );
                 axis?;
+                if indicator.scale() == crate::studies::StudyScale::None {
+                    return None;
+                }
                 crate::chart::renderers::render_crosshair_price_tag(
                     &context,
                     pos,
@@ -657,6 +668,7 @@ impl IndicatorPane {
                         rect.right()
                     },
                     None,
+                    Some(indicator.format_value(mapping.price.y_to_price(pos.y))),
                 )
             });
             // Draw y-axis labels
@@ -732,21 +744,19 @@ impl IndicatorPane {
         }
 
         // Auto-scale based on visible indicator values
-        let values = indicator.values();
         let mut min_val = f64::MAX;
         let mut max_val = f64::MIN;
 
-        for (_, line) in values
-            .columns()
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| indicator.plot_style(*index).visible)
-        {
-            for &value in line
-                .get(visible_range.start..visible_range.end.min(line.len()))
-                .unwrap_or_default()
-            {
-                if value.is_finite() {
+        for line in (0..indicator.line_cnt()).filter(|line| {
+            let plot = indicator.plot_style(*line);
+            plot.visible
+                && !matches!(
+                    plot.plot_type,
+                    crate::studies::PlotType::BarColor | crate::studies::PlotType::BackgroundColor
+                )
+        }) {
+            for bar in visible_range.clone() {
+                if let Some(value) = indicator.plot_value(line, bar) {
                     min_val = min_val.min(value);
                     max_val = max_val.max(value);
                 }
@@ -756,7 +766,13 @@ impl IndicatorPane {
         if min_val != f64::MAX
             && (0..indicator.line_cnt()).any(|line| {
                 let plot = indicator.plot_style(line);
-                plot.visible && plot.plot_type == crate::studies::PlotType::Histogram
+                plot.visible
+                    && matches!(
+                        plot.plot_type,
+                        crate::studies::PlotType::Histogram
+                            | crate::studies::PlotType::Columns
+                            | crate::studies::PlotType::Area
+                    )
             })
         {
             min_val = min_val.min(0.0);
@@ -1041,63 +1057,26 @@ impl IndicatorPane {
             );
             return;
         }
-        let values = indicator.values();
-        let colors = indicator.colors();
-        let line_cnt = indicator.line_cnt();
-
-        // Calculate bar spacing from rect and visible range
-        let visible_bars = visible_range.end.saturating_sub(visible_range.start);
-        if visible_bars == 0 {
+        let count = visible_range.end.saturating_sub(visible_range.start);
+        if count == 0 {
             return;
         }
-        let bar_spacing = rect.width() / visible_bars as f32;
-
-        for line_idx in 0..line_cnt {
-            let plot = indicator.plot_style(line_idx);
-            if !plot.visible {
-                continue;
-            }
-            let mut plot = plot;
-            plot.color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
-            let mut points = Vec::new();
-
-            for i in visible_range.clone() {
-                if i >= bars.len() || i >= values.len() {
-                    break;
-                }
-
-                let val = values.value(line_idx, i);
-
-                if val.is_none() && !points.is_empty() {
-                    crate::chart::renderers::paint_study_plot(
-                        &painter.with_clip_rect(rect),
-                        &points,
-                        plot,
-                        self.value_to_y(0.0, rect, y_min, y_max),
-                    );
-                    points.clear();
-                }
-                if let Some(v) = val {
-                    // X position based on position in visible range
-                    let local_idx = i - visible_range.start;
-                    let x = rect.min.x + (local_idx as f32 + 0.5) * bar_spacing;
-                    let y = self.value_to_y(v, rect, y_min, y_max);
-
-                    if x >= rect.min.x && x <= rect.max.x {
-                        points.push(Pos2::new(x, y));
-                    }
-                }
-            }
-
-            if !points.is_empty() {
-                crate::chart::renderers::paint_study_plot(
-                    &painter.with_clip_rect(rect),
-                    &points,
-                    plot,
-                    self.value_to_y(0.0, rect, y_min, y_max),
-                );
-            }
-        }
+        let spacing = rect.width() / count as f32;
+        let coords = IndicatorCoordParams::new(
+            spacing,
+            0.0,
+            visible_range.end.saturating_sub(1),
+            visible_range.start,
+        );
+        let mapping = coords.to_mapping(rect, y_min, y_max);
+        crate::chart::renderers::IndicatorRenderer::render_study(
+            &crate::chart::renderers::RenderContext::new(painter, rect),
+            indicator,
+            bars,
+            0,
+            &mapping.price,
+            &mapping,
+        );
     }
 
     fn draw_indicator_lines_aligned(
@@ -1105,66 +1084,23 @@ impl IndicatorPane {
         painter: &egui::Painter,
         rect: Rect,
         indicator: &dyn Indicator,
-        visible_range: &Range<usize>,
+        bars: &[Bar],
         y_min: f64,
         y_max: f64,
         coords: &IndicatorCoordParams,
     ) {
-        let values = indicator.values();
-        let colors = indicator.colors();
-        let line_cnt = indicator.line_cnt();
-
-        // Create mapping for coordinate conversion
-        let mapping = coords.to_mapping(rect, y_min, y_max);
-
-        for line_idx in 0..line_cnt {
-            let plot = indicator.plot_style(line_idx);
-            if !plot.visible {
-                continue;
-            }
-            let mut plot = plot;
-            if indicator.is_volume() && plot.plot_type == crate::studies::PlotType::Histogram {
-                plot.width = coords.bar_spacing * 0.8;
-            }
-            plot.color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
-            let mut points = Vec::new();
-
-            for i in visible_range.clone() {
-                if i >= values.len() {
-                    break;
-                }
-
-                let val = values.value(line_idx, i);
-
-                if val.is_none() && !points.is_empty() {
-                    crate::chart::renderers::paint_study_plot(
-                        &painter.with_clip_rect(rect),
-                        &points,
-                        plot,
-                        self.value_to_y(0.0, rect, y_min, y_max),
-                    );
-                    points.clear();
-                }
-                if let Some(v) = val {
-                    // Use the same coordinate formula as main chart
-                    let x = mapping.idx_to_x(i);
-                    let y = self.value_to_y(v, rect, y_min, y_max);
-
-                    if x >= rect.min.x && x <= rect.max.x {
-                        points.push(Pos2::new(x, y));
-                    }
-                }
-            }
-
-            if !points.is_empty() {
-                crate::chart::renderers::paint_study_plot(
-                    &painter.with_clip_rect(rect),
-                    &points,
-                    plot,
-                    self.value_to_y(0.0, rect, y_min, y_max),
-                );
-            }
+        let mut mapping = coords.to_mapping(rect, y_min, y_max);
+        if let Some(map) = self.price_map {
+            mapping.price = map;
         }
+        crate::chart::renderers::IndicatorRenderer::render_study(
+            &crate::chart::renderers::RenderContext::new(painter, rect),
+            indicator,
+            bars,
+            0,
+            &mapping.price,
+            &mapping,
+        );
     }
 
     fn draw_y_axis_labels(
@@ -1178,6 +1114,9 @@ impl IndicatorPane {
         axis: Option<crate::scales::PriceScaleId>,
         crosshair_tag: Option<Rect>,
     ) -> f32 {
+        if indicator.scale() == crate::studies::StudyScale::None {
+            return 0.0;
+        }
         let Some(axis) = axis else {
             return 0.0;
         };
@@ -1237,24 +1176,13 @@ impl IndicatorPane {
         for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
             let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = if indicator.is_volume() {
-                    crate::scales::PriceFormatter::format(
-                        &crate::scales::VolumeFormatter {
-                            precision: indicator.precision().unwrap_or(3),
-                        },
-                        mark.price,
-                    )
-                } else {
-                    mark.label
-                };
+                let label = indicator.format_value(mark.price);
                 let galley = painter.layout_no_wrap(
                     label,
                     crate::chart::rendering::axes::axis_font(painter.ctx()),
                     text_color,
                 );
-                if indicator.is_volume() {
-                    width = width.max(galley.size().x + 5.0 + 8.0);
-                }
+                width = width.max(galley.size().x + 5.0 + 8.0);
                 let bounds = align.anchor_size(Pos2::new(label_x, y), galley.size());
                 if tags.iter().flatten().any(|tag| tag.intersects(bounds)) {
                     continue;
@@ -1297,7 +1225,7 @@ impl IndicatorPane {
         {
             for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
             {
-                if let Some(value) = indicator.values().value(line, bar) {
+                if let Some(value) = indicator.plot_value(line, bar) {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));
                     }
@@ -1311,15 +1239,7 @@ impl IndicatorPane {
                         job.append("  ", 0.0, swatch);
                         job.append(" ", 0.0, format(text_color));
                     }
-                    let precision = indicator.precision().unwrap_or(2);
-                    let label = if indicator.is_volume() {
-                        crate::scales::PriceFormatter::format(
-                            &crate::scales::VolumeFormatter { precision },
-                            value,
-                        )
-                    } else {
-                        format!("{value:.precision$}")
-                    };
+                    let label = indicator.format_value(value);
                     job.append(
                         &label,
                         0.0,
@@ -1480,6 +1400,77 @@ mod tests {
                 assert!((guide[0].y - 30.0).abs() < 0.001 || (guide[0].y - 70.0).abs() < 0.001);
                 assert!((guide[1].x - guide[0].x - 4.0).abs() < 0.001);
             }
+        }
+    }
+
+    #[test]
+    fn volume_units_reach_pane_axes_and_legends() {
+        use crate::studies::{OnBalanceVolume, StudyFormat};
+        let bars: Vec<_> = [10.0, 11.0, 12.0]
+            .into_iter()
+            .map(|price| Bar::new(chrono::Utc::now(), price, price, price, price, 1_000_000.0))
+            .collect();
+        let shifted = CustomIndicator::new("Shifted", |_| {
+            vec![
+                IndicatorValue::Single(0.0),
+                IndicatorValue::Single(1_000_000.0),
+                IndicatorValue::Single(2_000_000.0),
+            ]
+        })
+        .with_value_format(StudyFormat::Volume)
+        .with_offsets(vec![1]);
+        for (mut study, expected) in [
+            (
+                Box::new(OnBalanceVolume::new()) as Box<dyn Indicator>,
+                "2.00M",
+            ),
+            (Box::new(shifted), "1.00M"),
+        ] {
+            study.calculate(&bars);
+            let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+            let job = pane.legend_job(study.as_ref(), Color32::WHITE, Color32::BLACK);
+            assert!(job.text.contains(expected), "{}", job.text);
+            let ctx = egui::Context::default();
+            let mut study = crate::studies::ConfiguredStudy::new(study);
+            study.set_overlay(true);
+            let studies: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+            let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(0);
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
+                pane.draw_y_axis_labels(
+                    ui.painter(),
+                    rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(300.0, 300.0)),
+                    0.0,
+                    3_000_000.0,
+                    studies[0].as_ref(),
+                    Some(crate::scales::PriceScaleId::Right),
+                    None,
+                );
+                let mut legend = crate::chart::renderers::Legend::new("SAMPLE", "1h", &bars[2]);
+                legend.studies = &studies;
+                legend.bar_index = 2;
+                legend.instrument = Some(&instrument);
+                legend.show(ui, rect);
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            // Both the last-value tag and overlay legend use displayed values and study units.
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| label.as_str() == expected)
+                    .count(),
+                2,
+                "{labels:?}"
+            );
         }
     }
 

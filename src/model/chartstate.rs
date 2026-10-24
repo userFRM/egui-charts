@@ -347,25 +347,40 @@ impl ChartState {
         } else {
             PriceTransform::default()
         };
+        let (study_start, study_end) = self.time_scale.visible_logical_range().to_strict_range();
         let study_values = indicators
             .into_iter()
-            .filter(|study| study.is_visible() && study.is_overlay())
+            .filter(|study| {
+                study.is_visible()
+                    && study.is_overlay()
+                    && study.scale() == crate::studies::StudyScale::Main
+            })
             .flat_map(|study| {
-                let (values, lines) = (study.values(), study.line_cnt());
-                values
-                    .columns()
-                    .iter()
-                    .enumerate()
-                    .take(lines)
-                    .filter(|(index, _)| study.plot_style(*index).visible)
-                    .flat_map(move |(index, line)| {
-                        line.get(start..end.min(line.len()))
-                            .unwrap_or_default()
-                            .iter()
-                            .copied()
+                (0..study.line_cnt())
+                    .filter(|&index| {
+                        let plot = study.plot_style(index);
+                        plot.visible
+                            && !matches!(
+                                plot.plot_type,
+                                crate::studies::PlotType::BarColor
+                                    | crate::studies::PlotType::BackgroundColor
+                            )
+                    })
+                    .flat_map(move |index| {
+                        let available_end = study
+                            .values()
+                            .len()
+                            .checked_add_signed(study.plot_offset(index))
+                            .unwrap_or(0);
+                        (study_start.max(start)..study_end.max(end).min(available_end))
+                            .filter_map(move |bar| study.plot_value(index, bar))
                             .chain(std::iter::once(0.0).filter(move |_| {
-                                study.plot_style(index).plot_type
-                                    == crate::studies::PlotType::Histogram
+                                matches!(
+                                    study.plot_style(index).plot_type,
+                                    crate::studies::PlotType::Histogram
+                                        | crate::studies::PlotType::Columns
+                                        | crate::studies::PlotType::Area
+                                )
                             }))
                     })
             });

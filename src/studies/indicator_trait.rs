@@ -156,6 +156,30 @@ pub trait Indicator: Send {
         }
     }
 
+    /// Horizontal displacement in bars. Positive values draw into future whitespace.
+    /// Values remain indexed by their source bar; missing bars still occupy a position.
+    fn plot_offset(&self, line: usize) -> isize {
+        let _ = line;
+        0
+    }
+
+    /// Optional per-bar colour, overriding the plot colour at a source bar.
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        let _ = (line, bar);
+        None
+    }
+
+    /// Filled bands, painted beneath this study's plots. Missing endpoints break a band.
+    fn fills(&self) -> Vec<super::StudyFill> {
+        Vec::new()
+    }
+
+    /// Value at a displayed bar, accounting for the plot's displacement.
+    fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
+        let source = bar.checked_add_signed(self.plot_offset(line).checked_neg()?)?;
+        self.values().value(line, source)
+    }
+
     /// Current applied presentation, initialized from the study's own defaults.
     fn settings(&self) -> super::StudySettings {
         super::StudySettings {
@@ -183,9 +207,37 @@ pub trait Indicator: Send {
         let _ = timeframe;
     }
 
-    /// Decimal places for study readouts, or the chart's default precision.
+    /// Units of this study's values. Placement defaults preserve price overlays and numeric panes.
+    fn value_format(&self) -> super::StudyFormat {
+        if self.is_volume() {
+            super::StudyFormat::Volume
+        } else if self.is_overlay() {
+            super::StudyFormat::Price
+        } else {
+            super::StudyFormat::Fixed(2)
+        }
+    }
+
+    /// Scale used in the pane selected by `is_overlay`.
+    fn scale(&self) -> super::StudyScale {
+        if self.is_overlay() && !self.is_volume() {
+            super::StudyScale::Main
+        } else {
+            super::StudyScale::Independent
+        }
+    }
+
+    /// Format a value using the declared units and current precision override.
+    fn format_value(&self, value: f64) -> String {
+        self.value_format().format(value, self.precision())
+    }
+
+    /// Decimal places for study readouts, or the format's default precision.
     fn precision(&self) -> Option<usize> {
-        None
+        match self.value_format() {
+            super::StudyFormat::Fixed(decimals) => Some(decimals.min(12)),
+            _ => None,
+        }
     }
 
     /// Current editable inputs. A host study can supply the same schema as built-ins.

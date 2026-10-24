@@ -26,6 +26,22 @@ pub enum PlotType {
     Histogram,
     /// A circle at each defined value.
     Circles,
+    /// Horizontal segments followed by a vertical change at the next bar.
+    StepLine,
+    /// Columns from zero, at 80% of the bar pitch.
+    Columns,
+    /// A plus at each defined value.
+    Crosses,
+    /// Filled area between the output and zero.
+    Area,
+    /// An upward triangle centred on each defined value.
+    TriangleUp,
+    /// A downward triangle centred on each defined value.
+    TriangleDown,
+    /// Repaint the source price bars using this plot's per-bar colour.
+    BarColor,
+    /// Colour the full pane height at each defined bar.
+    BackgroundColor,
 }
 
 /// Editable presentation of one output line.
@@ -150,6 +166,15 @@ impl Indicator for ConfiguredStudy {
         }
         plot
     }
+    fn plot_offset(&self, line: usize) -> isize {
+        self.study.plot_offset(line)
+    }
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        self.study.plot_color(line, bar)
+    }
+    fn fills(&self) -> Vec<super::StudyFill> {
+        self.study.fills()
+    }
     fn settings(&self) -> StudySettings {
         self.settings.clone()
     }
@@ -178,11 +203,21 @@ impl Indicator for ConfiguredStudy {
         self.settings = settings;
         Ok(())
     }
+    fn value_format(&self) -> super::StudyFormat {
+        self.study.value_format()
+    }
+    fn scale(&self) -> super::StudyScale {
+        self.study.scale()
+    }
     fn precision(&self) -> Option<usize> {
         self.settings
             .precision
             .or_else(|| self.study.precision())
-            .or(self.instrument_precision.map(usize::from))
+            .or_else(|| {
+                (self.value_format() == super::StudyFormat::Price)
+                    .then_some(self.instrument_precision.map(usize::from))
+                    .flatten()
+            })
     }
     fn line_cnt(&self) -> usize {
         self.study.line_cnt()
@@ -249,16 +284,27 @@ mod tests {
         assert_eq!(study.precision(), Some(0));
         study.set_instrument(None);
         assert_eq!(study.precision(), None);
-        for bounded in [
-            Box::new(super::super::RSI::default()) as Box<dyn Indicator>,
-            Box::new(super::super::Stochastic::default()),
+        for (bounded, precision) in [
+            (
+                Box::new(super::super::RSI::default()) as Box<dyn Indicator>,
+                Some(2),
+            ),
+            (Box::new(super::super::Stochastic::default()), Some(2)),
+            (Box::new(super::super::OnBalanceVolume::default()), None),
+            (
+                Box::new(
+                    super::super::CustomIndicator::new("Small", |_| Vec::new())
+                        .with_value_format(super::super::StudyFormat::Fixed(4)),
+                ),
+                Some(4),
+            ),
         ] {
             let mut bounded = ConfiguredStudy::new(bounded);
             bounded.set_instrument(Some(&instrument));
             let mut settings = bounded.settings();
             settings.precision = None;
             bounded.apply_settings(&[], settings).unwrap();
-            assert_eq!(bounded.precision(), Some(2));
+            assert_eq!(bounded.precision(), precision);
         }
     }
 

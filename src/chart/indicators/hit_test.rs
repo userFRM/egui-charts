@@ -80,14 +80,17 @@ fn hit_test_indicator_line<F>(
 where
     F: Fn(f64) -> f32,
 {
-    let values = indicator.values();
     let mut plot = indicator.plot_style(line_idx);
-    if indicator.is_volume() && plot.plot_type == PlotType::Histogram {
+    if plot.plot_type == PlotType::Columns
+        || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
+    {
         plot.width = coords.bar_spacing * 0.8;
     }
-    let end = visible_range.end.min(values.len());
+    let end = visible_range
+        .end
+        .max(coords.x_to_idx(rect.right()).saturating_add(1));
     for bar in visible_range.start..end {
-        let Some(value) = values.value(line_idx, bar) else {
+        let Some(value) = indicator.plot_value(line_idx, bar) else {
             continue;
         };
         let point = Pos2::new(coords.idx_to_x(bar), value_to_y(value));
@@ -95,7 +98,9 @@ where
             continue;
         }
         let hit = match plot.plot_type {
-            PlotType::Histogram => {
+            PlotType::BackgroundColor => (click_pos.x - point.x).abs() <= coords.bar_spacing * 0.5,
+            PlotType::BarColor => false,
+            PlotType::Histogram | PlotType::Columns => {
                 let baseline = value_to_y(0.0);
                 let baseline = if baseline.is_finite() {
                     baseline.clamp(rect.top(), rect.bottom())
@@ -109,14 +114,42 @@ where
                 .expand(HIT_TOLERANCE)
                 .contains(click_pos)
             }
-            PlotType::Circles => click_pos.distance(point) <= plot.width + HIT_TOLERANCE,
-            PlotType::Line => {
+            PlotType::Area => {
+                let Some(next) = indicator.plot_value(line_idx, bar + 1) else {
+                    continue;
+                };
+                let next = Pos2::new(coords.idx_to_x(bar + 1), value_to_y(next));
+                if !next.is_finite() || click_pos.x < point.x || click_pos.x > next.x {
+                    continue;
+                }
+                let t = (click_pos.x - point.x) / (next.x - point.x);
+                let edge = point.y + t * (next.y - point.y);
+                let baseline = value_to_y(0.0);
+                let baseline = if baseline.is_finite() {
+                    baseline.clamp(rect.top(), rect.bottom())
+                } else {
+                    rect.bottom()
+                };
+                (edge.min(baseline)..=edge.max(baseline)).contains(&click_pos.y)
+            }
+            PlotType::Circles
+            | PlotType::Crosses
+            | PlotType::TriangleUp
+            | PlotType::TriangleDown => click_pos.distance(point) <= plot.width + HIT_TOLERANCE,
+            PlotType::Line | PlotType::StepLine => {
                 let next = (bar + 1 < end)
-                    .then(|| values.value(line_idx, bar + 1))
+                    .then(|| indicator.plot_value(line_idx, bar + 1))
                     .flatten();
                 let next = next.map(|v| Pos2::new(coords.idx_to_x(bar + 1), value_to_y(v)));
-                point_to_segment_distance(click_pos, point, next.unwrap_or(point))
-                    <= HIT_TOLERANCE + plot.width * 0.5
+                let next = next.unwrap_or(point);
+                let distance = if plot.plot_type == PlotType::StepLine {
+                    let corner = Pos2::new(next.x, point.y);
+                    point_to_segment_distance(click_pos, point, corner)
+                        .min(point_to_segment_distance(click_pos, corner, next))
+                } else {
+                    point_to_segment_distance(click_pos, point, next)
+                };
+                distance <= HIT_TOLERANCE + plot.width * 0.5
             }
         };
         if hit {
@@ -200,6 +233,11 @@ mod tests {
                 (PlotType::Circles, Pos2::new(99.0, 20.0), false),
                 (PlotType::Circles, Pos2::new(149.0, 20.0), true),
                 (PlotType::Line, Pos2::new(99.0, 20.0), true),
+                (PlotType::Columns, Pos2::new(79.0, 60.0), true),
+                (PlotType::StepLine, Pos2::new(99.0, 20.0), true),
+                (PlotType::Area, Pos2::new(99.0, 60.0), true),
+                (PlotType::Area, Pos2::new(99.0, 5.0), false),
+                (PlotType::Area, Pos2::new(160.0, 60.0), false),
             ] {
                 let mut study = ConfiguredStudy::new(Box::new(
                     CustomIndicator::new("Plot", |_| vec![IndicatorValue::Single(80.0); 2])

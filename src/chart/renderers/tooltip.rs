@@ -28,6 +28,8 @@ pub struct StudyValue {
     pub value: Option<f64>,
     /// Number of decimal places used by the study's legend.
     pub precision: usize,
+    /// Value units used by this study.
+    pub format: crate::studies::StudyFormat,
     /// Plot colour.
     pub color: egui::Color32,
 }
@@ -46,7 +48,7 @@ impl StudyValue {
     pub fn formatted_value(&self) -> String {
         self.value.filter(|value| value.is_finite()).map_or_else(
             || "∅".to_owned(),
-            |value| format!("{value:.precision$}", precision = self.precision),
+            |value| self.format.format(value, Some(self.precision)),
         )
     }
 }
@@ -610,6 +612,7 @@ mod tests {
                     let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
                     let studies = vec![
                         StudyValue {
+                            format: crate::studies::StudyFormat::Fixed(2),
                             study: "A very long study caption with several input parameters".into(),
                             plot: "Signal".into(),
                             value: Some(1234.567),

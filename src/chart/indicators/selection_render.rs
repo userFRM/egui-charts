@@ -46,19 +46,28 @@ pub fn render_indicator_selection_dots<F>(
 ) where
     F: Fn(f64) -> f32,
 {
-    if !indicator.plot_style(line_idx).visible {
+    let plot = indicator.plot_style(line_idx);
+    if !plot.visible
+        || matches!(
+            plot.plot_type,
+            crate::studies::PlotType::BarColor | crate::studies::PlotType::BackgroundColor
+        )
+    {
         return;
     }
-    let values = indicator.values();
 
     // Draw dots at regular intervals
-    for i in visible_range.clone() {
+    for i in visible_range.start
+        ..visible_range
+            .end
+            .max(coords.x_to_idx(coords.rect.right()).saturating_add(1))
+    {
         // Only draw at intervals
         if i % config.dot_interval != 0 {
             continue;
         }
 
-        let value = values.value(line_idx, i);
+        let value = indicator.plot_value(line_idx, i);
 
         let Some(value) = value else { continue };
 

@@ -145,6 +145,10 @@ impl Chart {
             start_idx,
         );
 
+        let horizontal = coords.to_mapping(plot, 0.0, 1.0);
+        let displayed_range =
+            horizontal.x_to_idx(plot.left())..horizontal.x_to_idx(plot.right()).saturating_add(1);
+
         // A pane click is resolved after the loop so the immutable study
         // borrow can be released before mutating selection state. `Some`
         // means a pane was clicked; the inner value is the element to
@@ -175,7 +179,7 @@ impl Chart {
                 let study = self.studies.indicators()[idx].as_ref();
                 if study.is_visible() {
                     let range = IndicatorPane::with_config(IndicatorPaneConfig::from_study(study))
-                        .calculate_y_range(study, &visible_range);
+                        .calculate_y_range(study, &displayed_range);
                     shared_range.0 = shared_range.0.min(range.0);
                     shared_range.1 = shared_range.1.max(range.1);
                 }
@@ -191,11 +195,19 @@ impl Chart {
                         return None;
                     }
                     (0..study.line_cnt())
-                        .filter(|line| study.plot_style(*line).visible)
+                        .filter(|line| {
+                            let plot = study.plot_style(*line);
+                            plot.visible
+                                && !matches!(
+                                    plot.plot_type,
+                                    crate::studies::PlotType::BarColor
+                                        | crate::studies::PlotType::BackgroundColor
+                                )
+                        })
                         .find_map(|line| {
-                            visible_range
+                            displayed_range
                                 .clone()
-                                .find_map(|bar| study.values().value(line, bar))
+                                .find_map(|bar| study.plot_value(line, bar))
                         })
                 })
                 .filter(|base| *base != 0.0)
@@ -209,12 +221,18 @@ impl Chart {
                     let idx = self.study_ids.iter().position(|study| study == id).unwrap();
                     let study = self.studies.indicators()[idx].as_ref();
                     if study.is_visible() {
-                        for line in
-                            (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible)
-                        {
-                            for value in visible_range
+                        for line in (0..study.line_cnt()).filter(|line| {
+                            let plot = study.plot_style(*line);
+                            plot.visible
+                                && !matches!(
+                                    plot.plot_type,
+                                    crate::studies::PlotType::BarColor
+                                        | crate::studies::PlotType::BackgroundColor
+                                )
+                        }) {
+                            for value in displayed_range
                                 .clone()
-                                .filter_map(|bar| study.values().value(line, bar))
+                                .filter_map(|bar| study.plot_value(line, bar))
                                 .filter(|value| *value > 0.0)
                             {
                                 shared_range.0 = shared_range.0.min(value);
@@ -318,8 +336,16 @@ impl Chart {
                                 .filter(|study| study.is_visible())
                                 .flat_map(|study| {
                                     (0..study.line_cnt())
-                                        .filter(|line| study.plot_style(*line).visible)
-                                        .filter_map(move |line| study.values().value(line, bar))
+                                        .filter(|line| {
+                                            let plot = study.plot_style(*line);
+                                            plot.visible
+                                                && !matches!(
+                                                    plot.plot_type,
+                                                    crate::studies::PlotType::BarColor
+                                                        | crate::studies::PlotType::BackgroundColor
+                                                )
+                                        })
+                                        .filter_map(move |line| study.plot_value(line, bar))
                                 }),
                         )
                     {
@@ -334,7 +360,7 @@ impl Chart {
                 if let Some(interaction) = panel.show_aligned_interactive_in(
                     &mut child,
                     indicator.as_ref(),
-                    visible_range.clone(),
+                    self.state.shown(),
                     coords,
                     Some(plot.x_range()),
                     collapsed,
