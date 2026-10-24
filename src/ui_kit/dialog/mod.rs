@@ -128,7 +128,7 @@ impl DialogFrame {
 
 /// Standard dialog title row: left-aligned title and a close button centred on it.
 ///
-/// Returns `true` if the close button was clicked.
+/// Returns `true` on a close click or an unhandled Escape key.
 pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
     let close = title_row(ui, title, true);
     let had_focus = ui

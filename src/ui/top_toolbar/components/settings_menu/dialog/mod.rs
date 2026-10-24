@@ -31,8 +31,7 @@ use std::collections::HashSet;
 
 /// Modal settings dialog with tabbed interface.
 ///
-/// Provides full chart settings configuration organized into tabs:
-/// Symbol, Status Line, Scales and Lines, Canvas, Trading, Alerts, Events.
+/// Edits chart display settings. Host-managed trading, alerts and events have no editable controls.
 pub struct SettingsDialog {
     /// Whether the dialog is currently open
     pub is_open: bool,

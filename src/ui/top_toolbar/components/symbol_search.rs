@@ -1251,7 +1251,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compare_dialog_open_close() {
+    fn comparison_actions_wait_for_host_acceptance() {
         let mut dialog = CompareSymbolsDialog::new();
         assert!(!dialog.is_open);
 
