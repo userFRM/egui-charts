@@ -9,7 +9,7 @@
 //! use egui_charts::tokens::DESIGN_TOKENS;
 //!
 //! let btn_h = DESIGN_TOKENS.sizing.button_md;
-//! let toolbar_h = DESIGN_TOKENS.sizing.toolbar.top_height;
+//! let toolbar_button_h = DESIGN_TOKENS.sizing.toolbar.button_height;
 //! ```
 
 /// Root sizing tokens containing icon sizes, button sizes, and sub-module sizing.
