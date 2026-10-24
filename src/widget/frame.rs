@@ -1311,7 +1311,7 @@ impl Chart {
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
         // while a context menu is open, so the crosshair, its labels and the tooltip wait until
         // the menu closes.
-        let menu_open = std::mem::take(&mut self.menu_open);
+        let menu_open = std::mem::take(&mut self.menu_open) || response.secondary_clicked();
         let mut crosshair_tags = [None; 2];
         self.cursor_modes.update(ui.input(|input| input.stable_dt));
         if self.chart_options.crosshair.style == crate::config::CrosshairStyle::Demonstration

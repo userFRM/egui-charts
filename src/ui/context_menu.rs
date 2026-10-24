@@ -897,6 +897,81 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_menu_suppresses_hover_paint_in_the_same_frame() {
+        use egui::{Event, PointerButton, RawInput, Shape};
+        for theme in [Theme::light(), Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+            let ink = Color32::from_rgb(17, 41, 83);
+            let options = &mut chart.chart_options;
+            options.crosshair.vert_line_color = ink;
+            options.crosshair.horz_line_color = ink;
+            options.crosshair.label_background_color = ink;
+            options.tooltip.enabled = true;
+            options.tooltip.on_long_press = false;
+            options.tooltip.background_color = ink;
+            let mut menus = ChartMenus::default();
+            let mut frame = |events| {
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                        menus.show(ui.ctx(), &mut chart);
+                    },
+                );
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                shapes.iter().any(|shape| match &shape.shape {
+                    Shape::LineSegment { stroke, .. } => stroke.color == ink,
+                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(ink),
+                    Shape::Rect(rect) => rect.fill == ink,
+                    _ => false,
+                })
+            };
+            frame(vec![]);
+            let pos = Pos2::new(400.0, 200.0);
+            assert!(
+                frame(vec![Event::PointerMoved(pos)]),
+                "hover must paint before opening"
+            );
+            let click = |button| {
+                vec![
+                    Event::PointerButton {
+                        pos,
+                        button,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    Event::PointerButton {
+                        pos,
+                        button,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ]
+            };
+            assert!(
+                !frame(click(PointerButton::Secondary)),
+                "opening frame still paints hover"
+            );
+            assert!(!frame(vec![]), "open menu still paints hover");
+            frame(vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }]);
+            assert!(frame(vec![]), "closing must restore hover");
+        }
+    }
+
+    #[test]
     fn reset_row_shows_the_reset_chart_binding() {
         let ctx = Context::default();
         ctx.set_os(egui::os::OperatingSystem::Nix);
