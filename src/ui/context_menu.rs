@@ -899,10 +899,27 @@ mod tests {
     #[test]
     fn opening_a_menu_suppresses_hover_paint_in_the_same_frame() {
         use egui::{Event, PointerButton, RawInput, Shape};
-        for theme in [Theme::light(), Theme::dark()] {
+        fn uses_ink(shape: &Shape, ink: Color32) -> bool {
+            match shape {
+                Shape::Vec(shapes) => shapes.iter().any(|shape| uses_ink(shape, ink)),
+                Shape::LineSegment { stroke, .. } => stroke.color == ink,
+                Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(ink),
+                Shape::Rect(rect) => rect.fill == ink,
+                _ => false,
+            }
+        }
+        for (theme, pane) in [
+            (Theme::light(), false),
+            (Theme::dark(), false),
+            (Theme::light(), true),
+            (Theme::dark(), true),
+        ] {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+            if pane {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            }
             let ink = Color32::from_rgb(17, 41, 83);
             let options = &mut chart.chart_options;
             options.crosshair.vert_line_color = ink;
@@ -926,12 +943,7 @@ mod tests {
                 );
                 let shapes = std::mem::take(&mut output.shapes);
                 output.drop_without_applying_deltas();
-                shapes.iter().any(|shape| match &shape.shape {
-                    Shape::LineSegment { stroke, .. } => stroke.color == ink,
-                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(ink),
-                    Shape::Rect(rect) => rect.fill == ink,
-                    _ => false,
-                })
+                shapes.iter().any(|shape| uses_ink(&shape.shape, ink))
             };
             frame(vec![]);
             let pos = Pos2::new(400.0, 200.0);
