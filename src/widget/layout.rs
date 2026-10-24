@@ -370,6 +370,7 @@ impl ChartLayout {
                         response.request_focus();
                     }
                     if index == self.active
+                        && (ui.rect_contains_pointer(rect) || egui::Popup::is_any_open(ui.ctx()))
                         && charts[index]
                             .pane_layout
                             .maximized

@@ -1,10 +1,11 @@
 //! Time-scale (X-axis) options.
 //!
 //! [`TimeScaleOptions`] configures bar spacing, scroll constraints, edge
-//! fixing, time-label visibility, and the [`TimezoneMode`] used to convert
-//! UTC timestamps before rendering axis labels.
+//! fixing, time-label visibility and spacing, the axis size and border, and the
+//! [`TimezoneMode`] used to convert UTC timestamps before rendering axis labels.
 
 use crate::scales::TimezoneMode;
+use egui::Color32;
 
 /// Time Scale Options.
 /// Controls bar spacing, scrolling constraints, and time display.
@@ -46,7 +47,8 @@ pub struct TimeScaleOptions {
     /// Default: false
     pub lock_visible_time_range_on_resize: bool,
 
-    /// Prevent the hovered bar from moving when scrolling.
+    /// Keep the right offset when zooming with the mouse wheel, a pinch or the keyboard, so the
+    /// bar at the right edge stays in place instead of the bar under the pointer.
     /// Default: false
     pub right_bar_stays_on_scroll: bool,
 
@@ -77,9 +79,29 @@ pub struct TimeScaleOptions {
     /// Default: false
     pub uniform_distribution: bool,
 
-    /// Allow major time scale labels to be rendered in a bolder font weight.
+    /// Allow major time scale labels (day, month and year boundaries) to be rendered in a
+    /// bolder font weight.
     /// Default: true
     pub allow_bold_labels: bool,
+
+    /// The longest expected tick mark label in characters, which sets the minimum distance
+    /// between time scale labels; raise it for a custom formatter with longer labels.
+    /// Zero is treated as the default.
+    /// Default: 8
+    pub tick_mark_max_character_length: usize,
+
+    /// The minimum height of the time scale in points. The time scale is taller when its
+    /// labels need more space, and has no height while time labels are hidden.
+    /// Default: 0.0
+    pub minimum_height: f32,
+
+    /// Draw a line along the top edge of the time scale.
+    /// Default: false
+    pub border_visible: bool,
+
+    /// The colour of the time scale border; `None` uses the theme's border colour.
+    /// Default: None
+    pub border_color: Option<Color32>,
 
     /// Timezone mode for displaying ts
     /// Default: UTC
@@ -105,6 +127,10 @@ impl Default for TimeScaleOptions {
             ticks_visible: false,
             uniform_distribution: false,
             allow_bold_labels: true,
+            tick_mark_max_character_length: 8,
+            minimum_height: 0.0,
+            border_visible: false,
+            border_color: None,
             timezone: TimezoneMode::default(),
         }
     }

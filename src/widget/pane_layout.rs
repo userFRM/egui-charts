@@ -607,6 +607,7 @@ impl Chart {
         if rect.height() < 48.0 {
             return;
         }
+        let hovered = ui.rect_contains_pointer(rect);
         let rect = Rect::from_min_max(rect.min + egui::vec2(0.0, 24.0), rect.max);
         if self.has_panes() {
             self.pane_maximize_button(ui, PaneId::MAIN, rect, plot);
@@ -616,7 +617,7 @@ impl Chart {
             .into_iter()
             .filter(|id| *id != SeriesId::MAIN)
             .collect();
-        if movable.is_empty() {
+        if movable.is_empty() || !(hovered || egui::Popup::is_any_open(ui.ctx())) {
             return;
         }
         let button = Rect::from_min_size(
@@ -629,7 +630,10 @@ impl Chart {
                 .max_rect(button),
         );
         let mut moved = None;
-        child.menu_button("...", |ui| {
+        egui::containers::menu::MenuButton::from_button(
+            egui::Button::new("...").frame_when_inactive(false),
+        )
+        .ui(&mut child, |ui| {
             for id in movable {
                 ui.menu_button(self.member_name(id), |ui| {
                     if ui.button("Move to new pane").clicked() {

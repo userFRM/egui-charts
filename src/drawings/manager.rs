@@ -18,6 +18,7 @@ use crate::drawings::services::{
 };
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 /// A change to the stored drawings, queued in [`DrawingManager::pending_sync`].
@@ -1362,14 +1363,21 @@ impl DrawingManager {
     pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
         let painter = &painter.with_clip_rect(price_rect);
         let mut painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
-        painted.retain(|paint| {
-            self.drawings
-                .iter()
-                .any(|d| d.id == paint.id && !self.owns_pane(d))
-        });
+        // The paints of the other panes' drawings stay; a set keeps this linear in the drawings.
+        let others: HashSet<usize> = (self.drawings.iter())
+            .filter(|d| !self.owns_pane(d))
+            .map(|d| d.id)
+            .collect();
+        painted.retain(|paint| others.contains(&paint.id));
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
-            if self.owns_pane(drawing) && drawing.is_visible_on_timeframe(&self.curr_timeframe) {
+            let off_pane = drawing
+                .paint_span()
+                .is_some_and(|span| !span.intersects(price_rect.x_range()));
+            if self.owns_pane(drawing)
+                && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+                && !off_pane
+            {
                 let start = painter.ctx().graphics(|g| {
                     g.get(painter.layer_id())
                         .map_or(0, |list| list.next_idx().0)

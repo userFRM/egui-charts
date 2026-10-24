@@ -71,6 +71,15 @@ impl Drawing {
             });
         }
         self.render_end_markers(painter, rect);
+        let pixels_per_point = painter.pixels_per_point();
+        painter.ctx().graphics_mut(|g| {
+            let list = g.entry(painter.layer_id());
+            for index in start..list.next_idx().0 {
+                list.mutate_shape(ShapeIdx(index), |s| {
+                    fewer_circle_sides(&mut s.shape, pixels_per_point)
+                });
+            }
+        });
     }
 
     fn style_shape(&self, shape: &mut Shape) {
@@ -320,6 +329,86 @@ impl Drawing {
                     color,
                     Stroke::NONE,
                 ));
+            }
+        }
+    }
+}
+
+/// Replaces a circle with the polygon of the fewest sides within a quarter of a physical pixel of
+/// it. The tessellator gives a circle 32 sides from a radius of 5 points and 64 from 18, which made
+/// the anchor dots and rings of a drawing most of its vertices. A small disc without an outline
+/// stays a circle, which the tessellator draws as one textured quad.
+fn fewer_circle_sides(shape: &mut Shape, pixels_per_point: f32) {
+    match shape {
+        Shape::Vec(shapes) => {
+            for shape in shapes {
+                fewer_circle_sides(shape, pixels_per_point);
+            }
+        }
+        Shape::Circle(c) if !c.stroke.is_empty() || c.radius * pixels_per_point > 6.0 => {
+            let radius = c.radius * pixels_per_point;
+            let step = (1.0 - 0.25 / radius).clamp(-1.0, 1.0).acos();
+            let sides = ((std::f32::consts::PI / step).ceil() as usize).clamp(8, 128);
+            let points = (0..sides)
+                .map(|i| {
+                    let angle = i as f32 * std::f32::consts::TAU / sides as f32;
+                    c.center + c.radius * egui::vec2(angle.cos(), angle.sin())
+                })
+                .collect();
+            let mut path = egui::epaint::PathShape::convex_polygon(points, c.fill, c.stroke);
+            path.stroke = path.stroke.outside();
+            *shape = Shape::Path(path);
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::epaint::StrokeKind;
+
+    /// Guards the circles of drawings at 1x and 2x: a circle with an outline, or too large for a
+    /// textured quad, becomes a closed polygon whose corners lie on the circle and whose sides
+    /// stay within a quarter of a physical pixel of it, with the outline still outside the
+    /// radius; a small disc without an outline stays a circle.
+    #[test]
+    fn circles_become_polygons_within_a_quarter_pixel() {
+        let center = Pos2::new(50.0, 40.0);
+        let ring = Stroke::new(1.0, Color32::WHITE);
+        for (radius, ppp, stroke, polygon) in [
+            (3.0, 1.0, Stroke::NONE, false),
+            (3.0, 2.0, Stroke::NONE, false),
+            (3.0, 1.0, ring, true),
+            (8.0, 1.0, Stroke::NONE, true),
+            (8.0, 2.0, ring, true),
+            (200.0, 2.0, ring, true),
+        ] {
+            let circle = egui::epaint::CircleShape {
+                center,
+                radius,
+                fill: Color32::RED,
+                stroke,
+            };
+            let mut shape = Shape::Circle(circle);
+            fewer_circle_sides(&mut shape, ppp);
+            let case = format!("radius {radius} at {ppp}x");
+            let Shape::Path(path) = &shape else {
+                assert!(!polygon, "{case}: still a circle");
+                continue;
+            };
+            assert!(polygon, "{case}: a quad disc became a polygon");
+            assert!(path.closed, "{case}");
+            assert_eq!(
+                (path.fill, path.stroke.kind),
+                (Color32::RED, StrokeKind::Outside)
+            );
+            let corners = &path.points;
+            for (i, a) in corners.iter().enumerate() {
+                let b = corners[(i + 1) % corners.len()];
+                assert!(((*a - center).length() - radius).abs() < 1e-3, "{case}");
+                let error = (radius - (center.distance(a.lerp(b, 0.5)))) * ppp;
+                assert!((0.0..=0.25).contains(&error), "{case}: {error} px");
             }
         }
     }

@@ -105,11 +105,7 @@ impl Chart {
             .map(|(idx, pane)| (idx, pane.id, false))
             .collect();
         let pane_count = panes.len().saturating_sub(1);
-        let axis_height = if self.config.show_time_labels {
-            crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME.min(available.height())
-        } else {
-            0.0
-        };
+        let axis_height = self.time_axis_height().min(available.height());
         let gap = if maximized.is_some() {
             0.0
         } else {
