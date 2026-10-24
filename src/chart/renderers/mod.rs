@@ -20,6 +20,7 @@ mod labels;
 mod markers;
 mod session_breaks;
 mod tooltip;
+mod trading_lines;
 mod volume;
 
 pub use alert_levels::{alert_shortcut_price, render_alert_levels};
@@ -43,4 +44,7 @@ pub use session_breaks::{
 };
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
 pub use tooltip::{StudyValue, render_tooltip_with_options};
+pub use trading_lines::{
+    TradingLineAction, TradingLineOptions, TradingLines, render_trading_lines,
+};
 pub use volume::render_volume_bar;

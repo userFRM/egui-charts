@@ -353,6 +353,9 @@ pub struct Chart {
     pub(crate) marks: Vec<crate::model::Marker>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
     price_lines: Vec<crate::model::PriceLine>,
+    /// Price axis tags of the trading lines drawn over the last frame, shown once on the next.
+    #[cfg(feature = "ui")]
+    pub(crate) trading_tags: Vec<(f64, egui::Color32)>,
 
     // =========================================================================
     // Selection State

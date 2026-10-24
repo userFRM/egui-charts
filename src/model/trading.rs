@@ -283,6 +283,9 @@ pub struct Capabilities {
     pub stop_limit: bool,
     /// Accepts a take-profit and a stop-loss with an order.
     pub brackets: bool,
+    /// Changes working orders through [`Broker::modify`](crate::services::Broker::modify), so
+    /// their lines on the chart can be dragged.
+    pub modify: bool,
 }
 
 impl Capabilities {
@@ -328,17 +331,5 @@ impl TradingRules {
             point_value: 1.0,
             time_in_force: vec![TimeInForce::Day],
         }
-    }
-
-    /// Whether every number is positive and finite and a time in force is offered.
-    pub(crate) fn is_valid(&self) -> bool {
-        let positive = |value: f64| value.is_finite() && value > 0.0;
-        positive(self.quantity_step)
-            && positive(self.min_quantity)
-            && positive(self.point_value)
-            && self
-                .max_quantity
-                .is_none_or(|max| positive(max) && max >= self.min_quantity)
-            && !self.time_in_force.is_empty()
     }
 }

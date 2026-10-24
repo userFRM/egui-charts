@@ -9,12 +9,14 @@ pub use ticket::{Bracket, BracketMode, OrderPreset};
 use std::sync::Arc;
 
 use crate::chart::selection::SeriesId;
+use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
     Account, Capabilities, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType,
     Position, TradingRules,
 };
 use crate::services::{AccountEvent, Broker, Listener};
+use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::ui_kit::notifications::Toasts;
 use crate::widget::Chart;
 pub(crate) use ticket::to_step;
@@ -55,6 +57,10 @@ pub struct Trading {
     positions: Vec<Position>,
     rules: TradingRules,
     ticket: OrderTicket,
+    /// A change the user asked for on a line, waiting for confirmation.
+    pending: Option<TradingLineAction>,
+    /// Decimals of the chart's prices, for notifications.
+    decimals: usize,
     /// The quantity the ticket opens with, and that one-click orders and the chart menu's
     /// orders use. Positive, in the symbol's trading units.
     pub quantity: f64,
@@ -77,6 +83,8 @@ impl Default for Trading {
             positions: Vec::new(),
             rules: TradingRules::new(""),
             ticket: OrderTicket::default(),
+            pending: None,
+            decimals: 2,
             quantity: 1.0,
             one_click: false,
             presets: Vec::new(),
@@ -95,6 +103,7 @@ impl Trading {
     }
 
     fn connect(&mut self) {
+        self.pending = None;
         self.account = None;
         self.orders.clear();
         self.positions.clear();
@@ -167,7 +176,7 @@ impl Trading {
                 Ok(rules) => {
                     if let Ok(rules) = *rules
                         && rules.symbol == self.rules.symbol
-                        && rules.is_valid()
+                        && valid(&rules)
                     {
                         self.rules = rules;
                     }
@@ -207,42 +216,93 @@ impl Trading {
                 }
             }
             AccountEvent::Execution(fill) => toasts.info(format!(
-                "Filled: {} {} at {}",
+                "Filled: {} {} at {:.*}",
                 fill.side.label(),
                 format_quantity(fill.quantity),
+                self.decimals,
                 fill.price
             )),
             _ => {}
         }
     }
 
-    /// Draws the order ticket for `chart` and sends the order the user submits.
-    pub fn show(&mut self, ui: &mut egui::Ui, chart: &Chart) {
-        if !self.ticket.open {
-            return;
-        }
+    /// Draws the chart symbol's working orders, brackets and positions as lines on `chart`, and
+    /// the order ticket. Sends the order the user submits, and asks the user to confirm a change
+    /// made on a line before sending it.
+    pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
+        let symbol = chart.symbol().to_owned();
+        let symbol = symbol.as_str();
         let instrument = chart
             .instrument()
-            .filter(|instrument| instrument.symbol == self.ticket.symbol);
+            .filter(|instrument| instrument.symbol == symbol);
         let decimals = instrument
             .and_then(crate::scales::instrument_price_precision)
             .map_or(2, usize::from);
+        self.decimals = decimals;
         let tick = instrument
             .and_then(|instrument| instrument.tick_size)
             .filter(|tick| tick.is_finite() && *tick > 0.0)
             .unwrap_or(10f64.powi(-(decimals as i32)));
-        let last = (chart.symbol() == self.ticket.symbol)
-            .then(|| chart.bars(SeriesId::MAIN).last().map(|bar| bar.close))
-            .flatten();
+        let last = chart.bars(SeriesId::MAIN).last().map(|bar| bar.close);
+        // One symbol's rules at a time: the open ticket's, otherwise the chart's.
+        if !self.ticket.open {
+            self.load_rules(symbol);
+        }
+        let currency = self
+            .account
+            .as_ref()
+            .map_or("", |account| account.currency.as_str());
+        let capabilities = self.capabilities();
+
+        if self.service.is_some() {
+            let mapping = chart.get_chart_mapping();
+            let options = TradingLineOptions {
+                modify: capabilities.modify,
+                close: capabilities.market,
+                last_price: last,
+                point_value: if self.rules.symbol == symbol {
+                    self.rules.point_value
+                } else {
+                    1.0
+                },
+                currency,
+                snap: &|price| to_step(price, tick, f64::round),
+            };
+            let lines = render_trading_lines(
+                ui,
+                &mapping,
+                self.orders.iter().filter(|o| o.request.symbol == symbol),
+                self.positions.iter().filter(|p| p.symbol == symbol),
+                &options,
+            );
+            chart.trading_tags = lines.tags;
+            self.pending = lines.action.or(self.pending.take());
+        }
+        if let Some(action) = &self.pending {
+            let money = |value: f64| format!("{value:.decimals$}");
+            let (title, message, confirm) = describe(action, &money);
+            let mut open = true;
+            let result = ConfirmDialog::new("trading_confirm", title, message)
+                .confirm_text(confirm)
+                .cancel_text("Back")
+                .show(ui.ctx(), &mut open);
+            if result.is_confirmed() {
+                let action = self.pending.take();
+                self.execute(action);
+            } else if result.is_cancelled() || !open {
+                self.pending = None;
+            }
+        }
+
+        if !self.ticket.open {
+            return;
+        }
         let market = Market {
-            last,
+            last: (self.ticket.symbol == symbol).then_some(last).flatten(),
             tick,
             decimals,
-            currency: self
-                .account
-                .as_ref()
-                .map_or("", |account| account.currency.as_str()),
-            capabilities: self.capabilities(),
+            currency,
+            capabilities,
             rules: &self.rules,
         };
         let anchor = chart.get_rendered_price_rect().right_top() + egui::vec2(-8.0, 8.0);
@@ -256,6 +316,110 @@ impl Trading {
             self.place(request);
         }
     }
+
+    /// Sends a confirmed change to the broker. Closing and reversing a position are market
+    /// orders on the other side, for the position's size and for twice it.
+    fn execute(&self, action: Option<TradingLineAction>) {
+        let Some(service) = &self.service else {
+            return;
+        };
+        let reverse = matches!(action, Some(TradingLineAction::Reverse(_)));
+        match action {
+            Some(TradingLineAction::Cancel(order)) => service.cancel(order.id, self.inbox.reply(0)),
+            Some(TradingLineAction::Modify(order, request)) => {
+                service.modify(order.id, request, self.inbox.reply(0));
+            }
+            Some(TradingLineAction::Close(position) | TradingLineAction::Reverse(position))
+                if position.quantity != 0.0 =>
+            {
+                let side = if position.quantity > 0.0 {
+                    OrderSide::Sell
+                } else {
+                    OrderSide::Buy
+                };
+                let quantity = position.quantity.abs() * if reverse { 2.0 } else { 1.0 };
+                let order = OrderRequest::new(position.symbol, side, quantity, OrderType::Market);
+                service.place(order, self.inbox.reply(0));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether every number of `rules` is positive and finite and a time in force is offered.
+fn valid(rules: &TradingRules) -> bool {
+    let positive = |value: f64| value.is_finite() && value > 0.0;
+    positive(rules.quantity_step)
+        && positive(rules.min_quantity)
+        && positive(rules.point_value)
+        && rules
+            .max_quantity
+            .is_none_or(|max| positive(max) && max >= rules.min_quantity)
+        && !rules.time_in_force.is_empty()
+}
+
+/// The title, question and confirm button text of the confirmation for `action`.
+fn describe(
+    action: &TradingLineAction,
+    price: &dyn Fn(f64) -> String,
+) -> (&'static str, String, &'static str) {
+    let order = |request: &OrderRequest| {
+        let mut text = format!(
+            "{} {} {}",
+            request.side.label(),
+            format_quantity(request.quantity),
+            request.symbol
+        );
+        match request.order_type {
+            OrderType::Limit(limit) => text += &format!(" limit {}", price(limit)),
+            OrderType::Stop(stop) => text += &format!(" stop {}", price(stop)),
+            OrderType::StopLimit { stop, limit } => {
+                text += &format!(" stop {} limit {}", price(stop), price(limit));
+            }
+            _ => text += " at market",
+        }
+        if let Some(take_profit) = request.take_profit {
+            text += &format!(", take profit {}", price(take_profit));
+        }
+        if let Some(stop_loss) = request.stop_loss {
+            text += &format!(", stop loss {}", price(stop_loss));
+        }
+        text
+    };
+    let position = |position: &Position| {
+        format!(
+            "the {} position of {} {}",
+            if position.quantity > 0.0 {
+                "long"
+            } else {
+                "short"
+            },
+            format_quantity(position.quantity.abs()),
+            position.symbol
+        )
+    };
+    match action {
+        TradingLineAction::Cancel(working) => (
+            "Cancel order",
+            format!("Cancel the order to {}?", order(&working.request)),
+            "Cancel order",
+        ),
+        TradingLineAction::Modify(_, changed) => (
+            "Modify order",
+            format!("Change the order to {}?", order(changed)),
+            "Modify order",
+        ),
+        TradingLineAction::Close(open) => (
+            "Close position",
+            format!("Close {} at market?", position(open)),
+            "Close position",
+        ),
+        TradingLineAction::Reverse(open) => (
+            "Reverse position",
+            format!("Reverse {} at market?", position(open)),
+            "Reverse position",
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -265,16 +429,20 @@ mod tests {
     use crate::services::Events;
     use std::sync::Mutex;
 
-    /// A broker that records the orders it is sent.
+    /// A broker that pushes `state` on connecting and records the calls it gets.
     #[derive(Default)]
     struct Recorder {
+        state: Vec<AccountEvent>,
         placed: Mutex<Vec<OrderRequest>>,
+        cancelled: Mutex<Vec<OrderId>>,
     }
 
     impl Broker for Recorder {
         fn connect(&self, events: Events<AccountEvent>) {
             let capabilities = Capabilities {
                 market: true,
+                limit: true,
+                modify: true,
                 ..Capabilities::default()
             };
             events.push(AccountEvent::Account(Account::new(
@@ -282,12 +450,16 @@ mod tests {
                 0.0,
                 capabilities,
             )));
+            self.state
+                .iter()
+                .for_each(|event| events.push(event.clone()));
         }
         fn place(&self, order: OrderRequest, reply: Reply<OrderId>) {
             self.placed.lock().unwrap().push(order);
             reply.send(Ok(OrderId::new("1")));
         }
-        fn cancel(&self, _: OrderId, reply: Reply<()>) {
+        fn cancel(&self, id: OrderId, reply: Reply<()>) {
+            self.cancelled.lock().unwrap().push(id);
             reply.send(Ok(()));
         }
     }
@@ -312,5 +484,80 @@ mod tests {
         trading.trade("AAPL".into(), OrderSide::Buy);
         let expected = OrderRequest::new("AAPL", OrderSide::Buy, 3.0, OrderType::Market);
         assert_eq!(*broker.placed.lock().unwrap(), [expected]);
+    }
+
+    /// Guards the money path of the lines: a click on an order's cross only asks for
+    /// confirmation and sends nothing, and a confirmed change sends one call: the cancel of that
+    /// order, or a market order on the other side for the position's size (close) or twice it
+    /// (reverse). A regression cancels without asking, or closes on the wrong side or for the
+    /// wrong size, which leaves the user with a position instead of none or the reverse one.
+    #[test]
+    fn line_changes_wait_for_confirmation_and_send_one_call() {
+        let order = Order::new(
+            OrderId::new("7"),
+            OrderRequest::new("SYM", OrderSide::Sell, 1.0, OrderType::Limit(105.0)),
+            OrderStatus::Working,
+        );
+        let position = Position::new("SYM", -2.0, 100.0);
+        let broker = Arc::new(Recorder {
+            state: vec![
+                AccountEvent::Order(order.clone()),
+                AccountEvent::Position(position.clone()),
+            ],
+            ..Recorder::default()
+        });
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.symbol = "SYM".into();
+        let ctx = egui::Context::default();
+        let frame = |trading: &mut Trading, chart: &mut Chart, events| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                trading.poll(ui.ctx(), &mut Toasts::new());
+                chart.show(ui);
+                trading.show(ui, chart);
+            })
+            .drop_without_applying_deltas();
+        };
+        frame(&mut trading, &mut chart, vec![]);
+        frame(&mut trading, &mut chart, vec![]);
+        // The cross is the last cell of the label, which ends 8 points left of the plot's edge.
+        let mapping = chart.get_chart_mapping();
+        let cross = egui::pos2(mapping.rect.right() - 17.0, mapping.price_to_y(105.0));
+        frame(
+            &mut trading,
+            &mut chart,
+            vec![egui::Event::PointerMoved(cross)],
+        );
+        for pressed in [true, false] {
+            let click = egui::Event::PointerButton {
+                pos: cross,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(&mut trading, &mut chart, vec![click]);
+        }
+        assert!(broker.cancelled.lock().unwrap().is_empty());
+        assert_eq!(
+            trading.pending,
+            Some(TradingLineAction::Cancel(order.clone()))
+        );
+
+        trading.execute(trading.pending.clone());
+        trading.execute(Some(TradingLineAction::Close(position.clone())));
+        trading.execute(Some(TradingLineAction::Reverse(position)));
+        assert_eq!(*broker.cancelled.lock().unwrap(), [order.id]);
+        let market =
+            |quantity| OrderRequest::new("SYM", OrderSide::Buy, quantity, OrderType::Market);
+        assert_eq!(*broker.placed.lock().unwrap(), [market(2.0), market(4.0)]);
     }
 }

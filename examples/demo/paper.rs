@@ -1,6 +1,6 @@
 //! Session-only paper account: market, limit, stop and stop-limit orders filled at the chart's
-//! last price, one net position per symbol, and take-profit and stop-loss exits that cancel each
-//! other.
+//! last price, one net position per symbol, take-profit and stop-loss exits that cancel each
+//! other, and working orders whose prices can be changed.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -38,6 +38,7 @@ fn capabilities() -> Capabilities {
     capabilities.stop = true;
     capabilities.stop_limit = true;
     capabilities.brackets = true;
+    capabilities.modify = true;
     capabilities
 }
 
@@ -255,6 +256,23 @@ impl Broker for PaperAccount {
             reply.send(Err(FeedError::Other(format!(
                 "order {id} is no longer working"
             ))));
+        }
+    }
+
+    fn modify(&self, id: OrderId, order: OrderRequest, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        let Some(working) = state.working.iter_mut().find(|working| working.id == id) else {
+            return reply.send(Err(FeedError::Other(format!(
+                "order {id} is no longer working"
+            ))));
+        };
+        working.request = order;
+        let (working, symbol) = (working.clone(), working.request.symbol.clone());
+        reply.send(Ok(()));
+        state.push(AccountEvent::Order(working));
+        // A limit moved through the market or a stop moved past it fills at once.
+        if let Some(&last) = state.last.get(&symbol) {
+            state.reach(&symbol, last);
         }
     }
 

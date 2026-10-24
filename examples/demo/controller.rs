@@ -1804,7 +1804,7 @@ impl DemoApp {
                     if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {
                         self.paper.set_price(self.chart.symbol(), bar.close);
                     }
-                    self.trading.show(ui, &self.chart);
+                    self.trading.show(ui, &mut self.chart);
                 }
             });
         self.replay_control.set_dock_rect(chart.response.rect);

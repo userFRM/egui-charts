@@ -175,6 +175,8 @@ impl Chart {
             // Marks (Widget API)
             marks: Vec::new(),
             price_lines: Vec::new(),
+            #[cfg(feature = "ui")]
+            trading_tags: Vec::new(),
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,
