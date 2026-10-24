@@ -638,8 +638,15 @@ mod tests {
                             }
                             _ => None,
                         });
+                        let message_visible = output.shapes.iter().any(|shape| matches!(
+                            &shape.shape, egui::Shape::Text(text) if text.galley.text() == "Message"
+                                && shape.clip_rect.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                        ));
                         output.drop_without_applying_deltas();
                         if frame > 0 {
+                            if size.y == 900.0 {
+                                assert!(message_visible, "the default height fits the message row");
+                            }
                             let (clip, button) = save.expect("save action is painted");
                             assert!(
                                 clip.contains_rect(button),
