@@ -467,9 +467,9 @@ impl Chart {
         shared_time_axis: Option<Rect>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
-        // Register the SVG image loader once per context so the embedded
-        // icons used by the toolbars and panels decode without the host app
-        // having to wire egui_extras itself.
+        // Register the SVG and icon image loaders once per context so the
+        // embedded icons used by the toolbars and panels decode without the
+        // host app having to wire egui_extras itself.
         #[cfg(feature = "icons")]
         {
             let ctx = ui.ctx().clone();

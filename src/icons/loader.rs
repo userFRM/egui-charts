@@ -227,6 +227,10 @@ fn snap_to_pixels(path: &Path, width: f32) -> Option<Path> {
         }
         let (a, b) = (end[i - 1], end[i]);
         let (pa, pb) = (point(a), point(b));
+        // A zero-length segment, such as the close after a circle's last curve, has no direction.
+        if (pa.x - pb.x).abs() < 1e-3 && (pa.y - pb.y).abs() < 1e-3 {
+            continue;
+        }
         if (pa.y - pb.y).abs() < 1e-3 {
             shift[a].y = snap(pa.y) - pa.y;
             shift[b].y = snap(pb.y) - pb.y;
@@ -300,5 +304,12 @@ mod tests {
                 );
             }
         }
+    }
+    /// Curves stay where they are authored, including the point a closed curve ends on.
+    #[test]
+    fn closed_curves_keep_their_shape() {
+        let circle = PathBuilder::from_circle(10.3, 10.3, 5.2).unwrap();
+        let snapped = snap_to_pixels(&circle, 1.0).unwrap();
+        assert!(circle.segments().eq(snapped.segments()));
     }
 }
