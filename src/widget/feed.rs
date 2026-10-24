@@ -411,9 +411,10 @@ impl Chart {
             }
         }
         if let Some(deadline) = link.retries.iter().map(|r| r.0).min_by(f64::total_cmp) {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(
-                (deadline - now).max(0.0),
-            ));
+            ctx.request_repaint_after(
+                std::time::Duration::try_from_secs_f64((deadline - now).max(0.0))
+                    .unwrap_or(std::time::Duration::MAX),
+            );
         }
         self.scroll_back(&mut link);
         self.feed_link = Some(link);
@@ -1035,6 +1036,19 @@ mod tests {
         frames.time += 60.0;
         frames.run(&mut chart);
         assert!(feed.calls().is_empty(), "old symbol retry survived");
+        // A host can use an arbitrarily long rate limit, including Duration::MAX.
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.calls();
+        feed.page().send(Err(FeedError::RateLimited {
+            retry_after: Some(std::time::Duration::MAX),
+        }));
+        frames.run(&mut chart);
+        frames.time += 3600.0;
+        frames.run(&mut chart);
+        assert!(feed.calls().is_empty(), "long rate limit resumed early");
     }
 
     /// Guards the feed contract of the chart: nothing blocks or calls the feed outside `show`,
