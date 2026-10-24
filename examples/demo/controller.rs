@@ -1014,6 +1014,7 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        self.top_toolbar.sync_from_app_state(&self.state);
         let drawings = self.chart.drawings();
         self.top_toolbar.state.can_undo = drawings.can_undo();
         self.top_toolbar.state.can_redo = drawings.can_redo();
@@ -2341,9 +2342,9 @@ mod tests {
         );
     }
 
-    /// External chart modes and completed drawings are reflected before the toolbar is painted.
+    /// External chart modes and completed drawings are reflected before the toolbars are painted.
     #[test]
-    fn drawing_toolbar_follows_chart_modes_and_completed_tools() {
+    fn toolbars_follow_chart_modes_and_completed_tools() {
         use egui_charts::config::CrosshairStyle;
         use egui_charts::drawings::DrawingToolType;
         use egui_charts::ui::drawing_toolbar::{MagnetType, categories::cursors::CursorType};
@@ -2351,6 +2352,7 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         let frame = |app: &mut DemoApp| {
             ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.show_top_toolbar(ui, egui::Color32::BLACK);
                 app.show_drawing_toolbar(ui, egui::Color32::BLACK);
             })
             .drop_without_applying_deltas();
@@ -2402,6 +2404,12 @@ mod tests {
             assert!(!app.drawing_toolbar.state.eraser_mode_enabled);
             assert!(!app.drawing_toolbar.state.magnet_mode);
         }
+        app.start_replay();
+        frame(&mut app);
+        assert!(app.top_toolbar.state.replay_active);
+        app.stop_replay();
+        frame(&mut app);
+        assert!(!app.top_toolbar.state.replay_active);
     }
 
     /// A narrow first layout and later resizes retain the configured zoom and live edge.

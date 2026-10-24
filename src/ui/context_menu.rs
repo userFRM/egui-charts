@@ -216,7 +216,7 @@ pub(crate) fn show_menu<A: Clone>(
         ctx.fonts_mut(|f| f.layout_job(job))
     };
     // Each item's label and its shortcut.
-    let rows: Vec<_> = entries
+    let mut rows: Vec<_> = entries
         .iter()
         .map(|entry| match entry {
             MenuEntry::Item(item) => Some((
@@ -252,6 +252,12 @@ pub(crate) fn show_menu<A: Clone>(
     let bounds = ctx.content_rect().shrink(theme.spacing.lg);
     let size = (Vec2::new(row_width, height) + chrome).min(bounds.size());
     let row_width = (size.x - chrome.x).max(0.0);
+    let label_width = (row_width - 2.0 * pad - t.icon_width - trailing_column).max(0.0);
+    for (label, _) in rows.iter_mut().flatten() {
+        if label.size().x > label_width {
+            *label = layout(label.text().to_owned(), t.font_size, label_width);
+        }
+    }
     let pos = place(anchor, gap, size, bounds);
 
     let mut picked = None;
@@ -980,6 +986,60 @@ mod tests {
                 modifiers: Default::default(),
             }]);
             assert!(frame(vec![]), "closing must restore hover");
+        }
+    }
+
+    #[test]
+    fn narrow_menus_keep_labels_out_of_the_shortcut_column() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.set_os(egui::os::OperatingSystem::Nix);
+            let entries = [MenuEntry::Item(
+                MenuItem::new("Add alert on VERY_LONG_SYMBOL at 123,456.78…", ())
+                    .with_shortcut(KeyboardAction::ResetChart.shortcut()),
+            )];
+            for width in [800.0, 320.0] {
+                for pass in 0..2 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(width, 300.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            show_menu(
+                                ui.ctx(),
+                                Id::unique("narrow_menu"),
+                                &theme,
+                                Pos2::new(20.0, 20.0),
+                                POINTER_GAP,
+                                &entries,
+                                true,
+                            );
+                        },
+                    );
+                    let text: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if pass == 1 {
+                        assert_eq!(text.len(), 2);
+                        assert!(text[0].right() + COLUMN_GAP <= text[1].left() + 0.5);
+                        assert!(text[1].right() <= width - theme.spacing.lg);
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
         }
     }
 
