@@ -166,7 +166,7 @@ impl OrderTicket {
             OrderType::Limit(price) => (Kind::Limit, price, price),
             OrderType::Stop(price) => (Kind::Stop, price, price),
             OrderType::StopLimit { stop, limit } => (Kind::StopLimit, stop, limit),
-            _ => (Kind::Market, self.price, self.limit),
+            _ => (Kind::Market, 0.0, 0.0),
         };
         self.time_in_force = request.time_in_force;
     }
