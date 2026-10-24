@@ -927,7 +927,15 @@ impl Chart {
         let clipped_price_ctx = RenderContext::new(&clipped_painter, price_rect);
         let clipped_volume_ctx = RenderContext::new(&clipped_painter, volume_rect);
 
-        let bar_clock = self.bar_clock();
+        let mut bar_clock = self.bar_clock();
+        // TPO days follow the instrument's zone, as the session breaks do, also without its hours.
+        if let Some(zone) = self
+            .instrument()
+            .filter(|instrument| instrument.session.is_none())
+            .and_then(|instrument| instrument.time_zone.as_ref())
+        {
+            bar_clock = bar_clock.with_timezone(zone.tz());
+        }
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
             volume_ctx: &clipped_volume_ctx,
@@ -2630,6 +2638,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn tpo_days_follow_the_instrument_zone_without_trading_hours() {
+        use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe, TimezoneId};
+        // Half-hourly bars from 02:00 to 08:00 UTC, across midnight in New York at 05:00 UTC
+        let start: chrono::DateTime<chrono::Utc> = "2024-03-05T02:00:00Z".parse().unwrap();
+        let bars = (0..13)
+            .map(|i| {
+                let time = start + chrono::Duration::minutes(30 * i);
+                Bar::new(time, 100.0, 102.0, 99.0, 101.0, 1.0)
+            })
+            .collect();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.set_timeframe(Timeframe::Min30);
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        let new_york = TimezoneId::named("America/New_York").unwrap();
+        chart.set_instrument(Some(Instrument::new("FX").with_time_zone(new_york)));
+        let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
+        // One initial balance bar beside each profile
+        let initial_balance = crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance;
+        let profiles = painted
+            .iter()
+            .filter(|shape| {
+                matches!(shape, Shape::Rect(rect)
+                    if rect.fill == initial_balance && rect.rect.width() == 2.0)
+            })
+            .count();
+        assert_eq!(profiles, 2);
     }
 
     #[test]
