@@ -1187,7 +1187,12 @@ impl IndicatorPane {
                     let color = indicator.plot_style(line).color;
                     let readable = crate::theme::contrast(color, background) >= 4.5;
                     if !readable {
-                        job.append("■ ", 0.0, format(color));
+                        let mut swatch = format(color);
+                        swatch.background = color;
+                        swatch.font_id.size = 8.0;
+                        swatch.valign = egui::Align::Center;
+                        job.append("  ", 0.0, swatch);
+                        job.append(" ", 0.0, format(text_color));
                     }
                     let precision = indicator.precision().unwrap_or(2);
                     job.append(

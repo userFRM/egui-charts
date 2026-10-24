@@ -626,7 +626,11 @@ mod tests {
                 }
                 for expected in ["Readout 27.00", "Other 37.00", "Open"] {
                     assert!(
-                        text.iter().any(|text| text.replace("■ ", "") == expected),
+                        text.iter().any(|text| text
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            == expected),
                         "{expected}: {text:?}"
                     );
                 }
@@ -665,7 +669,7 @@ mod tests {
             }
             chart.set_synced_crosshair_bar_idx(None);
             let painted = shapes(&ctx, &mut chart, 10.0, vec![Event::PointerGone]);
-            assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text().replace("■ ", "") == "Readout 29.90")));
+            assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text().split_whitespace().collect::<Vec<_>>().join(" ") == "Readout 29.90")));
             chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;
             // With OHLC at 100 and 110, 107.25 can only come from the overlay.
             // Each pane contains 20 or 30 plus i/10, so bar 70 reads 27 or 37.
