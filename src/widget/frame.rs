@@ -301,14 +301,18 @@ impl Chart {
         let _theme_scope = theme
             .as_ref()
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
-        // Keep the same UI scope when an override is cleared, preserving focus and widget state.
-        ui.scope(|ui| {
+        let size = self.size;
+        let show = |ui: &mut Ui| {
             if let Some(theme) = &theme {
                 crate::theme::apply_to_style(ui.style_mut(), theme);
             }
             self.show_themed_content(ui, footprint)
-        })
-        .inner
+        };
+        // Keep the same UI scope when an override is cleared, preserving focus and widget state.
+        match size {
+            Some(size) => ui.allocate_ui(size, show).inner,
+            None => ui.scope(show).inner,
+        }
     }
 
     fn show_themed_content(
@@ -970,34 +974,69 @@ impl Chart {
             self.config.price_source,
         );
 
-        if self.main_series_visible {
-            if let Some((flow, config)) = footprint.filter(|_| time_based) {
-                if show_volume && !cfg!(feature = "studies") {
-                    rendering::candles::volume::render_volume_bars(
-                        &clipped_volume_ctx,
-                        visible_data,
-                        start_idx,
-                        max_volume,
-                        &colors,
-                        chart_rect.min.x,
+        let studies = if self.chart_type.is_time_independent() {
+            &self.element_studies.studies
+        } else {
+            &self.studies
+        };
+        let main_visible_range = start_idx..(start_idx + visible_data.len());
+        let volume_coords = show_volume.then(|| coords.with_rect(volume_rect));
+        let element_at = |pos| {
+            hit_test_main_chart(
+                pos,
+                studies,
+                &self.study_ids,
+                &coords,
+                volume_coords.as_ref(),
+                self.state.shown(),
+                max_volume,
+                main_visible_range.clone(),
+            )
+            .filter(|(id, _)| {
+                self.main_series_visible
+                    || matches!(id, crate::widget::ChartElementId::Indicator(_))
+            })
+        };
+        // The element under the pointer goes last when hovered series are drawn on top.
+        let on_top = ui
+            .input(|input| input.pointer.hover_pos())
+            .filter(|pos| self.chart_options.hovered_series_on_top && chart_rect.contains(*pos))
+            .and_then(element_at)
+            .map(|(id, _)| id);
+        let main_on_top = on_top == Some(super::ChartElementId::Series(super::SeriesId::MAIN));
+        let paint_main_series = || {
+            if self.main_series_visible {
+                if let Some((flow, config)) = footprint.filter(|_| time_based) {
+                    if show_volume && !cfg!(feature = "studies") {
+                        rendering::candles::volume::render_volume_bars(
+                            &clipped_volume_ctx,
+                            visible_data,
+                            start_idx,
+                            max_volume,
+                            &colors,
+                            chart_rect.min.x,
+                            idx_to_coord,
+                        );
+                    }
+                    crate::chart::overlays::render_footprint(
+                        &clipped_painter,
+                        &self.get_chart_mapping(),
+                        self.bars(super::SeriesId::MAIN),
+                        flow,
+                        config,
+                    );
+                } else {
+                    rendering::render_chart_type(
+                        self.chart_type,
+                        &render_ctx,
+                        &render_params,
                         idx_to_coord,
                     );
                 }
-                crate::chart::overlays::render_footprint(
-                    &clipped_painter,
-                    &self.get_chart_mapping(),
-                    self.bars(super::SeriesId::MAIN),
-                    flow,
-                    config,
-                );
-            } else {
-                rendering::render_chart_type(
-                    self.chart_type,
-                    &render_ctx,
-                    &render_params,
-                    idx_to_coord,
-                );
             }
+        };
+        if !main_on_top {
+            paint_main_series();
         }
 
         self.paint_secondary_series(&painter, price_rect);
@@ -1014,11 +1053,6 @@ impl Chart {
             });
         }
 
-        let studies = if self.chart_type.is_time_independent() {
-            &self.element_studies.studies
-        } else {
-            &self.studies
-        };
         let volume_map = volume_rect.is_positive().then(|| {
             crate::scales::PriceMap::new(
                 crate::scales::PriceTransform::default(),
@@ -1042,7 +1076,6 @@ impl Chart {
                     .unwrap_or(0),
             ))
         });
-        self.host_events.volume_map = volume_map;
         // Draw indicators
         for study in studies
             .indicators()
@@ -1086,36 +1119,36 @@ impl Chart {
                 self.config.bearish_color,
             );
         }
-        renderers::IndicatorRenderer::render(
-            &price_ctx,
-            studies.indicators(),
-            visible_data,
-            &price_map,
-            &coords,
-        );
+        let indicators = studies.indicators();
+        let top = on_top
+            .and_then(|on_top| {
+                self.study_ids
+                    .iter()
+                    .position(|id| on_top == super::ChartElementId::Indicator(*id))
+            })
+            .unwrap_or(indicators.len());
+        for part in [
+            &indicators[..top],
+            indicators.get(top + 1..).unwrap_or_default(),
+            indicators.get(top..=top).unwrap_or_default(),
+        ] {
+            renderers::IndicatorRenderer::render(
+                &price_ctx,
+                part,
+                visible_data,
+                &price_map,
+                &coords,
+            );
+        }
+        if main_on_top {
+            paint_main_series();
+        }
+        self.host_events.volume_map = volume_map;
 
         // Resolve a click on the main chart area into a selection. Overlay
         // indicators take priority over the series beneath them; an empty-area
         // click clears the selection. Clicks in a study's pane are resolved
         // where the panes are rendered, outside this rect.
-        let main_visible_range = start_idx..(start_idx + visible_data.len());
-        let volume_coords = show_volume.then(|| coords.with_rect(volume_rect));
-        let element_at = |pos| {
-            hit_test_main_chart(
-                pos,
-                studies,
-                &self.study_ids,
-                &coords,
-                volume_coords.as_ref(),
-                self.state.shown(),
-                max_volume,
-                main_visible_range.clone(),
-            )
-            .filter(|(id, _)| {
-                self.main_series_visible
-                    || matches!(id, crate::widget::ChartElementId::Indicator(_))
-            })
-        };
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
         {
@@ -1880,17 +1913,23 @@ impl Chart {
                     // Convert bar index to screen x coordinate
                     let x = coords.idx_to_x(bar_idx.round() as usize);
                     if coords.is_x_visible(x) {
-                        // Create a synthetic hover position at the center of the price range
-                        let center_y = price_rect.center().y;
-                        let synced_pos = Pos2::new(x, center_y);
-
+                        // At the host's price, or a synthetic position at the centre of the
+                        // price range for a time alone
+                        let mut options = self.chart_options.crosshair;
+                        let y = match self.synced_crosshair_price {
+                            Some(price) => {
+                                options.mode = crate::config::CrosshairMode::Normal;
+                                price_map.price_to_y(price)
+                            }
+                            None => price_rect.center().y,
+                        };
                         crosshair_tags = rendering::render_crosshair_with_options(
                             &price_ctx,
-                            synced_pos,
+                            Pos2::new(x, y),
                             visible_data,
                             &price_map,
                             &coords,
-                            &self.chart_options.crosshair,
+                            &options,
                             time_axis_top,
                             axis_edge,
                             last_price_tag,
@@ -2777,6 +2816,99 @@ mod tests {
                 vec![]
             };
             assert_eq!(fills, expected);
+        }
+    }
+
+    #[test]
+    fn runtime_options_size_and_crosshair_position_apply_to_a_built_chart() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[200.0]);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        // Unrelated options keep the view; new bounds clamp it; spacing and offset apply.
+        chart.apply_synced_time_scale(3.0, -20.0);
+        let mut options = chart.chart_options().clone();
+        options.crosshair.mode = crate::config::CrosshairMode::Magnet;
+        chart.set_chart_options(options.clone());
+        assert_eq!(chart.get_time_scale_state(), (3.0, -20.0));
+        options.time_scale.min_bar_spacing = 4.0;
+        chart.set_chart_options(options.clone());
+        assert_eq!(chart.get_time_scale_state(), (4.0, -20.0));
+        options.time_scale.bar_spacing = 8.0;
+        options.time_scale.right_offset = 5.0;
+        chart.set_chart_options(options.clone());
+        assert_eq!(chart.get_time_scale_state(), (8.0, 5.0));
+        assert_eq!(chart.chart_options(), &options);
+
+        chart.set_size(Some(egui::vec2(300.0, 200.0)));
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        let plot = chart.get_rendered_price_rect();
+        assert!(plot.max.x < 300.0 && plot.max.y < 200.0 && plot.width() > 200.0);
+        chart.set_size(None);
+
+        // The price label follows the host's price, which no axis tick shows.
+        let time = chart.state.shown()[50].time;
+        let label = |chart: &mut crate::widget::Chart, t| {
+            shapes(&ctx, chart, t, Vec::new())
+                .iter()
+                .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "137.50"))
+        };
+        chart.set_crosshair_position(Some((time, 137.5)));
+        assert!(label(&mut chart, 0.2));
+        chart.set_synced_crosshair_time(Some(time));
+        assert!(!label(&mut chart, 0.3));
+    }
+
+    #[test]
+    fn hovered_series_draw_above_the_others_when_enabled() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use egui::Color32;
+        let levels = [
+            (150.0, Color32::from_rgb(201, 1, 1)),
+            (170.0, Color32::from_rgb(1, 201, 1)),
+        ];
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[200.0]);
+        chart.chart_options.tooltip.enabled = false;
+        for (level, color) in levels {
+            chart.add_indicator(Box::new(
+                CustomIndicator::new("Level", move |bars| {
+                    vec![IndicatorValue::Single(level); bars.len()]
+                })
+                .with_color(color),
+            ));
+        }
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let map = chart.get_chart_mapping();
+        let candle = chart.config().bullish_color;
+        let first = |shapes: &[Shape], color| {
+            shapes.iter().position(|shape| match shape {
+                Shape::Rect(rect) => rect.fill == color,
+                Shape::LineSegment { stroke, .. } => stroke.color == color,
+                Shape::Mesh(mesh) => mesh.vertices.iter().any(|vertex| vertex.color == color),
+                _ => false,
+            })
+        };
+        // (enabled, hovered price, colours from the bottom up)
+        for (t, (enabled, price, order)) in [
+            (false, 120.0, [candle, levels[0].1, levels[1].1]),
+            (true, 120.0, [levels[0].1, levels[1].1, candle]),
+            (true, 150.0, [candle, levels[1].1, levels[0].1]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let t = t as f64;
+            chart.chart_options.hovered_series_on_top = enabled;
+            let pointer = || {
+                vec![Event::PointerMoved(Pos2::new(
+                    map.idx_to_x(90),
+                    map.price_to_y(price),
+                ))]
+            };
+            frame(&ctx, &mut chart, t + 0.1, pointer());
+            let painted = shapes(&ctx, &mut chart, t + 0.2, pointer());
+            let positions = order.map(|color| first(&painted, color).unwrap());
+            assert!(positions.is_sorted(), "{enabled} {price}: {positions:?}");
         }
     }
 
