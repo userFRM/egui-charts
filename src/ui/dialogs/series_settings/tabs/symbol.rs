@@ -97,6 +97,38 @@ impl SymbolTab {
                 ui.end_row();
                 Self::transform_source(ui, &mut params.line_break_source);
             }
+            ChartType::TimePriceOpportunity => {
+                ui.label("Period");
+                ui.add(
+                    egui::DragValue::new(&mut params.tpo_period_minutes)
+                        .range(1..=1440)
+                        .suffix(" min"),
+                );
+                ui.end_row();
+                ui.label("Ticks per row");
+                ui.add(
+                    egui::DragValue::new(&mut params.tpo_row_ticks)
+                        .range(0..=100_000)
+                        .custom_formatter(|ticks, _| {
+                            if ticks == 0.0 {
+                                "Auto".to_owned()
+                            } else {
+                                ticks.to_string()
+                            }
+                        }),
+                );
+                ui.end_row();
+                ui.label("Value area");
+                ui.add(
+                    egui::DragValue::new(&mut params.tpo_value_area)
+                        .range(1.0..=100.0)
+                        .suffix("%"),
+                );
+                ui.end_row();
+                ui.label("Split extended hours");
+                ui.checkbox(&mut params.tpo_split_sessions, "");
+                ui.end_row();
+            }
             ChartType::Baseline => {
                 ui.label("Base level");
                 let mut price = matches!(params.baseline, BaselineLevel::Price(_));

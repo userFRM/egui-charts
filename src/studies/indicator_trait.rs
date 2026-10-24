@@ -169,6 +169,13 @@ pub trait Indicator: Send {
         None
     }
 
+    /// Optional text beside the shape a circle, cross or triangle plot draws at a source bar:
+    /// under an upward triangle and over the other shapes, in the shape's colour.
+    fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
+        let _ = (line, bar);
+        None
+    }
+
     /// Filled bands, painted beneath this study's plots. Missing endpoints break a band.
     fn fills(&self) -> Vec<super::StudyFill> {
         Vec::new()
@@ -321,6 +328,13 @@ pub trait Indicator: Send {
     /// Source ranges and OHLCV remain available to hosts for per-bar readouts.
     fn candles(&self) -> &[super::StudyCandle] {
         &[]
+    }
+
+    /// Market Profile settings of a study whose session profiles the chart builds with
+    /// [`to_tpo_profiles`](crate::model::to_tpo_profiles) and draws on the price pane, beside
+    /// each session's bars, as it does for the TPO chart type. `None` by default.
+    fn tpo(&self) -> Option<&crate::model::TPOConfig> {
+        None
     }
 
     /// Shapes attached to study values, empty by default.
