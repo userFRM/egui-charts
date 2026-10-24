@@ -238,6 +238,7 @@ pub(crate) fn render_time_grid(
     coords: &ChartMapping,
     formatter: &dyn TimeFormatter,
     color: Color32,
+    style: crate::model::LineStyle,
 ) {
     let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter);
     for mark in marks {
@@ -250,6 +251,7 @@ pub(crate) fn render_time_grid(
                 Pos2::new(x, context.rect.top()),
                 Pos2::new(x, context.rect.bottom()),
                 egui::Stroke::new(0.5, color),
+                style,
             );
         }
     }

@@ -819,7 +819,13 @@ impl Chart {
 
         // Draw grid
         if self.config.show_grid && self.config.show_horizontal_grid {
-            rendering::render_grid(&painter, price_rect, &price_map, self.config.grid_color);
+            rendering::render_grid(
+                &painter,
+                price_rect,
+                &price_map,
+                self.config.grid_color,
+                self.config.grid_line_style,
+            );
         }
 
         // Create rendering contexts
@@ -849,6 +855,10 @@ impl Chart {
         let formatter = self.build_time_formatter();
 
         if self.config.show_grid && self.config.show_vertical_grid {
+            let style = self
+                .config
+                .vertical_grid_line_style
+                .unwrap_or(self.config.grid_line_style);
             if time_based {
                 renderers::render_time_grid(
                     &RenderContext::new(&painter, chart_rect),
@@ -858,6 +868,7 @@ impl Chart {
                     self.config
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
+                    style,
                 );
             } else {
                 rendering::render_vertical_grid(
@@ -867,6 +878,7 @@ impl Chart {
                     self.config
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
+                    style,
                 );
             }
         }

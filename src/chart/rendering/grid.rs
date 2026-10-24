@@ -3,13 +3,20 @@
 
 use super::dashed_line::draw_dashed_line;
 use crate::chart::renderers::ChartMapping;
+use crate::model::LineStyle;
 use crate::scales::{PriceMap, PriceMarkGenerator};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
 /// Renders horizontal price grid lines using smart mark generation
 /// Lines anchor to "nice" price values and adapt density based on zoom
-pub fn render_grid(painter: &Painter, rect: Rect, price_map: &PriceMap, grid_color: Color32) {
+pub fn render_grid(
+    painter: &Painter,
+    rect: Rect,
+    price_map: &PriceMap,
+    grid_color: Color32,
+    style: LineStyle,
+) {
     let marks = PriceMarkGenerator::new().generate_marks(price_map);
 
     for mark in marks {
@@ -25,6 +32,7 @@ pub fn render_grid(painter: &Painter, rect: Rect, price_map: &PriceMap, grid_col
             Pos2::new(rect.min.x, mark.y_coord),
             Pos2::new(rect.max.x, mark.y_coord),
             Stroke::new(stroke_width, grid_color),
+            style,
         );
     }
 }
@@ -36,6 +44,7 @@ pub fn render_vertical_grid(
     rect: Rect,
     coords: &ChartMapping,
     grid_color: Color32,
+    style: LineStyle,
 ) {
     // Calculate grid interval based on bar spacing (zoom level)
     // More zoomed in (larger bar_spacing) = more grid lines
@@ -82,14 +91,26 @@ pub fn render_vertical_grid(
                 },
                 grid_color,
             ),
+            style,
         );
     }
 }
 
-/// Paints a grid line at the caller's price or time mark, dotted in both themes.
-pub(crate) fn render_grid_line(painter: &Painter, start: Pos2, end: Pos2, mut stroke: Stroke) {
+/// Paints a one-pixel grid line in `style` at the caller's price or time mark.
+pub(crate) fn render_grid_line(
+    painter: &Painter,
+    start: Pos2,
+    end: Pos2,
+    mut stroke: Stroke,
+    style: LineStyle,
+) {
     stroke.width = DESIGN_TOKENS.stroke.hairline;
-    draw_dashed_line(painter, start, end, stroke, 1.0, 3.0);
+    match style.hairline_pattern() {
+        Some((dash, gap)) => draw_dashed_line(painter, start, end, stroke, dash, gap),
+        None => {
+            painter.line_segment([start, end], stroke);
+        }
+    }
 }
 
 /// Round to a nice interval (1, 2, 5, 10, 20, 50, 100, etc.)
@@ -132,7 +153,7 @@ mod tests {
     use egui::{Context, LayerId, RawInput, Shape, vec2};
 
     #[test]
-    fn grid_is_dotted_in_both_directions_with_the_supplied_colour() {
+    fn grid_dots_follow_the_style_in_both_directions_with_the_supplied_colour() {
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 240.0));
         let price = PriceMap::new(
             PriceTransform::default(),
@@ -151,7 +172,12 @@ mod tests {
             let ctx = Context::default();
             apply_to_egui(&ctx, &theme);
             ctx.set_pixels_per_point(scale);
-            for vertical in [false, true] {
+            for (style, dot_gap, vertical) in [
+                (LineStyle::Dotted, 3.0, false),
+                (LineStyle::Dotted, 3.0, true),
+                (LineStyle::SparseDotted, 7.0, false),
+                (LineStyle::SparseDotted, 7.0, true),
+            ] {
                 let output = ctx.run_ui(
                     RawInput {
                         screen_rect: Some(rect),
@@ -160,9 +186,9 @@ mod tests {
                     |_| {
                         let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
                         if vertical {
-                            render_vertical_grid(&painter, rect, &coords, Color32::RED);
+                            render_vertical_grid(&painter, rect, &coords, Color32::RED, style);
                         } else {
-                            render_grid(&painter, rect, &price, Color32::RED);
+                            render_grid(&painter, rect, &price, Color32::RED, style);
                         }
                     },
                 );
@@ -189,7 +215,7 @@ mod tests {
                                 } else {
                                     pair[1].left() - pair[0].right()
                                 };
-                                assert_eq!(gap, 3.0);
+                                assert_eq!(gap, dot_gap);
                             }
                             span_count += dots.len();
                         }
