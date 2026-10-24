@@ -340,6 +340,8 @@ pub struct DataWindowInfo {
     pub prev_close: f64,
     /// Instrument price decimals; `None` keeps magnitude-based formatting.
     pub price_decimals: Option<u8>,
+    /// Visible study plots at the same bar as the OHLCV values.
+    pub studies: Vec<crate::chart::renderers::StudyValue>,
 }
 
 impl DataWindowInfo {

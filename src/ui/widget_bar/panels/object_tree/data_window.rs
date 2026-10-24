@@ -14,6 +14,39 @@ use super::types::DataWindowInfo;
 use crate::ext::UiExt;
 use crate::tokens::DESIGN_TOKENS;
 
+impl DataWindowInfo {
+    /// Populates the readout from the hovered rendered bar, falling back to the latest bar.
+    /// Uses the chart's time formatter, instrument precision and visible study plots.
+    /// Call after [`crate::widget::Chart::show`] so hover and study values describe the current frame.
+    pub fn from_chart(chart: &crate::widget::Chart) -> Self {
+        let bars = chart.state().shown();
+        let index = chart
+            .get_hover_bar_idx()
+            .filter(|index| index.is_finite() && index.round() >= 0.0)
+            .map(|index| index.round() as usize)
+            .filter(|index| *index < bars.len())
+            .unwrap_or_else(|| bars.len().saturating_sub(1));
+        let mut info = Self::new(chart.symbol())
+            .with_timeframe(chart.timeframe().map(|tf| tf.as_str()).unwrap_or_default());
+        if let Some(instrument) = chart.instrument() {
+            info = info.with_instrument(instrument);
+        }
+        if let Some(bar) = bars.get(index) {
+            info = info
+                .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
+                .with_timestamp(chart.format_time(bar.time))
+                .with_prev_close(
+                    index
+                        .checked_sub(1)
+                        .and_then(|index| bars.get(index))
+                        .map_or(bar.open, |bar| bar.close),
+                );
+            info.studies = chart.study_values_at(index);
+        }
+        info
+    }
+}
+
 /// Render the Data Window section
 ///
 /// Shows OHLCV data at cursor position in a compact grid layout.
@@ -72,6 +105,18 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
 
             // OHLCV grid
             show_ohlcv_grid(ui, data);
+            if !data.studies.is_empty() {
+                ui.space_sm();
+                egui::Grid::new("study_values")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for study in &data.studies {
+                            ui.hint_label(study.label());
+                            ui.label(RichText::new(study.formatted_value()).color(study.color));
+                            ui.end_row();
+                        }
+                    });
+            }
 
             ui.space_sm();
         });
