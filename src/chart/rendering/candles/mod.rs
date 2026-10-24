@@ -357,20 +357,16 @@ pub fn render_chart_type(
 
         // === Advanced Types ===
         ChartType::TimePriceOpportunity => {
-            // Auto-derive the price-bin size from the visible range: a zero
-            // tick_size signals `render_live_tpo` to pick a readable row count.
-            let tpo_config = crate::model::TPOConfig {
-                tick_size: 0.0,
-                ..Default::default()
-            };
+            let tpo_config = params.type_params.tpo_config(ctx.tick_size);
             tpo::render_live_tpo(
                 painter,
                 price_rect,
-                ctx.visible_data,
+                ctx.full_data,
+                ctx.start_idx..ctx.start_idx + ctx.visible_data.len(),
                 ctx.revision,
-                ctx.start_idx,
                 ctx.price_scale,
                 &tpo_config,
+                ctx.clock,
                 &idx_to_coord,
                 params.chart_rect_min_x(),
                 params.bullish_color(),

@@ -38,7 +38,7 @@ Each item is marked as complete, partial, or missing.
 - [x] **Point & Figure**: X/O column rendering, max 1000 columns
 
 #### Advanced
-- [x] **Time Price Opportunity (TPO)**: Rendered by the chart type dispatch (value area, POC, initial balance); default 30-minute periods, sessions split on the UTC date, profiles built from the visible bars, at most about 1,000 rows, bars with a non-finite price skipped
+- [x] **Time Price Opportunity (TPO)**: Rendered by the chart type dispatch (value area, POC, initial balance); period, ticks per row, value area and extended-hours split set in the Symbol tab, periods at least the bar interval, sessions following the chart's exchange sessions or calendar days, profiles built over the whole sessions of the visible bars, adjacent sessions merged or a composite built through `ChartTypeParams::tpo_composites`, at most about 1,000 rows, bars with a non-finite price skipped
 
 ### Pan / Zoom
 - [x] Mouse wheel zoom (centered on cursor)

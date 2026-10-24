@@ -927,6 +927,7 @@ impl Chart {
         let clipped_price_ctx = RenderContext::new(&clipped_painter, price_rect);
         let clipped_volume_ctx = RenderContext::new(&clipped_painter, volume_rect);
 
+        let bar_clock = self.bar_clock();
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
             volume_ctx: &clipped_volume_ctx,
@@ -938,6 +939,10 @@ impl Chart {
             full_data: &self.state.data().bars,
             revision: self.state.revision(),
             start_idx,
+            clock: &bar_clock,
+            tick_size: self
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
         };
 
         let render_params = rendering::ChartTypeParams::new(
