@@ -320,7 +320,7 @@ pub struct Chart {
     last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
-    theme_override: Option<crate::theme::Theme>,
+    pub(crate) theme_override: Option<crate::theme::Theme>,
     host_events: events::HostEvents,
     events: Vec<crate::model::Marker>,
     time_scale_events: Vec<crate::model::TimeScaleEvent>,
@@ -358,6 +358,9 @@ pub struct Chart {
     pub(crate) marks: Vec<crate::model::Marker>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
     price_lines: Vec<crate::model::PriceLine>,
+    /// Price axis tags of the trading lines drawn over the last frame, shown once on the next.
+    #[cfg(feature = "ui")]
+    pub(crate) trading_tags: Vec<(f64, egui::Color32)>,
 
     // =========================================================================
     // Selection State

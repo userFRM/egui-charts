@@ -86,8 +86,8 @@ widget = ["dep:egui", "dep:web-time"]
 ## build can compute the same studies.
 studies = []
 ## Compile-time embedded SVG icons (`icons::Icon`).  Required by `ui`.
-## The chart installs egui_extras' SVG image loader so the icons render.
-icons = ["widget", "dep:egui_extras", "egui_extras/svg"]
+## The chart installs egui_extras' SVG image loader and a pixel-aligned icon loader so the icons render.
+icons = ["widget", "dep:egui_extras", "egui_extras/svg", "dep:resvg"]
 ## Application-level UI components: toolbars, panels, sidebars, dialogs, the
 ## reusable `ui_kit` widget library they are built on, the `ext` helpers, and
 ## the built-in studies they offer.
@@ -112,6 +112,8 @@ egui = { version = "0.37.0", default-features = false, features = ["serde"], opt
 # resolves to this crate, which egui re-exports.
 ecolor = { version = "0.37.0", features = ["serde"] }
 egui_extras = { version = "0.37.0", default-features = false, optional = true }
+# The icon loader rasterises with the same resvg that egui_extras' SVG loader uses.
+resvg = { version = "0.45.1", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }

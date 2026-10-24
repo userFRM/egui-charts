@@ -467,15 +467,16 @@ impl Chart {
         shared_time_axis: Option<Rect>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
-        // Register the SVG image loader once per context so the embedded
-        // icons used by the toolbars and panels decode without the host app
-        // having to wire egui_extras itself.
+        // Register the SVG and icon image loaders once per context so the
+        // embedded icons used by the toolbars and panels decode without the
+        // host app having to wire egui_extras itself.
         #[cfg(feature = "icons")]
         {
             let ctx = ui.ctx().clone();
             let loaders_installed = egui::Id::unique("egui_charts::image_loaders_installed");
             if !ctx.data(|d| d.get_temp::<bool>(loaders_installed).unwrap_or(false)) {
                 egui_extras::install_image_loaders(&ctx);
+                crate::icons::install_loader(&ctx);
                 ctx.data_mut(|d| d.insert_temp(loaders_installed, true));
             }
         }
@@ -1274,6 +1275,8 @@ impl Chart {
                 pending_values.push((line.price, line.color));
             }
         }
+        #[cfg(feature = "ui")]
+        pending_values.extend(std::mem::take(&mut self.trading_tags));
 
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)

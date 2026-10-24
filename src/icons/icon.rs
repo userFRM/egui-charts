@@ -42,7 +42,8 @@ impl Icon {
     /// * `size` - The size to render the icon at (width and height)
     #[inline]
     pub fn as_image(&self, size: Vec2) -> egui::Image<'static> {
-        let uri = format!("bytes://{}", self.name);
+        // The logical width in the URI lets the icon loader size strokes for the display scale.
+        let uri = format!("{}{}/{}", super::loader::URI_PREFIX, size.x, self.name);
         egui::Image::from_bytes(uri, self.svg_bytes).fit_to_exact_size(size)
     }
 

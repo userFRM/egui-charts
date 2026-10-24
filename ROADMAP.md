@@ -491,7 +491,8 @@ The ui_kit components are generic building blocks:
 
 ### Data Layer
 - [x] `data::Datafeed`: charts load history, live bars, trades and depth through `ChartBuilder::with_feed`
-- [ ] `services::Storage`, `SymbolSearch`, `Signals`, `Alerts` and `Broker` are defined, but nothing calls them yet
+- [x] `services::Broker`: order tickets, one-click orders and confirmed chart-line actions use the host account
+- [ ] `services::SymbolSearch` and `Signals` are defined, but nothing calls them yet
 - [ ] No in-crate `Datafeed` implementation: the host owns the transport
 
 ### Configuration
