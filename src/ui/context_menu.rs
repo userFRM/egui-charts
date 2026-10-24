@@ -1006,10 +1006,10 @@ impl ChartMenus {
 mod tests {
     use super::*;
 
-    /// Guards #218: entries above the last price offer a sell limit and a buy stop; below it,
-    /// a buy limit and a sell stop. They use
-    /// the configured quantity at the click rounded to the tick, and leave out order types the
-    /// account does not accept. Fixed sides send a marketable order from a click below the market.
+    /// Guards #218: entries above the last price offer a sell limit and a buy stop; below it, a
+    /// buy limit and a sell stop. They use the configured quantity at the click rounded to the
+    /// tick, and leave out order types the account does not accept. Fixed sides send a marketable
+    /// order from a click below the market.
     #[test]
     fn order_entries_follow_the_market() {
         use OrderSide::{Buy, Sell};
