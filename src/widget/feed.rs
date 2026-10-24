@@ -306,6 +306,9 @@ impl Chart {
     /// Keeps `history` of the order book the feed sends, sampled from the next update, or stops
     /// with `None`. The history starts empty and is cleared when the symbol or interval changes.
     /// It needs the instrument's tick size, and keeps no columns without one or without a feed.
+    /// Columns follow the times of the depth updates: an update stamped more than a minute after
+    /// the feed's time ([`Sink::set_server_time`](crate::data::Sink::set_server_time)) samples
+    /// nothing, so a wrong time cannot hold the history back.
     /// The chart takes the columns sampled since its last frame when it is drawn: while it is not,
     /// at most [`columns`](crate::data::DepthHistoryConfig::columns) of them wait, the oldest
     /// making room for new ones.

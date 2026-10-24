@@ -95,6 +95,7 @@ impl DepthHistory {
         })
     }
 
+    /// The configuration the history samples with.
     pub fn config(&self) -> &DepthHistoryConfig {
         &self.config
     }
@@ -172,7 +173,7 @@ fn start(ts: DateTime<Utc>, cadence: TimeDelta) -> Option<DateTime<Utc>> {
 /// One column spanning `older` and `newer`, adjacent, each row's size averaged over their spans.
 fn merge(older: DepthColumn, newer: DepthColumn, rows: usize) -> DepthColumn {
     let span = older.span + newer.span;
-    let weight = |part: TimeDelta| part.num_milliseconds() as f64 / span.num_milliseconds() as f64;
+    let weight = |part: TimeDelta| part.as_seconds_f64() / span.as_seconds_f64();
     let (a, b) = (weight(older.span), weight(newer.span));
     DepthColumn {
         time: older.time,
@@ -238,15 +239,16 @@ mod tests {
     /// with columns oldest first. Columns that are not adjacent must not be averaged together.
     #[test]
     fn full_tiers_merge_adjacent_columns_by_time_weight() {
+        // Spans of a cadence that is not a whole number of milliseconds.
         let older = DepthColumn {
             time: at(0),
-            span: TimeDelta::seconds(1),
+            span: TimeDelta::microseconds(500),
             bids: vec![(101, 4.0), (99, 2.0)],
             asks: vec![(102, 6.0)],
         };
         let newer = DepthColumn {
-            time: at(1),
-            span: TimeDelta::seconds(3),
+            time: at(0) + TimeDelta::microseconds(500),
+            span: TimeDelta::microseconds(1_500),
             bids: vec![(100, 8.0), (99, 6.0)],
             asks: vec![(102, 2.0), (103, 4.0)],
         };
@@ -255,7 +257,7 @@ mod tests {
             merge(older, newer, 2),
             DepthColumn {
                 time: at(0),
-                span: TimeDelta::seconds(4),
+                span: TimeDelta::milliseconds(2),
                 bids: vec![(101, 1.0), (100, 6.0)],
                 asks: vec![(102, 3.0), (103, 3.0)],
             }
