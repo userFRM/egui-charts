@@ -12,8 +12,9 @@
 //! with conventional length 21, non-centred. The non-centred form is aligned with the current
 //! bar. The centred form compares each close with the average centred on it; its value is
 //! stored at the bar that completes the average and [`plot_offset`](Indicator::plot_offset)
-//! draws it `shift` bars back, so its last `shift` bars are blank. A bar skipped for a non-finite
-//! close still counts toward that shift, so each value is drawn under the close it uses.
+//! draws it `shift` bars back, so its last `shift` bars are blank. A value that would be drawn
+//! back over a bar skipped for a non-finite close is left out, as it would not lie under the close
+//! it uses.
 //!
 //! # Example
 //! ```
@@ -73,15 +74,14 @@ impl DetrendedPriceOscillator {
         self.period / 2 + 1
     }
 
-    /// The non-centred values over `data`, every bar of which has a finite close, or the average
-    /// itself for the centred form.
+    /// The values over `data`, every bar of which has a finite close.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
         let average = rolling_mean(&closes, self.period);
         (0..data.len())
             .map(|i| {
                 IndicatorValue::Single(match i.checked_sub(self.shift()) {
-                    _ if self.centered => average[i],
+                    Some(back) if self.centered => closes[back] - average[i],
                     Some(back) => closes[i] - average[back],
                     None => f64::NAN,
                 })
@@ -126,17 +126,19 @@ impl Indicator for DetrendedPriceOscillator {
     fn calculate(&mut self, data: &[Bar]) {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
         if self.centered {
-            let average = std::mem::take(&mut self.values);
-            // The plot offset counts every chart bar, so the close drawn under a value is the one
-            // `shift` bars back on the chart, skipped bars included.
+            // Drawn back over a skipped bar, a value would sit beside the close it uses.
+            let mut skipped = None;
             self.values = (0..data.len())
                 .map(|i| {
-                    IndicatorValue::Single(
-                        match (i.checked_sub(self.shift()), average.value(0, i)) {
-                            (Some(back), Some(mean)) => data[back].close - mean,
-                            _ => f64::NAN,
-                        },
-                    )
+                    if !data[i].close.is_finite() {
+                        skipped = Some(i);
+                    }
+                    let near = skipped.is_some_and(|s| i - s <= self.shift());
+                    IndicatorValue::Single(if near {
+                        f64::NAN
+                    } else {
+                        self.values.value(0, i).unwrap_or(f64::NAN)
+                    })
                 })
                 .collect();
         }
@@ -190,8 +192,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     /// With length 1 the shift is 1 and the average is the close, so a centred value is drawn
-    /// under the close one bar before the one completing it. A skipped bar draws nothing, and
-    /// neither does the bar whose average it would complete.
+    /// under the close one bar before the one completing it. Nothing is drawn under a skipped bar,
+    /// nor under the bar before it, whose value the skipped bar would complete.
     #[test]
     fn centred_values_stay_under_their_close_past_a_skipped_bar() {
         let bars: Vec<Bar> = [0.0, 1.0, 4.0, f64::NAN, 9.0, 16.0]
