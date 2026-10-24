@@ -72,11 +72,11 @@
 //! | Volume | Anchored VWAP, Volume Profile | 3 |
 //! | Measurers | Price Range, Date Range | 4 |
 //! | Brushes | Brush, Highlighter | 3 |
-//! | Arrows | Arrow, Arrow Mark Up/Down | 4 |
-//! | Shapes | Rectangle, Circle, Ellipse, Polyline | 10 |
+//! | Arrows | Arrow, Arrow Mark Up/Down/Left/Right | 6 |
+//! | Shapes | Rectangle, Circle, Ellipse, Polyline, Sector | 11 |
 //! | Annotations | Text, Note, Callout, Price Label | 11 |
 //! | Content | Image, Tweet, Idea (placeholders) | 3 |
-//! | Icons | Font Icon / Emoji | 1 |
+//! | Icons | Icon / Emoji, Sticker | 2 |
 //!
 //! # Quick start
 //!
@@ -112,6 +112,7 @@ pub mod categories;
 /// Pure domain types with minimal dependencies: `Drawing`, `ChartPoint`,
 /// `DrawingToolType`, and styling/configuration options.
 pub mod domain;
+pub(crate) mod glyphs;
 /// `DrawingManager` -- thin coordinator that delegates to services.
 pub mod manager;
 /// JSON-based serialization and storage for drawings via `DrawingStorage`.

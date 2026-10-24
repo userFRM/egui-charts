@@ -25,3 +25,20 @@ impl IconSize {
         }
     }
 }
+
+/// Leftward single-point arrow mark.
+pub const ARROW_MARK_LEFT: crate::icons::Icon = crate::icons::Icon::new(
+    "marks/arrow-mark-left.svg",
+    include_bytes!("arrow-mark-left.svg"),
+);
+/// Rightward single-point arrow mark.
+pub const ARROW_MARK_RIGHT: crate::icons::Icon = crate::icons::Icon::new(
+    "marks/arrow-mark-right.svg",
+    include_bytes!("arrow-mark-right.svg"),
+);
+/// Circular sector with its center and radius anchors.
+pub const SECTOR: crate::icons::Icon =
+    crate::icons::Icon::new("marks/sector.svg", include_bytes!("sector.svg"));
+/// Sticker with a curled corner.
+pub const STICKER: crate::icons::Icon =
+    crate::icons::Icon::new("marks/sticker.svg", include_bytes!("sticker.svg"));

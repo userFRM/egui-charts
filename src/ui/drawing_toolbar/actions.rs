@@ -76,8 +76,14 @@ pub enum DrawingToolbarAction {
     OpenTemplateMenu,
     /// Open the host's drawing template catalog for loading and deletion.
     ManageTemplates,
-    /// An icon or emoji was picked in the Icons/Emojis menu; the host calls
-    /// `DrawingManager::start_icon_insertion` with it, and the next click places it.
+    /// Place a bundled icon, emoji or sticker at its independent pixel size.
+    InsertGlyph {
+        /// Bundled glyph id or Unicode emoji.
+        icon_name: &'static str,
+        /// Size in logical pixels, saved as `Drawing::font_size`.
+        size: f32,
+    },
+    /// Legacy host intent for an emoji at the configured default size.
     InsertEmoji {
         /// The icon or emoji to place
         icon_name: &'static str,

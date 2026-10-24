@@ -125,8 +125,10 @@ impl Drawing {
             if i > 0 {
                 painter.line_segment([self.points[i - 1], point], stroke);
             }
-            // Draw small circles at each vertex
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
+            // Keep the endpoint clear for its arrowhead.
+            if i + 1 < self.points.len() || !self.arrow_end_style.is_visible() {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
+            }
         }
 
         // Larger circle at start point

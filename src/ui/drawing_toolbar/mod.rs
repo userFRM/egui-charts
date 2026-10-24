@@ -65,6 +65,7 @@
 pub mod actions;
 pub mod config;
 pub mod data;
+mod glyph_picker;
 pub mod icons;
 pub mod shortcuts;
 pub mod state;
@@ -89,6 +90,7 @@ pub struct DrawingTemplate {
 pub use actions::DrawingToolbarAction;
 pub use components::{PairButton, draw_icon_btn, draw_separator, draw_toggle_btn};
 pub use config::DrawingToolbarConfig;
+pub use glyph_picker::GlyphPicker;
 pub use shortcuts::DrawingToolShortcuts;
 pub use state::{MagnetType, ToolbarState};
 pub use submenu_builder::{SubmenuBuilder, SubmenuItem, ToggleConfig};

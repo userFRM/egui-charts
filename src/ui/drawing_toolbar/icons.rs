@@ -135,6 +135,10 @@ pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
         DrawingToolType::ArrowMarker => &icons::ARROW_MARKER,
         DrawingToolType::Arrow => &icons::ARROW_LINE,
         DrawingToolType::ArrowMarkUp => &icons::ARROW_MARK_UP,
+        DrawingToolType::ArrowMarkLeft => &crate::ui::icons::ARROW_MARK_LEFT,
+        DrawingToolType::ArrowMarkRight => &crate::ui::icons::ARROW_MARK_RIGHT,
+        DrawingToolType::Sector => &crate::ui::icons::SECTOR,
+        DrawingToolType::Sticker => &crate::ui::icons::STICKER,
         DrawingToolType::ArrowMarkDown => &icons::ARROW_MARK_DOWN,
 
         // ============ SHAPES (10 tools) ============

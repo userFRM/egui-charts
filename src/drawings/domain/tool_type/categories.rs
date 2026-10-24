@@ -104,6 +104,8 @@ impl DrawingToolType {
                 Self::Arrow,
                 Self::ArrowMarkUp,
                 Self::ArrowMarkDown,
+                Self::ArrowMarkLeft,
+                Self::ArrowMarkRight,
             ],
             "shapes" => vec![
                 Self::Rect,
@@ -114,6 +116,7 @@ impl DrawingToolType {
                 Self::Polyline,
                 Self::Triangle,
                 Self::Arc,
+                Self::Sector,
                 Self::Curve,
                 Self::DoubleCurve,
             ],
@@ -130,7 +133,7 @@ impl DrawingToolType {
                 Self::FlagNote,
             ],
             "content" => Vec::new(),
-            "icons" => vec![Self::FontIcon],
+            "icons" => vec![Self::FontIcon, Self::Sticker],
             _ => vec![Self::TrendLine],
         }
     }
@@ -244,12 +247,14 @@ impl DrawingToolType {
             // Brushes (2)
             Self::Brush,
             Self::Highlighter,
-            // Arrows (4)
+            // Arrows (6)
             Self::ArrowMarker,
             Self::Arrow,
             Self::ArrowMarkUp,
             Self::ArrowMarkDown,
-            // Shapes (10)
+            Self::ArrowMarkLeft,
+            Self::ArrowMarkRight,
+            // Shapes (11)
             Self::Rect,
             Self::RotatedRect,
             Self::Path,
@@ -258,6 +263,7 @@ impl DrawingToolType {
             Self::Polyline,
             Self::Triangle,
             Self::Arc,
+            Self::Sector,
             Self::Curve,
             Self::DoubleCurve,
             // Annotations (11)
@@ -276,8 +282,9 @@ impl DrawingToolType {
             Self::Image,
             Self::Tweet,
             Self::Idea,
-            // Icons (1)
+            // Icons (2)
             Self::FontIcon,
+            Self::Sticker,
         ]
     }
 
@@ -358,6 +365,10 @@ impl DrawingToolType {
             Self::ArrowMarker => "assets/icons/drawing/arrow-marker.svg",
             Self::Arrow => "assets/icons/drawing/arrow.svg",
             Self::ArrowMarkUp => "assets/icons/drawing/arrow-mark-up.svg",
+            Self::ArrowMarkLeft => "src/ui/icons/arrow-mark-left.svg",
+            Self::ArrowMarkRight => "src/ui/icons/arrow-mark-right.svg",
+            Self::Sector => "src/ui/icons/sector.svg",
+            Self::Sticker => "src/ui/icons/sticker.svg",
             Self::ArrowMarkDown => "assets/icons/drawing/arrow-mark-down.svg",
             Self::Rect => "assets/icons/drawing/rect.svg",
             Self::RotatedRect => "assets/icons/drawing/rotated-rect.svg",

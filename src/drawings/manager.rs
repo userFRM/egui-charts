@@ -679,17 +679,20 @@ impl DrawingManager {
 
     /// Start icon/emoji insertion mode
     ///
-    /// Prepares a FontIcon drawing with the specified icon name,
+    /// Prepares a bundled icon, Unicode emoji or `sticker:` glyph,
     /// allowing the user to click on the chart to place it.
     pub fn start_icon_insertion(&mut self, icon_name: String) {
-        self.set_active_tool(Some(DrawingToolType::FontIcon));
+        let tool = if icon_name.starts_with("sticker:") {
+            DrawingToolType::Sticker
+        } else {
+            DrawingToolType::FontIcon
+        };
+        self.set_active_tool(Some(tool));
 
         // Create a new drawing with the icon name
         let id = self.take_id();
-        let mut drawing =
-            Drawing::with_color(id, DrawingToolType::FontIcon, self.options.default_color);
+        let mut drawing = Drawing::with_color(id, tool, self.options.default_color);
 
-        drawing.font_size = 32.0; // Larger size for icons/emojis
         if let Some(defaults) = self.tool_defaults.get(&drawing.tool_type) {
             let _ = defaults.apply_to(&mut drawing);
         }
@@ -835,9 +838,13 @@ impl DrawingManager {
     fn finish_curr_drawing(&mut self) {
         if let Some(mut drawing) = self.curr_drawing.take() {
             drawing.update_pane_coords(self.pane_rect);
-            let icon = (drawing.tool_type == DrawingToolType::FontIcon)
-                .then(|| drawing.text.clone())
-                .flatten();
+            let icon = matches!(
+                drawing.tool_type,
+                DrawingToolType::FontIcon | DrawingToolType::Sticker
+            )
+            .then(|| drawing.text.clone())
+            .flatten();
+            let glyph_size = drawing.font_size;
             self.history.push_add(drawing.clone());
             self.queue(DrawingSyncAction::SaveDrawing(drawing.id));
             self.drawings.push(drawing);
@@ -845,6 +852,9 @@ impl DrawingManager {
                 self.active_tool = None;
             } else if let Some(icon) = icon {
                 self.start_icon_insertion(icon);
+                if let Some(prepared) = &mut self.curr_drawing {
+                    prepared.font_size = glyph_size;
+                }
             }
         }
     }
@@ -1416,6 +1426,30 @@ mod tests {
         let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
         for (tool, anchors, hit, miss) in [
             (
+                DrawingToolType::Sector,
+                vec![(100., 100.), (200., 100.), (100., 150.)],
+                (170.71068, 170.71068),
+                (220., 220.),
+            ),
+            (
+                DrawingToolType::Sector,
+                vec![(100., 100.), (200., 100.), (100., 50.)],
+                (50., 150.),
+                (150., 50.),
+            ),
+            (
+                DrawingToolType::ArrowMarkLeft,
+                vec![(100., 100.)],
+                (110., 100.),
+                (80., 100.),
+            ),
+            (
+                DrawingToolType::ArrowMarkRight,
+                vec![(100., 100.)],
+                (90., 100.),
+                (120., 100.),
+            ),
+            (
                 DrawingToolType::TrendLine,
                 vec![(50., 100.), (550., 100.)],
                 (200., 100.),
@@ -1455,6 +1489,9 @@ mod tests {
                 .iter()
                 .map(|p| ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
                 .collect();
+            if tool == DrawingToolType::Sector {
+                drawing.fill_color = Some([30, 150, 180, 60]);
+            }
             drawing.text = Some("A long text annotation".into());
             manager.drawings.push(drawing);
             let render = |manager: &DrawingManager| {
@@ -1806,21 +1843,47 @@ mod tests {
     /// later click in keep-drawing mode.
     #[test]
     fn a_picked_icon_is_placed_by_the_next_click() {
-        for (keep_drawing, clicks) in [(false, 1), (true, 3)] {
-            let mut manager = DrawingManager::new();
-            manager.stay_in_drawing_mode = keep_drawing;
-            manager.start_icon_insertion("🔥".into());
-            for i in 0..clicks {
-                let tool = manager.active_tool.unwrap();
-                let at = Pos2::new(5.0 * (i + 1) as f32, 5.0);
-                manager.start_drawing_with_coords(tool, at, |x| x, f64::from);
+        for glyph in [
+            "icon:check",
+            "icon:star",
+            "😀",
+            "👍",
+            "🔥",
+            "🍎",
+            "🚀",
+            "📌",
+            "⭐",
+            "sticker:bull",
+        ] {
+            for (keep_drawing, clicks) in [(false, 1), (true, 3)] {
+                let mut manager = DrawingManager::new();
+                manager.stay_in_drawing_mode = keep_drawing;
+                manager.start_icon_insertion(glyph.into());
+                manager.curr_drawing.as_mut().unwrap().font_size = 48.0;
+                for i in 0..clicks {
+                    let tool = manager.active_tool.unwrap();
+                    assert_eq!(
+                        tool,
+                        if glyph.starts_with("sticker:") {
+                            DrawingToolType::Sticker
+                        } else {
+                            DrawingToolType::FontIcon
+                        }
+                    );
+                    let at = Pos2::new(5.0 * (i + 1) as f32, 5.0);
+                    manager.start_drawing_with_coords(tool, at, |x| x, f64::from);
+                }
+                let placed: Vec<_> = manager
+                    .drawings
+                    .iter()
+                    .map(|d| (d.text.as_deref(), d.font_size))
+                    .collect();
+                assert_eq!(
+                    placed,
+                    vec![(Some(glyph), 48.0); clicks],
+                    "{glyph}, keep drawing {keep_drawing}"
+                );
             }
-            let placed: Vec<_> = manager.drawings.iter().map(|d| d.text.as_deref()).collect();
-            assert_eq!(
-                placed,
-                vec![Some("🔥"); clicks],
-                "keep drawing {keep_drawing}"
-            );
         }
     }
 

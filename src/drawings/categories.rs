@@ -189,6 +189,8 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
                     DrawingToolType::Arrow,
                     DrawingToolType::ArrowMarkUp,
                     DrawingToolType::ArrowMarkDown,
+                    DrawingToolType::ArrowMarkLeft,
+                    DrawingToolType::ArrowMarkRight,
                 ],
             ),
             (
@@ -202,6 +204,7 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
                     DrawingToolType::Polyline,
                     DrawingToolType::Triangle,
                     DrawingToolType::Arc,
+                    DrawingToolType::Sector,
                     DrawingToolType::Curve,
                     DrawingToolType::DoubleCurve,
                 ],
@@ -222,7 +225,10 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
                 DrawingToolType::FlagNote,
             ],
         )],
-        "Icons/Emojis" => vec![("ICONS", vec![DrawingToolType::FontIcon])],
+        "Icons/Emojis" => vec![(
+            "ICONS",
+            vec![DrawingToolType::FontIcon, DrawingToolType::Sticker],
+        )],
         _ => vec![],
     }
 }

@@ -533,7 +533,7 @@ The ui_kit components are generic building blocks:
 ### What's built
 - 19 of 19 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
-- `DrawingToolType` defines 94 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
+- `DrawingToolType` defines 98 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
 - 124 registered indicators with calculation code
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - Reusable ui_kit building blocks
