@@ -9,7 +9,7 @@
 
 use super::time_formatter::TimeFormatter;
 use super::timescale_marks::{
-    TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight,
+    TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight, keep_spaced,
 };
 use crate::model::Bar;
 use chrono::{DateTime, Utc};
@@ -236,18 +236,15 @@ impl HorizontalScale for MaturityScale {
     }
 }
 
-/// Marks every point with the `weight` of its numeric key, then keeps the heaviest marks that
-/// lie the minimum spacing apart: lighter marks give way, and with a uniform distribution a
-/// weight that does not fit everywhere is left out with every lighter one. The heaviest kept
-/// marks are bold.
+/// Marks every point with the `weight` of its numeric key and keeps the heaviest marks that lie
+/// the minimum spacing apart, as the time scale does. The heaviest kept marks are bold.
 fn weighted_marks(
     points: &[(DateTime<Utc>, usize)],
     layout: &TickMarkLayout,
     weight: impl Fn(f64) -> u8,
     label: impl Fn(f64) -> String,
 ) -> Vec<TickMark> {
-    let gap = (layout.min_spacing / layout.bar_spacing).ceil() as usize;
-    let mut marks: Vec<_> = points
+    let marks = points
         .iter()
         .map(|&(time, index)| TickMark {
             time,
@@ -258,19 +255,11 @@ fn weighted_marks(
             bold: false,
         })
         .collect();
-    marks.sort_by(|a, b| b.weight.cmp(&a.weight).then(a.index.cmp(&b.index)));
-    let mut kept: Vec<TickMark> = Vec::new();
-    for mark in marks {
-        if kept
-            .iter()
-            .all(|other| other.index.abs_diff(mark.index) >= gap)
-        {
-            kept.push(mark);
-        } else if layout.uniform_distribution {
-            kept.retain(|other| other.weight > mark.weight);
-            break;
-        }
-    }
+    let mut kept = keep_spaced(
+        marks,
+        layout.min_spacing / layout.bar_spacing,
+        layout.uniform_distribution,
+    );
     let heaviest = kept.iter().map(|mark| mark.weight).max();
     for mark in &mut kept {
         mark.bold = Some(mark.weight) == heaviest;

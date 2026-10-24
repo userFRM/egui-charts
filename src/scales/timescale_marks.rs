@@ -247,19 +247,7 @@ impl TickMarkGenerator {
         marks = if intraday {
             let span = bars.last().unwrap().1.saturating_sub(bars[0].1).max(1) as f32;
             let min_bars = self.config.min_spacing * span / width_pixels;
-            marks.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.index.cmp(&b.index)));
-            let mut kept: Vec<TickMark> = Vec::new();
-            for mark in marks {
-                if kept
-                    .iter()
-                    .all(|other| mark.index.abs_diff(other.index) as f32 >= min_bars)
-                {
-                    kept.push(mark);
-                } else if self.uniform_distribution {
-                    kept.retain(|other| other.weight > mark.weight);
-                    break;
-                }
-            }
+            let mut kept = keep_spaced(marks, min_bars, self.uniform_distribution);
             kept.sort_by_key(|mark| mark.time);
             kept
         } else {
@@ -767,6 +755,26 @@ impl TickMarkGenerator {
         marks.sort_by_key(|m| m.time);
         marks
     }
+}
+
+/// The heaviest of `marks` that lie `min_bars` bars apart: lighter marks give way, and with a
+/// `uniform` distribution a weight that does not fit everywhere is left out with every lighter
+/// one.
+pub(super) fn keep_spaced(mut marks: Vec<TickMark>, min_bars: f32, uniform: bool) -> Vec<TickMark> {
+    marks.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.index.cmp(&b.index)));
+    let mut kept: Vec<TickMark> = Vec::new();
+    for mark in marks {
+        if kept
+            .iter()
+            .all(|other| mark.index.abs_diff(other.index) as f32 >= min_bars)
+        {
+            kept.push(mark);
+        } else if uniform {
+            kept.retain(|other| other.weight > mark.weight);
+            break;
+        }
+    }
+    kept
 }
 
 impl Default for TickMarkGenerator {
