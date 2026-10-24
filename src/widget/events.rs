@@ -14,7 +14,8 @@ pub struct ChartPointer {
     pub time: DateTime<Utc>,
     /// Price on the main pane, or the study/volume value on another pane.
     pub price: f64,
-    /// `MAIN`, `VOLUME`, or the study owning the hovered pane.
+    /// `MAIN`, `VOLUME`, or the study or bar series naming the hovered pane, as
+    /// [`Chart::series_pane`] names it.
     pub series: SeriesId,
     /// Nearest slot in the rendered series, counting elements on price-based chart types.
     /// Negative or past the last bar in whitespace.
