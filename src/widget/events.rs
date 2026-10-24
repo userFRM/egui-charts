@@ -176,12 +176,17 @@ impl Chart {
                 map.y_to_price(pos.y)
             }
         };
-        let (series, price, pane) = if let Some((pane_idx, pane)) = self
-            .last_rendered_indicator_panes
+        let rendered = &self.last_rendered_indicator_panes;
+        let (series, price, pane) = if let Some(at) = rendered
             .iter()
-            .enumerate()
-            .find(|(_, pane)| pane.chart_rect.contains(pos))
+            .position(|pane| pane.chart_rect.contains(pos))
         {
+            let pane = &rendered[at];
+            // Each study in a pane is listed with the pane's rect, so count the rects.
+            let pane_idx = rendered[..=at]
+                .windows(2)
+                .filter(|pair| pair[0].chart_rect != pair[1].chart_rect)
+                .count();
             let id = *self.study_ids.get(pane.indicator_idx)?;
             let group = self
                 .pane_layout
@@ -517,6 +522,16 @@ mod tests {
             frame(&ctx, &mut chart, 1.95, vec![Event::PointerMoved(pos)]);
             let events = chart.drain_events().collect::<Vec<_>>();
             assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.target == Some(PointerTarget::Element(ChartElementId::Indicator(other))))), "{events:?}");
+            // The pane below the merged pair is the second pane, not the third study.
+            let below = chart.add_indicator(Box::new(crate::studies::RSI::default()));
+            frame(&ctx, &mut chart, 1.96, vec![Event::PointerGone]);
+            chart.drain_events().for_each(drop);
+            let pane = chart.last_rendered_indicator_panes.last().unwrap();
+            let pos = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
+            frame(&ctx, &mut chart, 1.97, vec![Event::PointerMoved(pos)]);
+            let events = chart.drain_events().collect::<Vec<_>>();
+            assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == below && point.pane == 2)), "{events:?}");
+            chart.remove_series(below);
             chart.remove_series(other);
             chart.remove_series(id);
             chart.set_crosshair_mode(crate::config::CrosshairMode::Normal);
