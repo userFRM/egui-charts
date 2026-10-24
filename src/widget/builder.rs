@@ -132,6 +132,7 @@ impl Chart {
             symbol_drawings: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane_layout::PaneLayout::default(),
+            pane_options: Default::default(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
             zoom_just_applied: false,

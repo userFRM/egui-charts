@@ -9,9 +9,10 @@ use egui::{PointerButton, Pos2, Ui};
 pub struct ChartPointer {
     /// Nearest slot's timestamp, extrapolated into whitespace as in `visible_time_range`.
     pub time: DateTime<Utc>,
-    /// Price on the main pane, or the study/volume value on another pane.
+    /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
-    /// `MAIN`, `VOLUME`, or the study owning the hovered pane.
+    /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. An empty pane
+    /// reports no position.
     pub series: SeriesId,
 }
 
@@ -118,19 +119,26 @@ impl Chart {
         let plot = self.last_rendered_price_rect;
         let index = scale.coord_to_idx(pos.x, plot.left(), plot.width()).round() as f64;
         let time = super::sync::time_at(self.state.shown(), index)?;
-        let (series, map, values) = if let Some(pane) = self
-            .last_rendered_indicator_panes
-            .iter()
-            .find(|pane| pane.chart_rect.contains(pos))
-        {
-            let id = *self.study_ids.get(pane.indicator_idx)?;
-            let group = self
-                .pane_layout
-                .panes
-                .iter()
-                .find(|group| group.studies.contains(&id))?;
+        let (series, map, values) = if let Some(group) =
+            self.pane_layout.panes.iter().find(|group| {
+                group.id != super::PaneId::MAIN
+                    && group.rect.contains(pos)
+                    && plot.x_range().contains(pos.x)
+            }) {
+            let owner = *self.pane_series(group.id).first()?;
+            let map = group.scale.map(
+                group.scale.transform(),
+                group.rect.top(),
+                group.rect.bottom(),
+            );
+            let shown = index >= 0.0 && index < self.state.shown().len() as f64;
+            let closes = group.members.iter().filter_map(|id| {
+                let item =
+                    (self.price_series.iter()).find(|item| item.id == *id && item.visible)?;
+                shown.then(|| self.series_close_at(item, index as usize))?
+            });
             let values = group
-                .studies
+                .members
                 .iter()
                 .filter_map(|id| self.study_ids.iter().position(|study| study == id))
                 .map(|index| &self.rendered_studies().indicators()[index])
@@ -147,13 +155,14 @@ impl Chart {
                                 )
                         })
                         .filter_map(move |line| {
-                            (index >= 0.0 && index < self.state.shown().len() as f64)
+                            shown
                                 .then(|| study.plot_value(line, index as usize))
                                 .flatten()
                         })
                 })
+                .chain(closes)
                 .collect::<Vec<_>>();
-            (group.id, pane.mapping.price, values)
+            (owner, map, values)
         } else if self.last_rendered_volume_rect.contains(pos)
             && let Some(map) = self.host_events.volume_map
         {
