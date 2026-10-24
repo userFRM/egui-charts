@@ -9,7 +9,7 @@ use egui::{PointerButton, Pos2, Ui};
 pub struct ChartPointer {
     /// Nearest slot's timestamp, extrapolated into whitespace as in `visible_time_range`.
     pub time: DateTime<Utc>,
-    /// Price on the main pane, or the study/volume value on another pane.
+    /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
     /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. An empty pane
     /// reports no position.
