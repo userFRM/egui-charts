@@ -1,6 +1,6 @@
 //! Bars of a coarser interval built from bars of a finer one.
 
-use crate::model::{Bar, BarClock, Timeframe};
+use crate::model::{Bar, BarClock, Instrument, Timeframe};
 use chrono::TimeDelta;
 
 /// Builds bars of interval `to` from `bars` of interval `from`, which must be in time order.
@@ -77,6 +77,122 @@ pub fn resample(
     Some(resampled)
 }
 
+/// Builds a coarser interval using the instrument's exchange timezone and trading hours.
+///
+/// Intraday inputs must be stamped at their actual open, including a shortened final bar.
+/// Intraday target slots start at the first selected session window of each trading date;
+/// daily, weekly and monthly targets use that trading date, including overnight sessions.
+/// Bars outside the selected hours and holidays are omitted. No bars are invented across gaps,
+/// and the last output includes all available inputs even while its period is forming.
+/// Daily and longer inputs already carry their trading date at local midnight.
+///
+/// As with [`resample`], returns `None` if an input straddles target slots or folded volume
+/// overflows. The host retains the base history and calls again after live updates or corrections.
+/// Native source intervals can be reported through [`Instrument::native_timeframes`].
+pub fn resample_with_session(
+    bars: &[Bar],
+    from: Timeframe,
+    to: Timeframe,
+    instrument: &Instrument,
+    extended_hours: bool,
+) -> Option<Vec<Bar>> {
+    Some(
+        resample_periods(bars, from, to, instrument, extended_hours)?
+            .into_iter()
+            .map(|(_, bar)| bar)
+            .collect(),
+    )
+}
+
+pub(crate) fn resample_periods(
+    bars: &[Bar],
+    from: Timeframe,
+    to: Timeframe,
+    instrument: &Instrument,
+    extended_hours: bool,
+) -> Option<Vec<(std::ops::Range<usize>, Bar)>> {
+    use crate::model::{ExchangeSessionProvider, TimezoneId};
+    use chrono::NaiveTime;
+
+    let zone = instrument.time_zone.clone().unwrap_or_else(TimezoneId::utc);
+    let source = BarClock::new(from).with_timezone(zone.tz());
+    let target = BarClock::new(to).with_timezone(zone.tz());
+    if instrument.session.is_none()
+        || from.duration_ms() >= Timeframe::Day1.duration_ms()
+        || matches!(from, Timeframe::Ticks(_))
+        || matches!(to, Timeframe::Ticks(_))
+    {
+        let output = resample(bars, source.clone(), target.clone())?;
+        let mut start = 0;
+        return Some(
+            output
+                .into_iter()
+                .map(|bar| {
+                    let end = start
+                        + bars[start..].partition_point(|input| {
+                            target.bar_open(source.bar_open(input.time)) == bar.time
+                        });
+                    let range = start..end;
+                    start = end;
+                    (range, bar)
+                })
+                .collect(),
+        );
+    }
+    let mut session = instrument.session.clone()?;
+    if !extended_hours {
+        // Keep an empty regular schedule distinct from an explicitly continuous session.
+        if session.windows.is_empty() && !session.extended_windows.is_empty() {
+            return Some(Vec::new());
+        }
+        session.extended_windows.clear();
+    }
+    let provider = ExchangeSessionProvider::new(zone.clone(), Some(session));
+    let opens = provider.opens(bars.iter().map(|bar| bar.time));
+    let slot = |time| {
+        let n = opens.partition_point(|(open, _)| *open <= time);
+        let (open, date) = *opens.get(n.checked_sub(1)?)?;
+        if to.duration_ms() < Timeframe::Day1.duration_ms() {
+            let elapsed = (time - open).num_milliseconds();
+            open.checked_add_signed(TimeDelta::milliseconds(
+                elapsed - elapsed.rem_euclid(to.duration_ms()),
+            ))
+        } else {
+            let date =
+                crate::model::session::local_instant(zone.tz(), date.and_time(NaiveTime::MIN))?;
+            Some(target.bar_open(date))
+        }
+    };
+    let mut output: Vec<(std::ops::Range<usize>, Bar)> = Vec::new();
+    for (i, bar) in bars.iter().enumerate() {
+        if !provider.is_open(bar.time, true) {
+            continue;
+        }
+        let period = slot(bar.time)?;
+        let mut end = bar.time.checked_add_signed(from.duration())?;
+        if let Some(close) = provider.session_close(bar.time, true) {
+            end = end.min(close);
+        }
+        if slot(end.checked_sub_signed(TimeDelta::nanoseconds(1))?)? != period {
+            return None;
+        }
+        match output.last_mut() {
+            Some((range, last)) if last.time == period => {
+                *last = super::merge::fold(last, bar)?;
+                range.end = i + 1;
+            }
+            _ => output.push((
+                i..i + 1,
+                Bar {
+                    time: period,
+                    ..bar.clone()
+                },
+            )),
+        }
+    }
+    Some(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,6 +201,86 @@ mod tests {
     fn bar(time: &str, [open, high, low, close, volume]: [f64; 5]) -> Bar {
         let time: DateTime<Utc> = time.parse().unwrap();
         Bar::new(time, open, high, low, close, volume)
+    }
+
+    #[test]
+    fn resamples_selected_exchange_sessions() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday};
+        let clock = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let instrument = Instrument::new("SESSION")
+            .with_time_zone(TimezoneId::named("America/New_York").unwrap())
+            .with_session(
+                Session::new([SessionWindow::new(
+                    [Weekday::Fri, Weekday::Mon],
+                    clock(9, 30),
+                    clock(16, 0),
+                )])
+                .with_extended_windows([SessionWindow::new(
+                    [Weekday::Fri, Weekday::Mon],
+                    clock(8, 30),
+                    clock(9, 30),
+                )])
+                .with_holidays(["2024-03-18".parse().unwrap()]),
+            );
+        let input = vec![
+            bar("2024-03-15T12:30:00Z", [9.0, 10.0, 8.0, 9.0, 1.0]),
+            bar("2024-03-15T13:30:00Z", [10.0, 13.0, 9.0, 12.0, 2.0]),
+            bar("2024-03-15T14:30:00Z", [12.0, 15.0, 11.0, 14.0, 3.0]),
+            bar("2024-03-15T15:30:00Z", [14.0, 16.0, 10.0, 11.0, 4.0]),
+            bar("2024-03-15T19:30:00Z", [11.0, 12.0, 7.0, 8.0, 5.0]),
+            bar("2024-03-18T13:30:00Z", [8.0, 9.0, 6.0, 7.0, 6.0]),
+        ];
+        for (extended, expected) in [
+            (
+                false,
+                vec![
+                    bar("2024-03-15T13:30:00Z", [10.0, 15.0, 9.0, 14.0, 5.0]),
+                    bar("2024-03-15T15:30:00Z", [14.0, 16.0, 10.0, 11.0, 4.0]),
+                    bar("2024-03-15T19:30:00Z", [11.0, 12.0, 7.0, 8.0, 5.0]),
+                ],
+            ),
+            (
+                true,
+                vec![
+                    bar("2024-03-15T12:30:00Z", [9.0, 13.0, 8.0, 12.0, 3.0]),
+                    bar("2024-03-15T14:30:00Z", [12.0, 16.0, 10.0, 11.0, 7.0]),
+                    bar("2024-03-15T18:30:00Z", [11.0, 12.0, 7.0, 8.0, 5.0]),
+                ],
+            ),
+        ] {
+            assert_eq!(
+                resample_with_session(
+                    &input,
+                    Timeframe::Hour1,
+                    "2h".parse().unwrap(),
+                    &instrument,
+                    extended
+                ),
+                Some(expected)
+            );
+        }
+        let overnight = Instrument::new("OVERNIGHT")
+            .with_time_zone(TimezoneId::named("America/New_York").unwrap())
+            .with_session(Session::new([SessionWindow::new(
+                [Weekday::Mon, Weekday::Tue],
+                clock(18, 0),
+                clock(17, 0),
+            )]));
+        let input = vec![
+            bar("2024-03-10T22:00:00Z", [10.0, 13.0, 9.0, 12.0, 2.0]),
+            bar("2024-03-11T03:00:00Z", [12.0, 15.0, 11.0, 14.0, 3.0]),
+            bar("2024-03-11T20:00:00Z", [14.0, 16.0, 10.0, 11.0, 4.0]),
+            bar("2024-03-11T21:00:00Z", [99.0, 99.0, 99.0, 99.0, 1.0]),
+            bar("2024-03-11T22:00:00Z", [11.0, 12.0, 7.0, 8.0, 5.0]),
+        ];
+        assert_eq!(
+            resample_with_session(&input, Timeframe::Hour1, Timeframe::Day1, &overnight, false),
+            Some(vec![
+                bar("2024-03-11T04:00:00Z", [10.0, 16.0, 9.0, 11.0, 9.0]),
+                bar("2024-03-12T04:00:00Z", [11.0, 12.0, 7.0, 8.0, 5.0]),
+            ])
+        );
     }
 
     /// Guards the OHLCV aggregation, the alignment of output bars to `BarClock`, and the refusal of

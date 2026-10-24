@@ -416,7 +416,7 @@ impl ExchangeSessionProvider {
     /// far from every time are skipped, so the work follows the times, not the span between
     /// them. An open that falls in a repeated hour is its first instant, and one that falls in
     /// a skipped hour is the instant the clocks jump.
-    fn opens(
+    pub(crate) fn opens(
         &self,
         times: impl IntoIterator<Item = DateTime<Utc>>,
     ) -> Vec<(DateTime<Utc>, NaiveDate)> {

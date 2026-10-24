@@ -1,5 +1,6 @@
 //! Instrument metadata reported by a feed or a search service.
 
+use super::Timeframe;
 use chrono::{NaiveDate, NaiveTime, Weekday};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,9 @@ pub struct Instrument {
     pub time_zone: Option<TimezoneId>,
     /// Regular trading hours, in exchange time.
     pub session: Option<Session>,
+    /// OHLCV intervals supplied without aggregation. `None` means unspecified; an empty list
+    /// means no native bar history. Derived intervals remain available through host resampling.
+    pub native_timeframes: Option<Vec<Timeframe>>,
 }
 
 impl Instrument {
@@ -94,6 +98,7 @@ impl Instrument {
             currency: None,
             time_zone: None,
             session: None,
+            native_timeframes: None,
         }
     }
 
@@ -154,6 +159,15 @@ impl Instrument {
     /// Sets [`session`](Self::session).
     pub fn with_session(mut self, session: Session) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Sets [`native_timeframes`](Self::native_timeframes), reported by [`Datafeed::resolve`](crate::data::Datafeed::resolve).
+    pub fn with_native_timeframes(
+        mut self,
+        timeframes: impl IntoIterator<Item = Timeframe>,
+    ) -> Self {
+        self.native_timeframes = Some(timeframes.into_iter().collect());
         self
     }
 }

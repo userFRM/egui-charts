@@ -164,7 +164,8 @@ impl LiveFeed {
             .with_description(format!("{} (synthetic)", spec.company_name))
             .with_exchange(spec.exchange)
             .with_price_decimals(if sim.tick_size < 0.01 { 4 } else { 2 })
-            .with_tick_size(sim.tick_size);
+            .with_tick_size(sim.tick_size)
+            .with_native_timeframes([Timeframe::Min1]);
         if sim.symbol == "SAMPLE" && !sim.continuous {
             instrument = instrument
                 .with_time_zone(egui_charts::model::TimezoneId::utc())
