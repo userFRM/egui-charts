@@ -45,14 +45,17 @@
 //! [`AccumulationDistribution`], [`ChaikinMoneyFlow`],
 //! [`VolumeRateOfChange`], [`KlingerOscillator`], [`CVD`],
 //! [`VolProfileVisible`], [`VolProfileFixed`], [`ChaikinOscillator`], [`TimeWeightedAvgPrice`],
-//! [`VwapAutoAnchored`]
+//! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
 //! [`PivotPoints`], [`ZigZag`], [`PriceChannel`]
 //!
 //! ## Statistics
 //! [`LinearRegression`], [`StandardError`],
-//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`]
+//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`]
+//!
+//! ## Time
+//! [`TradingSessions`]
 
 use crate::model::Bar;
 
@@ -257,6 +260,11 @@ mod relative_volatility_index;
 mod smi_ergodic;
 mod special_k;
 mod woodies_cci;
+// Time studies
+mod relative_volume_at_time;
+mod seasonality;
+mod trading_sessions;
+mod volume_24h;
 
 // Re-exports - Original indicators
 pub use bollinger_bands::BollingerBands;
@@ -438,6 +446,11 @@ pub use relative_volatility_index::RelativeVolatilityIndex;
 pub use smi_ergodic::{SMIErgodic, SMIErgodicIndicator, SMIErgodicOscillator};
 pub use special_k::PringsSpecialK;
 pub use woodies_cci::WoodiesCCI;
+// Re-exports - Time studies
+pub use relative_volume_at_time::{RelativeVolumeAnchor, RelativeVolumeAtTime, RelativeVolumeMode};
+pub use seasonality::Seasonality;
+pub use trading_sessions::TradingSessions;
+pub use volume_24h::Volume24h;
 
 /// A float parameter clamped into `min..=max`, NaN to `min`, the way constructors
 /// raise a length of 0 to 1.

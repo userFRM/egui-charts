@@ -31,6 +31,14 @@
 //! - The conventional floor-trader pivot points with Tom DeMark's and Nick Stott's Camarilla levels,
 //!   from the previous period of UTC dates; the time-weighted mean of ohlc4 and Berkowitz, Logue and
 //!   Noser's volume-weighted mean of hlc3 since an anchor bar.
+//! - Time-study rows run on hand-built series in calendar time: 24-hour volume over the bars opening
+//!   in the last 24 hours; relative volume at time as the cumulative or single-bar volume over its
+//!   mean at the same offset into the previous periods (the last earlier bar of a period at that
+//!   offset, zero before its first bar, trading days from the exchange zone and session); seasonality
+//!   as the mean and population standard deviation of the same calendar month's percentage changes in
+//!   earlier years, applied to the previous month's close; and trading sessions as bar opens in
+//!   `[start, end)` exchange time, overnight when the end is not after the start, across daylight
+//!   saving changes.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -676,6 +684,7 @@ fn staple_studies_match_published_definitions() {
         ("AutoVWAP-LL", auto(AutoAnchor::LowestLow), bars.clone()),
         ("AutoVWAP-HV", auto(AutoAnchor::HighestVolume), bars.clone()),
     ]);
+    studies.extend(time_studies(&bars));
     for (_, study, data) in &mut studies {
         study.calculate(data);
     }
@@ -727,6 +736,196 @@ fn staple_studies_match_published_definitions() {
         assert!(*lines > 0, "{name} is built but has no expected values");
     }
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+/// The calendar-time studies, each with the series its rows were computed on.
+fn time_studies(bars: &[Bar]) -> Vec<(&'static str, Box<dyn Indicator>, Vec<Bar>)> {
+    use crate::model::{BarClock, Instrument, Session, SessionWindow, Timeframe, TimezoneId};
+    use crate::studies::{
+        RelativeVolumeAnchor, RelativeVolumeAtTime, RelativeVolumeMode, Seasonality,
+        TradingSessions, Volume24h,
+    };
+    use chrono::{NaiveTime, Weekday};
+    let series = |points: &[(i64, f64, f64)]| -> Vec<Bar> {
+        points
+            .iter()
+            .map(|&(t, c, v)| Bar::new(Utc.timestamp_opt(t, 0).unwrap(), c, c, c, c, v))
+            .collect()
+    };
+    let volumes = |points: &[(i64, f64)]| -> Vec<Bar> {
+        series(&points.iter().map(|&(t, v)| (t, 1.0, v)).collect::<Vec<_>>())
+    };
+    let clock = |mut study: Box<dyn Indicator>, timeframe| {
+        study.set_bar_clock(&BarClock::new(timeframe));
+        study
+    };
+    let hour = |h| NaiveTime::from_hms_opt(h, 0, 0).unwrap();
+    // 2024-03-04 is a Monday; the second day lacks 01:00 and the third starts at 01:00.
+    let utc_days = volumes(
+        &[
+            (0, 100.0),
+            (1, 50.0),
+            (2, 150.0),
+            (24, 120.0),
+            (26, 60.0),
+            (49, 80.0),
+            (50, 40.0),
+            (72, 300.0),
+            (73, 100.0),
+            (74, 200.0),
+            (75, 100.0),
+        ]
+        .map(|(h, v)| (1_709_510_400 + h * 3_600, v)),
+    );
+    // Chicago 17:00 on 7, 8 and 10 March 2024 and the next mornings; clocks moved on the 10th.
+    let chicago = volumes(&[
+        (1_709_852_400, 100.0),
+        (1_709_856_000, 100.0),
+        (1_709_910_000, 200.0),
+        (1_710_108_000, 300.0),
+        (1_710_111_600, 100.0),
+        (1_710_162_000, 400.0),
+    ]);
+    let futures = Instrument::new("FUTURES")
+        .with_time_zone(TimezoneId::named("America/Chicago").unwrap())
+        .with_session(Session::new([SessionWindow::new(
+            [
+                Weekday::Mon,
+                Weekday::Tue,
+                Weekday::Wed,
+                Weekday::Thu,
+                Weekday::Fri,
+            ],
+            hour(17),
+            hour(16),
+        )]));
+    let mut overnight = RelativeVolumeAtTime::new(1);
+    overnight.set_instrument(Some(&futures));
+    // Daily bars from Monday 1 January 2024; Monday the 8th and Thursday the 11th are missing.
+    let daily = volumes(
+        &[
+            (1, 100.0),
+            (2, 100.0),
+            (3, 100.0),
+            (4, 100.0),
+            (5, 100.0),
+            (9, 150.0),
+            (10, 150.0),
+            (12, 300.0),
+        ]
+        .map(|(d, v)| (1_704_067_200 + (d - 1) * 86_400, v)),
+    );
+    let seasons = series(
+        &[
+            ((2021, 12, 15), 100.0),
+            ((2022, 1, 10), 104.0),
+            ((2022, 1, 25), 110.0),
+            ((2022, 2, 14), 99.0),
+            ((2022, 12, 20), 120.0),
+            ((2023, 1, 5), 118.0),
+            ((2023, 1, 30), 126.0),
+            ((2023, 2, 10), 130.0),
+            ((2023, 2, 27), 132.0),
+            ((2024, 1, 15), 140.0),
+            ((2024, 2, 15), 150.0),
+        ]
+        .map(|((y, m, d), c)| {
+            (
+                Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap().timestamp(),
+                c,
+                1.0,
+            )
+        }),
+    );
+    // Session edges in January, after the United States moved its clocks in March but before
+    // the United Kingdom did, and in British summer time.
+    let sessions = volumes(
+        &[
+            1_705_269_540,
+            1_705_269_600,
+            1_705_276_800,
+            1_705_298_340,
+            1_705_298_400,
+            1_705_307_400,
+            1_705_327_200,
+            1_705_329_000,
+            1_705_336_140,
+            1_705_336_200,
+            1_710_163_800,
+            1_710_187_140,
+            1_710_187_200,
+            1_719_819_000,
+        ]
+        .map(|t| (t, 1.0)),
+    );
+    let hourly = volumes(
+        &[
+            (0, 10.0),
+            (1, 20.0),
+            (5, 30.0),
+            (23, 40.0),
+            (24, 50.0),
+            (25, 60.0),
+            (49, 70.0),
+            (72, 80.0),
+            (96, 90.0),
+        ]
+        .map(|(h, v)| (h * 3_600, v)),
+    );
+    vec![
+        ("Volume24h", Box::new(Volume24h::new()), bars.to_vec()),
+        ("Volume24h-hand", Box::new(Volume24h::new()), hourly.clone()),
+        (
+            "Volume24h-weekly",
+            clock(Box::<Volume24h>::default(), Timeframe::Week1),
+            hourly[..4].to_vec(),
+        ),
+        (
+            "RVOL-cumulative",
+            Box::new(RelativeVolumeAtTime::new(2)),
+            utc_days.clone(),
+        ),
+        (
+            "RVOL-regular",
+            Box::new(RelativeVolumeAtTime::new(2).with_mode(RelativeVolumeMode::Regular)),
+            utc_days,
+        ),
+        ("RVOL-chicago", Box::new(overnight), chicago),
+        (
+            "RVOL-week-daily",
+            clock(
+                Box::new(RelativeVolumeAtTime::new(1).with_anchor(RelativeVolumeAnchor::Week)),
+                Timeframe::Day1,
+            ),
+            daily,
+        ),
+        (
+            "Seasonality-hand",
+            Box::new(Seasonality::new()),
+            seasons.clone(),
+        ),
+        (
+            "Seasonality-2023",
+            Box::new(Seasonality::new().with_start_year(2023)),
+            seasons,
+        ),
+        (
+            "Sessions-default",
+            Box::new(TradingSessions::new()),
+            sessions.clone(),
+        ),
+        (
+            "Sessions-overnight",
+            Box::new(TradingSessions::new().with_session(
+                0,
+                "Overnight",
+                hour(22),
+                hour(6),
+                TimezoneId::utc(),
+            )),
+            sessions,
+        ),
+    ]
 }
 
 /// A refit drops the expired bar and replaces all three lines on an append or correction.

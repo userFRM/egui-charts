@@ -222,6 +222,8 @@ impl IndicatorFactory {
                 WilliamsAD,
                 MarketFacilitationIndex,
                 ChaikinOscillator,
+                Volume24h,
+                RelativeVolumeAtTime,
             ],
             "Support and resistance" => [
                 PivotPoints,
@@ -237,6 +239,7 @@ impl IndicatorFactory {
                 RciRibbon,
                 MajorityRule,
                 AccumulationSwingIndex,
+                Seasonality,
             ],
             "Price" => [
                 HigherIntervalCandles,
@@ -249,6 +252,7 @@ impl IndicatorFactory {
             "Market structure" => [
                 Week52HighLow,
                 Week52HighLowLevels,
+                TradingSessions,
             ],
         );
     }
@@ -564,6 +568,8 @@ mod tests {
             Box::new(WilliamsAD::new()),
             Box::new(MarketFacilitationIndex::new().with_divisor(x(1.0))),
             Box::new(PivotPoints::new().with_pivots_back(l(0))),
+            Box::new(Volume24h::new()),
+            Box::new(RelativeVolumeAtTime::new(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
             Box::new(PriceChannel::new(l(0))),
             Box::new(LinearRegression::new(l(0))),
@@ -575,6 +581,7 @@ mod tests {
             Box::new(RciRibbon::new(l(0), l(1), l(2))),
             Box::new(MajorityRule::new(l(0))),
             Box::new(AccumulationSwingIndex::new(x(0.5))),
+            Box::new(Seasonality::new()),
             Box::new(HigherIntervalCandles::default()),
             Box::new(BollingerBars::new()),
             Box::new(TypicalPrice::new()),
@@ -594,6 +601,7 @@ mod tests {
             Box::new(AdvanceDeclineRatioBars::new(l(0))),
             Box::new(UlcerIndex::new(l(0))),
             Box::new(DetrendedPriceOscillator::new(l(0)).with_centered(true)),
+            Box::new(TradingSessions::new()),
         ]
     }
 
