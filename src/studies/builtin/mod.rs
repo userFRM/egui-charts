@@ -50,6 +50,9 @@
 //! ## Support / resistance
 //! [`PivotPoints`], [`ZigZag`], [`PriceChannel`]
 //!
+//! ## Patterns
+//! [`CandlestickPatterns`]
+//!
 //! ## Statistics
 //! [`LinearRegression`], [`StandardError`],
 //! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`]
@@ -63,6 +66,9 @@ mod footprint_studies;
 pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studies};
 mod trade_delta;
 pub use trade_delta::{TradeDeltaValue, trade_delta};
+
+mod candlestick_patterns;
+pub use candlestick_patterns::{CandlestickPatterns, PatternTrend, PatternType};
 
 mod higher_interval_candles;
 pub use higher_interval_candles::HigherIntervalCandles;

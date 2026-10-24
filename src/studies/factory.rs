@@ -254,6 +254,9 @@ impl IndicatorFactory {
                 Week52HighLowLevels,
                 TradingSessions,
             ],
+            "Patterns" => [
+                CandlestickPatterns,
+            ],
         );
     }
 
@@ -602,6 +605,7 @@ mod tests {
             Box::new(UlcerIndex::new(l(0))),
             Box::new(DetrendedPriceOscillator::new(l(0)).with_centered(true)),
             Box::new(TradingSessions::new()),
+            Box::new(CandlestickPatterns::default()),
         ]
     }
 
