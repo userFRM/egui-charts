@@ -200,6 +200,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The Baseline chart fills both sides of its base without faint lines between neighbouring parts of the path, which a curved line made obvious. ([#832](https://github.com/userFRM/egui-charts/issues/832))
 - The series legend's values follow the title after one regular gap, and its flag and series actions appear after the values only while the pointer is over the row. The plot's chart layout and overlay study menus appear only while the pointer is over the chart or a menu is open, and no longer draw a button frame at the edge of the plot. ([#817](https://github.com/userFRM/egui-charts/issues/817))
 - The top toolbar labels Alert and Replay beside their icons, as it does Indicators, and places the chart layout selector at the right, directly before the layout name and Save. The demo lists its host actions in the main menu, so its default strip shows the built-in controls only. ([#817](https://github.com/userFRM/egui-charts/issues/817))
 - Watchlist text rejects ambiguous symbols, row drags stay within their unsorted list, and long panel titles and values leave controls and neighbouring columns readable. Size filters scroll before they hide the trade tape. The demo keeps active-symbol quotes on the chart session and price basis, clears the tape when changing chart slots or layouts, and exports watchlists to a fixed filename. ([#223](https://github.com/userFRM/egui-charts/issues/223), [#237](https://github.com/userFRM/egui-charts/issues/237))
