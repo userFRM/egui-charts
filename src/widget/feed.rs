@@ -552,7 +552,7 @@ impl Chart {
         let subscription = Subscription {
             id: sink.id,
             symbol: self.symbol.clone(),
-            timeframe: self.timeframe.unwrap_or_default(),
+            timeframe,
             clock: link.clock.clone(),
             extended_hours: self.extended_hours,
             sink,
