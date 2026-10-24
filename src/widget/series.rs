@@ -551,9 +551,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    /// Bars span 100..110 and the overlay reaches 120: 10% margins give 98..122. Every line of a
-    /// study counts and non-finite values do not; without eligible values, or with a volume
-    /// profile, the bars alone give 99..111. Relative modes use close 110.
+    /// Bars span 100..110 and the overlay reaches 120: 10% of the pane above and below adds an
+    /// eighth of the span on each side, 97.5..122.5. Every line of a study counts and non-finite
+    /// values do not; without eligible values, or with a volume profile, the bars alone give
+    /// 98.75..111.25. Relative modes use close 110.
     #[test]
     fn autoscale_includes_only_visible_overlay_values() {
         use crate::scales::PriceScaleMode;
@@ -561,16 +562,16 @@ mod tests {
         use crate::widget::test_frames::chart;
 
         for (mode, fitted, bars_only) in [
-            (PriceScaleMode::Normal, (98.0, 122.0), (99.0, 111.0)),
+            (PriceScaleMode::Normal, (97.5, 122.5), (98.75, 111.25)),
             (
                 PriceScaleMode::Percentage,
-                (-120.0 / 11.0, 120.0 / 11.0),
-                (-10.0, 10.0 / 11.0),
+                (-125.0 / 11.0, 125.0 / 11.0),
+                (-112.5 / 11.0, 12.5 / 11.0),
             ),
             (
                 PriceScaleMode::IndexedTo100,
-                (980.0 / 11.0, 1220.0 / 11.0),
-                (90.0, 1110.0 / 11.0),
+                (975.0 / 11.0, 1225.0 / 11.0),
+                (987.5 / 11.0, 1112.5 / 11.0),
             ),
         ] {
             for case in [
@@ -675,7 +676,7 @@ mod tests {
                 frame(&ctx, &mut chart, 0.04, Vec::new());
                 let expected = if case == "main_hidden" {
                     let value = crate::scales::PriceTransform { mode, base: 110.0 }.to_scale(120.0);
-                    (value - value.abs() * 0.001, value + value.abs() * 0.001)
+                    (value - value.abs() * 0.00125, value + value.abs() * 0.00125)
                 } else if matches!(case, "single" | "multiple" | "displaced_future") {
                     fitted
                 } else {

@@ -299,8 +299,8 @@ pub(crate) fn paint_crosshair_tag(
 /// Width of the current price labels and tags, including their plot gap and right clearance.
 /// Include formatted session and volume labels in `tag_labels` when allocating their column.
 pub fn price_axis_width(painter: &Painter, price_map: &PriceMap, tag_labels: &[&str]) -> f32 {
-    crate::scales::PriceMarkGenerator::new()
-        .generate_marks(price_map)
+    price_map
+        .marks()
         .into_iter()
         .map(|mark| mark.label)
         .chain(tag_labels.iter().map(|label| (*label).to_owned()))

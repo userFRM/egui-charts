@@ -594,7 +594,13 @@ impl Chart {
                 ));
             }
             crate::chart::renderers::render_price_labels_at_pos(
-                &ctx, &map, colors, position, &tags, slot,
+                &ctx,
+                &map,
+                colors,
+                &self.config.price_axis,
+                position,
+                &tags,
+                slot,
             );
             measured = measured.max(crate::chart::rendering::axes::price_axis_width(
                 &clipped,
@@ -640,7 +646,8 @@ mod tests {
     }
 
     /// Percent compares returns, not absolute prices: 100 -> 110 and 200 -> 220
-    /// coincide at +10%; 200 -> 240 extends the shared range to 20% plus 10% margins.
+    /// coincide at +10%; 200 -> 240 extends the shared range to 20%, plus an eighth of that on
+    /// each side for the 10% of the pane above and below.
     #[test]
     fn comparisons_share_percent_ranges_with_individual_visible_references() {
         let ctx = egui::Context::default();
@@ -653,7 +660,7 @@ mod tests {
         assert!((map.price_to_y(220.0) - chart.last_price_map.price_to_y(110.0)).abs() < 1e-4);
         let range = chart.state.price_scale().range();
         assert!(
-            (range.min + 2.0).abs() < 1e-10 && (range.max - 22.0).abs() < 1e-10,
+            (range.min + 2.5).abs() < 1e-10 && (range.max - 22.5).abs() < 1e-10,
             "{range:?}"
         );
         chart.state.time_scale_mut().set_bar_spacing(100.0);
@@ -809,9 +816,9 @@ mod tests {
             frame(&ctx, &mut chart, 0.0, vec![]);
             let range = chart.series_price_scale_mut(id).unwrap().range();
             let expected = if key == SeriesScale::Right {
-                (88.0, 232.0)
+                (85.0, 235.0)
             } else {
-                (198.0, 222.0)
+                (197.5, 222.5)
             };
             assert!(
                 (range.min - expected.0).abs() < 1e-10 && (range.max - expected.1).abs() < 1e-10,
@@ -825,7 +832,7 @@ mod tests {
             frame(&ctx, &mut chart, 0.1, vec![]);
             assert!(chart.series_axis_keys().is_empty());
             let range = chart.state.price_scale().range();
-            assert!((range.min - 99.0).abs() < 1e-10 && (range.max - 111.0).abs() < 1e-10);
+            assert!((range.min - 98.75).abs() < 1e-10 && (range.max - 111.25).abs() < 1e-10);
             // Secondary bars can occupy whitespace beyond the main history.
             let future = bars(&[200.0, 220.0])
                 .into_iter()

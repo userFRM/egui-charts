@@ -1965,12 +1965,20 @@ impl Chart {
         // Draw the axis labels, leaving out those the tags overlap
         tags.extend(crosshair_tags);
         if self.config.show_right_axis {
-            rendering::render_price_labels(&price_ctx, &price_map, &colors, &tags, price_labels);
+            rendering::render_price_labels(
+                &price_ctx,
+                &price_map,
+                &colors,
+                &self.config.price_axis,
+                &tags,
+                price_labels,
+            );
         } else if self.config.show_left_axis {
             renderers::render_price_labels_at_pos(
                 &price_ctx,
                 &price_map,
                 &colors,
+                &self.config.price_axis,
                 crate::scales::PriceScaleId::Left,
                 &tags,
                 price_labels,
