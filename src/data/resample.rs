@@ -260,6 +260,15 @@ mod tests {
                 Some(expected)
             );
         }
+        #[cfg(feature = "widget")]
+        {
+            let mut chart = crate::widget::ChartBuilder::new().build();
+            chart.set_timeframe("2h".parse().unwrap());
+            chart.set_instrument(Some(instrument.clone()));
+            assert_eq!(chart.bar_clock().bar_open(input[1].time), input[1].time);
+            chart.set_extended_hours(true);
+            assert_eq!(chart.bar_clock().bar_open(input[1].time), input[0].time);
+        }
         let overnight = Instrument::new("OVERNIGHT")
             .with_time_zone(TimezoneId::named("America/New_York").unwrap())
             .with_session(Session::new([SessionWindow::new(

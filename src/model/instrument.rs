@@ -198,7 +198,7 @@ impl TimezoneId {
 }
 
 /// Trading hours: the windows in which an instrument trades.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Session {
     /// Regular windows. With no regular or extended windows, the session is always open.
@@ -236,7 +236,7 @@ impl Session {
 }
 
 /// One trading window, repeated on each of `days`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SessionWindow {
     /// Trading days, named by the day on which the window closes.
