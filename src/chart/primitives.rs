@@ -169,6 +169,7 @@ pub trait Primitive: Send {
 
     /// The lowest and highest price the scale of the series must show while it fits itself to
     /// the bars in view, `visible` indexing `bars` as in [`PrimitiveView`]. `None` adds nothing.
+    /// An overlay study on an independent scale fits that scale to its own values only.
     fn autoscale(&self, bars: &[Bar], visible: Range<usize>) -> Option<(f64, f64)> {
         let _ = (bars, visible);
         None
@@ -189,7 +190,8 @@ pub trait Primitive: Send {
         let _ = (ctx, series);
     }
 
-    /// Called once when the primitive is detached, directly or by removing its series.
+    /// Called once when the primitive is detached, directly or by removing its series. Undoing
+    /// the removal of a study restores the study without its primitives.
     fn detached(&mut self) {}
 
     /// Called after [`attached`](Self::attached) and at every frame after the bars of the series
