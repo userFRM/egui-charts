@@ -13,17 +13,12 @@ impl Chart {
         if ids.is_empty() {
             return Ok(None);
         }
-        let mut storage = self.save_drawings()?;
-        let stored_ids: Vec<_> = self
-            .drawings
-            .drawings
-            .iter()
-            .filter(|d| !ids.contains(&d.id))
-            .map(|d| d.stored_id.clone().unwrap_or_else(|| d.id.to_string()))
-            .collect();
-        for id in stored_ids {
-            storage.remove_drawing(&id);
-        }
+        let storage = self.store_drawings(
+            self.drawings
+                .drawings
+                .iter()
+                .filter(|d| ids.contains(&d.id)),
+        )?;
         Ok(Some(format!("{PREFIX}{}", storage.to_json()?)))
     }
 

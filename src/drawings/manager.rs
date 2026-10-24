@@ -946,9 +946,10 @@ impl DrawingManager {
             return;
         }
         let mut ids = Vec::new();
-        for drawing in drawings {
+        for drawing in in_z_order(drawings) {
             let mut copy = drawing.clone();
             copy.id = self.take_id();
+            copy.z_order = self.top_z_order();
             copy.stored_id = None;
             copy.created_at = None;
             copy.screen_anchor = copy.screen_anchor.map(|[x, y]| [x + 0.02, y]);
@@ -1564,6 +1565,14 @@ mod tests {
         fresh.update_screen_coords(|bar| bar, |price| price as f32);
         manager.add_synced_drawing(fresh);
         let fresh_id = manager.drawings.last().unwrap().id;
+        assert_eq!(manager.hit_test(on_both), Some(fresh_id));
+
+        // Pasting a lower layer puts the copy above existing drawings too.
+        manager.paste_drawings(&[manager.drawings[1].clone()]);
+        manager.update_all_screen_coords(|bar| bar, |price| price as f32);
+        let copy_id = manager.drawings.last().unwrap().id;
+        assert_eq!(manager.hit_test(on_both), Some(copy_id));
+        assert!(manager.undo());
         assert_eq!(manager.hit_test(on_both), Some(fresh_id));
     }
 

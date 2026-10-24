@@ -10,7 +10,6 @@
 //! - `interaction` - Active drawing tool interaction handling
 //! - `selection` - Drawing selection, manipulation, eraser
 
-mod clipboard;
 mod effects;
 mod interaction;
 mod selection;

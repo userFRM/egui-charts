@@ -2415,8 +2415,8 @@ mod tests {
         );
     }
 
-    /// Native integrations send clipboard events instead of key events. Only our session
-    /// clipboard pastes a drawing, and the pasted copy is an ordinary undoable addition.
+    /// Native clipboard events paste the selected drawings without a session cache,
+    /// and the pasted group is one undoable addition.
     #[test]
     fn native_drawing_clipboard_pastes_once_and_undoes_the_copy() {
         use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};

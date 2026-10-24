@@ -72,6 +72,7 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     egui::Area::new(id)
         .order(egui::Order::Foreground)
         .fixed_pos(pos)
+        .constrain_to(pane)
         .movable(false)
         .show(ui.ctx(), |ui| {
             ui.set_clip_rect(pane);
@@ -79,7 +80,9 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
                 editor.focus = request_focus;
                 ui.ctx().request_discard("inline text editor layout");
             }
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
+            let popup = egui::Frame::popup(ui.style());
+            let response = popup.show(ui, |ui| {
+                ui.set_width((width - popup.total_margin().sum().x).max(1.0));
                 let field_id = id.with("field");
                 if request_focus {
                     ui.memory_mut(|memory| memory.request_focus(field_id));
@@ -100,8 +103,8 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
                     field.request_focus();
                 }
                 ui.small("Ctrl/Cmd+Enter to save, Esc to cancel");
-                outside = frame > opened_frame && field.clicked_elsewhere();
             });
+            outside = frame > opened_frame && response.response.clicked_elsewhere();
         });
     if cancel || commit || outside {
         ui.memory_mut(|memory| memory.surrender_focus(id.with("field")));
@@ -118,6 +121,78 @@ mod tests {
     use crate::drawings::DrawingToolType;
     use crate::widget::test_frames::{chart, frame};
     use egui::{Context, Event, Key, Modifiers, PointerButton, pos2};
+
+    /// Narrow editors stay within the pane, and clicks on their chrome keep the draft open.
+    #[test]
+    fn editor_bounds_and_inside_clicks() {
+        use crate::drawings::{Drawing, DrawingManager};
+        use egui::{Id, RawInput, Rect, vec2};
+        for dark in [false, true] {
+            for width in [120.0, 320.0] {
+                let ctx = Context::default();
+                ctx.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let pane = Rect::from_min_size(pos2(20.0, 20.0), vec2(width, 180.0));
+                let mut manager = DrawingManager::new();
+                let mut drawing = Drawing::new(7, DrawingToolType::TextLabel);
+                drawing.points.push(pane.right_bottom() - vec2(10.0, 10.0));
+                drawing.text = Some("Long draft\n".repeat(30));
+                manager.drawings.push(drawing);
+                super::begin_edit(&mut manager, 7);
+                let chart_id = Id::NULL.with("editor_bounds");
+                let mut time = 0.0;
+                let mut step = |manager: &mut DrawingManager, events| {
+                    time += 0.1;
+                    ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                pos2(0.0, 0.0),
+                                vec2(600.0, 400.0),
+                            )),
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| super::show_editor(ui, manager, chart_id, pane),
+                    )
+                    .drop_without_applying_deltas();
+                };
+                for _ in 0..3 {
+                    step(&mut manager, vec![]);
+                }
+                let area =
+                    egui::AreaState::load(&ctx, chart_id.with(("drawing_text", 7_usize))).unwrap();
+                let rect = Rect::from_min_size(area.left_top_pos(), area.size.unwrap());
+                assert!(
+                    pane.expand(1.0).contains_rect(rect),
+                    "{width}, dark {dark}: {rect:?}"
+                );
+                let pos = rect.center_bottom() - vec2(0.0, 8.0);
+                for pressed in [true, false] {
+                    step(
+                        &mut manager,
+                        vec![
+                            Event::PointerMoved(pos),
+                            Event::PointerButton {
+                                pos,
+                                button: PointerButton::Primary,
+                                pressed,
+                                modifiers: Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                assert!(
+                    manager.text_editor.is_some(),
+                    "inside click must keep editing"
+                );
+                assert!(!manager.can_undo());
+            }
+        }
+    }
 
     /// Completing a text, note or callout focuses an inline field. Commit is one undoable
     /// edit; double-click reopens it, and Escape discards the draft without deselecting.

@@ -980,7 +980,12 @@ impl Chart {
                 // clears any series/indicator selection so handles don't show
                 // on two objects at once.
                 self.selection.deselect();
-                if !self.drawings.is_selected(drawing_id) {
+                if self.drawings.is_selected(drawing_id) {
+                    let ids: Vec<_> = std::iter::once(drawing_id)
+                        .chain(self.drawings.selected_ids())
+                        .collect();
+                    self.drawings.select_drawings(ids);
+                } else {
                     self.drawings.select(drawing_id);
                 }
                 RightClickTarget::Drawing {

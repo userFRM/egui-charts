@@ -122,6 +122,7 @@ use crate::chart::state;
 
 mod anchors;
 pub mod builder;
+mod clipboard;
 mod crosshair;
 mod feed;
 mod frame;

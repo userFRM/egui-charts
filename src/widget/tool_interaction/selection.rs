@@ -276,6 +276,24 @@ mod tests {
             step(&mut chart, vec![button(pos, true, modifiers)]);
             step(&mut chart, vec![button(pos, false, modifiers)]);
         }
+        // A context action targets the clicked member without dropping its peers.
+        for pressed in [true, false] {
+            step(
+                &mut chart,
+                vec![
+                    Event::ModifiersChanged(Modifiers::NONE),
+                    Event::PointerMoved(first),
+                    Event::PointerButton {
+                        pos: first,
+                        button: PointerButton::Secondary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(chart.drawings().sel_drawing(), Some(7));
+        assert_eq!(chart.drawings().selected_ids().collect::<Vec<_>>(), [7, 8]);
         let view = chart.get_time_scale_state();
         let before: Vec<_> = chart
             .drawings()
