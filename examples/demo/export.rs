@@ -9,6 +9,7 @@ pub(super) fn render_image(
     state: &egui_wgpu::RenderState,
     mut frame: ChartImage,
     target: ScreenshotTarget,
+    generation: u64,
     sender: mpsc::Sender<Screenshot>,
     ctx: egui::Context,
 ) -> Result<(), String> {
@@ -122,7 +123,7 @@ pub(super) fn render_image(
                     pixels,
                 )))
             });
-            let _ = sender.send((result, target));
+            let _ = sender.send((result, target, generation));
             ctx.request_repaint();
         });
     Ok(())

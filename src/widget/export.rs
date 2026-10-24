@@ -256,6 +256,7 @@ impl Chart {
         chart.extended_hours = self.extended_hours;
         chart.theme_override = self.theme_override.clone();
         chart.drawings.drawings = self.drawings.drawings.clone();
+        chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
         chart.marks = self.marks.clone();
         chart.price_lines = self.price_lines.clone();
         chart.events = self.events.clone();
@@ -422,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn image_options_change_the_frame_without_changing_the_live_view() {
+    fn images_apply_options_and_drawing_visibility_without_changing_the_live_view() {
         let ctx = egui::Context::default();
         let mut chart = Chart::new(BarData::new());
         chart.symbol = "EXPORT TEST".into();
@@ -489,6 +490,36 @@ mod tests {
             chart.last_rendered_price_rect.is_negative(),
             "live geometry changed"
         );
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType, TimeframeVisibility};
+        let mut drawing = Drawing::new(1, DrawingToolType::HorizontalLine);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(0.0, 10.0)];
+        drawing.color = [71, 89, 123, 255];
+        drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+        chart.drawings.drawings.push(drawing);
+        chart.set_data(
+            SeriesId::MAIN,
+            vec![Bar::new(
+                DateTime::from_timestamp(0, 0).unwrap(),
+                10.0,
+                11.0,
+                9.0,
+                10.0,
+                1.0,
+            )],
+        );
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            chart.theme_override = Some(theme);
+            for (timeframe, visible) in [(Timeframe::Min1, false), (Timeframe::Hour1, true)] {
+                chart.set_timeframe(timeframe);
+                let mut image = chart.export_image(&ctx, &base).unwrap();
+                image.textures_delta.clear();
+                assert_eq!(image.primitives.iter().any(|primitive| {
+                    matches!(&primitive.primitive, egui::epaint::Primitive::Mesh(mesh)
+                        if mesh.vertices.iter().any(|vertex| vertex.color == egui::Color32::from_rgb(71, 89, 123)))
+                }), visible, "drawing visibility at {timeframe:?}");
+            }
+        }
         for size in [[0, 320], [480, u32::MAX], [7680, 7680]] {
             assert!(
                 chart
