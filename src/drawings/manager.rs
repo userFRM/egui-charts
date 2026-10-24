@@ -1455,6 +1455,11 @@ impl DrawingManager {
         }
         let pixels_per_point = painter.pixels_per_point();
         let options = painter.ctx().tessellation_options(|o| *o);
+        // A transformed layer, such as an `egui::Scene`, has its shapes transformed before they
+        // are tessellated, so a kept mesh would scale its feathering and rounding with the zoom.
+        let untransformed = (painter.ctx())
+            .layer_transform_to_global(painter.layer_id())
+            .is_none();
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
             let off_pane = drawing
@@ -1478,7 +1483,7 @@ impl DrawingManager {
                 // second frame so that a drawing changing every frame is not tessellated twice.
                 let tessellated = last
                     .remove(&drawing.id)
-                    .filter(|paint| same_geometry(&paint.shapes, &shapes))
+                    .filter(|paint| untransformed && same_geometry(&paint.shapes, &shapes))
                     .map(|paint| {
                         paint
                             .tessellated
@@ -1657,7 +1662,8 @@ mod tests {
 
     /// Guards the tessellation cache: a drawing that paints the same shapes on consecutive frames
     /// paints last frame's tessellation, which must come out as the triangles of its shapes, and a
-    /// moved drawing must paint its new shapes rather than the old mesh.
+    /// moved drawing, or one in a layer that is then zoomed, must paint its shapes rather than the
+    /// old mesh.
     #[test]
     fn cached_tessellation_matches_the_painted_shapes() {
         use egui::{Context, RawInput, epaint::Primitive};
@@ -1684,11 +1690,17 @@ mod tests {
                 })
                 .collect()
         };
-        for frame in 0..4 {
+        for frame in 0..5 {
             if frame == 3 {
                 manager.drawings[0].points[3].y = 40.0;
             }
+            let layer = if frame == 4 {
+                TSTransform::from_scaling(2.0)
+            } else {
+                TSTransform::IDENTITY
+            };
             let mut output = ctx.run_ui(RawInput::default(), |ui| {
+                ctx.set_transform_layer(ui.layer_id(), layer);
                 let view = ChartView {
                     instrument: None,
                     bars: &[],
@@ -1706,7 +1718,8 @@ mod tests {
                     "an unchanged drawing paints its kept tessellation"
                 );
             }
-            let painted = manager.painted.lock().unwrap()[0].shapes.clone();
+            let mut painted = manager.painted.lock().unwrap()[0].shapes.clone();
+            painted.iter_mut().for_each(|s| s.transform(layer));
             assert!(meshes(shapes) == meshes(painted), "frame {frame}");
         }
     }
