@@ -2642,6 +2642,12 @@ mod tests {
                         .find(|(_, study)| study.name() == "RSI")
                         .expect("palette adds RSI")
                         .0;
+                    let volume_id = app
+                        .chart
+                        .indicators()
+                        .find(|(_, study)| study.is_volume())
+                        .expect("the default chart shows Volume")
+                        .0;
                     for (action, studies, drawings, can_undo, can_redo) in [
                         (TopToolbarAction::Undo, 0, 1, true, true),
                         (TopToolbarAction::Redo, 1, 1, true, false),
@@ -2651,11 +2657,16 @@ mod tests {
                         (TopToolbarAction::Redo, 1, 1, true, false),
                     ] {
                         app.handle_top_toolbar(&ctx, action);
-                        assert_eq!(app.chart.indicators().count(), studies);
+                        let expected = if studies == 1 {
+                            vec![volume_id, id]
+                        } else {
+                            vec![volume_id]
+                        };
+                        assert_eq!(
+                            app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+                            expected
+                        );
                         assert_eq!(app.chart.drawings().drawings.len(), drawings);
-                        if studies == 1 {
-                            assert_eq!(app.chart.indicators().next().unwrap().0, id);
-                        }
                         ctx.run_ui(RawInput::default(), |ui| {
                             app.show_top_toolbar(ui, egui::Color32::BLACK)
                         })
@@ -2892,7 +2903,13 @@ mod tests {
                 }
                 assert!(painted, "comparison prices must be painted");
                 let template = app.current_study_template();
-                assert!(template.is_empty());
+                assert_eq!(
+                    template
+                        .iter()
+                        .map(|study| study.name.as_str())
+                        .collect::<Vec<_>>(),
+                    ["Volume"]
+                );
                 app.load_study_template(&template);
                 assert!(
                     app.chart
