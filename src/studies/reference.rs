@@ -29,7 +29,8 @@
 //!   the median of the bar midpoints with ATR bands for the Median; the angle of the 34-bar EMA for the
 //!   Chop Zone.
 //! - The conventional floor-trader pivot points with Tom DeMark's and Nick Stott's Camarilla levels,
-//!   from the previous period of UTC dates.
+//!   from the previous period of UTC dates; the time-weighted mean of ohlc4 and Berkowitz, Logue and
+//!   Noser's volume-weighted mean of hlc3 since an anchor bar.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -607,7 +608,10 @@ fn staple_studies_match_published_definitions() {
             long,
         ),
     ]);
-    use crate::studies::{PivotMethod, PivotPoints, PivotTimeframe};
+    use crate::studies::{
+        AutoAnchor, PivotMethod, PivotPoints, PivotTimeframe, TimeWeightedAvgPrice,
+        VwapAutoAnchored,
+    };
     // The fixture's minute bars cross UTC midnight once, before bar 107.
     for (name, method) in [
         ("Pivots-Trad", PivotMethod::Traditional),
@@ -636,6 +640,7 @@ fn staple_studies_match_published_definitions() {
         .collect();
     let mut monthly = PivotPoints::new().with_method(PivotMethod::Woodie);
     monthly.set_timeframe(crate::model::Timeframe::Day1);
+    let auto = |anchor| Box::new(VwapAutoAnchored::new().with_anchor(anchor));
     studies.extend([
         (
             "Pivots-Woodie-auto-daily",
@@ -657,6 +662,19 @@ fn staple_studies_match_published_definitions() {
             ),
             daily,
         ),
+        (
+            "TWAP",
+            Box::new(TimeWeightedAvgPrice::default()),
+            bars.clone(),
+        ),
+        (
+            "AutoVWAP",
+            Box::new(VwapAutoAnchored::default()),
+            bars.clone(),
+        ),
+        ("AutoVWAP-HH", auto(AutoAnchor::HighestHigh), bars.clone()),
+        ("AutoVWAP-LL", auto(AutoAnchor::LowestLow), bars.clone()),
+        ("AutoVWAP-HV", auto(AutoAnchor::HighestVolume), bars.clone()),
     ]);
     for (_, study, data) in &mut studies {
         study.calculate(data);

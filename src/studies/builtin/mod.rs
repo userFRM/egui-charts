@@ -44,7 +44,8 @@
 //! [`OnBalanceVolume`], [`VolumeWeightedAvgPrice`], [`MoneyFlowIndex`],
 //! [`AccumulationDistribution`], [`ChaikinMoneyFlow`],
 //! [`VolumeRateOfChange`], [`KlingerOscillator`], [`CVD`],
-//! [`VolProfileVisible`], [`VolProfileFixed`], [`ChaikinOscillator`]
+//! [`VolProfileVisible`], [`VolProfileFixed`], [`ChaikinOscillator`], [`TimeWeightedAvgPrice`],
+//! [`VwapAutoAnchored`]
 //!
 //! ## Support / resistance
 //! [`PivotPoints`], [`ZigZag`], [`PriceChannel`]
@@ -114,8 +115,10 @@ mod anchor_period;
 mod cmf;
 mod mfi;
 mod obv;
+mod twap;
 mod volume;
 mod vwap;
+mod vwap_auto_anchored;
 
 // Trend indicators
 mod adx;
@@ -293,8 +296,10 @@ pub use anchor_period::AnchorPeriod;
 pub use cmf::ChaikinMoneyFlow;
 pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
+pub use twap::TimeWeightedAvgPrice;
 pub use volume::{Volume, VolumeAverage, VolumeColorRule};
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
+pub use vwap_auto_anchored::{AutoAnchor, VwapAutoAnchored};
 
 // Re-exports - Trend indicators
 pub use adx::ADX;
