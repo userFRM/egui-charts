@@ -1141,6 +1141,10 @@ impl DemoApp {
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
+            TopToolbarAction::Save => {
+                self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Save);
+                return;
+            }
             TopToolbarAction::Layout(action) => {
                 self.handle_layout_action(action);
                 return;
@@ -1232,13 +1236,9 @@ impl DemoApp {
                     }
                 }
             }
-            TopToolbarAction::Save => {
-                self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Save)
-            }
             // Light/dark toggle is a real, cheap visual change.
             TopToolbarAction::ThemeToggle => self.toggle_theme(ctx),
-            TopToolbarAction::Layout(action) => self.handle_layout_action(action),
-            TopToolbarAction::None => {}
+            TopToolbarAction::Layout(_) | TopToolbarAction::Save | TopToolbarAction::None => {}
         }
     }
 
@@ -2614,6 +2614,14 @@ mod tests {
         app.chart.config_mut().candle_width = 0.8;
         app.handle_layout_action(LayoutAction::Open("Unnamed".into()));
         assert_eq!(app.chart.config().candle_width, 0.42);
+        let original_type = app.chart.chart_type();
+        app.handle_top_toolbar(
+            &ctx,
+            TopToolbarAction::ChartStyleSelected(egui_charts::model::ChartType::Line),
+        );
+        assert!(app.chart.can_undo());
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
+        assert_eq!(app.chart.chart_type(), original_type);
         app.execute_search_command(&ctx, "export");
         assert!(app.export_dialog.is_open());
         assert_eq!(app.layout_tabs.len(), 2);
