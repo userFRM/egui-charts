@@ -2,8 +2,8 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
-    Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest, Reply, Subscription,
-    SubscriptionId, SymbolDetails, aggregate_trades, resample,
+    Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest, NewsQuery, NewsStory, Reply,
+    Subscription, SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
 use egui_charts::model::{Bar, BarClock, Instrument, Level1Quote, Tick, Timeframe, TradeSide};
 use std::collections::VecDeque;
@@ -505,6 +505,11 @@ impl Datafeed for LiveFeed {
         if sim.subscription.as_ref().is_some_and(|sub| sub.id == id) {
             sim.subscription = None;
         }
+    }
+
+    /// Synthetic stories about the catalog symbols.
+    fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
+        reply.send(Ok(super::feeds::news(&query, Utc::now())));
     }
 
     /// Synthetic statistics and profile derived from the catalog entry of `symbol`.

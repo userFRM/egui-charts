@@ -29,6 +29,7 @@ mod footprint;
     expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod inbox;
+mod market;
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -36,6 +37,7 @@ pub(crate) mod inbox;
 pub(crate) mod merge;
 mod resample;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel};
+pub use market::{NewsQuery, NewsStory};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -131,6 +133,13 @@ pub trait Datafeed: MaybeSend + 'static {
     /// panel. The default answers [`FeedError::NotSupported`], and the panel then shows neither.
     fn symbol_details(&self, symbol: &str, reply: Reply<SymbolDetails>) {
         let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Up to `query.limit` stories, newest first, for the news and highlights panels. Answer
+    /// [`FeedError::NotSupported`] (the default) to have the panels say the feed has none.
+    fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
+        let _ = query;
         reply.send(Err(FeedError::NotSupported));
     }
 

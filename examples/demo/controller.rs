@@ -27,6 +27,8 @@ mod replay;
 mod templates;
 use egui_charts::services::StoreKind;
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate, TemplateDialog};
+#[path = "feeds.rs"]
+mod feeds;
 #[path = "live.rs"]
 mod live;
 #[path = "paper.rs"]
@@ -67,11 +69,11 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
-use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui::widget_bar::{
-    SymbolDetailsPanel, TimeAndSalesPanel, Watchlist, WatchlistAction, WatchlistPanel,
-    WidgetBarSection, WidgetBarWidget,
+    NewsAction, NewsPanel, SymbolDetailsPanel, TimeAndSalesPanel, Watchlist, WatchlistAction,
+    WatchlistPanel, WidgetBarSection, WidgetBarWidget,
 };
+use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
@@ -123,14 +125,18 @@ enum SidePanel {
     DataWindow,
     Watchlist,
     TimeAndSales,
+    Highlights,
+    News,
 }
 
 impl SidePanel {
     /// Panels the demo renders behind a built-in rail entry, with the entry.
-    const BUILT_IN: [(SidePanel, RightBarIcon); 3] = [
+    const BUILT_IN: [(SidePanel, RightBarIcon); 5] = [
         (SidePanel::Watchlist, RightBarIcon::Watchlist),
         (SidePanel::Alerts, RightBarIcon::Alerts),
         (SidePanel::ObjectTree, RightBarIcon::ObjectTree),
+        (SidePanel::Highlights, RightBarIcon::Highlights),
+        (SidePanel::News, RightBarIcon::News),
     ];
 
     /// Panels the demo renders behind a host rail entry, with the entry's id.
@@ -274,6 +280,9 @@ pub struct DemoApp {
     time_and_sales: TimeAndSalesPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
+    // Synthetic highlights and headlines from the live feed.
+    highlights: NewsPanel,
+    news: NewsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -472,6 +481,8 @@ impl DemoApp {
             watchlist_import: None,
             time_and_sales: TimeAndSalesPanel::default(),
             symbol_details: SymbolDetailsPanel::new(),
+            highlights: NewsPanel::highlights(),
+            news: NewsPanel::new(),
             replay: None,
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
@@ -510,6 +521,8 @@ impl DemoApp {
         app.watchlist.set_selected(symbol);
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
+        app.highlights.set_feed(app.live.clone());
+        app.news.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.template_storage.clone());
         app.apply_session();
         app.restore_drawings();
@@ -1007,6 +1020,8 @@ impl eframe::App for DemoApp {
         self.handle_screenshot(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
         self.symbol_details.poll(&ctx);
+        self.highlights.poll(&ctx);
+        self.news.poll(&ctx);
         self.trading.poll(&ctx, &mut self.toasts);
         // The watchlist opens beside the chart by default, but a compact window starts with the
         // chart alone.
@@ -1594,6 +1609,14 @@ impl DemoApp {
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
+                SidePanel::Highlights => {
+                    let action = self.highlights.show(ui);
+                    self.handle_news(ui.ctx(), action);
+                }
+                SidePanel::News => {
+                    let action = self.news.show(ui);
+                    self.handle_news(ui.ctx(), action);
+                }
                 SidePanel::DataWindow => {
                     self.data_window_expanded =
                         egui_charts::ui::widget_bar::panels::object_tree::show_data_window(
@@ -1603,6 +1626,14 @@ impl DemoApp {
                         );
                 }
             });
+    }
+
+    fn handle_news(&mut self, ctx: &egui::Context, action: NewsAction) {
+        match action {
+            NewsAction::ShowOnChart(time) => self.chart.scroll_to_time(time),
+            NewsAction::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            NewsAction::None => {}
+        }
     }
 
     fn show_object_tree(&mut self, ui: &mut egui::Ui) {
@@ -1717,11 +1748,13 @@ impl DemoApp {
                 .chart
                 .instrument()
                 .cloned()
-                .unwrap_or_else(|| egui_charts::model::Instrument::new(chart_symbol)),
+                .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
         if let Some(quote) = chart_quote {
             self.symbol_details.set_quote(quote);
         }
+        self.highlights.set_symbol(&chart_symbol);
+        self.news.set_symbol(&chart_symbol);
         let instrument = self.chart.instrument();
         let mut alert = None;
         for trade in self.live.drain_tape() {
