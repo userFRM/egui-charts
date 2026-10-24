@@ -650,71 +650,97 @@ mod tests {
     fn drawings_use_the_owning_study_pane_scale() {
         use crate::drawings::DrawingToolType;
         use crate::scales::PriceScaleMode;
-        for (mode, inverted, low, high, middle) in [
-            (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0),
-            (PriceScaleMode::Normal, true, 0.0, 100.0, 50.0),
-            (PriceScaleMode::Logarithmic, false, 10.0, 1000.0, 100.0),
-        ] {
-            let ctx = Context::default();
-            let mut chart = chart(&[1000.0], &[1100.0]);
-            let study = chart.add_indicator(Box::new(RSI::new(14)));
-            chart.sync_panes();
-            let scale = &mut chart.pane_layout.panes[0].scale;
-            scale.options_mut().mode = mode;
-            scale.options_mut().invert_scale = inverted;
-            let transform = crate::scales::PriceTransform { mode, base: 1.0 };
-            scale.rebase(transform);
-            scale.set_range(transform.to_scale(low), transform.to_scale(high));
-            crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
-            let pane = chart.get_rendered_indicator_panes()[0].clone();
-            // Halfway between 0 and 100 is 50; halfway between ln(10) and ln(1000) is ln(100).
-            let first = Pos2::new(pane.mapping.idx_to_x(30), pane.chart_rect.center().y);
-            let second = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
-            chart
-                .drawings_mut()
-                .set_active_tool(Some(DrawingToolType::TrendLine));
-            click(&ctx, &mut chart, first);
-            click(&ctx, &mut chart, second);
-            assert_eq!(
-                chart.drawings().drawings.len(),
-                1,
-                "drawing on a study pane"
-            );
-            let id = chart.drawings().drawings[0].id;
-            for point in &chart.drawings().drawings[0].chart_points {
-                assert!((point.price - middle).abs() < 1e-3);
-            }
-            assert_eq!(chart.drawings().hit_test(first.lerp(second, 0.5)), Some(id));
-            assert_eq!(
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for (mode, inverted, low, high, middle) in [
+                (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0),
+                (PriceScaleMode::Normal, true, 0.0, 100.0, 50.0),
+                (PriceScaleMode::Logarithmic, false, 10.0, 1000.0, 100.0),
+            ] {
+                let ctx = Context::default();
+                let mut chart = chart(&[1000.0], &[1100.0]);
+                chart.set_theme(&ctx, &theme);
+                let study = chart.add_indicator(Box::new(RSI::new(14)));
+                chart.sync_panes();
+                let scale = &mut chart.pane_layout.panes[0].scale;
+                scale.options_mut().mode = mode;
+                scale.options_mut().invert_scale = inverted;
+                let transform = crate::scales::PriceTransform { mode, base: 1.0 };
+                scale.rebase(transform);
+                scale.set_range(transform.to_scale(low), transform.to_scale(high));
+                crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+                let pane = chart.get_rendered_indicator_panes()[0].clone();
+                // Halfway between 0 and 100 is 50; halfway between ln(10) and ln(1000) is ln(100).
+                let first = Pos2::new(pane.mapping.idx_to_x(30), pane.chart_rect.center().y);
+                let second = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
                 chart
-                    .drawings()
-                    .hit_test(chart.get_rendered_price_rect().center()),
-                None
-            );
-            chart.drawings_mut().select(id);
-            let to = first + egui::vec2(0.0, 15.0);
-            drag(&ctx, &mut chart, first, to);
-            let moved = chart.drawings().drawings[0].chart_points[0].price;
-            assert!((moved - pane.mapping.y_to_price(to.y)).abs() < 1e-3);
-            assert!(chart.undo());
-            assert!((chart.drawings().drawings[0].chart_points[0].price - middle).abs() < 1e-3);
-            assert!(chart.redo());
-            let saved = chart.save_drawings().unwrap().to_json().unwrap();
-            chart.load_drawings(&saved).unwrap();
-            chart.pane_layout.maximized = Some(study);
-            pointer(&ctx, &mut chart, Pos2::ZERO, None);
-            let drawing = &chart.drawings().drawings[0];
-            let pane = &chart.get_rendered_indicator_panes()[0];
-            assert!((drawing.points[0].y - pane.mapping.price_to_y(moved)).abs() < 0.01);
-            let on_line = drawing.points[0].lerp(drawing.points[1], 0.5);
-            assert_eq!(chart.drawings().hit_test(on_line), Some(drawing.id));
-            chart.set_indicator_visible(study, false);
-            pointer(&ctx, &mut chart, Pos2::ZERO, None);
-            assert_eq!(
-                chart.drawings().hit_test(on_line),
-                None,
-                "hidden panes have no drawing hits"
-            );
+                    .drawings_mut()
+                    .set_active_tool(Some(DrawingToolType::TrendLine));
+                click(&ctx, &mut chart, first);
+                click(&ctx, &mut chart, second);
+                assert_eq!(
+                    chart.drawings().drawings.len(),
+                    1,
+                    "drawing on a study pane"
+                );
+                let id = chart.drawings().drawings[0].id;
+                for point in &chart.drawings().drawings[0].chart_points {
+                    assert!((point.price - middle).abs() < 1e-3);
+                }
+                assert_eq!(chart.drawings().hit_test(first.lerp(second, 0.5)), Some(id));
+                assert_eq!(
+                    chart
+                        .drawings()
+                        .hit_test(chart.get_rendered_price_rect().center()),
+                    None
+                );
+                chart.drawings_mut().select(id);
+                let to = first + egui::vec2(0.0, 15.0);
+                drag(&ctx, &mut chart, first, to);
+                let moved = chart.drawings().drawings[0].chart_points[0].price;
+                assert!((moved - pane.mapping.y_to_price(to.y)).abs() < 1e-3);
+                assert!(chart.undo());
+                assert!((chart.drawings().drawings[0].chart_points[0].price - middle).abs() < 1e-3);
+                assert!(chart.redo());
+                let saved = chart.save_drawings().unwrap().to_json().unwrap();
+                chart.load_drawings(&saved).unwrap();
+                chart.pane_layout.maximized = Some(study);
+                pointer(&ctx, &mut chart, Pos2::ZERO, None);
+                let drawing = &chart.drawings().drawings[0];
+                let pane = &chart.get_rendered_indicator_panes()[0];
+                assert!((drawing.points[0].y - pane.mapping.price_to_y(moved)).abs() < 0.01);
+                let on_line = drawing.points[0].lerp(drawing.points[1], 0.5);
+                assert_eq!(chart.drawings().hit_test(on_line), Some(drawing.id));
+                for width in [320.0, 360.0] {
+                    ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                    let pane = &chart.get_rendered_indicator_panes()[0];
+                    let drawing = &chart.drawings().drawings[0];
+                    assert!(pane.chart_rect.width() > 0.0 && pane.chart_rect.right() <= width);
+                    assert!((drawing.points[0].y - pane.mapping.price_to_y(moved)).abs() < 0.01);
+                    let on_line = drawing.points[0].lerp(drawing.points[1], 0.5);
+                    if pane.chart_rect.contains(on_line) {
+                        assert_eq!(chart.drawings().hit_test(on_line), Some(drawing.id));
+                    }
+                }
+                chart.set_indicator_visible(study, false);
+                pointer(&ctx, &mut chart, Pos2::ZERO, None);
+                assert_eq!(
+                    chart.drawings().hit_test(on_line),
+                    None,
+                    "hidden panes have no drawing hits"
+                );
+            }
         }
     }
 

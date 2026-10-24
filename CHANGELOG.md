@@ -163,6 +163,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Applying drawing templates preserves the target study pane, and saved defaults omit pane ownership. Standalone drawing managers release cached geometry after drawings are deleted. ([#151](https://github.com/userFRM/egui-charts/issues/151))
+
 - The study refresh regression checks one full recompute per frame without assuming measured update costs preserve registration order. Unequal refresh deadlines exercise that order independently of timer precision. ([#747](https://github.com/userFRM/egui-charts/issues/747))
 
 - Drawing timestamps survive history replacement, interval changes and streaming inserts, including fractional indices and whitespace outside loaded bars. Undo/redo snapshots and linked charts use the same displayed-bar mapping. Drawings and markers are retained per symbol; switching symbols ends active drags and preserves drawing controls; markers between bars interpolate, with the nearest bar supplying their height. Migration: construct `ChartPoint` with `new` instead of struct literals; its editable `bar_idx` and `price` fields remain public. Handle `SaveError::UnmappedAnchor` in exhaustive matches. Switching symbols or replacing drawings through `load_drawings` clears chart undo history. ([#81](https://github.com/userFRM/egui-charts/issues/81))

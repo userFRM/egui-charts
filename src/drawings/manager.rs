@@ -1120,10 +1120,6 @@ impl DrawingManager {
     ) {
         if pane.is_none() {
             self.pane_clips.clear();
-            self.painted
-                .get_mut()
-                .unwrap_or_else(|e| e.into_inner())
-                .retain(|paint| self.drawings.iter().any(|d| d.id == paint.id));
         }
         for member in &members {
             self.pane_clips.insert(*member, rect);
@@ -1357,10 +1353,9 @@ impl DrawingManager {
         let painter = &painter.with_clip_rect(price_rect);
         let mut painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
         painted.retain(|paint| {
-            !self
-                .drawings
+            self.drawings
                 .iter()
-                .any(|d| d.id == paint.id && self.owns_pane(d))
+                .any(|d| d.id == paint.id && !self.owns_pane(d))
         });
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
@@ -1462,17 +1457,20 @@ mod tests {
                 .collect();
             drawing.text = Some("A long text annotation".into());
             manager.drawings.push(drawing);
-            ctx.run_ui(RawInput::default(), |ui| {
-                let view = ChartView {
-                    instrument: None,
-                    bars: &[],
-                    revision: 0,
-                    bar_to_x: &|b| b * 10.0,
-                    price_to_y: &|p| 500.0 - p as f32,
-                };
-                manager.render_all(ui.painter(), pane, &view);
-            })
-            .drop_without_applying_deltas();
+            let render = |manager: &DrawingManager| {
+                ctx.run_ui(RawInput::default(), |ui| {
+                    let view = ChartView {
+                        instrument: None,
+                        bars: &[],
+                        revision: 0,
+                        bar_to_x: &|b| b * 10.0,
+                        price_to_y: &|p| 500.0 - p as f32,
+                    };
+                    manager.render_all(ui.painter(), pane, &view);
+                })
+                .drop_without_applying_deltas();
+            };
+            render(&manager);
             assert_eq!(
                 manager.hit_test(Pos2::new(hit.0, hit.1)),
                 Some(7),
@@ -1489,6 +1487,12 @@ mod tests {
             }
             manager.drawings[0].visible = false;
             assert_eq!(manager.hit_test(Pos2::new(hit.0, hit.1)), None);
+            manager.delete_drawing(7);
+            render(&manager);
+            assert!(
+                manager.painted.lock().unwrap().is_empty(),
+                "deleted geometry is released"
+            );
         }
     }
 

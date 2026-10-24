@@ -91,12 +91,15 @@ mod tests {
         drawing.notes = Some("note".into());
         drawing.label = Some("name".into());
         drawing.screen_anchor = Some([0.25, 0.75]);
+        drawing.pane = Some(7);
         let mut template = DrawingTemplate::from_drawing(&drawing);
         template.settings.stroke_width = 4.0;
         let template: DrawingTemplate =
             serde_json::from_str(&serde_json::to_string(&template).unwrap()).unwrap();
         assert!(template.settings.chart_points.is_empty());
         assert!(template.settings.screen_anchor.is_none());
+        assert!(template.settings.pane.is_none());
+        drawing.pane = Some(9);
         template.apply_to(&mut drawing).unwrap();
         assert_eq!(drawing.stroke_width, 4.0);
         assert_eq!(drawing.id, 17);
@@ -105,6 +108,7 @@ mod tests {
         assert_eq!(drawing.label.as_deref(), Some("name"));
         assert_eq!(drawing.chart_points.len(), 2);
         assert_eq!(drawing.screen_anchor, Some([0.25, 0.75]));
+        assert_eq!(drawing.pane, Some(9));
         assert_eq!(drawing.chart_points[0].bar_idx, 3.0);
         assert!(drawing.completed);
     }
