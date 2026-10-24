@@ -122,6 +122,7 @@ impl IndicatorFactory {
                 RateOfChange,
                 Aroon,
                 AwesomeOscillator,
+                RsiDivergence,
                 UltimateOscillator,
                 ConnorsRSI,
                 CoppockCurve,
@@ -148,6 +149,15 @@ impl IndicatorFactory {
                 VolumeOscillator,
                 BalanceOfPower,
                 EaseOfMovement,
+                AcceleratorOscillator,
+                AroonOscillator,
+                BullBearPower,
+                AdvanceDeclineRatioBars,
+                PriceMomentumOscillator,
+                PringsSpecialK,
+                SMIErgodicIndicator,
+                SMIErgodicOscillator,
+                WoodiesCCI,
             ],
             "Trend" => [
                 ADX,
@@ -162,6 +172,10 @@ impl IndicatorFactory {
                 Qstick,
                 ChoppinessIndex,
                 ElderImpulseSystem,
+                WilliamsAlligator,
+                ChopZone,
+                VolatilityStop,
+                ChandeKrollStop,
             ],
             "Volatility" => [
                 BollingerBands,
@@ -181,12 +195,19 @@ impl IndicatorFactory {
                 ParkinsonVol,
                 ZeroTrendVol,
                 CommoditySelectionIndex,
+                AverageDailyRange,
+                BBTrend,
+                UlcerIndex,
+                RelativeVolatilityIndex,
+                Median,
             ],
             "Volume" => [
                 Volume,
                 OnBalanceVolume,
                 VolumeWeightedAvgPrice,
                 AnchoredVWAP,
+                VwapAutoAnchored,
+                TimeWeightedAvgPrice,
                 MoneyFlowIndex,
                 AccumulationDistribution,
                 ChaikinMoneyFlow,
@@ -202,9 +223,14 @@ impl IndicatorFactory {
                 PositiveVolumeIndex,
                 WilliamsAD,
                 MarketFacilitationIndex,
+                ChaikinOscillator,
+                Volume24h,
+                RelativeVolumeAtTime,
             ],
             "Support and resistance" => [
                 PivotPoints,
+                PivotPointsHighLow,
+                WilliamsFractals,
                 ZigZag,
             ],
             "Statistics" => [
@@ -214,11 +240,14 @@ impl IndicatorFactory {
                 StandardError,
                 StandardErrorBands,
                 RankCorrelationIndex,
+                RciRibbon,
                 MajorityRule,
                 AccumulationSwingIndex,
+                Seasonality,
             ],
             "Price" => [
                 HigherIntervalCandles,
+                BollingerBars,
                 TypicalPrice,
                 MedianPrice,
                 WeightedClose,
@@ -227,6 +256,11 @@ impl IndicatorFactory {
             "Market structure" => [
                 Week52HighLow,
                 Week52HighLowLevels,
+                TradingSessions,
+                Gaps,
+            ],
+            "Patterns" => [
+                CandlestickPatterns,
             ],
         );
     }
@@ -345,6 +379,37 @@ mod tests {
         }
     }
 
+    /// Confirming the settings dialog without an edit hands each plot's colour back through
+    /// `set_colors`, which must leave every drawn colour as it was.
+    #[test]
+    fn unchanged_settings_keep_every_colour() {
+        use crate::studies::ConfiguredStudy;
+
+        let bars: Vec<Bar> = (0..300)
+            .map(|i| {
+                let c = 100.0 + 10.0 * (i as f64 / 9.0).sin();
+                let time = Utc.timestamp_opt(i * 3600, 0).unwrap();
+                Bar::new(time, c - 0.5, c + 1.0, c - 1.0, c, 1000.0 + i as f64)
+            })
+            .collect();
+        let colours = |study: &ConfiguredStudy| -> Vec<_> {
+            (0..study.line_cnt())
+                .flat_map(|line| {
+                    let style = study.plot_style(line).color;
+                    (0..bars.len()).map(move |bar| study.plot_color(line, bar).unwrap_or(style))
+                })
+                .collect()
+        };
+        for name in IndicatorFactory::new().list() {
+            let mut study = ConfiguredStudy::new(IndicatorFactory::new().create(&name).unwrap());
+            study.calculate(&bars);
+            let before = colours(&study);
+            study.apply_settings(&[], study.settings()).unwrap();
+            study.calculate(&bars);
+            assert_eq!(colours(&study), before, "{name}");
+        }
+    }
+
     /// Each registered name is a study of its own: on one series, no two names give the same
     /// values on every bar, even with their lines in another order.
     #[test]
@@ -352,11 +417,15 @@ mod tests {
         use crate::model::Bar;
         use chrono::{TimeZone, Utc};
 
-        // Two bars per session over more than 52 weeks distinguish session and calendar studies.
-        let bars: Vec<Bar> = (0..400)
+        // Two bars per session over more than 52 weeks distinguish session and calendar studies;
+        // 800 bars warm up the longest study, and a step every 160 bars opens a price gap.
+        let bars: Vec<Bar> = (0..800)
             .map(|i: i64| {
                 let x = i as f64;
-                let close = 100.0 + (x * 0.13).sin() * 8.0 + (x * 0.029).cos() * 5.0;
+                let close = 100.0
+                    + (x * 0.13).sin() * 8.0
+                    + (x * 0.029).cos() * 5.0
+                    + (i / 160) as f64 * 6.0;
                 let open = close - (x * 0.7).sin() * 1.5;
                 Bar {
                     time: Utc.timestamp_opt((i / 2 * 48 + i % 2) * 3_600, 0).unwrap(),
@@ -470,6 +539,11 @@ mod tests {
             Box::new(VolumeOscillator::new(l(0), l(1))),
             Box::new(BalanceOfPower::new(l(0))),
             Box::new(EaseOfMovement::new(l(0)).with_divisor(x(1e4))),
+            Box::new(PriceMomentumOscillator::new(l(0), l(1), l(2))),
+            Box::new(PringsSpecialK::new(l(0), l(1))),
+            Box::new(SMIErgodicIndicator::new(l(0), l(1), l(2))),
+            Box::new(SMIErgodicOscillator::new(l(0), l(1), l(2))),
+            Box::new(WoodiesCCI::new(l(0), l(1))),
             Box::new(ADX::new(l(0))),
             Box::new(SuperTrend::new(l(0), x(3.0))),
             Box::new(IchimokuCloud::new(l(0), l(1), l(2))),
@@ -486,6 +560,10 @@ mod tests {
             Box::new(Qstick::new(l(0))),
             Box::new(ChoppinessIndex::new(l(0))),
             Box::new(ElderImpulseSystem::new(l(0), l(1), l(2), l(3))),
+            Box::new(WilliamsAlligator::new(l(0), l(1), l(2))),
+            Box::new(ChopZone::new()),
+            Box::new(VolatilityStop::new(l(0), x(2.0))),
+            Box::new(ChandeKrollStop::new(l(0), x(1.0), l(1))),
             Box::new(BollingerBands::new(l(0), x(2.0))),
             Box::new(BollingerBandsWidth::new(l(0), x(2.0))),
             Box::new(ATR::new(l(0))),
@@ -503,16 +581,20 @@ mod tests {
             Box::new(OhlcVolatility::new(l(0))),
             Box::new(ParkinsonVol::new(l(0))),
             Box::new(ZeroTrendVol::new(l(0))),
+            Box::new(RelativeVolatilityIndex::new(l(0))),
             Box::new(
                 CommoditySelectionIndex::new(l(0))
                     .with_point_value(x(1.0))
                     .with_margin(x(1.0))
                     .with_commission(x(1.0)),
             ),
+            Box::new(Median::new(l(0), l(1), x(2.0))),
             Box::new(Volume::new(l(0))),
             Box::new(OnBalanceVolume::new()),
             Box::new(VolumeWeightedAvgPrice::new().with_std_dev_bands([x(1.0), x(2.0)])),
             Box::new(AnchoredVWAP::new(0)),
+            Box::new(VwapAutoAnchored::new().with_length(l(0))),
+            Box::new(TimeWeightedAvgPrice::new()),
             Box::new(MoneyFlowIndex::new(l(0))),
             Box::new(AccumulationDistribution::new()),
             Box::new(ChaikinMoneyFlow::new(l(0))),
@@ -529,8 +611,14 @@ mod tests {
             Box::new(PositiveVolumeIndex::new()),
             Box::new(WilliamsAD::new()),
             Box::new(MarketFacilitationIndex::new().with_divisor(x(1.0))),
-            Box::new(PivotPoints::new(l(0))),
+            Box::new(PivotPoints::new().with_pivots_back(l(0))),
+            Box::new(Volume24h::new()),
+            Box::new(RelativeVolumeAtTime::new(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
+            Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
+            Box::new(WilliamsFractals::new(l(0))),
+            Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
+            Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
             Box::new(PriceChannel::new(l(0))),
             Box::new(LinearRegression::new(l(0))),
             Box::new(LinearRegressionChannel::new(l(0), x(2.0))),
@@ -538,9 +626,12 @@ mod tests {
             Box::new(StandardError::new(l(0))),
             Box::new(StandardErrorBands::new(l(0), x(2.0))),
             Box::new(RankCorrelationIndex::new(l(0))),
+            Box::new(RciRibbon::new(l(0), l(1), l(2))),
             Box::new(MajorityRule::new(l(0))),
             Box::new(AccumulationSwingIndex::new(x(0.5))),
+            Box::new(Seasonality::new()),
             Box::new(HigherIntervalCandles::default()),
+            Box::new(BollingerBars::new()),
             Box::new(TypicalPrice::new()),
             Box::new(MedianPrice::new()),
             Box::new(WeightedClose::new()),
@@ -549,6 +640,17 @@ mod tests {
             Box::new(OHLC4::new()),
             Box::new(Week52HighLow::new()),
             Box::new(Week52HighLowLevels::new()),
+            Box::new(AcceleratorOscillator::new()),
+            Box::new(AroonOscillator::new(l(0))),
+            Box::new(AverageDailyRange::new(l(0))),
+            Box::new(BBTrend::new(l(0), l(1), x(2.0))),
+            Box::new(ChaikinOscillator::new(l(0), l(1))),
+            Box::new(BullBearPower::new(l(0))),
+            Box::new(AdvanceDeclineRatioBars::new(l(0))),
+            Box::new(UlcerIndex::new(l(0))),
+            Box::new(DetrendedPriceOscillator::new(l(0)).with_centered(true)),
+            Box::new(TradingSessions::new()),
+            Box::new(CandlestickPatterns::default()),
         ]
     }
 
