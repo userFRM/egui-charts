@@ -91,7 +91,7 @@ impl SettingsTab {
 }
 
 /// Background type for chart
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BackgroundType {
     #[default]
     Solid,
@@ -118,7 +118,7 @@ impl BackgroundType {
 }
 
 /// Grid lines display mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum GridLinesMode {
     #[default]
     None,
@@ -148,7 +148,7 @@ impl GridLinesMode {
 }
 
 /// Button visibility mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ButtonVisibility {
     AlwaysVisible,
     #[default]
@@ -175,7 +175,7 @@ impl ButtonVisibility {
 }
 
 /// Watermark display mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum WatermarkMode {
     #[default]
     ReplayMode,
@@ -260,7 +260,7 @@ impl Default for StatusLineOptions {
 }
 
 /// Precision mode for price display
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PrecisionMode {
     #[default]
     Default,

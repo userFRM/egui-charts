@@ -1238,6 +1238,8 @@ mod tests {
             for (visible, label) in [
                 (true, "Save as template…"),
                 (true, "Saved line"),
+                (true, "Manage templates…"),
+                (false, "Manage templates…"),
                 (false, "Saved line"),
             ] {
                 let ctx = Context::default();
@@ -1290,6 +1292,9 @@ mod tests {
                                 modifiers: Modifiers::NONE,
                             }],
                         );
+                        if !pressed && label == "Manage templates…" {
+                            assert_eq!(action, DrawingToolbarAction::ManageTemplates);
+                        }
                         if !pressed && label == "Saved line" {
                             assert_eq!(
                                 action,

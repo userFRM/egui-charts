@@ -28,6 +28,12 @@ impl TemplatesButton {
             || Some(DrawingToolbarAction::OpenTemplateMenu),
         );
 
+        builder = builder.add_text_item_with_action(
+            "Manage templates…",
+            "Load or delete saved drawing templates",
+            || Some(DrawingToolbarAction::ManageTemplates),
+        );
+
         // List existing templates
         for template in templates {
             let template_id = template.id.clone();

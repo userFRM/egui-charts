@@ -296,12 +296,16 @@ impl Chart {
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
         self.apply_config_scale_mode();
+        #[cfg(feature = "studies")]
+        self.sync_volume_study(ui.ctx());
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         self.show_elements();
+        let frame = ui.ctx().cumulative_frame_nr();
+        let initial_layout = self.first_layout_frame.is_none_or(|first| first == frame);
         let previous_axis_width = self.measured_axis_width;
         self.last_rendered_indicator_panes.clear();
         // Pane studies share the available height and the lowest time axis.
@@ -315,14 +319,17 @@ impl Chart {
         } else {
             self.show_internal(ui, None, footprint)
         };
+        if self.last_rendered_price_rect.width() > 1.0 {
+            self.first_layout_frame.get_or_insert(frame);
+        }
         if (self.measured_axis_width - previous_axis_width).abs() > 0.5 {
             let old_width = self.last_rendered_price_rect.width();
             let new_width = self
                 .calculate_layout_rects(response.rect)
                 .price_rect
                 .width();
-            // After the first layout, fitting labels keeps the visible bar range.
-            if previous_axis_width > 0.0 && old_width > 0.0 && new_width > 0.0 {
+            // Discarded startup passes still belong to the initial layout.
+            if !initial_layout && previous_axis_width > 0.0 && old_width > 0.0 && new_width > 0.0 {
                 let scale = self.state.time_scale_mut();
                 scale.set_bar_spacing(scale.bar_spacing() * new_width / old_width);
             }
@@ -523,9 +530,7 @@ impl Chart {
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
         let time_based = !self.chart_type.is_time_independent();
-        let show_volume = self.main_series_visible
-            && self.config.show_volume
-            && self.chart_type.supports_volume();
+        let show_volume = self.shows_volume();
         let is_drawing_interaction = time_based
             && (self.drawings.active_tool.is_some()
                 || self.drawings.dragging_handle.is_some()
@@ -628,7 +633,7 @@ impl Chart {
         let volume_rect = layout.volume_rect;
 
         // Get visible range
-        let (start_idx, _end_idx) = self.state.visible_range();
+        let (start_idx, end_idx) = self.state.visible_range();
         self.start_idx = start_idx;
 
         // Capture near_live status for button
@@ -659,7 +664,7 @@ impl Chart {
                 .indicators()
                 .iter()
                 .zip(&self.study_autoscale)
-                .filter(|(_, autoscale)| time_based && **autoscale)
+                .filter(|(study, autoscale)| time_based && **autoscale && !study.is_volume())
                 .map(|(study, _)| study.as_ref()),
         );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
@@ -830,7 +835,10 @@ impl Chart {
 
         let render_params = rendering::ChartTypeParams::new(
             rendering::BarDimensions::new(bar_width, self.config.wick_width),
-            rendering::VolumeSettings::new(self.config.show_volume, max_volume),
+            rendering::VolumeSettings::new(
+                self.config.show_volume && !cfg!(feature = "studies"),
+                max_volume,
+            ),
             &self.chart_type_params,
             rendering::TradingColors::new(self.config.bullish_color, self.config.bearish_color),
             rendering::CoordMapping::new(chart_rect.min.x),
@@ -839,7 +847,7 @@ impl Chart {
 
         if self.main_series_visible {
             if let Some((flow, config)) = footprint.filter(|_| time_based) {
-                if show_volume {
+                if show_volume && !cfg!(feature = "studies") {
                     rendering::candles::volume::render_volume_bars(
                         &clipped_volume_ctx,
                         visible_data,
@@ -887,6 +895,25 @@ impl Chart {
             &hidden_studies
         };
         // Draw indicators
+        for study in studies
+            .indicators()
+            .iter()
+            .filter(|study| study.is_volume() && study.is_overlay() && study.is_visible())
+        {
+            if self.main_series_visible {
+                let rect = super::volume::overlay_rect(price_rect, &self.config);
+                let (min, max) = super::volume::range(study.as_ref(), &(start_idx..end_idx));
+                super::volume::paint(
+                    &painter,
+                    rect,
+                    study.as_ref(),
+                    &(start_idx..end_idx),
+                    &coords,
+                    min,
+                    max,
+                );
+            }
+        }
         renderers::IndicatorRenderer::render(
             &price_ctx,
             studies.indicators(),
@@ -1121,7 +1148,7 @@ impl Chart {
                     .as_ref()
                     .filter(|_| show_price_axis)
                     .map(|quote| (quote, egui::Color32::from_rgb(251, 142, 1))),
-                (show_volume && show_price_axis)
+                (show_volume && show_price_axis && !cfg!(feature = "studies"))
                     .then_some((last.volume, egui::Color32::from_rgb(233, 30, 99))),
                 axis_edge,
                 countdown.as_deref(),
@@ -1164,6 +1191,26 @@ impl Chart {
                 .iter()
                 .filter(|study| study.is_overlay())
             {
+                if study.is_volume() {
+                    if self.main_series_visible {
+                        let rect = super::volume::overlay_rect(price_rect, &self.config);
+                        let mapping = super::volume::mapping(
+                            &coords,
+                            rect,
+                            study.as_ref(),
+                            &(start_idx..end_idx),
+                        );
+                        super::volume::tags(
+                            &painter,
+                            price_rect,
+                            &mapping.price,
+                            study.as_ref(),
+                            axis_edge,
+                            &mut tags,
+                        );
+                    }
+                    continue;
+                }
                 rendering::axes::render_study_tags(
                     &painter,
                     price_rect,
@@ -1475,7 +1522,18 @@ impl Chart {
                 if volume_rect.contains(hover_pos) {
                     let map = crate::scales::PriceMap::new(
                         crate::scales::PriceTransform::default(),
-                        crate::scales::PriceRange::new(0.0, max_volume.max(1.0)),
+                        crate::scales::PriceRange::new(
+                            0.0,
+                            studies
+                                .indicators()
+                                .iter()
+                                .find(|study| {
+                                    study.is_volume() && study.is_overlay() && study.is_visible()
+                                })
+                                .map_or(max_volume.max(1.0), |study| {
+                                    super::volume::range(study.as_ref(), &(start_idx..end_idx)).1
+                                }),
+                        ),
                         volume_rect.top(),
                         volume_rect.bottom(),
                         false,
@@ -1900,7 +1958,18 @@ mod tests {
                 output.textures_delta.clear();
                 assert!(
                     output.shapes.iter().any(|shape| match &shape.shape {
-                        Shape::Rect(rect) => rect.fill == theme.chart.volume_up(),
+                        Shape::Rect(rect) =>
+                            rect.fill
+                                == if cfg!(feature = "studies") {
+                                    egui::Color32::from_rgba_unmultiplied(
+                                        38,
+                                        198,
+                                        218,
+                                        theme.chart.volume_alpha,
+                                    )
+                                } else {
+                                    theme.chart.volume_up()
+                                },
                         _ => false,
                     }),
                     "footprint keeps the volume histogram"
@@ -2003,13 +2072,20 @@ mod tests {
                 ("1 close", 7),
                 ("110.00", 8),
                 ("O 100.00", 3),
-                ("Vol 1", 5),
             ] {
                 assert_eq!(
                     texts.contains(&text),
                     hidden != flag && (hidden != 11 || matches!(flag, 6..=8)),
                     "{text}: hidden={hidden} {texts:?}"
                 );
+            }
+            for (text, visible) in [
+                ("Vol 1", hidden == 10),
+                ("Volume", !matches!(hidden, 5 | 6 | 10 | 11)),
+                ("SMA 9", !matches!(hidden, 5 | 7 | 10 | 11)),
+                ("1.000", !matches!(hidden, 5 | 8 | 10 | 11)),
+            ] {
+                assert_eq!(texts.contains(&text), visible, "{text}: hidden={hidden}");
             }
             assert_eq!(
                 texts.iter().any(|text| text.contains("RSI")),
@@ -2736,6 +2812,60 @@ mod tests {
     }
 
     #[test]
+    fn initial_axis_passes_keep_zoom_and_later_measurements_keep_range() {
+        use crate::model::Instrument;
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(2)));
+        let initial_view = chart.get_time_scale_state();
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::ZERO),
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+            },
+        )
+        .drop_without_applying_deltas();
+        let mut passes = 0;
+        ctx.run_ui(input(), |ui| {
+            chart.show(ui);
+            passes += 1;
+            if ui.ctx().current_pass_index() == 0 {
+                // Metadata arriving during startup can widen labels on the discarded pass.
+                chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(6)));
+                ui.ctx().request_discard("instrument metadata arrived");
+            }
+        })
+        .drop_without_applying_deltas();
+        assert!(passes > 1);
+        assert_eq!(chart.get_time_scale_state(), initial_view);
+
+        ctx.run_ui(input(), |ui| {
+            chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        let width = chart.get_rendered_price_rect().width();
+        let spacing = chart.state.time_scale().bar_spacing();
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(10)));
+        ctx.run_ui(input(), |ui| {
+            chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        let new_width = chart.get_rendered_price_rect().width();
+        assert!(new_width < width, "later labels must widen the axis");
+        assert!(
+            (new_width / chart.state.time_scale().bar_spacing() - width / spacing).abs() < 1e-4
+        );
+    }
+
+    #[test]
     fn plot_uses_the_interior_and_configured_axis_widths() {
         let mut chart = chart(&[100.0], &[110.0]);
         for (width, height, padding, left, right) in [
@@ -2775,9 +2905,9 @@ mod tests {
         use crate::theme::{Theme, apply_to_egui};
         use egui::Color32;
 
-        // Volume uses muted teal and salmon independently of candle colours.
-        // A second opacity proves that painting reads the applied theme on every frame.
-        for (mut theme, alpha, candle_width, kind, height_fraction, inset, expected) in [
+        // Volume uses cyan and pink independently of candle colours.
+        // A second opacity checks that the default study inherits the applied theme.
+        for (mut theme, alpha, candle_width, kind, height_fraction, inset, expected, band) in [
             (
                 Theme::dark(),
                 153,
@@ -2785,6 +2915,7 @@ mod tests {
                 ChartType::Candles,
                 0.12,
                 12.0,
+                [[23, 119, 131, 153], [142, 38, 73, 153]],
                 [[23, 100, 92, 153], [143, 50, 48, 153]],
             ),
             (
@@ -2794,6 +2925,7 @@ mod tests {
                 ChartType::Heikin,
                 0.12,
                 12.0,
+                [[8, 40, 44, 51], [47, 13, 24, 51]],
                 [[8, 33, 31, 51], [48, 17, 16, 51]],
             ),
             (
@@ -2803,6 +2935,7 @@ mod tests {
                 ChartType::Line,
                 0.25,
                 0.0,
+                [[19, 99, 109, 128], [118, 32, 61, 128]],
                 [[19, 83, 77, 128], [120, 42, 40, 128]],
             ),
             (
@@ -2812,6 +2945,7 @@ mod tests {
                 ChartType::Area,
                 0.4,
                 6.0,
+                [[19, 99, 109, 128], [118, 32, 61, 128]],
                 [[19, 83, 77, 128], [120, 42, 40, 128]],
             ),
         ] {
@@ -2857,6 +2991,11 @@ mod tests {
             assert!(!dots.is_empty(), "missing volume selection handles");
             assert!(dots.iter().all(|dot| (dot.y - volume.top()).abs() < 0.001));
             let pitch = chart.state.time_scale().bar_spacing();
+            let expected = if cfg!(feature = "studies") {
+                expected
+            } else {
+                band
+            };
             for (colour, fraction) in expected.into_iter().zip([1.0, 0.5]) {
                 let colour =
                     Color32::from_rgba_premultiplied(colour[0], colour[1], colour[2], colour[3]);

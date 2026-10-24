@@ -88,6 +88,7 @@ mod acc_dist;
 mod cmf;
 mod mfi;
 mod obv;
+mod volume;
 mod vwap;
 
 // Trend indicators
@@ -248,6 +249,7 @@ pub use acc_dist::AccumulationDistribution;
 pub use cmf::ChaikinMoneyFlow;
 pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
+pub use volume::{Volume, VolumeAverage, VolumeColorRule};
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
 
 // Re-exports - Trend indicators

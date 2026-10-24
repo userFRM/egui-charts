@@ -3,8 +3,8 @@
 //!
 //! The chart engine is pure: widgets return `Action` enums and never touch the
 //! chart themselves. This controller is the host half that consumes those
-//! actions. Layouts and indicator templates live in host memory. Controls that need
-//! a trading account or drawing-template storage are hidden.
+//! actions. Layouts live in host memory; templates use application storage. Controls that need
+//! a trading account are hidden.
 
 #[path = "commands.rs"]
 mod commands;
@@ -17,6 +17,10 @@ use layouts::{DemoChart, LayoutTab};
 
 #[path = "comparison.rs"]
 mod comparison;
+#[path = "templates.rs"]
+mod templates;
+use egui_charts::services::StoreKind;
+use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate, TemplateDialog};
 #[path = "live.rs"]
 mod live;
 
@@ -60,10 +64,23 @@ use std::sync::{Arc, mpsc};
 
 use crate::sampledata::{DemoSymbol, visible_bars_for_range};
 
-struct SavedIndicators {
-    name: String,
-    studies: Vec<Box<dyn egui_charts::studies::Indicator>>,
-    inputs: Vec<String>,
+fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
+    study
+        .inputs()
+        .iter()
+        .map(|input| match (&input.kind, &input.value) {
+            (
+                egui_charts::studies::InputKind::Choice(choices),
+                egui_charts::studies::InputValue::Choice(index),
+            ) => choices.get(*index).cloned().unwrap_or_default(),
+            (_, egui_charts::studies::InputValue::Length(value)) => value.to_string(),
+            (_, egui_charts::studies::InputValue::Integer(value)) => value.to_string(),
+            (_, egui_charts::studies::InputValue::Number(value)) => value.to_string(),
+            (_, egui_charts::studies::InputValue::Toggle(value)) => value.to_string(),
+            _ => String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Object-tree ids for indicators are offset into a high range so a single
@@ -167,7 +184,9 @@ pub struct DemoApp {
     symbol_search: SymbolSearchDialog,
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
-    indicator_templates: Vec<SavedIndicators>,
+    template_storage: Arc<templates::TemplateStorage>,
+    study_templates: TemplateDialog<Vec<StudyTemplate>>,
+    drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
     series_settings: SeriesSettingsDialog,
@@ -207,7 +226,11 @@ impl DemoApp {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let theme = Theme::light();
+        let dark = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "dark_theme"))
+            .unwrap_or(false);
+        let theme = if dark { Theme::dark() } else { Theme::light() };
         let timeframe = Timeframe::Min1;
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
@@ -231,7 +254,7 @@ impl DemoApp {
             .with_visible_candles(0)
             .with_chart_options(options)
             .build();
-        chart.config_mut().volume_height_fraction = 0.25;
+        chart.config_mut().volume_height_fraction = 0.12;
         chart.config_mut().volume_baseline_inset = 0.0;
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
@@ -300,7 +323,13 @@ impl DemoApp {
             symbol_search: SymbolSearchDialog::new(),
             compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
             comparisons: Vec::new(),
-            indicator_templates: Vec::new(),
+            template_storage: Arc::new(templates::TemplateStorage(std::sync::Mutex::new(
+                cc.storage
+                    .and_then(|storage| eframe::get_value(storage, "templates"))
+                    .unwrap_or_default(),
+            ))),
+            study_templates: TemplateDialog::new(StoreKind::StudyTemplates),
+            drawing_templates: TemplateDialog::new(StoreKind::DrawingTemplates),
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
                 commands::quick_search_commands(),
             ),
@@ -329,12 +358,17 @@ impl DemoApp {
                 .unwrap_or_default(),
             toasts: Toasts::new(),
         };
-        for control in [
-            egui_charts::ui::Control::Trading,
-            egui_charts::ui::Control::Templates,
-        ] {
-            app.drawing_toolbar.set_control_visible(control, false);
-        }
+        app.drawing_toolbar
+            .set_control_visible(egui_charts::ui::Control::Trading, false);
+        app.settings_dialog
+            .templates
+            .set_storage(app.template_storage.clone());
+        app.study_templates
+            .templates
+            .set_storage(app.template_storage.clone());
+        app.drawing_templates
+            .templates
+            .set_storage(app.template_storage.clone());
         app.menus
             .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.alerts.set_service(app.alert_host.clone());
@@ -766,30 +800,7 @@ impl DemoApp {
                 .ok_or("Study was removed")
                 .and_then(|study| {
                     study.apply_settings(&edit.inputs, edit.settings)?;
-                    Ok(study
-                        .inputs()
-                        .iter()
-                        .map(|input| match (&input.kind, &input.value) {
-                            (
-                                egui_charts::studies::InputKind::Choice(choices),
-                                egui_charts::studies::InputValue::Choice(index),
-                            ) => choices.get(*index).cloned().unwrap_or_default(),
-                            (_, egui_charts::studies::InputValue::Length(value)) => {
-                                value.to_string()
-                            }
-                            (_, egui_charts::studies::InputValue::Integer(value)) => {
-                                value.to_string()
-                            }
-                            (_, egui_charts::studies::InputValue::Number(value)) => {
-                                value.to_string()
-                            }
-                            (_, egui_charts::studies::InputValue::Toggle(value)) => {
-                                value.to_string()
-                            }
-                            _ => String::new(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" "))
+                    Ok(study_input_summary(study))
                 });
             match result {
                 Ok(inputs) => {
@@ -799,6 +810,8 @@ impl DemoApp {
             }
             self.chart.end_user_action();
         }
+
+        self.show_templates(ctx);
 
         // Chart settings.
         match self.settings_dialog.show(ctx, &self.theme) {
@@ -1002,6 +1015,12 @@ impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.remember_drawings();
         eframe::set_value(storage, "drawings", &self.saved_drawings);
+        eframe::set_value(storage, "dark_theme", &self.theme.dark);
+        eframe::set_value(
+            storage,
+            "templates",
+            &*self.template_storage.0.lock().unwrap(),
+        );
         eframe::set_value(
             storage,
             "interval_preferences",
@@ -1238,46 +1257,11 @@ impl DemoApp {
             }
             TopToolbarAction::Undo | TopToolbarAction::Redo => {}
             TopToolbarAction::SaveIndicatorTemplate => {
-                let name = format!("Study set {}", self.indicator_templates.len() + 1);
-                let studies = self
-                    .chart
-                    .indicators()
-                    .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
-                    .map(|(_, study)| study.clone_box())
-                    .collect();
-                let inputs = self
-                    .chart
-                    .indicators()
-                    .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
-                    .map(|(id, _)| {
-                        self.chart
-                            .indicator_inputs(id)
-                            .unwrap_or_default()
-                            .to_owned()
-                    })
-                    .collect();
-                self.indicator_templates.push(SavedIndicators {
-                    name: name.clone(),
-                    studies,
-                    inputs,
-                });
-                self.top_toolbar
-                    .indicator_templates
-                    .push((name.clone(), name));
+                self.study_templates.open(self.current_study_template());
             }
             TopToolbarAction::ApplyIndicatorTemplate(id) => {
-                if let Some(saved) = self
-                    .indicator_templates
-                    .iter()
-                    .find(|saved| saved.name == id)
-                {
-                    let studies = saved.studies.clone();
-                    let inputs = saved.inputs.clone();
-                    self.remove_all_indicators();
-                    for (study, inputs) in studies.into_iter().zip(inputs) {
-                        let id = self.chart.add_indicator(study);
-                        self.chart.set_indicator_inputs(id, inputs);
-                    }
+                if let Some(template) = self.study_templates.templates.entries().get(&id).cloned() {
+                    self.load_study_template(&template);
                 }
             }
             // Light/dark toggle is a real, cheap visual change.
@@ -1363,6 +1347,36 @@ impl DemoApp {
         // Variants that touch the indicator registry (not the drawing manager)
         // or surface a notice are handled first, before the `dm` borrow.
         match action {
+            DrawingToolbarAction::ManageTemplates => {
+                if let Some(template) = self.current_drawing_template() {
+                    self.drawing_templates.open(template);
+                } else {
+                    self.drawing_templates.open_catalog();
+                }
+                return;
+            }
+            DrawingToolbarAction::SaveTemplate { name } => {
+                let Some(template) = self.current_drawing_template() else {
+                    self.notify("Select a drawing first");
+                    return;
+                };
+                if let Err(error) = self.drawing_templates.templates.save(&name, template) {
+                    self.notify(error);
+                }
+                return;
+            }
+            DrawingToolbarAction::LoadTemplate { template_id } => {
+                if let Some(template) = self
+                    .drawing_templates
+                    .templates
+                    .entries()
+                    .get(&template_id)
+                    .cloned()
+                {
+                    self.load_drawing_template(template);
+                }
+                return;
+            }
             DrawingToolbarAction::RemoveAllIndicators | DrawingToolbarAction::RemoveAllStudies => {
                 self.remove_all_indicators();
                 return;
@@ -1447,6 +1461,7 @@ impl DemoApp {
             }
             DrawingToolbarAction::None
             | DrawingToolbarAction::OpenTemplateMenu
+            | DrawingToolbarAction::ManageTemplates
             | DrawingToolbarAction::SaveTemplate { .. }
             | DrawingToolbarAction::LoadTemplate { .. }
             | DrawingToolbarAction::HideAllPoss
@@ -1962,6 +1977,8 @@ impl DemoApp {
             || self.export_dialog.is_open()
             || self.alert_dialog.is_open
             || self.series_settings.is_open
+            || self.study_templates.is_open
+            || self.drawing_templates.is_open
             || self.indicator_settings.is_open()
             || self.interval_entry.is_some()
             || self.date_picker.is_open
@@ -2234,20 +2251,6 @@ mod tests {
     #[test]
     fn application_storage_restores_drawings_after_restart() {
         use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
-        #[derive(Default)]
-        struct Memory(std::collections::HashMap<String, String>);
-        impl eframe::Storage for Memory {
-            fn get_string(&self, key: &str) -> Option<String> {
-                self.0.get(key).cloned()
-            }
-            fn set_string(&mut self, key: &str, value: String) {
-                self.0.insert(key.to_owned(), value);
-            }
-            fn remove_string(&mut self, key: &str) {
-                self.0.remove(key);
-            }
-            fn flush(&mut self) {}
-        }
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = DemoApp::new(&cc);
@@ -2260,7 +2263,7 @@ mod tests {
         let expected = drawing.chart_points.clone();
         let original_bars = app.chart.bars(SeriesId::MAIN).to_vec();
         app.chart.drawings_mut().drawings.push(drawing);
-        let mut storage = Memory::default();
+        let mut storage = AppStorage::default();
         eframe::App::save(&mut app, &mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(ctx);
         cc.storage = Some(&storage);
@@ -2268,6 +2271,143 @@ mod tests {
         assert_eq!(restored.chart.drawings().drawings.len(), 1);
         restored.chart.set_data(SeriesId::MAIN, original_bars);
         assert_eq!(restored.chart.drawings().drawings[0].chart_points, expected);
+    }
+
+    #[derive(Default)]
+    struct AppStorage(std::collections::HashMap<String, String>);
+
+    impl eframe::Storage for AppStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.into(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn theme_selection_survives_restart_and_initializes_the_chart() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        for dark in [true, false] {
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut app = DemoApp::new(&cc);
+            app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
+            assert_eq!(app.theme.dark, dark);
+            app.save(&mut storage);
+            drop(app);
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let restored = DemoApp::new(&cc);
+            assert_eq!(restored.theme.dark, dark);
+            assert_eq!(
+                restored.chart.config().background_color,
+                restored.theme.chart.bg
+            );
+            assert_eq!(
+                restored.chart.config().bearish_color,
+                restored.theme.chart.candle_down
+            );
+        }
+    }
+
+    #[test]
+    fn named_templates_survive_demo_restart_with_inputs_and_drawing_identity_intact() {
+        use eframe::App;
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.handle_drawing_toolbar(DrawingToolbarAction::SaveTemplate {
+            name: "Missing".into(),
+        });
+        assert_eq!(
+            app.toasts.toasts().last().unwrap().message,
+            "Select a drawing first"
+        );
+        assert!(app.drawing_templates.templates.entries().is_empty());
+        app.chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
+        let mut drawing = Drawing::new(17, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(3.0, 100.0), ChartPoint::new(5.0, 200.0)];
+        drawing.completed = true;
+        drawing.stroke_width = 4.0;
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.drawings_mut().select(17);
+        app.settings_dialog.templates.poll(&ctx);
+        app.show_templates(&ctx);
+        app.settings_dialog
+            .templates
+            .save("Canvas", ChartSettingsState::from_chart(&app.chart))
+            .unwrap();
+        app.study_templates
+            .templates
+            .save("Average", app.current_study_template())
+            .unwrap();
+        app.drawing_templates
+            .templates
+            .save("Trend", app.current_drawing_template().unwrap())
+            .unwrap();
+        app.settings_dialog.templates.poll(&ctx);
+        app.show_templates(&ctx);
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        drop(app);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut app = DemoApp::new(&cc);
+        for _ in 0..2 {
+            app.settings_dialog.templates.poll(&ctx);
+            app.show_templates(&ctx);
+        }
+        assert!(
+            app.settings_dialog
+                .templates
+                .entries()
+                .contains_key("Canvas")
+        );
+        app.handle_top_toolbar(
+            &ctx,
+            TopToolbarAction::ApplyIndicatorTemplate("Average".into()),
+        );
+        assert_eq!(
+            app.chart.indicators().next().unwrap().1.inputs()[0].value,
+            egui_charts::studies::InputValue::Length(7)
+        );
+        let mut target = Drawing::new(23, DrawingToolType::TrendLine);
+        target.chart_points = vec![ChartPoint::new(8.0, 300.0), ChartPoint::new(10.0, 400.0)];
+        target.completed = true;
+        app.chart.drawings_mut().drawings.push(target);
+        app.chart.drawings_mut().select(23);
+        app.handle_drawing_toolbar(DrawingToolbarAction::LoadTemplate {
+            template_id: "Trend".into(),
+        });
+        let target = app
+            .chart
+            .drawings()
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == 23)
+            .unwrap();
+        assert_eq!(target.id, 23);
+        assert_eq!(target.chart_points[0].bar_idx, 8.0);
+        assert_eq!(target.stroke_width, 4.0);
+        assert!(app.chart.undo());
+        assert_ne!(
+            app.chart
+                .drawings()
+                .drawings
+                .iter()
+                .find(|drawing| drawing.id == 23)
+                .unwrap()
+                .stroke_width,
+            4.0
+        );
     }
 
     /// Native integrations send clipboard events instead of key events. Only our session
@@ -2586,6 +2726,12 @@ mod tests {
                         .find(|(_, study)| study.name() == "RSI")
                         .expect("palette adds RSI")
                         .0;
+                    let volume_id = app
+                        .chart
+                        .indicators()
+                        .find(|(_, study)| study.is_volume())
+                        .expect("the default chart shows Volume")
+                        .0;
                     for (action, studies, drawings, can_undo, can_redo) in [
                         (TopToolbarAction::Undo, 0, 1, true, true),
                         (TopToolbarAction::Redo, 1, 1, true, false),
@@ -2595,11 +2741,16 @@ mod tests {
                         (TopToolbarAction::Redo, 1, 1, true, false),
                     ] {
                         app.handle_top_toolbar(&ctx, action);
-                        assert_eq!(app.chart.indicators().count(), studies);
+                        let expected = if studies == 1 {
+                            vec![volume_id, id]
+                        } else {
+                            vec![volume_id]
+                        };
+                        assert_eq!(
+                            app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+                            expected
+                        );
                         assert_eq!(app.chart.drawings().drawings.len(), drawings);
-                        if studies == 1 {
-                            assert_eq!(app.chart.indicators().next().unwrap().0, id);
-                        }
                         ctx.run_ui(RawInput::default(), |ui| {
                             app.show_top_toolbar(ui, egui::Color32::BLACK)
                         })
@@ -2837,12 +2988,15 @@ mod tests {
                     output.drop_without_applying_deltas();
                 }
                 assert!(painted, "comparison prices must be painted");
-                app.handle_top_toolbar(&ctx, TopToolbarAction::SaveIndicatorTemplate);
-                assert!(app.indicator_templates.last().unwrap().studies.is_empty());
-                app.handle_top_toolbar(
-                    &ctx,
-                    TopToolbarAction::ApplyIndicatorTemplate("Study set 1".into()),
+                let template = app.current_study_template();
+                assert_eq!(
+                    template
+                        .iter()
+                        .map(|study| study.name.as_str())
+                        .collect::<Vec<_>>(),
+                    ["Volume"]
                 );
+                app.load_study_template(&template);
                 assert!(
                     app.chart
                         .indicators()

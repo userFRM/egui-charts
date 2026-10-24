@@ -28,7 +28,10 @@ impl Chart {
             .indicators()
             .iter()
             .filter(|study| {
-                !self.chart_type.is_time_independent() && study.is_visible() && study.is_overlay()
+                !self.chart_type.is_time_independent()
+                    && study.is_visible()
+                    && study.is_overlay()
+                    && !study.is_volume()
             })
             .flat_map(|study| {
                 (0..study.line_cnt())

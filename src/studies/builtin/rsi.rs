@@ -27,7 +27,7 @@
 //!
 //! # Default colour
 //!
-//! Purple (from the design-token `indicators.rsi`).
+//! Blue (#2962ff), with a two-pixel line.
 //!
 //! # Example
 //!
@@ -45,7 +45,6 @@
 use crate::model::Bar;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Relative Strength Index (RSI) indicator.
@@ -90,7 +89,7 @@ impl RSI {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: DESIGN_TOKENS.semantic.indicators.rsi, // Purple
+            color: Color32::from_rgb(41, 98, 255),
             visible: true,
         }
     }
@@ -116,6 +115,13 @@ impl Indicator for RSI {
 
     fn name(&self) -> &str {
         "RSI"
+    }
+
+    fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
+        crate::studies::IndicatorLineStyle {
+            width: 2.0,
+            ..Default::default()
+        }
     }
 
     fn precision(&self) -> Option<usize> {

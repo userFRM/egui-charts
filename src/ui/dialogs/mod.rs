@@ -13,6 +13,7 @@ pub mod drawing_properties;
 pub mod keyboard_shortcuts;
 pub mod series_context_menu;
 pub mod series_settings;
+pub mod templates;
 
 pub use alert_dialog::{AlertDialog, AlertDialogAction, AlertDialogConfig};
 pub use drawing_context_menu::{DrawingContextMenu, DrawingContextMenuAction};

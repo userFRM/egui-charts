@@ -135,6 +135,7 @@ mod panes;
 mod readout;
 mod selection;
 mod series;
+mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
 use feed::FeedLink;
@@ -255,6 +256,10 @@ pub struct Chart {
     pub(crate) from_ticks: BTreeSet<DateTime<Utc>>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
+    #[cfg(feature = "studies")]
+    volume_setting: bool,
+    #[cfg(feature = "studies")]
+    volume_study: Option<SeriesId>,
     /// Id of each study in `studies`.
     pub(crate) study_ids: Vec<SeriesId>,
     /// Whether each study in `studies` contributes to the main price auto-scale.
@@ -294,6 +299,8 @@ pub struct Chart {
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,
     pub(crate) measured_axis_width: f32,
+    /// The first usable layout includes all discarded passes in that frame.
+    first_layout_frame: Option<u64>,
     last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
@@ -594,22 +601,8 @@ impl Chart {
         } else {
             Rect::NOTHING
         };
-        let volume_rect = if self.main_series_visible
-            && self.config.show_volume
-            && self.chart_type.supports_volume()
-        {
-            let inset = self
-                .config
-                .volume_baseline_inset
-                .max(0.0)
-                .min(price_rect.height());
-            let bottom = price_rect.bottom() - inset;
-            let height =
-                (price_rect.height() - inset) * self.config.volume_height_fraction.clamp(0.0, 1.0);
-            Rect::from_min_max(
-                Pos2::new(price_rect.left(), bottom - height),
-                Pos2::new(price_rect.right(), bottom),
-            )
+        let volume_rect = if self.shows_volume() {
+            volume::overlay_rect(price_rect, &self.config)
         } else {
             Rect::ZERO
         };

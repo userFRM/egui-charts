@@ -177,6 +177,12 @@ impl Chart {
             return false;
         };
         self.record_study(id);
+        #[cfg(feature = "studies")]
+        if self.volume_study == Some(id) {
+            self.volume_study = None;
+            self.config.show_volume = false;
+            self.volume_setting = false;
+        }
         self.studies.remove_indicator(at);
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
