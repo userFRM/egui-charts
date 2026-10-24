@@ -181,6 +181,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Continuous exchange sessions close their final intraday bucket at local midnight, so custom intervals retain their short final bar when resampled. ([#97](https://github.com/userFRM/egui-charts/issues/97))
+
+- Higher-interval candles retain their full body and wick range and can be selected by that geometry after moving to a separate pane. ([#546](https://github.com/userFRM/egui-charts/issues/546))
+
 - The main menu button of the top toolbar stays at the left edge while the narrow strip scrolls; only the controls after it move. ([#810](https://github.com/userFRM/egui-charts/issues/810))
 
 - The top toolbar keeps every control in its original group and order at narrow widths, scrolling horizontally with touch drags and horizontal wheel or trackpad input. The scroll bar and overflow dropdown are removed. A drag beginning on a button scrolls without activating it; taps and keyboard focus keep working, and focused controls scroll into view. ([#806](https://github.com/userFRM/egui-charts/issues/806))

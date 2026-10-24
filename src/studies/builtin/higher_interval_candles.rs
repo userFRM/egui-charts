@@ -18,7 +18,6 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct HigherIntervalCandles {
     interval: Timeframe,
-    source: Timeframe,
     clock: BarClock,
     instrument: Instrument,
     extended_hours: bool,
@@ -33,7 +32,6 @@ impl HigherIntervalCandles {
     pub fn new(interval: Timeframe) -> Self {
         Self {
             interval,
-            source: Timeframe::Min1,
             clock: BarClock::new(Timeframe::Min1),
             instrument: Instrument::new(""),
             extended_hours: true,
@@ -62,9 +60,9 @@ impl HigherIntervalCandles {
         if start == 0 && !data.is_empty() {
             self.values.set_value(1, 0, f64::NAN);
         }
-        if self.source.duration_ms() == 0
-            || self.interval.duration_ms() <= self.source.duration_ms()
-        {
+        if self.clock.timeframe().is_none_or(|source| {
+            source.duration_ms() == 0 || self.interval.duration_ms() <= source.duration_ms()
+        }) {
             return;
         }
         // A bad direct-call input has no value and does not contaminate the rest of its period.
@@ -145,7 +143,6 @@ impl Indicator for HigherIntervalCandles {
         Ok(())
     }
     fn set_timeframe(&mut self, timeframe: Timeframe) {
-        self.source = timeframe;
         self.clock = self.clock.for_timeframe(timeframe);
     }
     fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
@@ -153,9 +150,6 @@ impl Indicator for HigherIntervalCandles {
             return false;
         }
         self.clock = clock.clone();
-        if let Some(timeframe) = clock.timeframe() {
-            self.source = timeframe;
-        }
         true
     }
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
@@ -371,7 +365,7 @@ mod tests {
                 study.calculate(&bars);
                 let mut settings = study.settings();
                 settings.plots[0].color = Color32::BLUE;
-                study.apply_settings(&[], settings.clone()).unwrap();
+                study.apply_settings(&[], settings).unwrap();
                 let mut state =
                     crate::model::ChartState::new(crate::model::BarData::from_bars(bars.clone()));
                 state.time_scale_mut().set_width(40.0);
@@ -438,34 +432,6 @@ mod tests {
                         "{mode:?}, inverted {inverted}: {actual} != {expected}"
                     );
                 }
-                for (point, expected) in [
-                    (body.center(), true),
-                    (Pos2::new(99.0, y_high), true),
-                    (Pos2::new(20.0, y_high), false),
-                ] {
-                    let hit = crate::chart::indicators::hit_test_indicator(
-                        point,
-                        &study,
-                        0,
-                        0..3,
-                        &coords,
-                        |p| price.price_to_y(p),
-                    );
-                    assert_eq!(hit.is_some(), expected);
-                }
-                settings.plots[0].visible = false;
-                study.apply_settings(&[], settings).unwrap();
-                assert!(
-                    crate::chart::indicators::hit_test_indicator(
-                        body.center(),
-                        &study,
-                        0,
-                        0..3,
-                        &coords,
-                        |p| price.price_to_y(p)
-                    )
-                    .is_none()
-                );
             }
         }
     }

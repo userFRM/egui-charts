@@ -332,5 +332,14 @@ mod tests {
             assert_eq!(clock.bar_open(t(at)), t(open));
             assert_eq!(clock.next_open(t(open)), Some(t(next)));
         }
+        let clock = BarClock::new("7min".parse().unwrap()).with_session(
+            super::super::TimezoneId::utc(),
+            super::super::Session::new([]),
+            false,
+        );
+        assert_eq!(
+            clock.next_open(t("2024-03-15T23:55:00Z")),
+            Some(t("2024-03-16T00:00:00Z"))
+        );
     }
 }

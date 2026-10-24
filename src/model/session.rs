@@ -308,9 +308,18 @@ impl ExchangeSessionProvider {
     }
 
     /// Closing instant of the active trading window. Outside trading hours, including holidays,
-    /// returns `None`. Extended windows participate only when requested.
+    /// returns `None`. Continuous sessions end at the next local midnight.
+    /// Extended windows participate only when requested.
     pub fn session_close(&self, time: DateTime<Utc>, extended: bool) -> Option<DateTime<Utc>> {
         let session = self.session.as_ref()?;
+        if session.windows.is_empty() && session.extended_windows.is_empty() {
+            let date = self.wall_time(time).date();
+            return if session.holidays.contains(&date) {
+                None
+            } else {
+                self.instant(date.succ_opt()?.and_time(NaiveTime::MIN))
+            };
+        }
         session
             .windows
             .iter()

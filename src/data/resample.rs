@@ -264,6 +264,23 @@ mod tests {
                 Some(expected)
             );
         }
+        let continuous = Instrument::new("CONTINUOUS")
+            .with_time_zone(TimezoneId::utc())
+            .with_session(Session::new([]));
+        let last = bar("2024-03-15T23:55:00Z", [10.0, 13.0, 9.0, 12.0, 2.0]);
+        assert_eq!(
+            resample_with_session(
+                &[last],
+                "7min".parse::<Timeframe>().unwrap(),
+                Timeframe::Day1,
+                &continuous,
+                false,
+            ),
+            Some(vec![bar(
+                "2024-03-15T00:00:00Z",
+                [10.0, 13.0, 9.0, 12.0, 2.0]
+            )])
+        );
         #[cfg(feature = "widget")]
         {
             let mut chart = crate::widget::ChartBuilder::new().build();
