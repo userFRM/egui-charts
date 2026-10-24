@@ -342,20 +342,32 @@ impl DemoApp {
         );
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
-        for (id, icon, tooltip) in [
-            (1, egui_charts::icons::icons::DATABASE, "Data Window"),
-            (3, egui_charts::icons::icons::WATCHLIST, "Watchlist"),
+        // The watchlist leads the built-in entries; the demo's other panels sit in the lower group.
+        for (id, icon, tooltip, section) in [
+            (
+                3,
+                egui_charts::icons::icons::WATCHLIST,
+                "Watchlist",
+                WidgetBarSection::Top,
+            ),
+            (
+                1,
+                egui_charts::icons::icons::DATABASE,
+                "Data Window",
+                WidgetBarSection::Bottom,
+            ),
             (
                 4,
                 egui_charts::icons::icons::SETTINGS_EVENTS,
                 "Time and sales",
+                WidgetBarSection::Bottom,
             ),
         ] {
             widget_bar.widgets.push(WidgetBarWidget {
                 id,
                 icon,
                 tooltip: tooltip.into(),
-                section: WidgetBarSection::Top,
+                section,
             });
         }
         let mut notes = String::new();
@@ -364,7 +376,7 @@ impl DemoApp {
                 id: 2,
                 icon: egui_charts::icons::icons::TEXT,
                 tooltip: "Session notes".into(),
-                section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
+                section: egui_charts::ui::widget_bar::WidgetBarSection::Bottom,
             },
             move |ui| {
                 ui.label("Host panel · notes stay in this session");
@@ -440,7 +452,7 @@ impl DemoApp {
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
-            open_panel: None,
+            open_panel: Some(SidePanel::Watchlist),
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
@@ -994,6 +1006,11 @@ impl eframe::App for DemoApp {
         self.handle_screenshot(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
         self.symbol_details.poll(&ctx);
+        // The watchlist opens beside the chart by default, but a compact window starts with the
+        // chart alone.
+        if ctx.cumulative_frame_nr() == 0 && ctx.content_rect().width() < 600.0 {
+            self.open_panel = None;
+        }
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
@@ -1122,10 +1139,10 @@ impl DemoApp {
                             if ui.ctx().content_rect().width() < 600.0 {
                                 ui.separator();
                                 for (label, panel) in [
-                                    ("Object Tree", SidePanel::ObjectTree),
-                                    ("Alerts", SidePanel::Alerts),
-                                    ("Data Window", SidePanel::DataWindow),
                                     ("Watchlist", SidePanel::Watchlist),
+                                    ("Alerts", SidePanel::Alerts),
+                                    ("Object Tree", SidePanel::ObjectTree),
+                                    ("Data Window", SidePanel::DataWindow),
                                     ("Time and sales", SidePanel::TimeAndSales),
                                 ] {
                                     if ui.button(label).clicked() {
@@ -1565,7 +1582,7 @@ impl DemoApp {
         };
         egui::Panel::right("detail_panel")
             .resizable(true)
-            .default_size(280.0)
+            .default_size(300.0)
             .min_size(220.0)
             .show(ui, |ui| match which {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
