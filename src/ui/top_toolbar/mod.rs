@@ -7,6 +7,7 @@ pub mod actions;
 pub mod buttons;
 pub mod components;
 pub mod config;
+mod host;
 pub mod state;
 mod toolbar;
 
@@ -53,5 +54,6 @@ pub use components::{
     TimeframeUnit,
 };
 pub use config::TopToolbarConfig;
+pub use host::ToolbarEntry;
 pub use state::TopToolbarState;
 pub use toolbar::TopToolbar;

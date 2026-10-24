@@ -180,6 +180,8 @@ pub struct TopToolbar {
     host_hidden: HashSet<Control>,
     /// Host-supplied saved indicator sets as (id, name), in display order.
     pub indicator_templates: Vec<(String, String)>,
+    /// Host buttons and dropdowns in registration order, placed before the host action slot.
+    pub host_entries: Vec<super::ToolbarEntry>,
 }
 
 impl Default for TopToolbar {
@@ -193,6 +195,7 @@ impl Default for TopToolbar {
             chart_grid_selector: ChartGridSelector::default(),
             host_hidden: HashSet::new(),
             indicator_templates: Vec::new(),
+            host_entries: Vec::new(),
         }
     }
 }
@@ -283,12 +286,26 @@ impl TopToolbar {
                 )
                 .inner;
             ui.add_space((ui.available_width() - actions_width).max(0.0));
-            let width = ui.horizontal(actions).response.rect.width();
+            let mut host_action = TopToolbarAction::None;
+            let width = ui
+                .horizontal(|ui| {
+                    for entry in &self.host_entries {
+                        entry.show(ui, &mut host_action);
+                    }
+                    actions(ui);
+                })
+                .response
+                .rect
+                .width();
             if (width - actions_width).abs() > 0.5 {
                 ui.data_mut(|d| d.insert_temp(width_id, width));
                 ui.ctx().request_discard("Host actions changed width");
             }
-            action
+            if host_action != TopToolbarAction::None {
+                host_action
+            } else {
+                action
+            }
         })
         .inner
     }

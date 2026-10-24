@@ -31,7 +31,9 @@ use egui_charts::model::{Alert, AlertCondition};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
-use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
+use egui_charts::ui::context_menu::{
+    ChartContextAction, ChartMenus, ContextMenuAction, HostMenuEntry,
+};
 use egui_charts::ui::dialogs::DrawingContextMenuAction;
 use egui_charts::ui::dialogs::{
     AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
@@ -52,7 +54,7 @@ use egui_charts::ui::top_toolbar::components::indicator_dialog::{
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
-use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
+use egui_charts::ui::top_toolbar::{ToolbarEntry, TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
@@ -270,6 +272,17 @@ impl DemoApp {
                 1,
                 egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute,
             );
+        top_toolbar.host_entries = vec![
+            ToolbarEntry::new("research", "Research")
+                .with_icon(&egui_charts::icons::icons::QUICK_SEARCH),
+            ToolbarEntry::new("host-tools", "Host tools")
+                .with_items(vec![ToolbarEntry::new("copy-symbol", "Copy symbol")]),
+        ];
+        let mut menus = ChartMenus::default();
+        menus.host_entries.push(
+            HostMenuEntry::new("research", "Open in research")
+                .with_icon(&egui_charts::icons::icons::QUICK_SEARCH),
+        );
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
         widget_bar
@@ -303,7 +316,7 @@ impl DemoApp {
             footprint: None,
             footprint_scale: None,
             feed_before_footprint: false,
-            menus: ChartMenus::default(),
+            menus,
             state: DemoAppState {
                 symbol: symbol.into(),
                 timeframe,
@@ -1097,6 +1110,14 @@ impl DemoApp {
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
+            TopToolbarAction::Host(id) => {
+                if id == "copy-symbol" {
+                    ctx.copy_text(self.chart.symbol().to_string());
+                }
+                self.toasts
+                    .info(format!("Host action: {id} ({})", self.chart.symbol()));
+                return;
+            }
             TopToolbarAction::Save => {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Save);
                 return;
@@ -1159,7 +1180,10 @@ impl DemoApp {
             }
             // Light/dark toggle is a real, cheap visual change.
             TopToolbarAction::ThemeToggle => self.toggle_theme(ctx),
-            TopToolbarAction::Layout(_) | TopToolbarAction::Save | TopToolbarAction::None => {}
+            TopToolbarAction::Layout(_)
+            | TopToolbarAction::Save
+            | TopToolbarAction::Host(_)
+            | TopToolbarAction::None => {}
         }
     }
 
@@ -1747,6 +1771,16 @@ impl DemoApp {
 
     fn handle_context_action(&mut self, action: ChartContextAction) {
         match action {
+            ChartContextAction::Host { id, context } => {
+                self.toasts.info(format!(
+                    "Host action: {id}, time: {}, price: {:.4}, target: {:?}",
+                    context
+                        .time
+                        .map_or_else(|| "outside loaded data".into(), |time| time.to_rfc3339()),
+                    context.price,
+                    context.target
+                ));
+            }
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
             ChartContextAction::Drawing(a) => self.handle_drawing_context(a),

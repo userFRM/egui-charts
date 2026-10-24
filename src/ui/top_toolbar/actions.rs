@@ -5,6 +5,8 @@ use super::components::layout_menu::LayoutAction;
 /// Actions emitted by the top toolbar
 #[derive(Debug, Clone, PartialEq)]
 pub enum TopToolbarAction {
+    /// A registered host button or dropdown item was chosen.
+    Host(String),
     /// No action taken
     None,
     /// Open the command palette for actions, settings, drawing tools and studies.

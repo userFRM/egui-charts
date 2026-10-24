@@ -105,7 +105,7 @@ impl DrawingContextMenu {
     }
 
     /// Build menu items for the drawing context menu
-    fn build_menu_items(
+    pub(crate) fn build_menu_items(
         &self,
         shortcuts: &crate::widget::ShortcutMap,
     ) -> Vec<MenuEntry<DrawingContextMenuAction>> {
