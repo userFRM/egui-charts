@@ -126,12 +126,29 @@ enum SidePanel {
 }
 
 impl SidePanel {
-    /// Panels the demo renders behind a host rail entry, with the entry's id.
-    const HOSTED: [(SidePanel, u64); 3] = [
-        (SidePanel::DataWindow, 1),
-        (SidePanel::Watchlist, 3),
-        (SidePanel::TimeAndSales, 4),
+    /// Panels the demo renders behind a built-in rail entry, with the entry.
+    const BUILT_IN: [(SidePanel, RightBarIcon); 3] = [
+        (SidePanel::Watchlist, RightBarIcon::Watchlist),
+        (SidePanel::Alerts, RightBarIcon::Alerts),
+        (SidePanel::ObjectTree, RightBarIcon::ObjectTree),
     ];
+
+    /// Panels the demo renders behind a host rail entry, with the entry's id.
+    const HOSTED: [(SidePanel, u64); 1] = [(SidePanel::TimeAndSales, 4)];
+
+    fn icon(self) -> Option<RightBarIcon> {
+        Self::BUILT_IN
+            .iter()
+            .find(|(panel, _)| *panel == self)
+            .map(|(_, icon)| *icon)
+    }
+
+    fn from_icon(icon: RightBarIcon) -> Option<Self> {
+        Self::BUILT_IN
+            .iter()
+            .find(|(_, entry)| *entry == icon)
+            .map(|(panel, _)| *panel)
+    }
 
     fn widget(self) -> Option<u64> {
         Self::HOSTED
@@ -341,34 +358,18 @@ impl DemoApp {
         );
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
-        // The watchlist leads the built-in entries; the demo's other panels sit in the lower group.
-        for (id, icon, tooltip, section) in [
-            (
-                3,
-                egui_charts::icons::icons::WATCHLIST,
-                "Watchlist",
-                WidgetBarSection::Top,
-            ),
-            (
-                1,
-                egui_charts::icons::icons::DATABASE,
-                "Data Window",
-                WidgetBarSection::Bottom,
-            ),
-            (
-                4,
-                egui_charts::icons::icons::SETTINGS_EVENTS,
-                "Time and sales",
-                WidgetBarSection::Bottom,
-            ),
-        ] {
-            widget_bar.widgets.push(WidgetBarWidget {
-                id,
-                icon,
-                tooltip: tooltip.into(),
-                section,
-            });
-        }
+        // The demo feeds every built-in panel; its own panels sit in the lower group.
+        widget_bar.icons = SidePanel::BUILT_IN
+            .iter()
+            .map(|(_, icon)| *icon)
+            .chain([RightBarIcon::Help])
+            .collect();
+        widget_bar.widgets.push(WidgetBarWidget {
+            id: 4,
+            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
+            tooltip: "Time and sales".into(),
+            section: WidgetBarSection::Bottom,
+        });
         let mut notes = String::new();
         widget_bar.register_panel(
             egui_charts::ui::widget_bar::WidgetBarWidget {
@@ -1526,11 +1527,7 @@ impl DemoApp {
         if ui.ctx().content_rect().width() < 600.0 {
             return;
         }
-        self.widget_bar.active_icon = match self.open_panel {
-            Some(SidePanel::ObjectTree) => Some(RightBarIcon::ObjectTree),
-            Some(SidePanel::Alerts) => Some(RightBarIcon::Alerts),
-            _ => None,
-        };
+        self.widget_bar.active_icon = self.open_panel.and_then(SidePanel::icon);
         if let Some(id) = self.open_panel.and_then(SidePanel::widget) {
             self.widget_bar.active_widget = Some(id);
         } else if self.open_panel.is_some()
@@ -1563,15 +1560,10 @@ impl DemoApp {
     }
 
     fn toggle_panel(&mut self, icon: RightBarIcon) {
-        let target = match icon {
-            RightBarIcon::ObjectTree => Some(SidePanel::ObjectTree),
-            RightBarIcon::Alerts => Some(SidePanel::Alerts),
-            RightBarIcon::Help => {
-                self.keyboard_shortcuts.toggle();
-                None
-            }
-        };
-        if let Some(target) = target {
+        if icon == RightBarIcon::Help {
+            self.keyboard_shortcuts.toggle();
+        }
+        if let Some(target) = SidePanel::from_icon(icon) {
             self.open_panel = if self.open_panel == Some(target) {
                 None
             } else {
