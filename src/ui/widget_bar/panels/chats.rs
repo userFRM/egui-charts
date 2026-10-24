@@ -60,16 +60,6 @@ impl ChatsPanel {
         }
     }
 
-    /// The rooms in the order the host pushed them.
-    pub fn rooms(&self) -> &[String] {
-        &self.rooms
-    }
-
-    /// The messages of every room in arrival order, the most recent 5,000.
-    pub fn messages(&self) -> &VecDeque<ChatMessage> {
-        &self.messages
-    }
-
     fn add_room(&mut self, room: &str) {
         if !self.rooms.iter().any(|known| known == room) {
             self.rooms.push(room.to_owned());

@@ -63,11 +63,6 @@ impl HotlistsPanel {
         self.refresh();
     }
 
-    /// The entries of the latest answer.
-    pub fn entries(&self) -> &[HotlistEntry] {
-        &self.entries
-    }
-
     /// Ask the feed again, such as to update the figures.
     pub fn refresh(&mut self) {
         let (Some(feed), Some(list)) = (&self.feed, self.lists.get(self.list)) else {

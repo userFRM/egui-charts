@@ -94,11 +94,6 @@ impl NewsPanel {
         }
     }
 
-    /// The stories of the latest answer, newest first as the feed answered them.
-    pub fn stories(&self) -> &[NewsStory] {
-        &self.stories
-    }
-
     /// Ask the feed again, such as when the host learns of new stories.
     pub fn refresh(&mut self) {
         let Some(feed) = &self.feed else {
@@ -329,7 +324,7 @@ mod tests {
         latest.send(Ok(vec![story("b")]));
         earlier.send(Ok(vec![story("a")]));
         panel.poll(&ctx);
-        assert_eq!(panel.stories(), [story("b")]);
+        assert_eq!(panel.stories, [story("b")]);
 
         panel.market = true;
         panel.refresh();
@@ -340,7 +335,7 @@ mod tests {
         assert_eq!((query.symbol, query.highlights), (None, false));
         reply.send(Err(FeedError::NotSupported));
         panel.poll(&ctx);
-        assert!(panel.stories().is_empty());
+        assert!(panel.stories.is_empty());
         assert_eq!(panel.error, Some(FeedError::NotSupported));
     }
 }

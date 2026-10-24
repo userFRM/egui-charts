@@ -81,11 +81,6 @@ impl ScreenerPanel {
         self.refresh();
     }
 
-    /// The rows of the latest answer.
-    pub fn rows(&self) -> &[ScreenerRow] {
-        &self.rows
-    }
-
     fn query(&self) -> ScreenerQuery {
         ScreenerQuery {
             columns: self.sets.get(self.set).map_or_else(Vec::new, |set| {
@@ -136,7 +131,7 @@ impl ScreenerPanel {
 
     /// The shown rows as CSV, headed by Symbol and the column titles. Every field is quoted and
     /// embedded quotes doubled.
-    pub fn csv(&self) -> String {
+    fn csv(&self) -> String {
         let field = |text: &str| format!("\"{}\"", text.replace('"', "\"\""));
         let titles = self
             .sets

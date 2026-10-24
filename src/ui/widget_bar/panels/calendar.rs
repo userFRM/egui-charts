@@ -14,7 +14,7 @@ use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
 /// The days a calendar lists, in UTC.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CalendarRange {
+enum CalendarRange {
     Yesterday,
     Today,
     Tomorrow,
@@ -122,11 +122,6 @@ impl CalendarPanel {
     pub fn set_countries(&mut self, countries: impl IntoIterator<Item = String>) {
         self.countries = countries.into_iter().map(|code| (code, false)).collect();
         self.refresh();
-    }
-
-    /// The events of the latest answer.
-    pub fn events(&self) -> &[CalendarEvent] {
-        &self.events
     }
 
     /// Ask the feed again, such as when the host learns of new figures.
@@ -306,7 +301,11 @@ impl CalendarPanel {
                                     .size(theme.text.small)
                                     .color(color),
                             )
-                            .on_hover_text(importance_label(Some(importance)));
+                            .on_hover_text(match importance {
+                                Importance::Low => "Low importance",
+                                Importance::Medium => "Medium importance",
+                                Importance::High => "High importance",
+                            });
                         }
                         let title = match &event.symbol {
                             Some(symbol) => format!("{symbol} · {}", event.title),

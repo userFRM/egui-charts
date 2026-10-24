@@ -64,11 +64,6 @@ impl NotificationsPanel {
         }
     }
 
-    /// The entries in arrival order, the most recent 1,000.
-    pub fn log(&self) -> &VecDeque<Notification> {
-        &self.log
-    }
-
     /// Entries pushed since the panel was last shown.
     pub fn unread(&self) -> usize {
         self.unread
@@ -160,7 +155,7 @@ mod tests {
         let events = host.0.lock().unwrap().clone().unwrap();
         events.push(entry(1));
         panel.poll(&ctx);
-        assert_eq!((panel.log().len(), panel.unread()), (1, 1));
+        assert_eq!((panel.log.len(), panel.unread()), (1, 1));
         for n in 0..=10_000 {
             events.push(entry(n));
         }
@@ -169,7 +164,7 @@ mod tests {
         let renewed = host.0.lock().unwrap().clone().unwrap();
         renewed.push(entry(1));
         panel.poll(&ctx);
-        assert_eq!(panel.log(), &[entry(1)]);
+        assert_eq!(panel.log, [entry(1)]);
         assert_eq!(panel.unread(), 1);
     }
 }
