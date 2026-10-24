@@ -139,6 +139,7 @@ impl Chart {
             session_provider: None,
             extended_hours: false,
             measured_axis_width: 0.0,
+            first_layout_frame: None,
             last_ratio_lock: false,
             axis_hover: None,
             scale_settings_requested: false,

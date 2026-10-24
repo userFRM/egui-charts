@@ -296,6 +296,8 @@ pub struct Chart {
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,
     pub(crate) measured_axis_width: f32,
+    /// The first usable layout includes all discarded passes in that frame.
+    first_layout_frame: Option<u64>,
     last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
