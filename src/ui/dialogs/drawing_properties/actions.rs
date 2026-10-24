@@ -216,9 +216,9 @@ impl DrawingProps {
             if self.save_as_default
                 && let Some(drawing) = manager.drawings.iter().find(|d| d.id == id.0)
             {
-                manager
-                    .tool_defaults
-                    .insert(drawing.tool_type, DrawingTemplate::from_drawing(drawing));
+                let mut defaults = DrawingTemplate::from_drawing(drawing);
+                defaults.settings.visible = true;
+                manager.tool_defaults.insert(drawing.tool_type, defaults);
             }
         });
         Ok(())

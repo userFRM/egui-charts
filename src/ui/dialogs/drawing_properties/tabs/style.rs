@@ -85,7 +85,7 @@ fn color_swatch(
 /// Swatches that draw each preset width, then a stepper for any width from 1 to 10 px.
 fn line_width_row(ui: &mut Ui, width: &mut f32) {
     let theme = ui.active_theme();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing.xs;
         for preset in LINE_WIDTHS {
             let size = Vec2::splat(ButtonSize::MD.pixels());

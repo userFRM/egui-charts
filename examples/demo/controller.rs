@@ -3541,51 +3541,72 @@ mod tests {
                 let narrow = egui::Context::default();
                 egui_charts::theme::apply_to_egui(&narrow, &theme);
                 let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 640.0));
-                for _ in 0..3 {
-                    let mut output = narrow.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(screen),
-                            ..Default::default()
-                        },
-                        |ui| app.show_dialogs(ui.ctx()),
-                    );
-                    output.textures_delta.clear();
-                    let mut footer = Vec::new();
-                    for shape in &output.shapes {
-                        if let egui::Shape::Text(text) = &shape.shape
-                            && matches!(
-                                text.galley.job.text.as_str(),
-                                "Apply" | "Cancel" | "Remove" | "Clone" | "Delete"
-                            )
-                        {
-                            let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
-                            if matches!(
-                                text.galley.job.text.as_str(),
-                                "Apply" | "Cancel" | "Clone" | "Delete"
-                            ) {
-                                footer.push(bounds);
-                            }
+                let tabs = if tool == Tool::FibonacciRetracement {
+                    PropertiesTab::all().to_vec()
+                } else {
+                    vec![PropertiesTab::Inputs]
+                };
+                for tab in tabs {
+                    app.drawing_props.active_tab = tab;
+                    for pass in 0..3 {
+                        let mut output = narrow.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ui| app.show_dialogs(ui.ctx()),
+                        );
+                        output.textures_delta.clear();
+                        if pass > 0 {
+                            let area = narrow
+                                .memory(|memory| {
+                                    memory.area_rect(egui::Id::unique(Some("Drawing Properties")))
+                                })
+                                .unwrap();
                             assert!(
-                                screen.left() <= bounds.left() && screen.right() >= bounds.right(),
-                                "{tool:?}: control outside narrow window: {bounds:?}"
-                            );
-                            assert!(
-                                shape.clip_rect.left() <= bounds.left()
-                                    && shape.clip_rect.right() >= bounds.right(),
-                                "{tool:?}: horizontally clipped control: {bounds:?}, clip: {:?}",
-                                shape.clip_rect
+                                screen.contains_rect(area),
+                                "{tool:?}, {tab:?}: dialog exceeds the window: {area:?}"
                             );
                         }
+                        let mut footer = Vec::new();
+                        for shape in &output.shapes {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && matches!(
+                                    text.galley.job.text.as_str(),
+                                    "Apply" | "Cancel" | "Remove" | "Clone" | "Delete"
+                                )
+                            {
+                                let bounds =
+                                    egui::Rect::from_min_size(text.pos, text.galley.size());
+                                if matches!(
+                                    text.galley.job.text.as_str(),
+                                    "Apply" | "Cancel" | "Clone" | "Delete"
+                                ) {
+                                    footer.push(bounds);
+                                }
+                                assert!(
+                                    screen.left() <= bounds.left()
+                                        && screen.right() >= bounds.right(),
+                                    "{tool:?}: control outside narrow window: {bounds:?}"
+                                );
+                                assert!(
+                                    shape.clip_rect.left() <= bounds.left()
+                                        && shape.clip_rect.right() >= bounds.right(),
+                                    "{tool:?}: horizontally clipped control: {bounds:?}, clip: {:?}",
+                                    shape.clip_rect
+                                );
+                            }
+                        }
+                        for (index, bounds) in footer.iter().enumerate() {
+                            assert!(
+                                footer[index + 1..]
+                                    .iter()
+                                    .all(|other| !bounds.intersects(*other)),
+                                "{tool:?}: overlapping footer controls: {footer:?}"
+                            );
+                        }
+                        output.drop_without_applying_deltas();
                     }
-                    for (index, bounds) in footer.iter().enumerate() {
-                        assert!(
-                            footer[index + 1..]
-                                .iter()
-                                .all(|other| !bounds.intersects(*other)),
-                            "{tool:?}: overlapping footer controls: {footer:?}"
-                        );
-                    }
-                    output.drop_without_applying_deltas();
                 }
             }
             app.drawing_props.close();
@@ -3650,6 +3671,7 @@ mod tests {
             app.chart.drawings().drawings[0].chart_points[0].bar_idx,
             1.0
         );
+        app.chart.drawings_mut().drawings[0].visible = false;
         app.open_drawing_props_for(7);
         app.drawing_props.props.line_width = 4.0;
         let texts = frame(&mut app, &ctx, vec![]);
@@ -3687,6 +3709,11 @@ mod tests {
             1,
             "defaults cannot copy anchors"
         );
+        assert!(
+            app.chart.drawings().curr_drawing.as_ref().unwrap().visible,
+            "a hidden source must not make new drawings invisible"
+        );
+        assert!(!app.chart.drawings().drawings[0].visible);
         app.chart.drawings_mut().cancel_curr_drawing();
         app.chart.drawings_mut().start_drawing_with_coords(
             Tool::HorizontalLine,
