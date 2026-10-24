@@ -1836,7 +1836,10 @@ impl Chart {
                     && !self.drawings.eraser_mode
                     && self.drawings.active_tool.is_none();
                 let mut crosshair_options = self.chart_options.crosshair;
-                if held_values || self.drawings.eraser_mode {
+                // Arrow keeps the axis labels, which a hidden crosshair never shows.
+                if (held_values || self.drawings.eraser_mode)
+                    && crosshair_options.style != crate::config::CrosshairStyle::Hidden
+                {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
                 }
                 let index = coords
@@ -2744,7 +2747,8 @@ mod tests {
         }
     }
 
-    /// Held values appear only for a pressed pointer and disappear on release or disable.
+    /// Held values appear only for a pressed pointer and disappear on release or disable. A
+    /// hidden crosshair keeps them and shows no axis label while the pointer is held.
     #[test]
     fn held_values_follow_press_release_and_switch() {
         for (_, theme) in crate::theme::presets() {
@@ -2753,6 +2757,7 @@ mod tests {
             let mut chart = chart(&[100.0], &[110.0, 120.0]);
             chart.config.bullish_color = egui::Color32::BLUE;
             chart.config.show_ohlc_info = true;
+            chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Hidden;
             chart.chart_options.tooltip.on_long_press = true;
             chart.chart_options.tooltip.show_time = false;
             frame(&ctx, &mut chart, 0.0, vec![]);
@@ -2792,6 +2797,7 @@ mod tests {
                     expected,
                     "step {step}: {labels:?}"
                 );
+                assert_eq!(chart.axis_hover, None, "step {step}");
                 assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
                     if text.galley.text() == "O 100.00" && text.galley.job.sections[1].format.color == egui::Color32::BLUE)));
                 if expected {

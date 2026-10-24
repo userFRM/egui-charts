@@ -320,7 +320,9 @@ impl Chart {
                     })
                     .filter(|_| !egui::Popup::is_any_open(ui.ctx()));
                 let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
-                if self.drawings.eraser_mode {
+                if self.drawings.eraser_mode
+                    && crosshair_options.style != crate::config::CrosshairStyle::Hidden
+                {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
                 }
 
