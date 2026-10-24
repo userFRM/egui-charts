@@ -144,7 +144,9 @@ impl DrawingPropertiesDialog {
         if self.active_tab == PropertiesTab::Inputs && !has_inputs {
             self.active_tab = PropertiesTab::Style;
         }
-        TabBar::new(&tabs, &mut self.active_tab).show(ui);
+        egui::ScrollArea::horizontal()
+            .id_salt("properties_tabs")
+            .show(ui, |ui| TabBar::new(&tabs, &mut self.active_tab).show(ui));
 
         // Vertical auto-shrink stays on: a full-height body would push the pinned footer out.
         egui::ScrollArea::vertical()
@@ -181,18 +183,29 @@ impl DrawingPropertiesDialog {
 
         let mut delete = false;
         let mut clone = false;
+        let compact = ui.available_width() < 400.0;
         let (mut apply, cancel_clicked) = DialogFooter::new("Apply")
             .secondary("Cancel")
             .show_with_left(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.lg;
-                delete = Button::icon_and_text(&icons::TRASH, "Delete")
-                    .ghost()
-                    .show(ui)
-                    .clicked();
-                clone = Button::icon_and_text(&icons::DUPLICATE, "Clone")
-                    .ghost()
-                    .show(ui)
-                    .clicked();
+                delete = if compact {
+                    Button::icon(&icons::TRASH)
+                } else {
+                    Button::icon_and_text(&icons::TRASH, "Delete")
+                }
+                .ghost()
+                .tooltip("Delete")
+                .show(ui)
+                .clicked();
+                clone = if compact {
+                    Button::icon(&icons::DUPLICATE)
+                } else {
+                    Button::icon_and_text(&icons::DUPLICATE, "Clone")
+                }
+                .ghost()
+                .tooltip("Clone")
+                .show(ui)
+                .clicked();
             });
         cancel |= cancel_clicked;
 

@@ -58,8 +58,6 @@ pub struct DrawingProps {
     pub extend_left: bool,
     /// Extend line right
     pub extend_right: bool,
-    /// Show price labels
-    pub show_price: bool,
     /// Text label
     pub label: String,
     /// Font size
@@ -84,7 +82,6 @@ impl Default for DrawingProps {
             fill_enabled: false,
             extend_left: false,
             extend_right: false,
-            show_price: false,
             label: String::new(),
             font_size: 12.0,
             visible_all_timeframes: true,

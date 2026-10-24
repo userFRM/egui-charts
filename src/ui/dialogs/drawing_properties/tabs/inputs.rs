@@ -194,7 +194,7 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     let mut remove = None;
     for (i, level) in config.levels.iter_mut().enumerate() {
         ui.push_id(i, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.checkbox(&mut level.visible, "");
                 ui.add(
                     egui::DragValue::new(&mut level.value)
@@ -259,7 +259,7 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     let mut remove = None;
     for (i, level) in config.levels.iter_mut().enumerate() {
         ui.push_id(i, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.checkbox(&mut level.visible, "");
                 ui.add(
                     egui::DragValue::new(&mut level.value)
@@ -304,22 +304,25 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
 fn fractions(ui: &mut Ui, title: &str, levels: &mut Vec<f32>) {
     ui.strong(title);
     let mut remove = None;
-    egui::Grid::new(title).num_columns(6).show(ui, |ui| {
-        for (i, value) in levels.iter_mut().enumerate() {
-            ui.add(egui::DragValue::new(value).range(0.0..=1.0).speed(0.001));
-            if Button::icon(&crate::icons::icons::TRASH)
-                .ghost()
-                .tooltip("Remove division")
-                .show(ui)
-                .clicked()
-            {
-                remove = Some(i);
+    let columns = ((ui.available_width() / 96.0) as usize).clamp(1, 3);
+    egui::Grid::new(title)
+        .num_columns(columns * 2)
+        .show(ui, |ui| {
+            for (i, value) in levels.iter_mut().enumerate() {
+                ui.add(egui::DragValue::new(value).range(0.0..=1.0).speed(0.001));
+                if Button::icon(&crate::icons::icons::TRASH)
+                    .ghost()
+                    .tooltip("Remove division")
+                    .show(ui)
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+                if (i + 1) % columns == 0 {
+                    ui.end_row();
+                }
             }
-            if i % 3 == 2 {
-                ui.end_row();
-            }
-        }
-    });
+        });
     if let Some(i) = remove {
         levels.remove(i);
     }

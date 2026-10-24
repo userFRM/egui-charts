@@ -3383,7 +3383,7 @@ mod tests {
         }
     }
 
-    /// Every tool page edits its saved model; coordinate drafts validate before one undoable Apply.
+    /// Family pages fit both themes and narrow windows; coordinate drafts apply as one undoable edit.
     #[test]
     fn drawing_properties_family_inputs_and_coordinates_apply_through_dialog() {
         use chrono::{TimeZone, Utc};
@@ -3534,6 +3534,60 @@ mod tests {
                 before,
                 "visiting a page must not change defaults"
             );
+            for (theme, width) in [Theme::light(), Theme::dark()]
+                .into_iter()
+                .flat_map(|theme| [320.0, 360.0].map(|width| (theme.clone(), width)))
+            {
+                let narrow = egui::Context::default();
+                egui_charts::theme::apply_to_egui(&narrow, &theme);
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 640.0));
+                for _ in 0..3 {
+                    let mut output = narrow.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ui| app.show_dialogs(ui.ctx()),
+                    );
+                    output.textures_delta.clear();
+                    let mut footer = Vec::new();
+                    for shape in &output.shapes {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && matches!(
+                                text.galley.job.text.as_str(),
+                                "Apply" | "Cancel" | "Remove" | "Clone" | "Delete"
+                            )
+                        {
+                            let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
+                            if matches!(
+                                text.galley.job.text.as_str(),
+                                "Apply" | "Cancel" | "Clone" | "Delete"
+                            ) {
+                                footer.push(bounds);
+                            }
+                            assert!(
+                                screen.left() <= bounds.left() && screen.right() >= bounds.right(),
+                                "{tool:?}: control outside narrow window: {bounds:?}"
+                            );
+                            assert!(
+                                shape.clip_rect.left() <= bounds.left()
+                                    && shape.clip_rect.right() >= bounds.right(),
+                                "{tool:?}: horizontally clipped control: {bounds:?}, clip: {:?}",
+                                shape.clip_rect
+                            );
+                        }
+                    }
+                    for (index, bounds) in footer.iter().enumerate() {
+                        assert!(
+                            footer[index + 1..]
+                                .iter()
+                                .all(|other| !bounds.intersects(*other)),
+                            "{tool:?}: overlapping footer controls: {footer:?}"
+                        );
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
             app.drawing_props.close();
         }
         app.chart.drawings_mut().drawings[0].tool_type = Tool::TrendLine;
