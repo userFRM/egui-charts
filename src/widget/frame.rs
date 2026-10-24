@@ -1238,6 +1238,8 @@ impl Chart {
                 pending_values.push((line.price, line.color));
             }
         }
+        #[cfg(feature = "ui")]
+        pending_values.extend(std::mem::take(&mut self.trading_tags));
 
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
