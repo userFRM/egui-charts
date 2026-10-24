@@ -3186,6 +3186,36 @@ mod tests {
     }
 
     #[test]
+    fn first_frame_is_settled_and_an_idle_chart_requests_no_repaint() {
+        // A host that repaints only on input or new data shows this frame until the next event.
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0, 104.0], &[110.0, 108.0]);
+        chart.set_visible_bars(50);
+        let mut run = || {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                chart.show(ui);
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+            output.drop_without_applying_deltas();
+            (shapes, delay)
+        };
+        let (first, _) = run();
+        for _ in 0..3 {
+            let (shapes, delay) = run();
+            assert!(
+                shapes == first,
+                "the first frame must draw the settled chart"
+            );
+            assert_eq!(delay, std::time::Duration::MAX);
+        }
+    }
+
+    #[test]
     fn plot_uses_the_interior_and_configured_axis_widths() {
         for (width, height, padding, left, right, studies, gutter) in [
             (800.0, 600.0, 0.0, 0.0, 70.0, 0, 0.0),
