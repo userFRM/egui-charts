@@ -1,24 +1,54 @@
 //! Facts about the chart's symbol: its quote, the key statistics and profile the feed supplies,
 //! and the user's notes, kept through the storage service.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use egui::{Align, Label, Layout, RichText, Ui};
+use chrono::{DateTime, Offset, Utc};
+use chrono_tz::Tz;
+use egui::text::LayoutJob;
+use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
 use super::object_tree::{format_price, price_decimals};
-use super::watchlist::{WatchlistQuote, signed};
+use super::watchlist::{HEADER_HEIGHT, WatchlistQuote, signed, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, SymbolDetails};
+use crate::icons::icons;
 use crate::model::Instrument;
 use crate::services::{Storage, StoreKind};
+use crate::studies::StudyFormat;
 use crate::theme::ThemeExt;
-use crate::ui_kit::PanelHeader;
+use crate::ui_kit::IconButton;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 
 /// Text size of the last price, the panel's largest figure.
 const PRICE_SIZE: f32 = 24.0;
+/// Text size of the extended-hours price.
+const EXTENDED_PRICE_SIZE: f32 = 18.0;
+/// The sections the layout menu shows or hides, in panel order.
+const SECTIONS: [&str; 4] = ["Volume", "Key statistics", "Profile", "Notes"];
+
+/// The session of an extended-hours trade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtendedSession {
+    /// Before the regular session opens.
+    PreMarket,
+    /// After the regular session closes.
+    PostMarket,
+}
+
+/// The latest extended-hours trade of the shown symbol, supplied by the host.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExtendedHoursQuote {
+    pub session: ExtendedSession,
+    /// Last traded price. The change is `last` minus the last price of the regular session, the
+    /// one set with [`SymbolDetailsPanel::set_quote`], and the change percent is that difference
+    /// divided by the absolute regular last price, times 100.
+    pub last: f64,
+    /// When `last` traded.
+    pub time: DateTime<Utc>,
+}
 
 #[derive(Serialize, Deserialize)]
 struct NotesDocument {
@@ -45,8 +75,13 @@ enum Request {
 
 /// Details of the chart's symbol, fed by the host's [`Datafeed`] and [`Storage`].
 ///
-/// Keep it on the chart's symbol with [`set_instrument`](Self::set_instrument) and its latest
-/// quote with [`set_quote`](Self::set_quote). For each new symbol the panel asks the feed for
+/// Keep it on the chart's symbol with [`set_instrument`](Self::set_instrument), its latest
+/// regular-session quote with [`set_quote`](Self::set_quote), its extended-hours trade with
+/// [`set_extended_hours`](Self::set_extended_hours) and its volume with
+/// [`set_volume`](Self::set_volume); update times are shown in the time zone set with
+/// [`set_timezone`](Self::set_timezone), UTC by default. The header's layout button shows or
+/// hides sections, the edit button moves to the notes, and a feed that supplies
+/// [`SymbolDetails::url`] gets a link to the instrument beside its name. For each new symbol the panel asks the feed for
 /// [`Datafeed::symbol_details`] and shows the statistics and profile it answers; an empty section,
 /// or a feed that does not support the request, shows nothing. Notes are kept in memory per
 /// symbol, and with a storage service attached they are read from and written to one
@@ -56,7 +91,11 @@ enum Request {
 #[derive(Default)]
 pub struct SymbolDetailsPanel {
     instrument: Option<Instrument>,
-    quote: Option<WatchlistQuote>,
+    quote: Option<(WatchlistQuote, DateTime<Utc>)>,
+    extended: Option<ExtendedHoursQuote>,
+    volume: Option<(f64, f64)>,
+    timezone: Tz,
+    hidden: HashSet<&'static str>,
     details: Option<SymbolDetails>,
     error: Option<String>,
     notes: HashMap<String, Notes>,
@@ -92,13 +131,16 @@ impl SymbolDetailsPanel {
         }
     }
 
-    /// Show `instrument`, such as the chart's. A new symbol clears the quote and asks for its
-    /// details and notes; the same symbol only takes the new name, exchange and currency.
+    /// Show `instrument`, such as the chart's. A new symbol clears the quote, extended-hours trade
+    /// and volume and asks for its details and notes; the same symbol only takes the new name,
+    /// exchange and currency.
     pub fn set_instrument(&mut self, instrument: &Instrument) {
         let new = self.symbol() != Some(instrument.symbol.as_str());
         self.instrument = Some(instrument.clone());
         if new {
             self.quote = None;
+            self.extended = None;
+            self.volume = None;
             self.details = None;
             self.error = None;
             self.request_details(instrument.symbol.clone());
@@ -117,9 +159,26 @@ impl SymbolDetailsPanel {
         }
     }
 
-    /// Sets the latest quote of the shown symbol.
-    pub fn set_quote(&mut self, quote: WatchlistQuote) {
-        self.quote = Some(quote);
+    /// Sets the latest regular-session quote of the shown symbol and when it was last updated.
+    pub fn set_quote(&mut self, quote: WatchlistQuote, time: DateTime<Utc>) {
+        self.quote = Some((quote, time));
+    }
+
+    /// Sets the latest extended-hours trade of the shown symbol, or `None` to hide that line,
+    /// such as during the regular session.
+    pub fn set_extended_hours(&mut self, quote: Option<ExtendedHoursQuote>) {
+        self.extended = quote;
+    }
+
+    /// Sets the volume of the shown symbol in its current session and its average daily volume
+    /// over the last 30 days, drawn as a bar split in proportion to the two.
+    pub fn set_volume(&mut self, volume: f64, average: f64) {
+        self.volume = Some((volume, average));
+    }
+
+    /// Shows update times in `timezone`, such as the chart's.
+    pub fn set_timezone(&mut self, timezone: Tz) {
+        self.timezone = timezone;
     }
 
     /// The shown symbol, if any.
@@ -263,6 +322,10 @@ impl SymbolDetailsPanel {
         let Self {
             instrument,
             quote,
+            extended,
+            volume,
+            timezone,
+            hidden,
             details,
             error,
             notes,
@@ -272,7 +335,60 @@ impl SymbolDetailsPanel {
             return;
         };
         let theme = ui.active_theme();
-        PanelHeader::new(&instrument.symbol).show_plain(ui);
+        let mut edit_notes = false;
+        let header = vec2(ui.available_width(), HEADER_HEIGHT);
+        ui.allocate_ui_with_layout(header, Layout::right_to_left(Align::Center), |ui| {
+            ui.set_min_height(header.y);
+            ui.spacing_mut().item_spacing.x = theme.spacing.sm;
+            let more = IconButton::new(&icons::UI_MORE_HORIZONTAL)
+                .tooltip("More")
+                .show(ui);
+            egui::Popup::menu(&more).show(|ui| {
+                if ui.button("Copy symbol").clicked() {
+                    ui.ctx().copy_text(instrument.symbol.clone());
+                }
+            });
+            edit_notes = IconButton::new(&icons::PENCIL)
+                .tooltip("Edit notes")
+                .show(ui)
+                .clicked();
+            let layout = IconButton::new(&icons::LAYOUT_GRID)
+                .tooltip("Layout")
+                .show(ui);
+            egui::Popup::menu(&layout)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    for section in SECTIONS {
+                        let mut shown = !hidden.contains(section);
+                        if ui.checkbox(&mut shown, section).changed() {
+                            if shown {
+                                hidden.remove(section);
+                            } else {
+                                hidden.insert(section);
+                            }
+                        }
+                    }
+                });
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                let title = LayoutJob::single_section(
+                    instrument.symbol.clone(),
+                    weighted(theme.text.heading, 700.0, theme.ui.text),
+                );
+                ui.add(Label::new(title).truncate());
+            });
+        });
+        if edit_notes {
+            hidden.remove("Notes");
+        }
+        let shown = |section| !hidden.contains(section);
+        let update = |time: DateTime<Utc>| {
+            let local = time.with_timezone(&*timezone);
+            format!(
+                "Last update at {} {}",
+                local.format("%H:%M"),
+                zone_label(local.offset().fix().local_minus_utc())
+            )
+        };
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -281,57 +397,110 @@ impl SymbolDetailsPanel {
                     .flatten()
                     .map(String::as_str)
                     .collect();
-                if !name.is_empty() {
-                    ui.add(
-                        Label::new(
-                            RichText::new(name.join(" · "))
-                                .size(theme.text.small)
-                                .color(theme.ui.text_secondary),
-                        )
-                        .truncate(),
-                    );
+                let url = details.as_ref().and_then(|details| details.url.as_deref());
+                if !name.is_empty() || url.is_some() {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = theme.spacing.xs;
+                        ui.scope(|ui| {
+                            ui.set_max_width(ui.available_width() - 16.0);
+                            ui.add(
+                                Label::new(
+                                    RichText::new(name.join(" · "))
+                                        .size(theme.text.label)
+                                        .color(theme.ui.text),
+                                )
+                                .truncate(),
+                            );
+                        });
+                        if let Some(url) = url {
+                            external_link(ui, url);
+                        }
+                    });
                 }
-                if let Some(quote) = quote {
+                if let Some((quote, time)) = quote {
                     let decimals = quote
                         .price_decimals
                         .or(instrument.price_decimals)
                         .unwrap_or_else(|| price_decimals(quote.last));
-                    let change = quote.change();
-                    let color = if change > 0.0 {
-                        theme.chart.candle_up
-                    } else if change < 0.0 {
-                        theme.chart.candle_down
-                    } else {
-                        theme.ui.text
-                    };
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(format_price(quote.last, Some(decimals)))
-                                .size(PRICE_SIZE)
-                                .strong()
-                                .color(theme.ui.text),
+                    ui.add_space(theme.spacing.md);
+                    price_line(
+                        ui,
+                        quote.last,
+                        quote.change(),
+                        quote.change_percent(),
+                        decimals,
+                        PRICE_SIZE,
+                        instrument.currency.as_deref(),
+                    );
+                    ui.label(
+                        RichText::new(update(*time))
+                            .size(theme.text.small)
+                            .color(theme.ui.text_secondary),
+                    );
+                    if let Some(extended) = extended {
+                        let from_regular = WatchlistQuote {
+                            last: extended.last,
+                            prev_close: quote.last,
+                            price_decimals: Some(decimals),
+                        };
+                        ui.add_space(theme.spacing.md);
+                        price_line(
+                            ui,
+                            from_regular.last,
+                            from_regular.change(),
+                            from_regular.change_percent(),
+                            decimals,
+                            EXTENDED_PRICE_SIZE,
+                            instrument.currency.as_deref(),
                         );
-                        if let Some(currency) = &instrument.currency {
+                        let (session, color) = match extended.session {
+                            ExtendedSession::PreMarket => ("Pre-market", theme.ui.warning),
+                            ExtendedSession::PostMarket => ("Post-market", theme.ui.info),
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(session).size(theme.text.small).color(color));
                             ui.label(
-                                RichText::new(currency)
+                                RichText::new(update(extended.time))
                                     .size(theme.text.small)
                                     .color(theme.ui.text_secondary),
                             );
-                        }
-                        for text in [
-                            signed(change, usize::from(decimals)),
-                            format!("{}%", signed(quote.change_percent(), 2)),
-                        ] {
-                            ui.label(RichText::new(text).size(theme.text.heading).color(color));
-                        }
-                    });
+                        });
+                    }
+                }
+                if let Some((volume, average)) = *volume
+                    && shown("Volume")
+                {
+                    ui.add_space(theme.spacing.md);
+                    let decimals = instrument.volume_decimals.map(usize::from);
+                    for (left, right, size, color) in [
+                        (
+                            "Volume".to_owned(),
+                            "Avg. volume (30D)".to_owned(),
+                            theme.text.small,
+                            theme.ui.text_secondary,
+                        ),
+                        (
+                            StudyFormat::Volume.format(volume, decimals),
+                            StudyFormat::Volume.format(average, decimals),
+                            theme.text.label,
+                            theme.ui.text,
+                        ),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(left).size(size).color(color));
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(RichText::new(right).size(size).color(color));
+                            });
+                        });
+                    }
+                    volume_bar(ui, volume, average);
                 }
                 if let Some(details) = details {
                     for (title, rows) in [
                         ("Key statistics", &details.statistics),
                         ("Profile", &details.profile),
                     ] {
-                        if rows.is_empty() {
+                        if rows.is_empty() || !shown(title) {
                             continue;
                         }
                         ui.add_space(theme.spacing.md);
@@ -346,21 +515,151 @@ impl SymbolDetailsPanel {
                         }
                     }
                 }
-                ui.add_space(theme.spacing.md);
-                ui.label(RichText::new("Notes").strong());
-                let notes = notes.entry(instrument.symbol.clone()).or_default();
-                ui.add_enabled(
-                    notes.written.is_some(),
-                    egui::TextEdit::multiline(&mut notes.text)
-                        .hint_text("Add a note")
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(4),
-                );
+                if shown("Notes") {
+                    ui.add_space(theme.spacing.md);
+                    ui.label(RichText::new("Notes").strong());
+                    let notes = notes.entry(instrument.symbol.clone()).or_default();
+                    let field = ui.add_enabled(
+                        notes.written.is_some(),
+                        egui::TextEdit::multiline(&mut notes.text)
+                            .hint_text("Add a note")
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(4),
+                    );
+                    if edit_notes {
+                        field.request_focus();
+                        field.scroll_to_me(None);
+                    }
+                }
                 if let Some(error) = error {
                     status_message(ui, MessageKind::Error, error);
                 }
             });
     }
+}
+
+/// A price set large and bold with its currency, then its signed change and change percent in
+/// the rising or falling colour.
+fn price_line(
+    ui: &mut Ui,
+    price: f64,
+    change: f64,
+    percent: f64,
+    decimals: u8,
+    size: f32,
+    currency: Option<&str>,
+) {
+    let theme = ui.active_theme();
+    let color = if change > 0.0 {
+        theme.chart.candle_up
+    } else if change < 0.0 {
+        theme.chart.candle_down
+    } else {
+        theme.ui.text
+    };
+    // One text, so the figures of different sizes share a baseline.
+    let mut job = LayoutJob::single_section(
+        format_price(price, Some(decimals)),
+        weighted(size, 700.0, theme.ui.text),
+    );
+    if let Some(currency) = currency {
+        job.append(
+            currency,
+            theme.spacing.sm,
+            weighted(theme.text.small, 400.0, theme.ui.text),
+        );
+    }
+    let change_size = (size * 2.0 / 3.0).max(theme.text.body);
+    for text in [
+        signed(change, usize::from(decimals)),
+        format!("{}%", signed(percent, 2)),
+    ] {
+        job.append(&text, theme.spacing.sm, weighted(change_size, 600.0, color));
+    }
+    ui.add(Label::new(job).wrap());
+}
+
+/// "UTC" for no offset, otherwise "GMT" and the signed offset in hours, with minutes when they
+/// are not zero, such as "GMT+2" or "GMT+5:30".
+fn zone_label(offset_seconds: i32) -> String {
+    if offset_seconds == 0 {
+        return "UTC".to_owned();
+    }
+    let sign = if offset_seconds < 0 { '-' } else { '+' };
+    let minutes = offset_seconds.unsigned_abs() / 60;
+    match minutes % 60 {
+        0 => format!("GMT{sign}{}", minutes / 60),
+        rest => format!("GMT{sign}{}:{rest:02}", minutes / 60),
+    }
+}
+
+/// A small external-link glyph opening `url` in a new tab.
+fn external_link(ui: &mut Ui, url: &str) {
+    let theme = ui.active_theme();
+    let (rect, response) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::click());
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(url);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Link, ui.is_enabled(), "Open instrument page")
+    });
+    let color = if response.hovered() {
+        theme.ui.accent
+    } else {
+        theme.ui.text_secondary
+    };
+    let stroke = Stroke::new(1.0, color);
+    let r = rect.shrink(1.5);
+    let painter = ui.painter();
+    // A box open at its top right, with an arrow leaving through the gap.
+    painter.line(
+        vec![
+            pos2(r.center().x, r.top()),
+            r.left_top(),
+            r.left_bottom(),
+            r.right_bottom(),
+            pos2(r.right(), r.center().y),
+        ],
+        stroke,
+    );
+    painter.line_segment([r.center(), r.right_top()], stroke);
+    painter.line(
+        vec![
+            pos2(r.right() - 3.5, r.top()),
+            r.right_top(),
+            pos2(r.right(), r.top() + 3.5),
+        ],
+        stroke,
+    );
+    if response.clicked() {
+        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+    }
+}
+
+/// A bar split at `volume / (volume + average)`: the session volume in the accent colour, the
+/// average volume in a lighter shade.
+fn volume_bar(ui: &mut Ui, volume: f64, average: f64) {
+    let theme = ui.active_theme();
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
+    let total = volume.max(0.0) + average.max(0.0);
+    if !total.is_finite() || total <= 0.0 {
+        return;
+    }
+    let gap = 2.0;
+    let split = rect.left() + (rect.width() - gap) * (volume.max(0.0) / total) as f32;
+    let painter = ui.painter();
+    let radius = rect.height() / 2.0;
+    let part = |left: f32, right: f32, color: Color32| {
+        if right > left {
+            painter.rect_filled(rect.with_min_x(left).with_max_x(right), radius, color);
+        }
+    };
+    part(rect.left(), split, theme.ui.accent);
+    part(
+        split + gap,
+        rect.right(),
+        theme.ui.accent.gamma_multiply(0.35),
+    );
 }
 
 #[cfg(test)]
@@ -501,5 +800,39 @@ mod tests {
         restored.set_instrument(&Instrument::new("BAD"));
         restored.poll(&ctx);
         assert!(restored.error.is_some());
+    }
+
+    /// The extended-hours change is measured from the regular last price, not the previous close,
+    /// and update times carry the offset of the chart's time zone on that date.
+    #[test]
+    fn extended_hours_change_from_the_regular_last_price() {
+        let ctx = egui::Context::default();
+        let mut panel = SymbolDetailsPanel::new();
+        panel.set_instrument(&Instrument::new("QQQ"));
+        panel.set_timezone(chrono_tz::Europe::Berlin);
+        let quote = WatchlistQuote {
+            last: 704.47,
+            prev_close: 725.20,
+            price_decimals: Some(2),
+        };
+        panel.set_quote(quote, "2026-10-22T19:59:00Z".parse().unwrap());
+        panel.set_extended_hours(Some(ExtendedHoursQuote {
+            session: ExtendedSession::PreMarket,
+            last: 703.65,
+            // Summer time ends in Berlin on October 25.
+            time: "2026-10-26T12:30:00Z".parse().unwrap(),
+        }));
+        let shown = texts(&ctx, &mut panel);
+        for text in [
+            "704.47-20.73-2.86%",
+            "Last update at 21:59 GMT+2",
+            "703.65-0.82-0.12%",
+            "Last update at 13:30 GMT+1",
+        ] {
+            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        for (offset, label) in [(0, "UTC"), (-5 * 3600, "GMT-5"), (-12600, "GMT-3:30")] {
+            assert_eq!(zone_label(offset), label);
+        }
     }
 }
