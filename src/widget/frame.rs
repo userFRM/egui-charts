@@ -3059,7 +3059,7 @@ mod tests {
             .collect();
         let ctx = egui::Context::default();
         let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
-                let mut options = chart.chart_options().clone();
+        let mut options = chart.chart_options().clone();
         options.time_scale.min_bar_spacing = 0.0;
         chart.set_chart_options(options);
         frame(&ctx, &mut chart, 0.0, Vec::new());
