@@ -185,6 +185,9 @@ impl Indicator for ConfiguredStudy {
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
         self.study.plot_color(line, bar)
     }
+    fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
+        self.study.plot_text(line, bar)
+    }
     fn fills(&self) -> Vec<super::StudyFill> {
         self.study.fills()
     }

@@ -215,7 +215,7 @@ pub fn render_price_line(
             Align2::LEFT_BOTTOM,
             title,
             axis_font(painter.ctx()),
-            line.color,
+            line.title_color.unwrap_or(line.color),
         );
     }
 
@@ -226,11 +226,21 @@ pub fn render_price_line(
         transform.to_scale(line.price),
         price_map.price_precision().unwrap_or(2),
     );
-    let text_color = tag_text_color(line.color);
+    let (text_color, fill) = axis_label_colors(line);
     let (anchor, align) = price_tag_anchor(price_rect, axis_right, y);
     Some(paint_axis_tag(
-        painter, anchor, align, axis_right, label, text_color, line.color,
+        painter, anchor, align, axis_right, label, text_color, fill,
     ))
+}
+
+/// The text colour and fill of `line`'s axis tag.
+pub(crate) fn axis_label_colors(line: &PriceLine) -> (Color32, Color32) {
+    let fill = line.axis_label_color.unwrap_or(line.color);
+    (
+        line.axis_label_text_color
+            .unwrap_or_else(|| tag_text_color(fill)),
+        fill,
+    )
 }
 
 // Keep white text on financial colours; pale custom fills still need dark text.
@@ -294,8 +304,8 @@ pub(crate) fn paint_crosshair_tag(
 /// Width of the current price labels and tags, including their plot gap and right clearance.
 /// Include formatted session and volume labels in `tag_labels` when allocating their column.
 pub fn price_axis_width(painter: &Painter, price_map: &PriceMap, tag_labels: &[&str]) -> f32 {
-    crate::scales::PriceMarkGenerator::new()
-        .generate_marks(price_map)
+    price_map
+        .marks()
         .into_iter()
         .map(|mark| mark.label)
         .chain(tag_labels.iter().map(|label| (*label).to_owned()))

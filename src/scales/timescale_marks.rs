@@ -140,6 +140,7 @@ impl Default for TickMarkGeneratorConfig {
 pub struct TickMarkGenerator {
     config: TickMarkGeneratorConfig,
     formatter: Box<dyn TimeFormatter>,
+    uniform_distribution: bool,
 }
 
 impl TickMarkGenerator {
@@ -148,6 +149,7 @@ impl TickMarkGenerator {
         Self {
             config: TickMarkGeneratorConfig::default(),
             formatter: Box::new(DefaultTimeFormatter::default()),
+            uniform_distribution: false,
         }
     }
 
@@ -159,7 +161,11 @@ impl TickMarkGenerator {
             show_seconds: config.show_subseconds,
         });
 
-        Self { config, formatter }
+        Self {
+            config,
+            formatter,
+            uniform_distribution: false,
+        }
     }
 
     /// Create a new tick mark generator with custom formatter
@@ -167,7 +173,19 @@ impl TickMarkGenerator {
         config: TickMarkGeneratorConfig,
         formatter: Box<dyn TimeFormatter>,
     ) -> Self {
-        Self { config, formatter }
+        Self {
+            config,
+            formatter,
+            uniform_distribution: false,
+        }
+    }
+
+    /// Keeps marks of one weight all or none (default `false`): when a mark of some weight
+    /// does not fit between the marks already placed, that weight and every lighter one are
+    /// left out, so labels of one kind stay evenly spaced.
+    pub fn with_uniform_distribution(mut self, uniform: bool) -> Self {
+        self.uniform_distribution = uniform;
+        self
     }
 
     /// Generate tick marks for a given time range and display width
@@ -234,6 +252,9 @@ impl TickMarkGenerator {
                     .all(|other| mark.index.abs_diff(other.index) as f32 >= min_bars)
                 {
                     kept.push(mark);
+                } else if self.uniform_distribution {
+                    kept.retain(|other| other.weight > mark.weight);
+                    break;
                 }
             }
             kept.sort_by_key(|mark| mark.time);
@@ -704,6 +725,9 @@ impl TickMarkGenerator {
                     diff >= min_time_diff
                 }) {
                     filtered.push(mark.clone());
+                } else if self.uniform_distribution {
+                    filtered.retain(|other| other.weight > mark.weight);
+                    break;
                 }
             }
 
@@ -723,7 +747,12 @@ impl TickMarkGenerator {
 
         // Keep the highest weight marks
         marks.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.time.cmp(&b.time)));
-        marks.truncate(max_marks);
+        if self.uniform_distribution {
+            let cut = marks[max_marks].weight;
+            marks.retain(|mark| mark.weight > cut);
+        } else {
+            marks.truncate(max_marks);
+        }
         marks.sort_by_key(|m| m.time);
         marks
     }
@@ -780,6 +809,43 @@ mod tests {
                     "{years:?}"
                 );
             }
+        }
+    }
+
+    /// Three days of 5-minute bars on 600 points: day marks lie 288 bars apart and 4-hour
+    /// marks 48 apart, under the 72-bar minimum of 50 points. Without uniform distribution
+    /// every other 4-hour mark is kept; with it, none are.
+    #[test]
+    fn uniform_distribution_keeps_each_weight_whole() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let bars: Vec<_> = (0..864)
+            .map(|i| (start + Duration::minutes(5 * i as i64), i))
+            .collect();
+        for (uniform, expected) in [
+            (
+                false,
+                vec![
+                    (0, 100),
+                    (96, 50),
+                    (192, 50),
+                    (288, 60),
+                    (384, 50),
+                    (480, 50),
+                    (576, 60),
+                    (672, 50),
+                    (768, 50),
+                ],
+            ),
+            (true, vec![(0, 100), (288, 60), (576, 60)]),
+        ] {
+            let marks = TickMarkGenerator::new()
+                .with_uniform_distribution(uniform)
+                .generate_marks(start, bars[863].0, 600.0, &bars);
+            let marks: Vec<_> = marks
+                .iter()
+                .map(|mark| (mark.index, mark.weight.value()))
+                .collect();
+            assert_eq!(marks, expected, "uniform {uniform}");
         }
     }
 

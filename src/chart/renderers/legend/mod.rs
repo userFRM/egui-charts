@@ -2,7 +2,7 @@
 
 use super::{price_decimals, semibold};
 use crate::chart::renderers::StyleColors;
-use crate::model::{Bar, Instrument, Level1Quote, percent_change};
+use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
 use crate::studies::Indicator;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
@@ -163,10 +163,35 @@ impl<'a> Legend<'a> {
                 egui::Image::new(badge.clone()).paint_at(&badge_ui, rect);
             }
             let title = self.title();
-            let status_width = self
-                .statuses
+            // Delayed and end-of-day data are marked ahead of the host's own marks.
+            let data_status = match self
+                .instrument
+                .and_then(|instrument| instrument.data_status)
+            {
+                Some(DataStatus::Delayed) => Some(("D", "Delayed data")),
+                Some(DataStatus::EndOfDay) => Some(("E", "End-of-day data")),
+                _ => None,
+            }
+            .map(|(text, hint)| {
+                let color = theme.ui.warning;
+                let background = color.gamma_multiply(0.15);
+                (
+                    LegendStatus {
+                        text,
+                        color,
+                        background,
+                    },
+                    hint,
+                )
+            });
+            let statuses: Vec<_> = data_status
                 .iter()
-                .map(|status| {
+                .map(|(status, hint)| (status, Some(*hint)))
+                .chain(self.statuses.iter().map(|status| (status, None)))
+                .collect();
+            let status_width = statuses
+                .iter()
+                .map(|(status, _)| {
                     painter
                         .layout_no_wrap(
                             status.text.to_owned(),
@@ -180,7 +205,7 @@ impl<'a> Legend<'a> {
                 .sum::<f32>();
             let title_width = (bounds.right() - layout.pos.x - status_width - 64.0).max(0.0);
             layout.text(title, typography::XXL, colors.text, title_width);
-            for status in self.statuses {
+            for (status, hint) in statuses {
                 let galley = painter.layout_no_wrap(
                     status.text.to_owned(),
                     FontId::proportional(typography::SM),
@@ -189,6 +214,11 @@ impl<'a> Legend<'a> {
                 let rect = layout.reserve(Vec2::new(galley.size().x + 8.0, 18.0));
                 painter.rect_filled(rect, 4.0, status.background);
                 painter.galley(rect.center() - galley.size() / 2.0, galley, status.color);
+                if let Some(hint) = hint {
+                    let rect = rect.intersect(bounds);
+                    ui.interact(rect, id.with("data_status"), Sense::hover())
+                        .on_hover_text(hint);
+                }
             }
         }
         let precision = self.price_precision(self.bar.close);

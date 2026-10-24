@@ -179,6 +179,7 @@ impl DemoApp {
 
     fn refresh_active_chart(&mut self) {
         self.last_chart_click = None;
+        self.crosshair = None;
         self.time_and_sales.clear();
         self.watchlist.set_selected(self.chart.symbol());
         self.state.symbol = self.chart.symbol().to_owned();

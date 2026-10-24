@@ -4,7 +4,7 @@
 use super::dashed_line::draw_dashed_line;
 use crate::chart::renderers::ChartMapping;
 use crate::model::LineStyle;
-use crate::scales::{PriceMap, PriceMarkGenerator};
+use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
@@ -17,7 +17,7 @@ pub fn render_grid(
     grid_color: Color32,
     style: LineStyle,
 ) {
-    let marks = PriceMarkGenerator::new().generate_marks(price_map);
+    let marks = price_map.marks();
 
     for mark in marks {
         let stroke_width = if grid_color.is_opaque() {
