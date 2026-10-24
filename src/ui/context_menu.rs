@@ -715,7 +715,7 @@ impl ChartMenus {
             .show_with_shortcuts(ctx, &theme, chart.shortcuts());
         self.drawing
             .show_with_shortcuts(ctx, &theme, chart.shortcuts());
-        let axis_action = self.axes.show(ctx, chart);
+        let axis_action = chart.user_action(|chart| self.axes.show(ctx, chart));
         chart.menu_open = self.chart.is_open()
             || self.series.is_open()
             || self.drawing.is_open()
@@ -885,6 +885,15 @@ mod tests {
                     size,
                 );
                 assert!(!chart.menu_open);
+                let config = chart.config().clone();
+                let options = chart.chart_options().clone();
+                let scale = chart.state().price_scale().options().clone();
+                assert!(chart.undo(), "axis choices enter chart history");
+                assert!(!chart.can_undo(), "one action per axis choice");
+                assert!(chart.redo());
+                assert_eq!(chart.config(), &config);
+                assert_eq!(chart.chart_options(), &options);
+                assert_eq!(chart.state().price_scale().options(), &scale);
                 if short {
                     assert!(chart.config().show_high_low);
                 } else if ratio {

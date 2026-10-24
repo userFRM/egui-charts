@@ -197,6 +197,7 @@ pub struct ChartLayout {
     /// Synchronization controls, applied within each group.
     pub sync: ChartSyncOptions,
     active: usize,
+    focus_active: bool,
     groups: [Option<String>; 16],
     detached: [bool; 16],
     previous: [Option<(String, Option<Timeframe>)>; 16],
@@ -210,10 +211,11 @@ impl ChartLayout {
         self.active
     }
 
-    /// Selects a chart slot; out-of-range indices are ignored.
+    /// Selects a chart slot and focuses its canvas when shown; out-of-range indices are ignored.
     pub fn set_active(&mut self, index: usize) {
         if index < 16 {
             self.active = index;
+            self.focus_active = true;
         }
     }
 
@@ -311,6 +313,7 @@ impl ChartLayout {
             if self.mode == ChartLayoutMode::Tabs && index != self.active && !self.detached[index] {
                 continue;
             }
+            let focus = self.focus_active && index == self.active;
             if self.detached[index] {
                 let id = egui::ViewportId::from_hash_of((ui.scope_id(), "detached_chart", index));
                 let chart = &mut charts[index];
@@ -329,6 +332,9 @@ impl ChartLayout {
                         }
                         egui::CentralPanel::default().show(ui, |ui| {
                             let response = chart.show(ui);
+                            if focus {
+                                response.request_focus();
+                            }
                             activate |= response.is_pointer_button_down_on()
                                 || response.clicked()
                                 || (response.hovered()
@@ -358,7 +364,10 @@ impl ChartLayout {
                     .id_salt(("chart_slot", index)),
                 |ui| {
                     ui.set_clip_rect(rect);
-                    charts[index].show(ui);
+                    let response = charts[index].show(ui);
+                    if focus {
+                        response.request_focus();
+                    }
                     if index == self.active {
                         let button = ui.put(
                             Rect::from_min_size(
@@ -392,6 +401,7 @@ impl ChartLayout {
                 );
             }
         }
+        self.focus_active = false;
         // Apply gestures from the source after it has handled this frame's input.
         let sync_range = charts[self.active].visible_time_range() != before_range
             || self.previous_preset != Some((self.mode, count));

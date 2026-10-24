@@ -287,6 +287,7 @@ impl SymbolSearchDialog {
         let mut sel_symbol = None;
         let mut should_close = false;
         let search_id = egui::Id::unique("symbol_search_input");
+        let focus_search = std::mem::take(&mut self.focus_search);
         let search_focused = ctx.memory(|m| m.has_focus(search_id));
         let (up, down) = ctx.input(|input| {
             (
@@ -318,7 +319,7 @@ impl SymbolSearchDialog {
                             .as_image_tinted(Vec2::splat(24.0), theme.ui.text_secondary),
                     );
                     let search_id = egui::Id::unique("symbol_search_input");
-                    if std::mem::take(&mut self.focus_search) {
+                    if focus_search {
                         ui.memory_mut(|memory| memory.request_focus(search_id));
                     }
                     let response = ui.add(
@@ -335,6 +336,10 @@ impl SymbolSearchDialog {
                         .clicked()
                     {
                         should_close = true;
+                    }
+                    // Sizing passes clear invisible widgets' focus while building the field.
+                    if focus_search {
+                        response.request_focus();
                     }
                     if response.changed() {
                         self.sel_idx = 0;

@@ -1186,6 +1186,10 @@ impl DemoApp {
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
+            TopToolbarAction::Layout(action) => {
+                self.handle_layout_action(action);
+                return;
+            }
             TopToolbarAction::Undo => {
                 self.chart.undo();
                 self.sync_chart_history();
@@ -1808,8 +1812,8 @@ impl DemoApp {
                         |price| format!("{price:.decimals$} {currency}"),
                     ) { self.alerts.save(alert); }
                 }
-                if let Some(price) = egui_charts::chart::alert_shortcut_price(ui, &mapping) {
-                    self.quick_price_alert(self.chart.symbol().to_owned(), price);
+                if !self.keyboard_dialog_open() {
+                    self.handle_keyboard(ui.ctx());
                 }
                 if let Some(id) = self.chart.take_indicator_settings_request() {
                     self.open_indicator_settings(id);
@@ -1999,7 +2003,25 @@ impl DemoApp {
                     }
                     A::GoToDate => self.date_picker.open(),
                     A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
-                    A::CreateAlert => self.open_alert(None),
+                    A::CreateAlert => {
+                        let mapping = self.chart.get_chart_mapping();
+                        if let Some(pos) = ctx
+                            .pointer_hover_pos()
+                            .filter(|pos| mapping.rect.contains(*pos))
+                        {
+                            if ctx
+                                .layer_id_at(pos)
+                                .is_some_and(|layer| layer.order == egui::Order::Background)
+                            {
+                                let price = mapping.y_to_price(pos.y);
+                                if price.is_finite() {
+                                    self.quick_price_alert(self.chart.symbol().to_owned(), price);
+                                }
+                            }
+                        } else {
+                            self.open_alert(None);
+                        }
+                    }
                     A::MaximizeChart => {
                         self.handle_top_toolbar(ctx, TopToolbarAction::ToggleFullscreen)
                     }
@@ -2023,8 +2045,20 @@ impl DemoApp {
                             });
                     }
                     A::PasteDrawing => self.paste_drawing(),
-                    // There is one chart in this host; egui still moves keyboard focus with Tab.
-                    A::CycleChartFocus | A::CycleChartFocusBack => {}
+                    A::CycleChartFocus | A::CycleChartFocusBack => {
+                        let count = self
+                            .layout
+                            .mode
+                            .chart_count()
+                            .min(self.extra_charts.len() + 1);
+                        let delta = if action == A::CycleChartFocus {
+                            1
+                        } else {
+                            count - 1
+                        };
+                        self.activate_chart_slot((self.layout_slot + delta) % count);
+                        self.layout.set_active(self.layout_slot);
+                    }
                     _ => {}
                 },
             }
@@ -2911,6 +2945,39 @@ mod tests {
             1,
             "a covering window owns the hovered point"
         );
+        assert!(!app.alert_dialog.is_open);
+        use egui_charts::config::KeyboardAction;
+        app.chart
+            .shortcuts_mut()
+            .bindings
+            .retain(|(_, action)| *action != KeyboardAction::CreateAlert);
+        app.chart.shortcuts_mut().bindings.insert(
+            0,
+            (
+                egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::B),
+                KeyboardAction::CreateAlert,
+            ),
+        );
+        frame(&mut app, vec![], false);
+        frame(&mut app, vec![], false);
+        for (key, expected) in [(egui::Key::A, 1), (egui::Key::B, 2)] {
+            frame(
+                &mut app,
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::ALT,
+                }],
+                false,
+            );
+            assert_eq!(
+                app.alerts.alerts().len(),
+                expected,
+                "alert creation follows the chart map"
+            );
+        }
     }
 
     /// External chart modes and completed drawings are reflected before the toolbar is painted.
@@ -3159,6 +3226,10 @@ mod tests {
         );
         app.handle_object_tree(ObjectTreeAction::ToggleVisibility(MAIN_SERIES_ID), &sources);
         assert!(!app.chart.is_main_series_visible());
+        assert!(app.chart.undo());
+        assert!(app.chart.is_main_series_visible());
+        assert!(app.chart.redo());
+        assert!(!app.chart.is_main_series_visible());
         assert!(!app.build_source_items()[0].visible);
         assert!(app.chart.drawings().drawings[0].visible);
         let sources = app.build_source_items();
@@ -3201,7 +3272,7 @@ mod tests {
                 .iter()
                 .map(|d| d.z_order)
                 .collect();
-            assert!(app.chart.drawings_mut().undo());
+            assert!(app.chart.undo());
             assert_eq!(
                 app.chart
                     .drawings()
@@ -3211,7 +3282,7 @@ mod tests {
                     .collect::<Vec<_>>(),
                 before
             );
-            assert!(app.chart.drawings_mut().redo());
+            assert!(app.chart.redo());
             assert_eq!(
                 app.chart
                     .drawings()
@@ -3240,16 +3311,16 @@ mod tests {
             app.chart.drawings().drawings[0].label.as_deref(),
             Some("Support")
         );
-        assert!(app.chart.drawings_mut().undo());
+        assert!(app.chart.undo());
         assert_eq!(app.chart.drawings().drawings[0].label, None);
-        assert!(app.chart.drawings_mut().redo());
+        assert!(app.chart.redo());
         app.handle_object_tree(ObjectTreeAction::Duplicate(ids[0]), &sources);
         assert_eq!(app.chart.drawings().drawings.len(), 4);
-        assert!(app.chart.drawings_mut().undo());
+        assert!(app.chart.undo());
         assert_eq!(app.chart.drawings().drawings.len(), 3);
-        assert!(app.chart.drawings_mut().redo());
+        assert!(app.chart.redo());
         assert_eq!(app.chart.drawings().drawings.len(), 4);
-        assert!(app.chart.drawings_mut().undo());
+        assert!(app.chart.undo());
         app.handle_object_tree(ObjectTreeAction::ZoomTo(ids[0]), &sources);
         // Prices 100..200 with ten percent on either side give 90..210.
         assert_eq!(app.chart.state().price_scale().range().min, 90.0);

@@ -117,6 +117,7 @@ impl CommandPalette {
         let mut executed_command = None;
 
         let search_id = egui::Id::unique("command_palette_search");
+        let focus_search = std::mem::take(&mut self.focus_search);
         let search_focused = ctx.memory(|m| m.has_focus(search_id));
         // Handle keyboard navigation
         let (move_up, move_down, execute, close) = ctx.input(|i| {
@@ -161,7 +162,7 @@ impl CommandPalette {
                         icons::QUICK_SEARCH
                             .as_image_tinted(Vec2::splat(20.0), ui.visuals().text_color()),
                     );
-                    if std::mem::take(&mut self.focus_search) {
+                    if focus_search {
                         ui.memory_mut(|memory| memory.request_focus(search_id));
                     }
                     let response = ui.add(
@@ -172,6 +173,10 @@ impl CommandPalette {
                             .desired_width(ui.available_width())
                             .font(egui::FontId::proportional(14.0)),
                     );
+                    // Sizing passes clear invisible widgets' focus while building the field.
+                    if focus_search {
+                        response.request_focus();
+                    }
                     if response.changed() {
                         self.update_filter();
                     }
