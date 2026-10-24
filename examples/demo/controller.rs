@@ -198,6 +198,7 @@ pub struct DemoApp {
     // egui's capture callback sends each screenshot here; the next frame delivers it.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
+    saved_drawings: std::collections::HashMap<String, String>,
     toasts: Toasts,
 }
 
@@ -322,6 +323,10 @@ impl DemoApp {
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
             screenshots: mpsc::channel(),
+            saved_drawings: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "drawings"))
+                .unwrap_or_default(),
             toasts: Toasts::new(),
         };
         for control in [
@@ -335,8 +340,44 @@ impl DemoApp {
         app.alerts.set_service(app.alert_host.clone());
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.apply_session();
+        app.restore_drawings();
         app.settings_state = ChartSettingsState::from_chart(&app.chart);
         app
+    }
+
+    fn remember_drawings(&mut self) {
+        match self
+            .chart
+            .save_drawings()
+            .and_then(|storage| storage.to_json())
+        {
+            Ok(json) => {
+                self.saved_drawings
+                    .insert(self.chart.symbol().to_owned(), json);
+            }
+            Err(error) => {
+                self.toasts
+                    .error(format!("Could not save drawings: {error}"));
+            }
+        }
+    }
+
+    fn restore_drawings(&mut self) {
+        let Some(json) = self.saved_drawings.get(self.chart.symbol()) else {
+            return;
+        };
+        match self.chart.load_drawings(json) {
+            Ok(skipped) => {
+                if !skipped.is_empty() {
+                    self.toasts
+                        .warning(format!("Skipped {} unreadable drawings", skipped.len()));
+                }
+            }
+            Err(error) => {
+                self.toasts
+                    .error(format!("Could not load drawings: {error}"));
+            }
+        }
     }
 
     /// Surface a short-lived, honest status message in the UI.
@@ -386,12 +427,14 @@ impl DemoApp {
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
+        self.remember_drawings();
         self.copied_drawing = None;
         let spec = DemoSymbol::find(symbol);
         self.live.set_symbol(spec.symbol);
         self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
         self.chart.set_symbol(spec.symbol);
+        self.restore_drawings();
         for control in [
             egui_charts::ui::Control::Session,
             egui_charts::ui::Control::DividendAdjustment,
@@ -957,6 +1000,8 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.remember_drawings();
+        eframe::set_value(storage, "drawings", &self.saved_drawings);
         eframe::set_value(
             storage,
             "interval_preferences",
@@ -2186,6 +2231,45 @@ mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
+    #[test]
+    fn application_storage_restores_drawings_after_restart() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        #[derive(Default)]
+        struct Memory(std::collections::HashMap<String, String>);
+        impl eframe::Storage for Memory {
+            fn get_string(&self, key: &str) -> Option<String> {
+                self.0.get(key).cloned()
+            }
+            fn set_string(&mut self, key: &str, value: String) {
+                self.0.insert(key.to_owned(), value);
+            }
+            fn remove_string(&mut self, key: &str) {
+                self.0.remove(key);
+            }
+            fn flush(&mut self) {}
+        }
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new(&cc);
+        app.live.set_paused(true);
+        let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+        drawing.completed = true;
+        drawing.chart_points = [-0.5, app.chart.bars(SeriesId::MAIN).len() as f32 + 1.5]
+            .map(|index| ChartPoint::new(index, 100.0))
+            .to_vec();
+        let expected = drawing.chart_points.clone();
+        let original_bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        app.chart.drawings_mut().drawings.push(drawing);
+        let mut storage = Memory::default();
+        eframe::App::save(&mut app, &mut storage);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx);
+        cc.storage = Some(&storage);
+        let mut restored = DemoApp::new(&cc);
+        assert_eq!(restored.chart.drawings().drawings.len(), 1);
+        restored.chart.set_data(SeriesId::MAIN, original_bars);
+        assert_eq!(restored.chart.drawings().drawings[0].chart_points, expected);
+    }
+
     /// Native integrations send clipboard events instead of key events. Only our session
     /// clipboard pastes a drawing, and the pasted copy is an ordinary undoable addition.
     #[test]
@@ -2630,6 +2714,8 @@ mod tests {
     fn drawing_zoom_changes_the_view_without_editing_drawings() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
         app.chart.begin_user_action();
         let dm = app.chart.drawings_mut();
         dm.start_drawing_with_coords(

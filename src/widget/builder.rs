@@ -117,6 +117,7 @@ impl Chart {
             // 0 and 1 are the main and volume series.
             next_series: 2,
             drawings: DrawingManager::new(),
+            symbol_drawings: Default::default(),
             history: super::history::ChartHistory::default(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
@@ -788,6 +789,64 @@ mod tests {
     use super::*;
     use crate::model::Bar;
     use chrono::{Duration, TimeZone, Utc};
+
+    #[test]
+    fn drawings_keep_times_through_replacement_streaming_and_symbol_switches() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::SeriesId;
+        let bars = |times: &[i64]| {
+            times
+                .iter()
+                .map(|&t| Bar::new(Utc.timestamp_opt(t, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0))
+                .collect()
+        };
+        let mut chart = Chart::new(BarData::from_bars(bars(&[60, 120, 180])));
+        chart.set_symbol("A");
+        chart.user_action(|chart| {
+            let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+            drawing.chart_points = [-0.5, 0.5, 3.5].map(|i| ChartPoint::new(i, 10.0)).to_vec();
+            chart.drawings_mut().drawings.push(drawing);
+            chart
+                .drawings_mut()
+                .edit_drawing(7, |d| d.color = [1, 2, 3, 255]);
+        });
+        chart.set_markers(
+            SeriesId::MAIN,
+            vec![crate::model::Marker::new(Utc.timestamp_opt(90, 0).unwrap())],
+        );
+        // Anchors are at 30, 90, 270 seconds. New bars include an interior gap and
+        // a new cadence: their projected indices follow piecewise linear interpolation.
+        for (times, expected) in [
+            (vec![0, 60, 120, 180], [0.5, 1.5, 4.5]),
+            (vec![0, 120, 240, 360], [0.25, 0.75, 2.25]),
+            (vec![], [0.25, 0.75, 2.25]),
+            (vec![0, 60, 180, 300], [0.5, 1.25, 2.75]),
+        ] {
+            chart.set_data(SeriesId::MAIN, bars(&times));
+            for (point, want) in chart.drawings().drawings[0]
+                .chart_points
+                .iter()
+                .zip(expected)
+            {
+                assert_eq!(point.bar_idx, want, "times {times:?}");
+            }
+        }
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 1.25);
+        assert!(chart.redo());
+        chart.update(SeriesId::MAIN, bars(&[120]).pop().unwrap());
+        assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 1.5);
+        // An index edited by the host gets a new time before the next mutation.
+        chart.drawings_mut().drawings[0].chart_points[1].bar_idx = 2.5;
+        chart.set_symbol("B");
+        assert!(chart.drawings().drawings.is_empty());
+        assert!(chart.marks.is_empty());
+        chart.set_data(SeriesId::MAIN, bars(&[0, 120, 240]));
+        chart.set_symbol("A");
+        chart.set_data(SeriesId::MAIN, bars(&[0, 60, 120, 180, 240, 300]));
+        assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 2.5);
+        assert_eq!(chart.marks.len(), 1);
+    }
 
     #[test]
     fn configured_price_mode_reaches_constructors_and_mutations() {

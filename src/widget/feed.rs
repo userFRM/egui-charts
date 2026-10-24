@@ -147,7 +147,8 @@ impl Chart {
     /// Shows `symbol` from the next [`show`](Self::show). With a feed, a changed symbol clears
     /// the series and its studies, then resolves, loads and subscribes it, in one load per
     /// `show` however many setters ran; an unchanged one does nothing, also after an error.
-    /// Without a feed it only sets the label: replace the bars with
+    /// Drawings and markers are retained separately for each symbol. A changed symbol clears
+    /// chart undo history. Without a feed replace the bars with
     /// [`set_data`](Self::set_data).
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
         let symbol = symbol.into();
@@ -158,6 +159,17 @@ impl Chart {
             link.instrument = None;
         }
         if symbol != self.symbol {
+            self.anchor_drawing_points();
+            self.drawings.cancel_curr_drawing();
+            self.drawings.deselect();
+            let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
+            next.0.options = self.drawings.options.clone();
+            next.0.active_tool = self.drawings.active_tool;
+            next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
+            std::mem::swap(&mut self.drawings, &mut next.0);
+            std::mem::swap(&mut self.marks, &mut next.1);
+            self.symbol_drawings.insert(self.symbol.clone(), next);
+            self.history = Default::default();
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
@@ -441,7 +453,7 @@ impl Chart {
         let timeframe = self.timeframe.unwrap_or_default();
         link.clock = clock;
         link.rebuild_bubbles();
-        // Drawings stay: they belong to the chart, not to the bars of one symbol.
+        // Timestamp anchors survive the empty interval between history requests.
         self.set_data(SeriesId::MAIN, Vec::new());
         self.feed = FeedState::default();
         if self.symbol.is_empty() {

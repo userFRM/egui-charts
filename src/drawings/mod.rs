@@ -107,6 +107,8 @@
 //! selection.select(drawing.id);
 //! ```
 
+mod anchors;
+
 /// Static category and toolbar grouping definitions for the drawing tools.
 pub mod categories;
 /// Pure domain types with minimal dependencies: `Drawing`, `ChartPoint`,

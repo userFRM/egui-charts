@@ -135,7 +135,7 @@ mod readout;
 mod selection;
 mod series;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
-mod sync;
+pub(crate) mod sync;
 use feed::FeedLink;
 pub use sync::VisibleTimeRange;
 pub(crate) mod tool_interaction;
@@ -214,7 +214,7 @@ pub struct Chart {
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
     pub(crate) keyboard: keyboard::KeyboardState,
-    history: history::ChartHistory,
+    pub(crate) history: history::ChartHistory,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)
@@ -268,6 +268,7 @@ pub struct Chart {
     pub(crate) next_series: usize,
     /// The chart's drawings and the active drawing tool.
     pub(crate) drawings: DrawingManager,
+    symbol_drawings: std::collections::HashMap<String, (DrawingManager, Vec<crate::model::Marker>)>,
     /// Right-click box zoom state
     pub(crate) box_zoom: BoxZoomState,
     /// Whether zoom mode is currently active (controlled by zoom toolbar button)

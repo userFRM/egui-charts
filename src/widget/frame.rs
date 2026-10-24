@@ -1003,9 +1003,12 @@ impl Chart {
             renderers::render_markers(
                 &clipped_price_ctx,
                 &self.marks,
-                visible_data,
+                self.state.shown(),
                 &price_map,
-                &coords,
+                &crate::chart::coords::ChartMapping {
+                    start_idx: 0,
+                    ..coords
+                },
             );
         }
 

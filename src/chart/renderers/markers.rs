@@ -5,7 +5,8 @@ use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, epaint::StrokeKind};
 
-/// Render markers on the chart
+/// Render markers on the chart. Times between bars interpolate; whitespace extends the
+/// nearest distinct pair (one second for a single bar). Vertical placement uses the nearest bar.
 pub fn render_markers(
     context: &RenderContext,
     markers: &[Marker],
@@ -14,13 +15,13 @@ pub fn render_markers(
     coords: &ChartMapping,
 ) {
     for marker in markers {
-        // Find the corresponding bar for this marker
-        if let Some(bar_idx) = visible_data.iter().position(|bar| bar.time == marker.time) {
-            let global_idx = coords.start_idx + bar_idx;
+        if let Some(index) = crate::widget::sync::index_at(visible_data, marker.time) {
+            let bar_idx = index.round().clamp(0.0, (visible_data.len() - 1) as f64) as usize;
             let bar = &visible_data[bar_idx];
-
-            // Calculate marker position using ChartCoords helper
-            let x = coords.idx_to_x(global_idx);
+            let x = coords.idx_to_x(coords.start_idx) + index as f32 * coords.bar_spacing;
+            if x < context.rect.left() || x > context.rect.right() {
+                continue;
+            }
 
             // The bar's ends on screen; the high is the lower end on an inverted scale.
             let (high_y, low_y) = (
@@ -323,39 +324,41 @@ mod tests {
                 500.0,
                 inverted,
             );
-            let coords = ChartMapping::new(rect, 10.0, 0, 0, 0.0, map);
+            let coords = ChartMapping::new(rect, 10.0, 0, 0, 10.0, map);
             for (position, want) in [
                 (MarkerPos::AboveBar, 105.0),
                 (MarkerPos::BelowBar, 395.0),
                 (MarkerPos::AbsoluteUp, 115.0),
                 (MarkerPos::AbsoluteDown, 385.0),
             ] {
-                let marker = Marker::new(t)
-                    .with_pos(position)
-                    .with_shape(MarkerShape::Circle);
-                let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                    let painter = Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
-                    render_markers(
-                        &RenderContext::new(&painter, rect),
-                        std::slice::from_ref(&marker),
-                        &bars,
-                        &map,
-                        &coords,
-                    );
-                });
-                let y = output
-                    .shapes
-                    .iter()
-                    .find_map(|c| match &c.shape {
-                        Shape::Circle(circle) => Some(circle.center.y),
+                for seconds in [-2, 0, 1, 3] {
+                    let marker = Marker::new(t + chrono::Duration::seconds(seconds))
+                        .with_pos(position)
+                        .with_shape(MarkerShape::Circle);
+                    let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                        let painter =
+                            Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
+                        render_markers(
+                            &RenderContext::new(&painter, rect),
+                            std::slice::from_ref(&marker),
+                            &bars,
+                            &map,
+                            &coords,
+                        );
+                    });
+                    let center = output.shapes.iter().find_map(|c| match &c.shape {
+                        Shape::Circle(circle) => Some(circle.center),
                         _ => None,
-                    })
-                    .expect("a marker circle");
-                output.drop_without_applying_deltas();
-                assert!(
-                    (y - want).abs() < 1e-3,
-                    "{position:?}, inverted {inverted}: y {y}, want {want}"
-                );
+                    });
+                    output.drop_without_applying_deltas();
+                    let center = center.expect("a marker circle");
+                    assert_eq!(center.x, coords.idx_to_x(0) + seconds as f32 * 10.0);
+                    let y = center.y;
+                    assert!(
+                        (y - want).abs() < 1e-3,
+                        "{position:?}, inverted {inverted}: y {y}, want {want}"
+                    );
+                }
             }
         }
     }

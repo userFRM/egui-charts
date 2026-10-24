@@ -389,6 +389,13 @@ impl DrawingStorage {
                                 "{tool} is a cursor, not a drawing"
                             )));
                         }
+                        if drawing.points.iter().any(|point| {
+                            chrono::DateTime::from_timestamp_millis(point.ts_ms).is_none()
+                        }) {
+                            return Err(serde::de::Error::custom(
+                                "anchor timestamp is outside the supported range",
+                            ));
+                        }
                         if let Some(field) = drawing.non_finite_field() {
                             return Err(serde::de::Error::custom(format!("non-finite {field}")));
                         }
@@ -480,6 +487,13 @@ pub enum SaveError {
         /// The anchors the tool needs.
         needed: usize,
     },
+    /// An anchor cannot be mapped to time, for example before any bars have been supplied.
+    UnmappedAnchor {
+        /// Drawing id.
+        id: String,
+        /// Anchor index within the drawing.
+        point: usize,
+    },
     /// Serialization failed.
     Json(serde_json::Error),
 }
@@ -501,6 +515,9 @@ impl fmt::Display for SaveError {
                 f,
                 "drawing {id:?} has {anchors} anchors, {tool} needs {needed}"
             ),
+            Self::UnmappedAnchor { id, point } => {
+                write!(f, "drawing {id:?} anchor {point} has no time mapping")
+            }
             Self::Json(error) => error.fmt(f),
         }
     }
@@ -512,7 +529,8 @@ impl std::error::Error for SaveError {
             Self::NonFinite { .. }
             | Self::DuplicateId { .. }
             | Self::Cursor { .. }
-            | Self::MissingAnchors { .. } => None,
+            | Self::MissingAnchors { .. }
+            | Self::UnmappedAnchor { .. } => None,
             Self::Json(error) => Some(error),
         }
     }
@@ -599,6 +617,7 @@ mod v1 {
 /// the drawing's stored id and creation time when it was restored from storage, and under its
 /// id and the current time otherwise.
 ///
+/// Retained timestamps are used for unchanged projected indices. For new or edited indices,
 /// `bar_to_time` must accept fractional bar indices and extrapolate by the bar
 /// interval before index 0 and after the last bar instead of clamping: anchors
 /// can sit between bars, in the history not yet loaded or in the future area,
@@ -615,7 +634,17 @@ pub fn drawing_to_stored(drawing: &Drawing, bar_to_time: impl Fn(f32) -> i64) ->
     stored.points = drawing
         .chart_points
         .iter()
-        .map(|p| StoredCoord::new(bar_to_time(p.bar_idx), p.price))
+        .map(|p| {
+            StoredCoord::new(
+                p.time_anchor
+                    .filter(|(_, index)| *index == p.bar_idx)
+                    .map_or_else(
+                        || bar_to_time(p.bar_idx),
+                        |(time, _)| time.timestamp_millis(),
+                    ),
+                p.price,
+            )
+        })
         .collect();
     stored
 }
@@ -641,7 +670,12 @@ pub fn stored_to_drawing(
     drawing.chart_points = stored
         .points
         .iter()
-        .map(|p| ChartPoint::new(time_to_bar(p.ts_ms), p.price))
+        .map(|p| {
+            let mut point = ChartPoint::new(time_to_bar(p.ts_ms), p.price);
+            point.time_anchor =
+                chrono::DateTime::from_timestamp_millis(p.ts_ms).map(|time| (time, point.bar_idx));
+            point
+        })
         .collect();
     drawing.completed = true;
     drawing

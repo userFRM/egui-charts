@@ -131,7 +131,7 @@ fn segment(bars: &[Bar], index: usize) -> (usize, usize) {
     (if left == 0 { index } else { left - 1 }, index)
 }
 
-pub(super) fn time_at(bars: &[Bar], index: f64) -> Option<DateTime<Utc>> {
+pub(crate) fn time_at(bars: &[Bar], index: f64) -> Option<DateTime<Utc>> {
     if bars.is_empty() || !index.is_finite() {
         return None;
     }
@@ -155,7 +155,7 @@ pub(super) fn time_at(bars: &[Bar], index: f64) -> Option<DateTime<Utc>> {
         .checked_add_signed(Duration::nanoseconds(nanos.round() as i64))
 }
 
-pub(super) fn index_at(bars: &[Bar], time: DateTime<Utc>) -> Option<f64> {
+pub(crate) fn index_at(bars: &[Bar], time: DateTime<Utc>) -> Option<f64> {
     bars.first()?;
     let at = bars
         .partition_point(|bar| bar.time < time)
@@ -163,13 +163,15 @@ pub(super) fn index_at(bars: &[Bar], time: DateTime<Utc>) -> Option<f64> {
     if bars[at].time == time {
         return Some(at as f64);
     }
-    let (left, right) = segment(bars, at.saturating_sub(1));
+    let beyond = time > bars[at].time;
+    let (left, right) = segment(bars, if beyond { at } else { at.saturating_sub(1) });
     let step = if bars[left].time == bars[right].time {
         1.0
     } else {
         seconds(bars[right].time - bars[left].time) / (right - left) as f64
     };
-    Some(left as f64 + seconds(time - bars[left].time) / step)
+    let origin = if beyond { at } else { left };
+    Some(origin as f64 + seconds(time - bars[origin].time) / step)
 }
 
 #[cfg(test)]
@@ -219,6 +221,21 @@ mod tests {
         for (index, seconds) in [(0.5, 30), (1.5, 60), (2.5, 90), (3.5, 150)] {
             assert_eq!(time_at(repeated.state.shown(), index), Some(time(seconds)));
         }
+        // Repeated trailing times still extend the same last segment in both directions:
+        // index 3.5 is 60 + (3.5 - 2) * (60 / 2) = 105 seconds.
+        let trailing = chart(&[0, 60, 60], 501.0);
+        assert_eq!(time_at(trailing.state.shown(), 3.5), Some(time(105)));
+        assert_eq!(index_at(trailing.state.shown(), time(105)), Some(3.5));
+        let mut repeated = repeated;
+        let mut drawing =
+            crate::drawings::Drawing::new(7, crate::drawings::DrawingToolType::TrendLine);
+        drawing
+            .chart_points
+            .push(crate::drawings::ChartPoint::new(1.5, 10.0));
+        repeated.drawings.drawings.push(drawing);
+        repeated.anchor_drawing_points();
+        repeated.project_drawing_points();
+        assert_eq!(repeated.drawings.drawings[0].chart_points[0].bar_idx, 1.5);
         let mut source = chart(&[0, 60, 120, 180, 240, 300], 1001.0);
         // Pixel edges at source indices 0.5 and 4.5 represent 30 and 270 seconds.
         source.apply_synced_time_scale(250.0, -1.0);
