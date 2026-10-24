@@ -5,6 +5,7 @@
 //! arguments run only the scenarios whose name contains one of them.
 //! A second table prints first, steady, tick and new-bar frame times for candles and the five
 //! price-based chart types on 1,000,000 one-minute bars; `-- price-based` runs it alone.
+//! A third prints the frame of volume bubbles from 100,000 trades; `-- bubbles` runs it alone.
 
 use egui::{Rect, UiBuilder, pos2, vec2};
 use egui_charts::ChartType;
@@ -116,6 +117,8 @@ fn main() {
     }
     println!();
     price_based(&filters, frames);
+    println!();
+    bubbles(&filters, frames);
 }
 
 fn chart(scenario: &Scenario) -> Chart {
@@ -260,4 +263,96 @@ fn price_based(filters: &[String], frames: usize) {
             columns[2]
         );
     }
+}
+
+/// Prints the frame of volume bubbles from 100,000 trades over 1,667 one-minute bars, 40 price
+/// levels a bar, 200 bars in view on a 1440 by 900 window.
+fn bubbles(filters: &[String], frames: usize) {
+    use chrono::{Duration, TimeZone, Utc};
+    use egui_charts::ChartBuilder;
+    use egui_charts::chart::overlays::VolumeBubblesConfig;
+    use egui_charts::data::{
+        Datafeed, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest,
+    };
+    use egui_charts::model::{Bar, Tick, Timeframe, TradeSide};
+    use std::sync::Arc;
+
+    struct Feed(Vec<Bar>, Vec<Tick>);
+    impl Datafeed for Feed {
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Ok(HistoryPage {
+                bars: self.0.clone(),
+                end_of_history: true,
+            }));
+        }
+        fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+            let mut page = TradePage::default();
+            page.trades = self.1.clone();
+            page.end_of_history = true;
+            reply.send(Ok(page));
+        }
+    }
+
+    let name = "volume bubbles, 100,000 trades, 200 bars in view";
+    if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
+        return;
+    }
+    let (count, levels, step) = (100_000_i64, 40, 0.05);
+    let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let mut seed = 0x1234_5678_u64;
+    let mut unit = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed as f64 / (u64::MAX as f64 + 1.0)
+    };
+    let trades: Vec<Tick> = (0..count)
+        .map(|i| {
+            let side = if unit() < 0.5 {
+                TradeSide::Buy
+            } else {
+                TradeSide::Sell
+            };
+            let time = start + Duration::minutes(i / 60) + Duration::seconds(i % 60);
+            let price = 100.0 + (i % levels) as f64 * step;
+            Tick::new(time, price, 1.0 + unit() * 99.0, Some(side))
+        })
+        .collect();
+    let top = 100.0 + (levels - 1) as f64 * step;
+    let bars: Vec<Bar> = (0..(count + 59) / 60)
+        .map(|i| Bar::new(start + Duration::minutes(i), 100.0, top, 100.0, top, 100.0))
+        .collect();
+    let len = bars.len();
+    let mut chart = ChartBuilder::new()
+        .with_symbol("BUBBLES")
+        .with_timeframe(Timeframe::Min1)
+        .with_feed(Arc::new(Feed(bars, trades)))
+        .with_initial_bars(len)
+        .build();
+    chart.set_chart_type(ChartType::Candles);
+    chart.set_visible_bars(200);
+    chart.set_volume_bubbles(Some(VolumeBubblesConfig {
+        price_step: Some(step),
+        ..VolumeBubblesConfig::default()
+    }));
+    let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            chart.show(ui);
+        });
+    });
+    let held = chart.trades(egui_charts::widget::SeriesId::MAIN).count();
+    assert_eq!(held, count as usize, "every trade reaches the chart");
+    let median = |time: fn(&frame::Sample) -> std::time::Duration| {
+        let mut times: Vec<_> = samples.iter().map(time).collect();
+        times.sort();
+        times[times.len() / 2].as_secs_f64() * 1e3
+    };
+    println!("| volume bubbles | vertices | frame ms (median) | tessellation ms (median) |");
+    println!("|---|---:|---:|---:|");
+    println!(
+        "| {name} | {} | {:.3} | {:.3} |",
+        samples.last().map_or(0, |s| s.vertices),
+        median(|s| s.frame),
+        median(|s| s.tessellate),
+    );
 }
