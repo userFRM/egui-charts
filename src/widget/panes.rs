@@ -231,7 +231,11 @@ impl Chart {
                 .or_else(|| {
                     series
                         .iter()
-                        .find_map(|(item, range)| item.bars[range.clone()].first())
+                        .find_map(|(item, range)| {
+                            item.bars[range.clone()]
+                                .iter()
+                                .find(|bar| !bar.is_whitespace())
+                        })
                         .map(|bar| bar.close)
                 })
                 .filter(|base| *base != 0.0)
@@ -289,7 +293,7 @@ impl Chart {
             let series_tags: Vec<_> = series
                 .iter()
                 .map(|(item, _)| {
-                    let bar = item.bars.last()?;
+                    let bar = crate::model::last_with_value(&item.bars)?;
                     let scaled = transform.to_scale(bar.close);
                     let color = item.value_color(bar);
                     (self.config.show_symbol_last_val && map.range().contains(scaled)).then(|| {

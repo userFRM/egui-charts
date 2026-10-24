@@ -119,20 +119,26 @@ impl PriceSeries {
         }
     }
 
-    /// The close at the crosshair's time, or the last close without a crosshair.
+    /// The close at the crosshair's time, none at a whitespace bar, or the last close without a
+    /// crosshair.
     pub(super) fn legend_value(&self, time: Option<chrono::DateTime<chrono::Utc>>) -> Option<f64> {
         match time {
             Some(time) => self
                 .bars
                 .binary_search_by_key(&time, |bar| bar.time)
                 .ok()
-                .map(|at| self.bars[at].close),
-            None => self.bars.last().map(|bar| bar.close),
+                .map(|at| &self.bars[at])
+                .filter(|bar| !bar.is_whitespace())
+                .map(|bar| bar.close),
+            None => crate::model::last_with_value(&self.bars).map(|bar| bar.close),
         }
     }
 
-    /// The last-value tag colour: the bar's direction for the OHLC types.
+    /// The last-value tag colour: the bar's own colour, or its direction for the OHLC types.
     pub(super) fn value_color(&self, bar: &Bar) -> Color32 {
+        if let Some(color) = bar.colors.as_ref().and_then(|own| own.color) {
+            return color;
+        }
         match self.options.chart_type.uses_ohlc() {
             true if bar.close >= bar.open => self.options.up_color,
             true => self.options.down_color,
@@ -480,7 +486,10 @@ impl Chart {
     fn series_transform(&self, item: &PriceSeries) -> PriceTransform {
         let mode = self.secondary_scale(item.options.scale).options().mode;
         let range = self.series_range(item);
-        let base = item.bars[range].first().map_or(f64::NAN, |bar| bar.close);
+        let base = item.bars[range]
+            .iter()
+            .find(|bar| !bar.is_whitespace())
+            .map_or(f64::NAN, |bar| bar.close);
         PriceTransform { mode, base }
     }
 
@@ -552,8 +561,7 @@ impl Chart {
                     .filter(|line| line.axis_label)
                     .map(|line| (line.price, line.color))
                     .chain(
-                        item.bars
-                            .last()
+                        crate::model::last_with_value(&item.bars)
                             .filter(|_| self.config.show_symbol_last_val)
                             .map(|bar| (bar.close, item.value_color(bar))),
                     )
@@ -692,7 +700,7 @@ impl Chart {
                 };
                 let bar = Bar {
                     time: marker.time,
-                    ..*bar
+                    ..bar.clone()
                 };
                 crate::chart::renderers::render_markers(
                     &RenderContext::new(plot, rect),
@@ -1310,11 +1318,13 @@ mod tests {
             [
                 ChartEvent::DataUpdated {
                     series: id,
-                    bars: 2
+                    bars: 2,
+                    last: Some(data[2].clone())
                 },
                 ChartEvent::DataUpdated {
                     series: SeriesId::MAIN,
-                    bars: 4
+                    bars: 4,
+                    last: Some(bars(&[1.0, 2.0, 3.0, 4.0, 5.0])[3].clone())
                 },
             ]
         );

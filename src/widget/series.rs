@@ -44,7 +44,8 @@ impl Chart {
 
     /// Replaces the bars of `series`, for history or a replay window. Invalid bars (a non-finite
     /// value, a high or low on the wrong side of the open and close, negative volume) are dropped
-    /// and counted in [`feed_state`](Self::feed_state), the rest sorted by time, and of several
+    /// and counted in [`feed_state`](Self::feed_state), except [whitespace](Bar::whitespace) bars,
+    /// which keep their slots empty. The rest are sorted by time, and of several
     /// bars with one open time, or in one slot of the timeframe for a chart built with a feed, the
     /// last is kept. Drawings retain their timestamps across replacements and interval changes.
     /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
@@ -171,8 +172,9 @@ impl Chart {
         removed
     }
 
-    /// The bars of `series`, oldest first: `bars(id).get(index)` is the bar at an index and
-    /// `bars(id).last()` the last value. Removed series, volume and studies hold no bars.
+    /// The bars of `series`, oldest first, with their colours and payloads: `bars(id).get(index)`
+    /// is the bar at an index and `bars(id).last()` the last bar, which can be a
+    /// [whitespace](Bar::whitespace) bar. Removed series, volume and studies hold no bars.
     pub fn bars(&self, series: SeriesId) -> &[Bar] {
         if series == SeriesId::MAIN && self.main_series_present {
             &self.state.data().bars
@@ -573,8 +575,10 @@ impl Chart {
         // either, since the bar indices and the base index both grow by their count.
         let appended =
             bars.len() > before.len && tail.is_some_and(|(old, new)| new.time > old.time);
-        let tail_changed =
-            tail.is_some_and(|(old, new)| old.time != new.time || old.close != new.close);
+        // Bitwise, so that the NaN close of an unchanged whitespace bar is unchanged.
+        let tail_changed = tail.is_some_and(|(old, new)| {
+            old.time != new.time || old.close.to_bits() != new.close.to_bits()
+        });
         let options = &self.chart_options.time_scale;
         let shift_for_whitespace = tail_changed
             && !appended

@@ -89,6 +89,9 @@ pub(super) fn render_hollow_candles(
     let coords = *price_scale;
 
     for (i, bar) in visible_data.iter().enumerate() {
+        if bar.is_whitespace() {
+            continue;
+        }
         let g = start_idx + i;
         let x = idx_to_coord(g, chart_rect_min_x);
         let color = if bar.close >= prev_close(full_data, g) {
@@ -114,8 +117,8 @@ pub(super) fn render_hollow_candles(
     }
 }
 
-/// Columns: one solid column per bar from the pane bottom to the close, coloured by the close
-/// versus the previous close.
+/// Columns: one solid column per bar from the pane bottom to the close, in the bar's own colour or
+/// coloured by the close versus the previous close.
 pub(super) fn render_columns(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
@@ -134,13 +137,18 @@ pub(super) fn render_columns(
 ) {
     let bottom = price_ctx.rect.max.y;
     for (i, bar) in visible_data.iter().enumerate() {
+        if bar.is_whitespace() {
+            continue;
+        }
         let g = start_idx + i;
         let x = idx_to_coord(g, chart_rect_min_x);
-        let color = if bar.close >= prev_close(full_data, g) {
-            bullish_color
-        } else {
-            bearish_color
-        };
+        let color = bar.colors.as_ref().and_then(|own| own.color).unwrap_or(
+            if bar.close >= prev_close(full_data, g) {
+                bullish_color
+            } else {
+                bearish_color
+            },
+        );
         let top = price_scale.price_to_y(bar.close).min(bottom - 1.0);
         let rect = Rect::from_min_max(
             Pos2::new(x - bar_width / 2.0, top),
@@ -200,6 +208,9 @@ pub(super) fn render_heikin_ashi(
             let coords = *price_scale;
 
             for (i, bar) in ha_window.iter().enumerate() {
+                if bar.is_whitespace() {
+                    continue;
+                }
                 let x = idx_to_coord(start_idx + i, chart_rect_min_x);
                 let color = if bar.close >= bar.open {
                     bullish_color
@@ -247,6 +258,9 @@ pub(super) fn render_volume_candles(
     let coords = *price_scale;
 
     for (i, bar) in visible_data.iter().enumerate() {
+        if bar.is_whitespace() {
+            continue;
+        }
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
         let color = bar_color(bar, bullish_color, bearish_color);
         let y = OhlcYCoords::from_bar(bar, &coords);

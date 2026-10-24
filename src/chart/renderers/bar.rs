@@ -5,7 +5,8 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Stroke};
 
 /// Renders a single OHLC bar
-/// Vertical line with left tick for open, right tick for close
+/// Vertical line with left tick for open, right tick for close, in the bar's own colour if it has
+/// one; a whitespace bar draws nothing
 pub fn render_ohlc_bar(
     context: &RenderContext,
     bar: &Bar,
@@ -13,7 +14,14 @@ pub fn render_ohlc_bar(
     colors: &StyleColors,
     params: &BarRenderParams,
 ) {
-    let color = colors.bar_color(bar.is_bullish());
+    if bar.is_whitespace() {
+        return;
+    }
+    let color = bar
+        .colors
+        .as_ref()
+        .and_then(|own| own.color)
+        .unwrap_or_else(|| colors.bar_color(bar.is_bullish()));
 
     // Convert prices to screen coords
     let high_y = price_scale.price_to_y(bar.high);

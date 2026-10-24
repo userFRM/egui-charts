@@ -61,8 +61,8 @@ pub use alert::{
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
-pub(crate) use bar::percent_change;
-pub use bar::{Bar, BarData};
+pub use bar::{Bar, BarColors, BarData};
+pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{AreaStyle, BaselineStyle, ChartTypeStyles, LinePlotStyle};
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
@@ -129,6 +129,8 @@ mod tests {
                 low: p,
                 close: p,
                 volume: 0.0,
+                colors: None,
+                payload: None,
             })
             .collect()
     }

@@ -343,10 +343,13 @@ impl ChartState {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
         let visible = &self.shown()[start..end];
-        // In whitespace retain the nearest reference bar so relative axis units stay valid.
-        let base = self
-            .shown()
-            .get(start.min(self.shown().len().saturating_sub(1)))
+        // In whitespace retain the nearest reference bar so relative axis units stay valid: the
+        // first bar with a value from the left edge on, or else the last one before it.
+        let at = start.min(self.shown().len().saturating_sub(1));
+        let base = self.shown()[at..]
+            .iter()
+            .find(|bar| !bar.is_whitespace())
+            .or_else(|| crate::model::last_with_value(&self.shown()[..at]))
             .map_or(f64::NAN, |bar| bar.close);
         let relative = matches!(
             mode,

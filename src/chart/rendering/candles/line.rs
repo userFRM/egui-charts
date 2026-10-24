@@ -4,8 +4,9 @@
 
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Painter, Pos2, Shape, Stroke};
+use egui::{Color32, Painter, Pos2, Shape, Stroke};
 
+use super::helpers::valued_runs;
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::model::{Bar, LinePlotStyle, PriceSource};
@@ -35,9 +36,7 @@ pub(super) fn render_line(
         })
         .collect();
 
-    if points.len() > 1 {
-        draw_styled_line(painter, points, style);
-    }
+    draw_bar_line(painter, visible_data, &points, style, false);
 
     if show_volume {
         render_volume_bars(
@@ -79,16 +78,19 @@ pub(super) fn render_line_with_markers(
         })
         .collect();
 
-    if points.len() > 1 {
-        draw_styled_line(painter, points.clone(), style);
-    }
+    draw_bar_line(painter, visible_data, &points, style, false);
 
     // Draw markers
-    for point in points
+    for (point, bar) in points
         .iter()
-        .filter(|_| marker_radius.is_finite() && marker_radius > 0.0)
+        .zip(visible_data)
+        .filter(|(_, bar)| !bar.is_whitespace() && marker_radius.is_finite() && marker_radius > 0.0)
     {
-        painter.add(Shape::circle_filled(*point, marker_radius, style.color));
+        painter.add(Shape::circle_filled(
+            *point,
+            marker_radius,
+            line_color(bar, style),
+        ));
         painter.add(Shape::circle_stroke(
             *point,
             marker_radius,
@@ -131,26 +133,16 @@ pub(super) fn render_step_line(
         return;
     }
 
-    let mut points = Vec::new();
-    let mut prev_y = None;
-
-    for (i, bar) in visible_data.iter().enumerate() {
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let value = price_source.compute(bar.open, bar.high, bar.low, bar.close);
-        let y = price_scale.price_to_y(value);
-
-        if let Some(prev) = prev_y {
-            // Add horizontal step first
-            points.push(Pos2::new(x, prev));
-        }
-        // Then vertical
-        points.push(Pos2::new(x, y));
-        prev_y = Some(y);
-    }
-
-    if points.len() > 1 {
-        draw_styled_line(painter, points, style);
-    }
+    let points: Vec<Pos2> = visible_data
+        .iter()
+        .enumerate()
+        .map(|(i, bar)| {
+            let x = idx_to_coord(start_idx + i, chart_rect_min_x);
+            let value = price_source.compute(bar.open, bar.high, bar.low, bar.close);
+            Pos2::new(x, price_scale.price_to_y(value))
+        })
+        .collect();
+    draw_bar_line(painter, visible_data, &points, style, true);
 
     if show_volume {
         render_volume_bars(
@@ -162,6 +154,48 @@ pub(super) fn render_step_line(
             chart_rect_min_x,
             &idx_to_coord,
         );
+    }
+}
+
+/// The colour of the line from `bar` to the next bar: the bar's own, or `style`'s.
+pub(super) fn line_color(bar: &Bar, style: &LinePlotStyle) -> Color32 {
+    bar.colors
+        .as_ref()
+        .and_then(|own| own.color)
+        .unwrap_or(style.color)
+}
+
+/// Paint the line through `points`, one per bar of `bars`, with the chart type's own style: broken
+/// at whitespace bars, each segment in the [`line_color`] of the bar it starts at, and with
+/// `step`, across to the next bar first and then up or down to it.
+pub(super) fn draw_bar_line(
+    painter: &Painter,
+    bars: &[Bar],
+    points: &[Pos2],
+    style: &LinePlotStyle,
+    step: bool,
+) {
+    for run in valued_runs(bars) {
+        let mut from = run.start;
+        while from + 1 < run.end {
+            let color = line_color(&bars[from], style);
+            let to = (from + 1..run.end - 1)
+                .find(|&at| line_color(&bars[at], style) != color)
+                .unwrap_or(run.end - 1);
+            let mut path = vec![points[from]];
+            for at in from + 1..=to {
+                if step {
+                    path.push(Pos2::new(points[at].x, points[at - 1].y));
+                }
+                path.push(points[at]);
+            }
+            let style = LinePlotStyle {
+                color,
+                ..style.clone()
+            };
+            draw_styled_line(painter, path, &style);
+            from = to;
+        }
     }
 }
 

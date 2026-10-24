@@ -6,10 +6,13 @@ use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
-use super::line::draw_styled_line;
+use super::helpers::valued_runs;
+use super::line::draw_bar_line;
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
-use crate::model::{AreaStyle, Bar, BaselineLevel, BaselineStyle, PriceSource};
+use crate::model::{
+    AreaStyle, Bar, BaselineLevel, BaselineStyle, LinePlotStyle, LineStyle, PriceSource,
+};
 
 const HLC_AREA_ALPHA: u8 = 30;
 
@@ -38,16 +41,15 @@ pub(super) fn render_area(
         price_source,
     );
 
-    if line_points.len() > 1 {
-        draw_area_fill(
-            painter,
-            &line_points,
-            price_rect.max.y,
-            style.top_fill,
-            style.bottom_fill,
-        );
-        draw_styled_line(painter, line_points, &style.line);
-    }
+    draw_area_fill(
+        painter,
+        visible_data,
+        &line_points,
+        price_rect.max.y,
+        style.top_fill,
+        style.bottom_fill,
+    );
+    draw_bar_line(painter, visible_data, &line_points, &style.line, false);
 
     if show_volume {
         render_volume_bars(
@@ -93,14 +95,14 @@ pub(super) fn render_hlc_area(
         price_source,
     );
 
-    if points.len() > 1 {
-        draw_hlc_fill(painter, &points, bullish_color, bearish_color);
-        let close_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, p.y_close)).collect();
-        painter.add(Shape::line(
-            close_points,
-            Stroke::new(DESIGN_TOKENS.stroke.thick, bullish_color),
-        ));
-    }
+    draw_hlc_fill(painter, visible_data, &points, bullish_color, bearish_color);
+    let close_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, p.y_close)).collect();
+    let close_line = LinePlotStyle {
+        color: bullish_color,
+        width: DESIGN_TOKENS.stroke.thick,
+        style: LineStyle::Solid,
+    };
+    draw_bar_line(painter, visible_data, &close_points, &close_line, false);
 
     if show_volume {
         render_volume_bars(
@@ -220,37 +222,49 @@ fn collect_hlc_points(
         .collect()
 }
 
+/// Fills down from `points`, one per bar of `bars`, broken at whitespace bars, with the gradient
+/// running from the highest point.
 fn draw_area_fill(
     painter: &Painter,
+    bars: &[Bar],
     points: &[Pos2],
     baseline_y: f32,
     top_color: Color32,
     bottom_color: Color32,
 ) {
+    // `f32::min` skips the NaN of a whitespace bar.
     let top = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
     if !top.is_finite() || baseline_y <= top {
         return;
     }
     let mut mesh = egui::Mesh::default();
-    for (i, point) in points.iter().enumerate() {
-        let fraction = ((point.y - top) / (baseline_y - top)).clamp(0.0, 1.0);
-        mesh.colored_vertex(*point, top_color.lerp_to_gamma(bottom_color, fraction));
-        mesh.colored_vertex(Pos2::new(point.x, baseline_y), bottom_color);
-        if i > 0 {
-            let n = (2 * i) as u32;
-            mesh.add_triangle(n - 2, n, n - 1);
-            mesh.add_triangle(n - 1, n, n + 1);
+    for run in valued_runs(bars).filter(|run| run.len() > 1) {
+        for (i, point) in points[run].iter().enumerate() {
+            let fraction = ((point.y - top) / (baseline_y - top)).clamp(0.0, 1.0);
+            let n = mesh.vertices.len() as u32;
+            mesh.colored_vertex(*point, top_color.lerp_to_gamma(bottom_color, fraction));
+            mesh.colored_vertex(Pos2::new(point.x, baseline_y), bottom_color);
+            if i > 0 {
+                mesh.add_triangle(n - 2, n, n - 1);
+                mesh.add_triangle(n - 1, n, n + 1);
+            }
         }
     }
     painter.add(mesh);
 }
 
-fn draw_hlc_fill(painter: &Painter, points: &[HlcPoint], bullish: Color32, bearish: Color32) {
+fn draw_hlc_fill(
+    painter: &Painter,
+    bars: &[Bar],
+    points: &[HlcPoint],
+    bullish: Color32,
+    bearish: Color32,
+) {
     let tint = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), HLC_AREA_ALPHA);
     let (up, down) = (tint(bullish), tint(bearish));
 
     // Both quads are convex: high >= close >= low at both ends of a segment.
-    for pair in points.windows(2) {
+    for pair in valued_runs(bars).flat_map(|run| points[run].windows(2)) {
         let (p1, p2) = (&pair[0], &pair[1]);
         let above = vec![
             Pos2::new(p1.x, p1.y_high),
@@ -303,6 +317,29 @@ fn draw_baseline_segments(
     };
     let mut distance = 0.0;
     for i in 1..data.len() {
+        if data[i - 1].is_whitespace() || data[i].is_whitespace() {
+            continue;
+        }
+        // The colours of the bar a segment starts at replace the style's.
+        let own;
+        let style = match data[i - 1].colors.as_deref() {
+            Some(colors) => {
+                own = BaselineStyle {
+                    above: LinePlotStyle {
+                        color: colors.top_line.unwrap_or(style.above.color),
+                        ..style.above.clone()
+                    },
+                    below: LinePlotStyle {
+                        color: colors.bottom_line.unwrap_or(style.below.color),
+                        ..style.below.clone()
+                    },
+                    above_fill: colors.top_fill.unwrap_or(style.above_fill),
+                    below_fill: colors.bottom_fill.unwrap_or(style.below_fill),
+                };
+                &own
+            }
+            None => style,
+        };
         let (prev, curr) = (point(i - 1), point(i));
         // A segment that crosses the base line is split there, in screen space, where the
         // line is straight on every price scale.
@@ -453,6 +490,7 @@ mod tests {
                 );
                 draw_area_fill(
                     &painter,
+                    &vec![Bar::from_value(chrono::DateTime::UNIX_EPOCH, 1.0); 3],
                     &[
                         pos2(10.0, top),
                         pos2(20.0, (top + 100.0) / 2.0),
