@@ -323,6 +323,11 @@ pub struct Chart {
     indicator_settings_request: Option<SeriesId>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
+    locale: Option<String>,
+    date_format: Option<String>,
+    time_formatter: Option<std::sync::Arc<dyn crate::scales::TimeFormatter>>,
+    price_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    percentage_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.

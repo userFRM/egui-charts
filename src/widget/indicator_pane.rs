@@ -1160,14 +1160,14 @@ impl IndicatorPane {
                 super::volume::tags(painter, chart_rect, &map, indicator, axis_edge, &mut tags);
             } else {
                 crate::chart::rendering::axes::render_study_tags(
-                    painter, chart_rect, &map, indicator, axis_edge, &mut tags,
+                    painter, chart_rect, &map, indicator, axis_edge, &mut tags, None,
                 );
             }
         }
         let mut width = if indicator.is_volume() {
             0.0
         } else {
-            crate::chart::rendering::axes::price_axis_width(painter, &map, &[])
+            crate::chart::rendering::axes::price_axis_width(painter, &map, &[], None)
         };
         for tag in tags.iter().flatten() {
             width = width.max(tag.width() + 5.0 + 8.0);

@@ -3,8 +3,8 @@ use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
 use crate::config::TimeScaleOptions;
 use crate::model::Bar;
 use crate::scales::{
-    PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkGenerator,
-    TickMarkGeneratorConfig, TickMarkType, TimeFormatter,
+    PriceFormatter, PriceMap, PriceMark, PriceMarkGenerator, PriceScaleId, TickMark,
+    TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TimeFormatter,
 };
 use crate::theme::ThemeExt;
 use chrono::Duration;
@@ -13,13 +13,14 @@ use egui::{Color32, FontId, Pos2, Rect, Shape};
 
 /// Paints the price labels on the right side into `slot`, using smart tick mark generation and
 /// leaving out the labels the `tags` (the price line, last price and crosshair tags) would cut
-/// through.
+/// through. A host `formatter` writes the labels with [`PriceFormatter::format_tick`].
 pub fn render_price_labels(
     context: &RenderContext,
     price_scale: &PriceMap,
     colors: &StyleColors,
     tags: &[Option<Rect>],
     slot: ShapeIdx,
+    formatter: Option<&dyn PriceFormatter>,
 ) {
     render_price_labels_at_pos(
         context,
@@ -28,6 +29,7 @@ pub fn render_price_labels(
         PriceScaleId::Right,
         tags,
         slot,
+        formatter,
     );
 }
 
@@ -40,12 +42,9 @@ pub fn render_price_labels_at_pos(
     position: PriceScaleId,
     tags: &[Option<Rect>],
     slot: ShapeIdx,
+    formatter: Option<&dyn PriceFormatter>,
 ) {
-    // Create price mark generator with default config
-    let generator = PriceMarkGenerator::new();
-
-    // Generate smart price marks using "nice numbers" algorithm
-    let marks = generator.generate_marks(price_scale);
+    let marks = price_marks(price_scale, formatter);
 
     // Determine positioning based on scale position
     let (x_offset, alignment) = match position {
@@ -84,6 +83,21 @@ pub fn render_price_labels_at_pos(
         })
         .collect();
     context.painter.set(slot, labels);
+}
+
+/// Price axis marks of `price_scale` from the "nice numbers" generator, labelled with
+/// [`PriceFormatter::format_tick`] when the host supplies a `formatter`.
+pub(crate) fn price_marks(
+    price_scale: &PriceMap,
+    formatter: Option<&dyn PriceFormatter>,
+) -> Vec<PriceMark> {
+    let mut marks = PriceMarkGenerator::new().generate_marks(price_scale);
+    if let Some(formatter) = formatter {
+        for mark in &mut marks {
+            mark.label = formatter.format_tick(mark.price);
+        }
+    }
+    marks
 }
 
 /// Whether a label at `rect` is left out: a tag takes the place of the axis labels it overlaps.

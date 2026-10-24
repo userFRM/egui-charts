@@ -179,7 +179,7 @@ impl PriceMarkGenerator {
                 let label = if prices {
                     self.format_price(curr_price, precision)
                 } else {
-                    map.transform().label(curr_price, precision)
+                    map.transform().label(curr_price, precision, None)
                 };
 
                 // Calculate weight (higher for rounder numbers)
