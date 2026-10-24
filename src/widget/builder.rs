@@ -82,6 +82,7 @@ impl Chart {
         Self {
             state,
             config: ChartConfig::default(),
+            applied_config_scale_mode: Default::default(),
             start_idx: 0,
             chart_options,
             keyboard: super::keyboard::KeyboardState::default(),
@@ -177,7 +178,7 @@ impl Chart {
     /// * `config` -- Custom visual configuration (colors, padding, feature flags)
     pub fn with_config(data: BarData, config: ChartConfig) -> Self {
         let mut chart = Self::new(data);
-        chart.config = config;
+        chart.update_config(config);
         chart
     }
 
@@ -250,12 +251,27 @@ impl Chart {
         self.start_idx
     }
 
+    /// Applies a changed configuration mode without overriding direct scale controls.
+    pub(super) fn apply_config_scale_mode(&mut self) {
+        let mode = self.config.right_axis_scale_mode;
+        if self.applied_config_scale_mode != mode {
+            if self.state.price_scale().options().mode != mode {
+                self.state.price_scale_mut().reset();
+                self.state.clear_zoom_history();
+                self.state.price_scale_mut().options_mut().mode = mode;
+            }
+            self.applied_config_scale_mode = mode;
+        }
+    }
+
     /// Replaces the visual configuration on a persistent chart instance.
     ///
     /// Use this when reconfiguring a long-lived chart (e.g., after the user
     /// changes settings). For initial construction prefer [`Chart::with_config`].
     pub fn update_config(&mut self, config: ChartConfig) {
         self.config = config;
+        self.applied_config_scale_mode = self.state.price_scale().options().mode;
+        self.apply_config_scale_mode();
     }
 
     /// Updates the desired number of visible bars on a persistent chart instance.
@@ -742,10 +758,8 @@ impl ChartBuilder {
         // Apply theme to config
         self.config = self.theme.apply_to_config(self.config);
 
-        let right_scale_mode = self.config.right_axis_scale_mode;
         let mut chart =
             Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
-        chart.state.price_scale_mut().options_mut().mode = right_scale_mode;
 
         chart.set_chart_type(self.chart_type);
         chart.set_visible_bars(self.visible_candles);
@@ -774,6 +788,50 @@ mod tests {
     use super::*;
     use crate::model::Bar;
     use chrono::{Duration, TimeZone, Utc};
+
+    #[test]
+    fn configured_price_mode_reaches_constructors_and_mutations() {
+        use crate::scales::PriceScaleMode;
+        for entry in 0..4 {
+            let config = ChartConfig {
+                right_axis_scale_mode: PriceScaleMode::Logarithmic,
+                ..Default::default()
+            };
+            let mut chart = match entry {
+                0 => Chart::with_config(BarData::new(), config.clone()),
+                1 => ChartBuilder::new().with_config(config.clone()).build(),
+                _ => Chart::new(BarData::new()),
+            };
+            if entry == 2 {
+                chart.update_config(config);
+            } else if entry == 3 {
+                chart.config_mut().right_axis_scale_mode = PriceScaleMode::Logarithmic;
+            }
+            let ctx = egui::Context::default();
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                chart.state.price_scale().options().mode,
+                PriceScaleMode::Logarithmic,
+                "entry {entry}"
+            );
+            chart.state.price_scale_mut().set_range(1.0, 2.0);
+            chart.update_config(chart.config().clone());
+            assert!(chart.state.price_scale().is_manual());
+            chart.config_mut().right_axis_scale_mode = PriceScaleMode::Normal;
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                chart.state.price_scale().options().mode,
+                PriceScaleMode::Normal
+            );
+            assert!(!chart.state.price_scale().is_manual());
+        }
+    }
 
     /// Both entry points fit 50 slots once and leave the same view at the latest bar.
     #[test]

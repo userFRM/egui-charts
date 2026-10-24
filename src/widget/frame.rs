@@ -295,6 +295,7 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        self.apply_config_scale_mode();
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()

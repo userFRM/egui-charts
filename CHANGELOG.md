@@ -146,6 +146,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Configured right-axis price modes reach `Chart::with_config`, `update_config` and changes through `config_mut`. A mode change resets manual scale ranges and zoom history; unchanged settings preserve them. ([#86](https://github.com/userFRM/egui-charts/issues/86))
+
 - The top toolbar uses a 38 px strip followed by a 4 px gap, measured menu, settings and screenshot glyphs and a leading symbol-search icon. Its dark strip and separators use #0f0f0f and #4a4a4a. Save, quick search, settings, fullscreen and screenshot form the right group; alerts, replay and layouts remain reachable through overflow. Overflow preserves disabled Undo and Redo and the selected Replay state, including when playback stops outside the menu. The demo feed toggle moves into its menu and unsupported Publish and Trade buttons are hidden. ([#287](https://github.com/userFRM/egui-charts/issues/287))
 - Save and the layout menu create independent session layout copies; export remains an explicit command. Drawing templates and account-dependent orders and positions controls are hidden until the host supplies them. Persistent layouts and trading accounts remain host-owned. ([#118](https://github.com/userFRM/egui-charts/issues/118))
 

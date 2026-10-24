@@ -208,6 +208,7 @@ pub struct Chart {
     pub(crate) state: ChartState,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
     pub(crate) config: ChartConfig,
+    applied_config_scale_mode: crate::scales::PriceScaleMode,
     /// Whether the main price series and its volume are drawn.
     pub(crate) main_series_visible: bool,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
