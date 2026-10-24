@@ -15,7 +15,7 @@
 //!
 //! ## Momentum / oscillators
 //! [`RSI`], [`MACD`], [`Stochastic`], [`StochasticRSI`], [`WilliamsR`],
-//! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`],
+//! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`], [`RsiDivergence`],
 //! [`UltimateOscillator`], [`ConnorsRSI`], [`CoppockCurve`], [`TRIX`],
 //! [`ElderRay`], [`FisherTransform`], [`ForceIndex`], [`MassIndex`],
 //! [`DetrendedPriceOscillator`], [`KDJ`], [`PrettyGoodOscillator`],
@@ -48,7 +48,8 @@
 //! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
-//! [`PivotPoints`], [`ZigZag`], [`PriceChannel`]
+//! [`PivotPoints`], [`PivotPointsHighLow`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
+//! [`PriceChannel`]
 //!
 //! ## Patterns
 //! [`CandlestickPatterns`]
@@ -142,7 +143,11 @@ mod keltner;
 mod std_dev;
 
 // Support/Resistance indicators
+mod gaps;
 mod pivot_points;
+mod pivot_points_high_low;
+mod rsi_divergence;
+mod williams_fractals;
 mod zigzag;
 
 // Oscillator/Momentum indicators (additional)
@@ -328,7 +333,11 @@ pub use keltner::KeltnerChannels;
 pub use std_dev::StandardDeviation;
 
 // Re-exports - Support/Resistance indicators
+pub use gaps::Gaps;
 pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
+pub use pivot_points_high_low::PivotPointsHighLow;
+pub use rsi_divergence::RsiDivergence;
+pub use williams_fractals::WilliamsFractals;
 pub use zigzag::{ZigZag, ZigZagMode};
 
 // Re-exports - Additional Oscillator/Momentum indicators

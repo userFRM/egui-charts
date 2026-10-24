@@ -39,6 +39,12 @@
 //!   earlier years, applied to the previous month's close; and trading sessions as bar opens in
 //!   `[start, end)` exchange time, overnight when the end is not after the start, across daylight
 //!   saving changes.
+//! - Event-study rows run on the fixture and on hand-built series: Williams fractals by Bill Williams'
+//!   five-bar rule with up to four equal highs (lows) before the fractal bar, pivot highs and lows by
+//!   the conventional left/right window with the newest of equal extremes as the pivot, gaps by the
+//!   conventional zone rule (a gap of at least a percentage of the 14-bar mean range, closed or
+//!   shrunk by the first bar to enter it), and RSI divergences by comparing consecutive Wilder RSI
+//!   pivots with the price at the same bars.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -83,6 +89,7 @@ use crate::studies::{
 use crate::studies::{
     BollingerBars, ChandeKrollStop, ChopZone, Median, VolatilityStop, WilliamsAlligator,
 };
+use crate::studies::{Gaps, PivotPointsHighLow, RsiDivergence, WilliamsFractals};
 use crate::studies::{
     PriceMomentumOscillator, PringsSpecialK, RciRibbon, RelativeVolatilityIndex,
     SMIErgodicIndicator, SMIErgodicOscillator, WoodiesCCI,
@@ -376,6 +383,30 @@ fn staple_studies_match_published_definitions() {
         ("SMIEI(20,5,5)", Box::new(SMIErgodicIndicator::default())),
         ("SMIEO(20,5,5)", Box::new(SMIErgodicOscillator::default())),
         ("Woodies(6,14)", Box::new(WoodiesCCI::default())),
+        ("Fractals(2)", Box::new(WilliamsFractals::default())),
+        ("Fractals(3)", Box::new(WilliamsFractals::new(3))),
+        (
+            "PivotsHL(10,10,10,10)",
+            Box::new(PivotPointsHighLow::default()),
+        ),
+        (
+            "PivotsHL(3,2,4,1)",
+            Box::new(PivotPointsHighLow::new(3, 2, 4, 1)),
+        ),
+        ("Gaps(15,30)", Box::new(Gaps::default())),
+        (
+            "Gaps(3,10,partial,12)",
+            Box::new(
+                Gaps::new(3, 10.0)
+                    .with_partial_closing(true)
+                    .with_trail_limit(Some(12)),
+            ),
+        ),
+        ("RSIDiv(14,5,5,5,60)", Box::new(RsiDivergence::default())),
+        (
+            "RSIDiv(14,3,2,2,40,hidden)",
+            Box::new(RsiDivergence::new(14, 3, 2, 2, 40).with_divergences(true, true, true, true)),
+        ),
     ];
     let mut studies: Vec<_> = studies
         .into_iter()
@@ -478,6 +509,68 @@ fn staple_studies_match_published_definitions() {
             )
         })
         .collect();
+    // Bars of the given highs, lows and closes, each opening at its close.
+    let hand = |rows: Vec<(f64, f64, f64)>| -> Vec<Bar> {
+        rows.into_iter()
+            .enumerate()
+            .map(|(i, (h, l, c))| {
+                Bar::new(
+                    bars[0].time + chrono::Duration::minutes(i as i64),
+                    c,
+                    h,
+                    l,
+                    c,
+                    1.0,
+                )
+            })
+            .collect()
+    };
+    // Range-2 bars: an up gap filled in two steps, a gap too small, an up gap closed by a down
+    // gap's bar, a down gap entered part way, and two later down gaps.
+    let gap_bars = hand(
+        [100.0; 14]
+            .into_iter()
+            .chain([
+                103.0, 104.0, 104.0, 103.5, 102.75, 103.0, 102.5, 105.0, 108.0, 108.0, 104.0,
+                104.0, 105.5, 104.0, 100.5, 100.0, 96.0,
+            ])
+            .chain([95.0; 9])
+            .map(|m| (m + 1.0, m - 1.0, m))
+            .collect(),
+    );
+    // Flat tops of two, five and six equal highs, and the same bottoms one lower.
+    let tie_bars = hand(
+        [
+            1, 2, 5, 5, 3, 2, 1, 4, 4, 4, 4, 4, 4, 3, 2, 1, 4, 4, 4, 4, 4, 3, 2, 3, 3, 4, 5,
+        ]
+        .into_iter()
+        .map(|h| (h as f64, h as f64 - 1.0, h as f64 - 0.5))
+        .collect(),
+    );
+    // Closes in legs of (step, bars): a regular bullish and a regular bearish divergence.
+    let legs = [
+        (1.0, 20),
+        (-3.0, 8),
+        (2.0, 8),
+        (-1.0, 18),
+        (3.0, 10),
+        (1.0, 8),
+        (-2.0, 6),
+        (1.0, 6),
+        (0.75, 12),
+        (-1.0, 6),
+        (-3.0, 6),
+        (2.0, 6),
+        (-1.0, 13),
+        (2.0, 8),
+    ];
+    let mut closes = vec![100.0];
+    for (step, count) in legs {
+        for _ in 0..count {
+            closes.push(closes[closes.len() - 1] + step);
+        }
+    }
+    let divergence_bars = hand(closes.into_iter().map(|c| (c + 1.0, c - 1.0, c)).collect());
     use crate::studies::{AverageLine, AverageType, MACombination};
     let combination_bars: Vec<_> = [2.0, 4.0, 8.0, 6.0, 10.0, 5.0]
         .into_iter()
@@ -614,6 +707,42 @@ fn staple_studies_match_published_definitions() {
             "SpecialK-long",
             Box::new(PringsSpecialK::default()) as Box<dyn Indicator>,
             long,
+        ),
+        ("Gaps-hand", Box::new(Gaps::default()), gap_bars.clone()),
+        (
+            "Gaps-hand-partial",
+            Box::new(Gaps::default().with_partial_closing(true)),
+            gap_bars.clone(),
+        ),
+        (
+            "Gaps-hand(3,partial,6)",
+            Box::new(
+                Gaps::new(3, 30.0)
+                    .with_partial_closing(true)
+                    .with_trail_limit(Some(6)),
+            ),
+            gap_bars,
+        ),
+        (
+            "Fractals-ties",
+            Box::new(WilliamsFractals::default()),
+            tie_bars.clone(),
+        ),
+        (
+            "PivotsHL-ties",
+            Box::new(PivotPointsHighLow::new(2, 2, 2, 2)),
+            tie_bars,
+        ),
+        (
+            "RSIDiv-hand",
+            Box::new(RsiDivergence::default()),
+            divergence_bars.clone(),
+        ),
+        // 18 bars lie between the bullish pivots and 23 between the bearish ones.
+        (
+            "RSIDiv(14,5,5,5,18)-hand",
+            Box::new(RsiDivergence::new(14, 5, 5, 5, 18)),
+            divergence_bars,
         ),
     ]);
     use crate::studies::{

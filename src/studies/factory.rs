@@ -122,6 +122,7 @@ impl IndicatorFactory {
                 RateOfChange,
                 Aroon,
                 AwesomeOscillator,
+                RsiDivergence,
                 UltimateOscillator,
                 ConnorsRSI,
                 CoppockCurve,
@@ -227,6 +228,8 @@ impl IndicatorFactory {
             ],
             "Support and resistance" => [
                 PivotPoints,
+                PivotPointsHighLow,
+                WilliamsFractals,
                 ZigZag,
             ],
             "Statistics" => [
@@ -253,6 +256,7 @@ impl IndicatorFactory {
                 Week52HighLow,
                 Week52HighLowLevels,
                 TradingSessions,
+                Gaps,
             ],
             "Patterns" => [
                 CandlestickPatterns,
@@ -574,6 +578,10 @@ mod tests {
             Box::new(Volume24h::new()),
             Box::new(RelativeVolumeAtTime::new(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
+            Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
+            Box::new(WilliamsFractals::new(l(0))),
+            Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
+            Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
             Box::new(PriceChannel::new(l(0))),
             Box::new(LinearRegression::new(l(0))),
             Box::new(LinearRegressionChannel::new(l(0), x(2.0))),
