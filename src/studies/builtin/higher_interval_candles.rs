@@ -1,6 +1,6 @@
 //! Higher-interval candle bodies and wicks built from the chart's own bars.
 
-use crate::model::{Bar, Instrument, Timeframe};
+use crate::model::{Bar, BarClock, Instrument, Timeframe};
 use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyCandle, StudyInput};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -8,7 +8,8 @@ use egui::Color32;
 /// Candles spanning the loaded bars of a higher interval, daily by default.
 ///
 /// The chart supplies its input interval and instrument metadata. Direct callers set them through
-/// [`Indicator::set_timeframe`] and [`Indicator::set_instrument`] before calculating. Input bars
+/// [`Indicator::set_timeframe`] and [`Indicator::set_instrument`] before calculating, and
+/// [`Indicator::set_bar_clock`] when their calendar differs from UTC. Input bars
 /// must be chronological. The last period is rebuilt on every update, including corrections to
 /// its opening bar. Incompatible intervals have no output. No external data is requested.
 ///
@@ -18,6 +19,7 @@ use egui::Color32;
 pub struct HigherIntervalCandles {
     interval: Timeframe,
     source: Timeframe,
+    clock: BarClock,
     instrument: Instrument,
     extended_hours: bool,
     candles: Vec<StudyCandle>,
@@ -32,6 +34,7 @@ impl HigherIntervalCandles {
         Self {
             interval,
             source: Timeframe::Min1,
+            clock: BarClock::new(Timeframe::Min1),
             instrument: Instrument::new(""),
             extended_hours: true,
             candles: Vec::new(),
@@ -75,8 +78,8 @@ impl HigherIntervalCandles {
         let bars: Vec<_> = indices.iter().map(|&i| data[i].clone()).collect();
         let Some(periods) = crate::data::resample_periods(
             &bars,
-            self.source,
-            self.interval,
+            self.clock.clone(),
+            self.clock.for_timeframe(self.interval),
             &self.instrument,
             self.extended_hours,
         ) else {
@@ -143,6 +146,17 @@ impl Indicator for HigherIntervalCandles {
     }
     fn set_timeframe(&mut self, timeframe: Timeframe) {
         self.source = timeframe;
+        self.clock = self.clock.for_timeframe(timeframe);
+    }
+    fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
+        if self.clock == *clock {
+            return false;
+        }
+        self.clock = clock.clone();
+        if let Some(timeframe) = clock.timeframe() {
+            self.source = timeframe;
+        }
+        true
     }
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
         let next = instrument.cloned().unwrap_or_else(|| Instrument::new(""));
@@ -262,9 +276,9 @@ mod tests {
                 .map(|c| c.bar.time.to_rfc3339())
                 .collect::<Vec<_>>(),
             [
-                "2024-03-08T05:00:00+00:00",
-                "2024-03-11T04:00:00+00:00",
-                "2024-03-12T04:00:00+00:00"
+                "2024-03-08T00:00:00+00:00",
+                "2024-03-11T00:00:00+00:00",
+                "2024-03-12T00:00:00+00:00"
             ]
         );
         // Correct the forming bar from up to down; neither an old high nor an up output survives.
@@ -286,6 +300,37 @@ mod tests {
             use crate::scales::{PriceMap, PriceRange, PriceScaleMode, PriceTransform};
             use crate::studies::ConfiguredStudy;
             use egui::{Pos2, Rect, Shape};
+            let mut options = crate::config::ChartOptions::default();
+            options.time_scale.timezone =
+                crate::scales::TimezoneMode::Timezone(chrono_tz::Asia::Tokyo);
+            let mut chart = crate::widget::ChartBuilder::new()
+                .with_chart_options(options)
+                .build();
+            chart.set_timeframe(Timeframe::Day1);
+            chart.set_instrument(Some(
+                Instrument::new("TOKYO").with_time_zone(TimezoneId::named("Asia/Tokyo").unwrap()),
+            ));
+            let monday = Bar::new(
+                "2024-03-10T15:00:00Z".parse().unwrap(),
+                10.0,
+                13.0,
+                9.0,
+                12.0,
+                1.0,
+            );
+            chart.set_data(crate::widget::SeriesId::MAIN, vec![monday.clone()]);
+            let id = chart.add_indicator(Box::new(HigherIntervalCandles::new(Timeframe::Week1)));
+            assert_eq!(
+                chart
+                    .indicators()
+                    .find(|(candidate, _)| *candidate == id)
+                    .unwrap()
+                    .1
+                    .candles()[0]
+                    .bar
+                    .time,
+                monday.time
+            );
             // Three hourly centres are 59, 99 and 139; the period covers x=41..157.
             // A linear 0..20 map places O=10 at y=50 and C=15 at y=25.
             let start: chrono::DateTime<chrono::Utc> = "2024-03-08T00:00:00Z".parse().unwrap();

@@ -208,6 +208,23 @@ impl BarClock {
         }
     }
 
+    pub(crate) fn for_timeframe(&self, timeframe: Timeframe) -> Self {
+        Self {
+            timeframe: Some(timeframe),
+            ..self.clone()
+        }
+    }
+
+    /// Label a trading date in this clock's calendar before finding its containing period.
+    pub(crate) fn open_on_date(&self, date: chrono::NaiveDate) -> Option<DateTime<Utc>> {
+        let midnight = date.and_time(NaiveTime::MIN);
+        let time = match self.timezone {
+            Some(zone) => super::session::local_instant(zone, midnight),
+            None => super::session::local_instant(chrono::Local, midnight),
+        }?;
+        Some(self.bar_open(time))
+    }
+
     /// The timeframe of the bars, `None` for a clock that matches bars by their exact open time.
     pub(crate) fn timeframe(&self) -> Option<Timeframe> {
         self.timeframe

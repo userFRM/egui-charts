@@ -207,6 +207,13 @@ pub trait Indicator: Send {
         let _ = timeframe;
     }
 
+    /// Source bar calendar, including the chart's selected timezone and session anchor.
+    /// Returns whether cached values must be recalculated. Direct callers default to UTC.
+    fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
+        let _ = clock;
+        false
+    }
+
     /// Units of this study's values. Placement defaults preserve price overlays and numeric panes.
     fn value_format(&self) -> super::StudyFormat {
         if self.is_volume() {

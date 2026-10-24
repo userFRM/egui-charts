@@ -77,22 +77,24 @@ pub fn resample(
     Some(resampled)
 }
 
-/// Builds a coarser interval using the instrument's exchange timezone and trading hours.
+/// Builds a coarser interval using the instrument's exchange trading hours and dates.
 ///
 /// Intraday inputs must be stamped at their actual open, including a shortened final bar.
 /// Intraday target slots start at the first selected session window of each trading date;
 /// daily, weekly and monthly targets use that trading date, including overnight sessions.
 /// Bars outside the selected hours and holidays are omitted. No bars are invented across gaps,
 /// and the last output includes all available inputs even while its period is forming.
-/// Daily and longer inputs already carry their trading date at local midnight.
+/// Daily and longer inputs already carry their trading date as a calendar label. Pass timeframes
+/// for UTC labels, or matching source and target [`BarClock`] values to retain another calendar.
+/// Exchange time determines the trading date; the target clock determines its output label.
 ///
 /// As with [`resample`], returns `None` if an input straddles target slots or folded volume
 /// overflows. The host retains the base history and calls again after live updates or corrections.
 /// Native source intervals can be reported through [`Instrument::native_timeframes`].
 pub fn resample_with_session(
     bars: &[Bar],
-    from: Timeframe,
-    to: Timeframe,
+    from: impl Into<BarClock>,
+    to: impl Into<BarClock>,
     instrument: &Instrument,
     extended_hours: bool,
 ) -> Option<Vec<Bar>> {
@@ -106,18 +108,18 @@ pub fn resample_with_session(
 
 pub(crate) fn resample_periods(
     bars: &[Bar],
-    from: Timeframe,
-    to: Timeframe,
+    from: impl Into<BarClock>,
+    to: impl Into<BarClock>,
     instrument: &Instrument,
     extended_hours: bool,
 ) -> Option<Vec<(std::ops::Range<usize>, Bar)>> {
     use crate::model::{ExchangeSessionProvider, TimezoneId};
-    use chrono::NaiveTime;
 
     let zone = instrument.time_zone.clone().unwrap_or_else(TimezoneId::utc);
-    let source = BarClock::new(from).with_timezone(zone.tz());
-    let target = BarClock::new(to).with_timezone(zone.tz());
-    if instrument.session.is_none()
+    let (source, target) = (from.into(), to.into());
+    let (from, to) = (source.timeframe()?, target.timeframe()?);
+    if (instrument.session.is_none()
+        && (instrument.time_zone.is_none() || to.duration_ms() < Timeframe::Day1.duration_ms()))
         || from.duration_ms() >= Timeframe::Day1.duration_ms()
         || matches!(from, Timeframe::Ticks(_))
         || matches!(to, Timeframe::Ticks(_))
@@ -139,15 +141,15 @@ pub(crate) fn resample_periods(
                 .collect(),
         );
     }
-    let mut session = instrument.session.clone()?;
-    if !extended_hours {
+    let mut session = instrument.session.clone();
+    if !extended_hours && let Some(session) = &mut session {
         // Keep an empty regular schedule distinct from an explicitly continuous session.
         if session.windows.is_empty() && !session.extended_windows.is_empty() {
             return Some(Vec::new());
         }
         session.extended_windows.clear();
     }
-    let provider = ExchangeSessionProvider::new(zone.clone(), Some(session));
+    let provider = ExchangeSessionProvider::new(zone, session);
     let opens = provider.opens(bars.iter().map(|bar| bar.time));
     let slot = |time| {
         let n = opens.partition_point(|(open, _)| *open <= time);
@@ -158,9 +160,7 @@ pub(crate) fn resample_periods(
                 elapsed - elapsed.rem_euclid(to.duration_ms()),
             ))
         } else {
-            let date =
-                crate::model::session::local_instant(zone.tz(), date.and_time(NaiveTime::MIN))?;
-            Some(target.bar_open(date))
+            target.open_on_date(date)
         }
     };
     let mut output: Vec<(std::ops::Range<usize>, Bar)> = Vec::new();
@@ -169,7 +169,11 @@ pub(crate) fn resample_periods(
             continue;
         }
         let period = slot(bar.time)?;
-        let mut end = bar.time.checked_add_signed(from.duration())?;
+        let mut end = if instrument.session.is_none() {
+            source.next_open(source.bar_open(bar.time))?
+        } else {
+            bar.time.checked_add_signed(from.duration())?
+        };
         if let Some(close) = provider.session_close(bar.time, true) {
             end = end.min(close);
         }
@@ -253,7 +257,7 @@ mod tests {
                 resample_with_session(
                     &input,
                     Timeframe::Hour1,
-                    "2h".parse().unwrap(),
+                    "2h".parse::<Timeframe>().unwrap(),
                     &instrument,
                     extended
                 ),
@@ -286,9 +290,38 @@ mod tests {
         assert_eq!(
             resample_with_session(&input, Timeframe::Hour1, Timeframe::Day1, &overnight, false),
             Some(vec![
-                bar("2024-03-11T04:00:00Z", [10.0, 16.0, 9.0, 11.0, 9.0]),
-                bar("2024-03-12T04:00:00Z", [11.0, 12.0, 7.0, 8.0, 5.0]),
+                bar("2024-03-11T00:00:00Z", [10.0, 16.0, 9.0, 11.0, 9.0]),
+                bar("2024-03-12T00:00:00Z", [11.0, 12.0, 7.0, 8.0, 5.0]),
             ])
+        );
+        // Date-labelled daily inputs must not be read as instants on the preceding New York day.
+        let monday = vec![bar("2024-03-11T00:00:00Z", [10.0, 13.0, 9.0, 12.0, 2.0])];
+        assert_eq!(
+            resample_with_session(
+                &monday,
+                Timeframe::Day1,
+                Timeframe::Week1,
+                &overnight,
+                false
+            ),
+            Some(monday.clone())
+        );
+        // Tokyo midnight is on the preceding UTC date; its trading date still labels March 11.
+        let tokyo =
+            Instrument::new("TOKYO").with_time_zone(TimezoneId::named("Asia/Tokyo").unwrap());
+        assert_eq!(
+            resample_with_session(&monday, Timeframe::Hour1, Timeframe::Day1, &tokyo, false),
+            Some(monday)
+        );
+        let local = BarClock::new(Timeframe::Day1).with_timezone(chrono_tz::America::New_York);
+        let selected =
+            resample_with_session(&input, Timeframe::Hour1, local, &overnight, false).unwrap();
+        assert_eq!(
+            selected.iter().map(|bar| bar.time).collect::<Vec<_>>(),
+            [
+                "2024-03-11T04:00:00Z".parse::<DateTime<Utc>>().unwrap(),
+                "2024-03-12T04:00:00Z".parse::<DateTime<Utc>>().unwrap(),
+            ]
         );
     }
 
