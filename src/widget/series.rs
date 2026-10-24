@@ -204,7 +204,7 @@ impl Chart {
     }
 
     /// The bars of `series` inside `range`, a range of logical indices of the time scale such as
-    /// its [`visible_logical_range`](crate::scales::TimeScale::visible_logical_range), with the
+    /// its [`visible_logical_range`](crate::model::TimeScale::visible_logical_range), with the
     /// bars before and after it, for example to request older history before the user scrolls
     /// to its start. The range's edges are rounded to whole indices; a bar's logical index is
     /// the position of its open time on the time scale. `None` for a series without bars or a
