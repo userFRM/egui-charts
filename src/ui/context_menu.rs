@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::chart::selection::{ChartElementId, SeriesId};
 use crate::config::KeyboardAction;
 use crate::icons::{Icon, icons as embedded_icons};
+use crate::model::{Capabilities, OrderRequest, OrderSide, OrderType};
 use crate::theme::{Theme, ThemeExt};
 use crate::ui::Control;
 use crate::ui::app_state::set_control_visible;
@@ -36,18 +37,9 @@ pub enum ContextMenuAction {
     CopyPrice(f64),
     /// Add a price alert on a symbol
     AddAlert { symbol: String, price: f64 },
-    /// Place a sell limit order
-    SellLimit {
-        symbol: String,
-        price: f64,
-        quantity: u32,
-    },
-    /// Place a buy stop order
-    BuyStop {
-        symbol: String,
-        price: f64,
-        quantity: u32,
-    },
+    /// A limit or stop order at the clicked price, for the user to confirm in the order ticket
+    /// ([`Trading::open_ticket`](crate::ui::trading::Trading::open_ticket)).
+    Order(OrderRequest),
     /// Open the object tree panel
     ObjectTree,
     /// Remove all indicators from the chart
@@ -432,6 +424,15 @@ pub struct ChartContextMenu {
     pub click_price: f64,
     /// Number of indicators on chart (for Remove menu)
     pub indicator_cnt: usize,
+    /// The last price. Order entries need it: a click above it offers a sell limit and a buy
+    /// stop, a click below it a buy limit and a sell stop.
+    pub market_price: Option<f64>,
+    /// The symbol's tick size, to which order prices are rounded.
+    pub tick_size: Option<f64>,
+    /// The quantity of the order entries.
+    pub order_quantity: f64,
+    /// The order types the account accepts; entries for the others are left out.
+    pub order_types: Capabilities,
     /// Last action taken
     pub last_action: ContextMenuAction,
     /// Skip close detection on first frame after opening
@@ -454,6 +455,14 @@ impl ChartContextMenu {
             symbol: String::new(),
             click_price: 0.0,
             indicator_cnt: 0,
+            market_price: None,
+            tick_size: None,
+            order_quantity: 1.0,
+            order_types: Capabilities {
+                limit: true,
+                stop: true,
+                ..Capabilities::default()
+            },
             last_action: ContextMenuAction::None,
             just_opened: false,
             hidden: HashSet::new(),
@@ -528,31 +537,44 @@ impl ChartContextMenu {
                 .with_shortcut(shortcuts.shortcut(KeyboardAction::CreateAlert)),
             ));
         }
-        if !symbol.is_empty() && !self.hidden.contains(&Control::Trading) {
-            trading.extend([
-                MenuEntry::Item(
+        if !symbol.is_empty()
+            && !self.hidden.contains(&Control::Trading)
+            && let Some(market) = self.market_price
+        {
+            let price = self.tick_size.map_or(self.click_price, |tick| {
+                crate::ui::trading::to_step(self.click_price, tick, f64::round)
+            });
+            // Above the market a sell waits as a limit order and a buy as a stop order; below it,
+            // the other way round. Either way the order does not fill at once.
+            let (limit, stop) = if price >= market {
+                (OrderSide::Sell, OrderSide::Buy)
+            } else {
+                (OrderSide::Buy, OrderSide::Sell)
+            };
+            for (side, order_type, kind) in [
+                (limit, OrderType::Limit(price), "limit"),
+                (stop, OrderType::Stop(price), "stop"),
+            ] {
+                if !self.order_types.accepts(&order_type) {
+                    continue;
+                }
+                let request = OrderRequest::new(symbol, side, self.order_quantity, order_type);
+                let (verb, icon) = match side {
+                    OrderSide::Buy => ("Buy", &embedded_icons::LONG_POS),
+                    OrderSide::Sell => ("Sell", &embedded_icons::SHORT_POS),
+                };
+                trading.push(MenuEntry::Item(
                     MenuItem::new(
-                        format!("Sell 1 {symbol} @ {price_str} limit"),
-                        ContextMenuAction::SellLimit {
-                            symbol: symbol.clone(),
-                            price: self.click_price,
-                            quantity: 1,
-                        },
+                        format!(
+                            "{verb} {} {symbol} @ {} {kind}",
+                            self.order_quantity,
+                            format_price(price)
+                        ),
+                        ContextMenuAction::Order(request),
                     )
-                    .with_icon(&embedded_icons::SHORT_POS),
-                ),
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Buy 1 {symbol} @ {price_str} stop"),
-                        ContextMenuAction::BuyStop {
-                            symbol: symbol.clone(),
-                            price: self.click_price,
-                            quantity: 1,
-                        },
-                    )
-                    .with_icon(&embedded_icons::LONG_POS),
-                ),
-            ]);
+                    .with_icon(icon),
+                ));
+            }
         }
         if !trading.is_empty() {
             items.extend(trading);
@@ -772,6 +794,15 @@ impl ChartMenus {
         set_control_visible(&mut self.axes.hidden, control, visible);
     }
 
+    /// Sets the quantity of the chart menu's order entries and the order types the account
+    /// accepts, such as [`Trading::quantity`](crate::ui::trading::Trading::quantity) and
+    /// [`Trading::capabilities`](crate::ui::trading::Trading::capabilities). By default the
+    /// entries are for 1 unit and offer limit and stop orders.
+    pub fn set_order_entries(&mut self, quantity: f64, capabilities: Capabilities) {
+        self.chart.order_quantity = quantity;
+        self.chart.order_types = capabilities;
+    }
+
     /// Opens the menu for the chart's last right-click, shows the open one and returns the
     /// chosen action. While a menu is open the chart draws no crosshair or tooltip under it.
     pub fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ChartContextAction> {
@@ -857,6 +888,11 @@ impl ChartMenus {
                 RightClickTarget::Background { pos, price } => {
                     self.chart.set_indicator_cnt(chart.indicators().count());
                     self.chart.set_symbol(chart.symbol.clone());
+                    self.chart.market_price = chart.bars(SeriesId::MAIN).last().map(|b| b.close);
+                    self.chart.tick_size = chart
+                        .instrument()
+                        .and_then(|instrument| instrument.tick_size)
+                        .filter(|tick| tick.is_finite() && *tick > 0.0);
                     self.chart.open(pos, price);
                 }
             }
@@ -963,6 +999,62 @@ impl ChartMenus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guards #218: the order entries follow the click against the last price, so neither fills
+    /// at once (above it a sell limit and a buy stop, below it a buy limit and a sell stop), use
+    /// the configured quantity at the click rounded to the tick, and leave out order types the
+    /// account does not accept. Fixed sides send a marketable order from a click below the market.
+    #[test]
+    fn order_entries_follow_the_market() {
+        use OrderSide::{Buy, Sell};
+        use OrderType::{Limit, Stop};
+        let mut menu = ChartContextMenu::new();
+        menu.symbol = "AAPL".into();
+        menu.market_price = Some(100.0);
+        menu.tick_size = Some(0.25);
+        menu.order_quantity = 3.0;
+        let stop_only = Capabilities {
+            stop: true,
+            ..Capabilities::default()
+        };
+        // (click, accepted types) -> entries
+        for (click, types, expected) in [
+            (
+                101.1,
+                menu.order_types,
+                vec![(Sell, Limit(101.0)), (Buy, Stop(101.0))],
+            ),
+            (
+                100.0,
+                menu.order_types,
+                vec![(Sell, Limit(100.0)), (Buy, Stop(100.0))],
+            ),
+            (
+                98.9,
+                menu.order_types,
+                vec![(Buy, Limit(99.0)), (Sell, Stop(99.0))],
+            ),
+            (98.9, stop_only, vec![(Sell, Stop(99.0))]),
+        ] {
+            menu.click_price = click;
+            menu.order_types = types;
+            let entries: Vec<_> = menu
+                .build_menu_items(&crate::widget::ShortcutMap::default())
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuEntry::Item(MenuItem {
+                        action: ContextMenuAction::Order(order),
+                        ..
+                    }) => {
+                        assert_eq!((order.symbol.as_str(), order.quantity), ("AAPL", 3.0));
+                        Some((order.side, order.order_type))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(entries, expected, "click at {click}");
+        }
+    }
 
     /// Each named control removes its row while leaving unrelated entries available; removing
     /// every row closes the popup instead of leaving separators or stale actions.

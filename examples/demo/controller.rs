@@ -425,8 +425,6 @@ impl DemoApp {
         app.drawing_templates
             .templates
             .set_storage(app.template_storage.clone());
-        app.menus
-            .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.alerts.set_service(app.alert_host.clone());
         app.trading.set_service(app.paper.clone());
         app.alert_dialog.set_storage(app.alert_host.clone());
@@ -1832,7 +1830,12 @@ impl DemoApp {
         if let Some(time) = replay_click {
             self.handle_replay_bar_click(ui.ctx(), time);
         }
-        // Right-click context actions resolve after the chart is shown.
+        // Right-click context actions resolve after the chart is shown. Order entries rest with
+        // the rest of trading during replay.
+        self.menus
+            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
+        self.menus
+            .set_order_entries(self.trading.quantity, self.trading.capabilities());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(action);
         }
@@ -1877,7 +1880,7 @@ impl DemoApp {
             ContextMenuAction::CopyPrice(price) => {
                 log::info!("[demo] copy price {price}");
             }
-            // Sell limit and buy stop need a broker, which the demo does not have.
+            ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
         }
     }

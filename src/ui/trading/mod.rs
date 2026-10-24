@@ -17,12 +17,14 @@ use crate::model::{
 use crate::services::{AccountEvent, Broker, Listener};
 use crate::ui_kit::notifications::Toasts;
 use crate::widget::Chart;
+pub(crate) use ticket::to_step;
 use ticket::{Market, OrderTicket, format_quantity};
 
 /// The trading controls of one chart, connected to the host's [`Broker`].
 ///
 /// Call [`poll`](Self::poll) every frame, then [`show`](Self::show) after the chart. Open the
-/// order ticket with [`open_ticket`](Self::open_ticket), and route the chart's
+/// order ticket with [`open_ticket`](Self::open_ticket), for example from the chart menu's
+/// [`Order`](crate::ui::context_menu::ContextMenuAction::Order) entries, and route the chart's
 /// Buy and Sell buttons ([`Chart::take_quote_action`]) to [`trade`](Self::trade). Orders reach
 /// the broker only from the ticket's submit button, or at once from Buy and Sell when the user
 /// turned on [`one_click`](Self::one_click).
