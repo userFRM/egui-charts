@@ -75,6 +75,12 @@ path = "benches/stream.rs"
 harness = false
 required-features = ["widget", "studies"]
 
+[[bench]]
+name = "order_flow"
+path = "benches/order_flow.rs"
+harness = false
+required-features = ["widget"]
+
 [features]
 default = ["ui"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,

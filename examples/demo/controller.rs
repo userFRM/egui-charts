@@ -29,6 +29,8 @@ use egui_charts::services::StoreKind;
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate, TemplateDialog};
 #[path = "live.rs"]
 mod live;
+#[path = "market.rs"]
+mod market;
 #[path = "paper.rs"]
 mod paper;
 

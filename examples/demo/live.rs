@@ -11,11 +11,15 @@ use egui_charts::model::{
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 
+use super::market::Market;
 use crate::sampledata::{DemoSymbol, sample_session, session_bars};
 use egui_charts::ui::timeframe_toolbar::SessionType;
 use egui_charts::ui::widget_bar::{ExtendedHoursQuote, ExtendedSession, WatchlistQuote};
 
 const RETAINED_TRADES: usize = 100_000;
+
+/// Orders added or cancelled in the book after each trade.
+const CHURN_PER_TRADE: usize = 6;
 
 /// Driven by the UI timer on both native and web; there is no background worker.
 pub(super) struct LiveFeed(Mutex<Simulation>);
@@ -37,6 +41,8 @@ struct Simulation {
     continuous: bool,
     adjusted: bool,
     subscription: Option<Subscription>,
+    /// The order book of the subscription, around the last price it was shown.
+    market: Option<Market>,
 }
 
 impl LiveFeed {
@@ -64,6 +70,7 @@ impl LiveFeed {
             continuous: true,
             adjusted: false,
             subscription: None,
+            market: None,
         };
         while sim.next_trade <= now {
             sim.trade();
@@ -95,6 +102,7 @@ impl LiveFeed {
             continuous: sim.continuous,
             adjusted: sim.adjusted,
             subscription: None,
+            market: None,
         }))
     }
 
@@ -340,7 +348,9 @@ impl LiveFeed {
                 .is_some()
             {
                 sub.sink.advance_time(now);
-                sub.sink.push_quote(sim.quote(now));
+                if let Some(quote) = sim.quote(now) {
+                    sub.sink.push_quote(quote);
+                }
             }
         }
         let to_trade = (sim.next_trade - now).to_std().unwrap_or_default();
@@ -425,15 +435,16 @@ impl Simulation {
         self.random
     }
 
-    fn quote(&self, ts: DateTime<Utc>) -> Level1Quote {
-        Level1Quote {
-            ts,
-            symbol: self.symbol.clone(),
-            bid: (self.price_ticks - 1) as f64 * self.tick_size,
-            ask: (self.price_ticks + 1) as f64 * self.tick_size,
-            bid_size: 100.0,
-            ask_size: 100.0,
-        }
+    /// The best bid and ask of the subscription's book.
+    fn quote(&self, ts: DateTime<Utc>) -> Option<Level1Quote> {
+        Some(self.market.as_ref()?.quote(ts))
+    }
+
+    /// The price in ticks a trade at the current price would show at.
+    fn shown_ticks(&self, now: DateTime<Utc>, extended_hours: bool) -> Option<i64> {
+        let price = self.price_ticks as f64 * self.tick_size;
+        let shown = self.shown_trade(&Tick::new(now, price, 0.0, None), extended_hours)?;
+        Some((shown.price / self.tick_size).round() as i64)
     }
 
     fn trade(&mut self) {
@@ -457,8 +468,17 @@ impl Simulation {
         if let Some(sub) = &self.subscription
             && let Some(shown) = self.shown_trade(&trade, sub.extended_hours)
         {
+            let price = (shown.price / self.tick_size).round() as i64;
             sub.sink.push_tick(shown);
-            sub.sink.push_quote(self.quote(trade.ts));
+            if let Some(market) = &mut self.market {
+                let (sequence, delta) = market.trade(trade.ts, price, side, size);
+                sub.sink.push_depth_delta(sequence, delta);
+                for _ in 0..CHURN_PER_TRADE {
+                    let (sequence, delta) = market.churn(trade.ts);
+                    sub.sink.push_depth_delta(sequence, delta);
+                }
+                sub.sink.push_quote(market.quote(trade.ts));
+            }
         }
         if trade.ts < self.retain_from {
             let open = BarClock::new(Timeframe::Min1).bar_open(trade.ts);
@@ -556,15 +576,14 @@ impl Datafeed for LiveFeed {
                 subscription.sink.push_tick(trade);
             }
         }
-        if sim
-            .shown_trade(
-                &Tick::new(sim.now, sim.price_ticks as f64 * sim.tick_size, 0.0, None),
-                subscription.extended_hours,
-            )
-            .is_some()
-        {
+        sim.market = None;
+        if let Some(last) = sim.shown_ticks(sim.now, subscription.extended_hours) {
+            let market = Market::new(&sim.symbol, sim.tick_size, last, sim.random);
+            let (sequence, book) = market.snapshot(sim.now);
+            subscription.sink.push_depth_snapshot(sequence, book);
             subscription.sink.advance_time(sim.now);
-            subscription.sink.push_quote(sim.quote(sim.now));
+            subscription.sink.push_quote(market.quote(sim.now));
+            sim.market = Some(market);
         }
         subscription.sink.set_status(FeedStatus::Live);
         sim.subscription = Some(subscription);
@@ -574,6 +593,17 @@ impl Datafeed for LiveFeed {
         let mut sim = self.state();
         if sim.subscription.as_ref().is_some_and(|sub| sub.id == id) {
             sim.subscription = None;
+            sim.market = None;
+        }
+    }
+
+    fn request_depth_snapshot(&self, id: SubscriptionId) {
+        let sim = self.state();
+        if let (Some(sub), Some(market)) = (&sim.subscription, &sim.market)
+            && sub.id == id
+        {
+            let (sequence, book) = market.snapshot(sim.now);
+            sub.sink.push_depth_snapshot(sequence, book);
         }
     }
 
