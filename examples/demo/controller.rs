@@ -289,6 +289,9 @@ pub struct DemoApp {
     toasts: Toasts,
     /// Handle of the demo's price line, moved and removed from the chart menu.
     demo_level: Option<egui_charts::widget::PriceLineId>,
+    /// Whether the sample markers, change marks, bar marks and demo level are on, from the
+    /// quick search.
+    api_samples: bool,
 }
 
 impl DemoApp {
@@ -505,6 +508,7 @@ impl DemoApp {
                 .unwrap_or_default(),
             toasts: Toasts::new(),
             demo_level: None,
+            api_samples: false,
         };
         app.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, false);
@@ -684,8 +688,6 @@ impl DemoApp {
             }]);
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
-        self.chart
-            .set_mark_source(Some(Arc::new(marks::DemoMarks(self.bars.clone()))));
         self.annotate();
     }
 
