@@ -334,13 +334,15 @@ impl<'a> Legend<'a> {
                     continue;
                 }
                 let row_start = layout.pos;
-                if study.is_volume() {
+                if self.show_indicator_titles {
                     layout.text(
-                        "Volume".to_owned(),
+                        study.name().to_owned(),
                         typography::MD,
-                        theme.ui.text,
+                        colors.text,
                         bounds.width(),
                     );
+                }
+                if study.is_volume() {
                     if self.show_indicator_inputs && study.plot_style(2).visible {
                         layout.text(
                             study.line_names().get(2).cloned().unwrap_or_default(),
@@ -349,9 +351,10 @@ impl<'a> Legend<'a> {
                             bounds.width(),
                         );
                     }
-                    if study.is_visible() {
+                    if self.show_indicator_values && study.is_visible() {
                         let up = study.values().value(0, self.bar_index);
                         if let Some(value) = up.or_else(|| study.values().value(1, self.bar_index))
+                            && study.plot_style(usize::from(up.is_none())).visible
                         {
                             let label = crate::scales::PriceFormatter::format(
                                 &crate::scales::VolumeFormatter {
@@ -368,14 +371,6 @@ impl<'a> Legend<'a> {
                         }
                     }
                 } else {
-                    if self.show_indicator_titles {
-                        layout.text(
-                            study.name().to_owned(),
-                            typography::MD,
-                            colors.text,
-                            bounds.width(),
-                        );
-                    }
                     if self.show_indicator_inputs
                         && let Some(inputs) = self
                             .study_inputs

@@ -1236,9 +1236,8 @@ impl IndicatorPane {
                 .bar_index
                 .or_else(|| indicator.values().len().checked_sub(1))
         {
-            for line in (0..indicator.line_cnt()).filter(|line| {
-                indicator.plot_style(*line).visible && (!indicator.is_volume() || *line < 2)
-            }) {
+            for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
+            {
                 if let Some(value) = indicator.values().value(line, bar) {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));

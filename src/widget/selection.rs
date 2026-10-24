@@ -84,7 +84,10 @@ impl Chart {
                 let Some((_, indicator)) = self.indicators().find(|(study, _)| *study == id) else {
                     return;
                 };
-                if !indicator.is_visible() || !indicator.is_overlay() {
+                if !indicator.is_visible()
+                    || !indicator.is_overlay()
+                    || (indicator.is_volume() && !self.shows_volume())
+                {
                     return;
                 }
                 let volume_coords = indicator.is_volume().then(|| {

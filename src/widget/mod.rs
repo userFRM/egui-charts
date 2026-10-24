@@ -572,18 +572,7 @@ impl Chart {
             Rect::NOTHING
         };
         let volume_rect = if self.shows_volume() {
-            let inset = self
-                .config
-                .volume_baseline_inset
-                .max(0.0)
-                .min(price_rect.height());
-            let bottom = price_rect.bottom() - inset;
-            let height =
-                (price_rect.height() - inset) * self.config.volume_height_fraction.clamp(0.0, 1.0);
-            Rect::from_min_max(
-                Pos2::new(price_rect.left(), bottom - height),
-                Pos2::new(price_rect.right(), bottom),
-            )
+            volume::overlay_rect(price_rect, &self.config)
         } else {
             Rect::ZERO
         };

@@ -310,5 +310,22 @@ mod tests {
                 }
             }
         }
+        let mut study =
+            crate::studies::ConfiguredStudy::new(Box::new(Volume::new(2).with_average(None)));
+        for enabled in [false, true, false, true] {
+            study
+                .set_input("show_average", crate::studies::InputValue::Toggle(enabled))
+                .unwrap();
+            study.calculate(&bars);
+            assert_eq!(study.plot_style(2).visible, enabled);
+            assert_eq!(study.values().value(2, 3), enabled.then_some(35.0));
+        }
+        let mut settings = study.settings();
+        settings.plots[2].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        assert!(
+            !study.plot_style(2).visible,
+            "style visibility still applies"
+        );
     }
 }

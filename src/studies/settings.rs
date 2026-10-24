@@ -67,7 +67,13 @@ pub struct ConfiguredStudy {
 impl ConfiguredStudy {
     /// Retain the study's current colours, widths and calculation parameters.
     pub fn new(study: Box<dyn Indicator>) -> Self {
-        let settings = study.settings();
+        let mut settings = study.settings();
+        // The optional average input must not become a permanent style override.
+        if study.is_volume()
+            && let Some(plot) = settings.plots.get_mut(2)
+        {
+            plot.visible = true;
+        }
         Self {
             study,
             settings,

@@ -212,12 +212,29 @@ mod tests {
             chart.selected_element(),
             Some(crate::chart::selection::ChartElementId::Indicator(id))
         );
+        chart.set_main_series_visible(false);
+        let hidden = shapes(&ctx, &mut chart, 1.3, vec![]);
+        assert!(
+            !hidden.iter().any(|shape| matches!(shape,
+                egui::Shape::Circle(dot) if dot.radius == 4.0
+            )),
+            "hidden volume must not leave selection handles"
+        );
+        chart.set_main_series_visible(true);
         chart
             .indicator_mut(id)
             .unwrap()
             .set_input("overlay", InputValue::Toggle(false))
             .unwrap();
-        shapes(&ctx, &mut chart, 2.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 2.0, vec![]);
+        assert!(
+            painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text)
+                    if text.galley.text().starts_with("Volume")
+                        && text.galley.text().matches("1.000M").count() == 2
+            )),
+            "pane legend includes the columns and moving average"
+        );
         assert_eq!(chart.get_rendered_indicator_panes().len(), 1);
         assert!(chart.get_rendered_indicator_panes()[0].y_max >= 1_000_000.0);
         assert!(chart.get_chart_mapping().price.range().max < 200.0);

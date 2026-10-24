@@ -9,7 +9,6 @@ All notable changes to this project are documented in this file. The format is b
 - Pane legends identify each visible output with its plot colour. Values below 4.5:1 contrast use a coloured swatch and normal text, retaining the study name and legend controls. ([#580](https://github.com/userFRM/egui-charts/issues/580))
 - RSI defaults to a two-pixel blue line, a 20% fill between its two grey 4/4 dashed guides and a 138 px pane when space permits. Other pane presets retain their zone fills. Migration: `IndicatorPaneConfig` literals add `fill_between_zones` or use `..Default::default()`. ([#726](https://github.com/userFRM/egui-charts/issues/726))
 
-
 ### Added
 
 - `studies::Volume`, registered as "Volume", draws up/down columns with an optional SMA or EMA, editable length, open or previous-close colouring and price-overlay or separate-pane placement. An unchanged close counts as up; the first previous-close comparison uses the bar's open. Volume uses its own zero-based scale, 80% pitch columns and a one-pixel moving average with a magenta value tag. The demo uses a 12% overlay band. ([#572](https://github.com/userFRM/egui-charts/issues/572))
