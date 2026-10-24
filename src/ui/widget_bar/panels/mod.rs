@@ -1,12 +1,13 @@
 //! Right toolbar panels
 //!
-//! Individual panels for alerts, object tree, watchlists, symbol details, time and sales, news
-//! and the event calendars.
+//! Individual panels for alerts, object tree, watchlists, symbol details, time and sales, news,
+//! the event calendars and the screener.
 
 pub mod alerts_panel;
 pub mod calendar;
 pub mod news;
 pub mod object_tree;
+pub mod screener;
 pub mod symbol_details;
 pub mod time_and_sales;
 pub mod watchlist;
@@ -15,6 +16,7 @@ pub use alerts_panel::*;
 pub use calendar::*;
 pub use news::*;
 pub use object_tree::*;
+pub use screener::*;
 pub use symbol_details::*;
 pub use time_and_sales::*;
 pub use watchlist::*;

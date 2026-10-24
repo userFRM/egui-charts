@@ -70,8 +70,9 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
 };
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{
-    CalendarAction, CalendarPanel, NewsAction, NewsPanel, SymbolDetailsPanel, TimeAndSalesPanel,
-    Watchlist, WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget,
+    CalendarAction, CalendarPanel, NewsAction, NewsPanel, ScreenerAction, ScreenerPanel,
+    SymbolDetailsPanel, TimeAndSalesPanel, Watchlist, WatchlistAction, WatchlistPanel,
+    WidgetBarSection, WidgetBarWidget,
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
@@ -126,17 +127,19 @@ enum SidePanel {
     Watchlist,
     TimeAndSales,
     Highlights,
+    Screener,
     Calendar,
     News,
 }
 
 impl SidePanel {
     /// Panels the demo renders behind a built-in rail entry, with the entry.
-    const BUILT_IN: [(SidePanel, RightBarIcon); 6] = [
+    const BUILT_IN: [(SidePanel, RightBarIcon); 7] = [
         (SidePanel::Watchlist, RightBarIcon::Watchlist),
         (SidePanel::Alerts, RightBarIcon::Alerts),
         (SidePanel::ObjectTree, RightBarIcon::ObjectTree),
         (SidePanel::Highlights, RightBarIcon::Highlights),
+        (SidePanel::Screener, RightBarIcon::Screener),
         (SidePanel::Calendar, RightBarIcon::Calendar),
         (SidePanel::News, RightBarIcon::News),
     ];
@@ -286,6 +289,7 @@ pub struct DemoApp {
     highlights: NewsPanel,
     news: NewsPanel,
     calendar: CalendarPanel,
+    screener: ScreenerPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -487,6 +491,7 @@ impl DemoApp {
             highlights: NewsPanel::highlights(),
             news: NewsPanel::new(),
             calendar: CalendarPanel::new(),
+            screener: ScreenerPanel::new(feeds::screener_sets()),
             replay: None,
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
@@ -528,6 +533,7 @@ impl DemoApp {
         app.highlights.set_feed(app.live.clone());
         app.news.set_feed(app.live.clone());
         app.calendar.set_feed(app.live.clone());
+        app.screener.set_feed(app.live.clone());
         app.calendar
             .set_countries(feeds::COUNTRIES.iter().map(|code| code.to_string()));
         app.symbol_details.set_storage(app.template_storage.clone());
@@ -1030,6 +1036,7 @@ impl eframe::App for DemoApp {
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);
         self.calendar.poll(&ctx);
+        self.screener.poll(&ctx);
         self.trading.poll(&ctx, &mut self.toasts);
         // The watchlist opens beside the chart by default, but a compact window starts with the
         // chart alone.
@@ -1621,6 +1628,15 @@ impl DemoApp {
                     let action = self.highlights.show(ui);
                     self.handle_news(ui.ctx(), action);
                 }
+                SidePanel::Screener => match self.screener.show(ui) {
+                    ScreenerAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+                    ScreenerAction::ExportCsv(text) => self.save_text("screener.csv", &text),
+                    ScreenerAction::SendToWatchlist(symbols) => {
+                        self.watchlist.import("Screener", &symbols.join(","));
+                        self.open_panel = Some(SidePanel::Watchlist);
+                    }
+                    _ => {}
+                },
                 SidePanel::Calendar => {
                     if let CalendarAction::SelectSymbol(symbol) = self.calendar.show(ui) {
                         self.open_catalog_symbol(&symbol);
@@ -1795,6 +1811,22 @@ impl DemoApp {
             .unwrap_or_default();
     }
 
+    /// Saves exported `text` to `file` in the temporary directory, or downloads it on the web.
+    fn save_text(&mut self, file: &str, text: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let path = std::env::temp_dir().join(file);
+        #[cfg(target_arch = "wasm32")]
+        let path = std::path::PathBuf::from(file);
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = std::fs::write(&path, text).map_err(|e| e.to_string());
+        #[cfg(target_arch = "wasm32")]
+        let result = browser_download(text.as_bytes(), &path);
+        self.notify(match result {
+            Ok(()) => format!("Export successful: {}", path.display()),
+            Err(error) => format!("Export failed: {error}"),
+        });
+    }
+
     /// Shows `symbol` on the chart when the demo has data for it.
     fn open_catalog_symbol(&mut self, symbol: &str) {
         if DemoSymbol::catalog()
@@ -1811,21 +1843,7 @@ impl DemoApp {
         match self.watchlist.show(ui) {
             WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
             WatchlistAction::Import => self.watchlist_import = Some(String::new()),
-            WatchlistAction::Export { text, .. } => {
-                let file = "watchlist.txt";
-                #[cfg(not(target_arch = "wasm32"))]
-                let path = std::env::temp_dir().join(file);
-                #[cfg(target_arch = "wasm32")]
-                let path = std::path::PathBuf::from(file);
-                #[cfg(not(target_arch = "wasm32"))]
-                let result = std::fs::write(&path, text).map_err(|e| e.to_string());
-                #[cfg(target_arch = "wasm32")]
-                let result = browser_download(text.as_bytes(), &path);
-                self.notify(match result {
-                    Ok(()) => format!("Export successful: {}", path.display()),
-                    Err(error) => format!("Export failed: {error}"),
-                });
-            }
+            WatchlistAction::Export { text, .. } => self.save_text("watchlist.txt", &text),
             WatchlistAction::None => {}
         }
     }

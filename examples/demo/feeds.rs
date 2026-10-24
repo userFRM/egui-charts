@@ -3,7 +3,8 @@
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, Utc, Weekday};
 use egui_charts::data::{
-    CalendarEvent, CalendarKind, CalendarQuery, Importance, NewsQuery, NewsStory,
+    CalendarEvent, CalendarKind, CalendarQuery, FeedError, Importance, NewsQuery, NewsStory,
+    ScreenerColumn, ScreenerColumnSet, ScreenerOp, ScreenerQuery, ScreenerRow,
 };
 
 use crate::sampledata::DemoSymbol;
@@ -200,4 +201,99 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
     });
     events.sort_by_key(|event| event.time);
     events
+}
+
+/// The demo screener's column sets.
+pub(super) fn screener_sets() -> Vec<ScreenerColumnSet> {
+    let column = ScreenerColumn::new;
+    vec![
+        ScreenerColumnSet::new(
+            "Overview",
+            vec![
+                column("price", "Price"),
+                column("change_percent", "Chg %"),
+                column("volume", "Volume"),
+            ],
+        ),
+        ScreenerColumnSet::new(
+            "Valuation",
+            vec![column("price", "Price"), column("market_cap", "Mkt cap")],
+        ),
+    ]
+}
+
+/// The catalog symbols that pass `query`, from their synthetic quotes at `now`.
+pub(super) fn screen(
+    query: &ScreenerQuery,
+    now: DateTime<Utc>,
+) -> Result<Vec<ScreenerRow>, FeedError> {
+    let value = |spec: &DemoSymbol, column: &str| {
+        let quote = super::live::watchlist_quote(spec.symbol, now)?;
+        Some(match column {
+            "price" => quote.last,
+            "change_percent" => (quote.last - quote.prev_close) / quote.prev_close * 100.0,
+            "volume" => 0.5e6 + (spec.seed % 10) as f64 * 0.35e6,
+            "market_cap" => spec.start_price * (spec.seed as f64 + 1.0) * 1.0e8,
+            _ => return None,
+        })
+    };
+    let known = |column: &String| value(&DemoSymbol::catalog()[0], column).is_some();
+    if let Some(filter) = query.filters.iter().find(|filter| !known(&filter.column)) {
+        return Err(FeedError::InvalidData(format!(
+            "no column {} to filter",
+            filter.column
+        )));
+    }
+    let mut rows: Vec<(f64, ScreenerRow)> = DemoSymbol::catalog()
+        .iter()
+        .filter(|spec| {
+            query.filters.iter().all(|filter| {
+                value(spec, &filter.column).is_some_and(|v| match filter.op {
+                    ScreenerOp::Above => v > filter.value,
+                    ScreenerOp::Below => v < filter.value,
+                })
+            })
+        })
+        .map(|spec| {
+            let decimals = if spec.start_price < 10.0 { 4 } else { 2 };
+            let values = query
+                .columns
+                .iter()
+                .map(|column| match (column.as_str(), value(spec, column)) {
+                    ("price", Some(v)) => format!("{v:.decimals$}"),
+                    ("change_percent", Some(v)) => format!("{v:+.2}%"),
+                    ("volume" | "market_cap", Some(v)) => compact(v),
+                    _ => String::new(),
+                })
+                .collect();
+            let key = query
+                .sort_by
+                .as_deref()
+                .and_then(|column| value(spec, column))
+                .unwrap_or(0.0);
+            (key, ScreenerRow::new(spec.symbol, values))
+        })
+        .collect();
+    if query.sort_by.is_some() {
+        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if query.descending {
+            rows.reverse();
+        }
+    }
+    Ok(rows
+        .into_iter()
+        .take(query.limit)
+        .map(|(_, row)| row)
+        .collect())
+}
+
+/// `value` with a K, M, B or T suffix and two decimals.
+fn compact(value: f64) -> String {
+    [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")]
+        .into_iter()
+        .find(|(scale, _)| value.abs() >= *scale)
+        .map_or_else(
+            || format!("{value:.0}"),
+            |(scale, suffix)| format!("{:.2}{suffix}", value / scale),
+        )
 }

@@ -1,5 +1,5 @@
-//! What a feed answers for the market panels beside the chart: news, highlights and the event
-//! calendars.
+//! What a feed answers for the market panels beside the chart: news, highlights, the event
+//! calendars and the screener.
 
 use chrono::{DateTime, Utc};
 
@@ -131,6 +131,98 @@ impl CalendarEvent {
             actual: None,
             forecast: None,
             prior: None,
+        }
+    }
+}
+
+/// A column the screener shows, filters and sorts by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ScreenerColumn {
+    /// Identifies the column to the feed, such as `"change_percent"`.
+    pub id: String,
+    /// The heading, such as `"Chg %"`.
+    pub title: String,
+}
+
+impl ScreenerColumn {
+    /// The column `id` headed `title`.
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+        }
+    }
+}
+
+/// A named set of columns the user switches between, such as `"Overview"` or `"Performance"`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ScreenerColumnSet {
+    pub name: String,
+    pub columns: Vec<ScreenerColumn>,
+}
+
+impl ScreenerColumnSet {
+    /// The set `name` of `columns`, in display order.
+    pub fn new(name: impl Into<String>, columns: Vec<ScreenerColumn>) -> Self {
+        Self {
+            name: name.into(),
+            columns,
+        }
+    }
+}
+
+/// How a screener filter compares a column's value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScreenerOp {
+    /// Greater than the filter's value.
+    Above,
+    /// Less than the filter's value.
+    Below,
+}
+
+/// One condition every row must meet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScreenerFilter {
+    /// The [`ScreenerColumn::id`] compared.
+    pub column: String,
+    pub op: ScreenerOp,
+    pub value: f64,
+}
+
+/// The rows a screener asks [`Datafeed::screen`](super::Datafeed::screen) for. The feed
+/// filters, sorts and limits.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ScreenerQuery {
+    /// The [`ScreenerColumn::id`]s each row answers a value for, in order.
+    pub columns: Vec<String>,
+    /// Conditions every row meets.
+    pub filters: Vec<ScreenerFilter>,
+    /// The column to sort by, or the feed's own order when `None`.
+    pub sort_by: Option<String>,
+    /// Sort from the largest value.
+    pub descending: bool,
+    /// Rows wanted at most.
+    pub limit: usize,
+}
+
+/// One symbol that passes the screen, with one formatted value per query column.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ScreenerRow {
+    pub symbol: String,
+    /// The values of [`ScreenerQuery::columns`], in that order, already formatted.
+    pub values: Vec<String>,
+}
+
+impl ScreenerRow {
+    /// The row of `symbol` with `values` in the order of the query's columns.
+    pub fn new(symbol: impl Into<String>, values: Vec<String>) -> Self {
+        Self {
+            symbol: symbol.into(),
+            values,
         }
     }
 }
