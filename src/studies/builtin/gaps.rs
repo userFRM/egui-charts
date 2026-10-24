@@ -58,7 +58,7 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Most gaps a chart shows, each two outputs.
-const MAX_GAPS: usize = 500;
+const MAX_GAPS: usize = 50;
 
 /// Bars in the average range a gap is measured against.
 const RANGE_LENGTH: usize = 14;
@@ -89,7 +89,7 @@ struct Gap {
 }
 
 impl Gaps {
-    /// The latest `max_gaps` gaps (1 to 500) of at least `deviation` percent (1 to 100, NaN to
+    /// The latest `max_gaps` gaps (1 to 50) of at least `deviation` percent (1 to 100, NaN to
     /// 1) of the average bar range.
     pub fn new(max_gaps: usize, deviation: f64) -> Self {
         Self {
