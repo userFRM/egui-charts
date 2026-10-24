@@ -134,7 +134,8 @@ impl<'a> Legend<'a> {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
-        self.show_with_colors(ui, plot, &colors)
+        let (quote, study, _) = self.show_with_colors(ui, plot, &colors);
+        (quote, study)
     }
 
     pub(crate) fn show_with_colors(
@@ -142,11 +143,11 @@ impl<'a> Legend<'a> {
         ui: &mut Ui,
         plot: Rect,
         colors: &StyleColors,
-    ) -> (Option<QuoteSide>, Option<StudyAction>) {
+    ) -> (Option<QuoteSide>, Option<StudyAction>, f32) {
         let theme = ui.active_theme();
         let bounds = plot.shrink(8.0);
         if !bounds.is_positive() {
-            return (None, None);
+            return (None, None, plot.top());
         }
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
@@ -468,7 +469,7 @@ impl<'a> Legend<'a> {
                 ui.ctx().data_mut(|data| data.insert_temp(id, !collapsed));
             }
         }
-        (action, study_settings)
+        (action, study_settings, layout.pos.y + layout.height)
     }
 
     fn title(&self) -> String {
