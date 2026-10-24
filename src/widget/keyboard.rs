@@ -196,6 +196,9 @@ impl super::Chart {
                 self.keyboard.map.clone(),
             )
         });
+        if self.menu_open {
+            self.suppress_shortcuts(ctx);
+        }
         if !self.chart_options.keyboard.enabled || shortcuts_suppressed(ctx) {
             return;
         }

@@ -178,21 +178,7 @@ impl<'a> IconTextButton<'a> {
             } else {
                 self.label
             },
-            match self.label {
-                "Indicators" => Some(crate::config::KeyboardAction::OpenIndicatorSearch),
-                "Alert" => Some(crate::config::KeyboardAction::CreateAlert),
-                _ => None,
-            }
-            .and_then(|action| {
-                ui.ctx()
-                    .data(|data| {
-                        data.get_temp::<crate::widget::ShortcutMap>(
-                            egui::Id::NULL.with("chart_shortcuts"),
-                        )
-                    })
-                    .unwrap_or_default()
-                    .shortcut(action)
-            }),
+            None,
         )
     }
 }
@@ -496,6 +482,21 @@ pub fn toolbar_tooltip(
     text: &str,
     shortcut: Option<egui::KeyboardShortcut>,
 ) -> Response {
+    let shortcut = shortcut.or_else(|| {
+        let action = match text {
+            "Quick Search" | "Quick search" => crate::config::KeyboardAction::OpenQuickSearch,
+            "Indicators" => crate::config::KeyboardAction::OpenIndicatorSearch,
+            "Create alert" => crate::config::KeyboardAction::CreateAlert,
+            _ => return None,
+        };
+        response
+            .ctx
+            .data(|data| {
+                data.get_temp::<crate::widget::ShortcutMap>(egui::Id::NULL.with("chart_shortcuts"))
+            })
+            .unwrap_or_default()
+            .shortcut(action)
+    });
     let fill = Color32::from_gray(28);
     egui::Popup::from_response(&response)
         .id(response.id.with("toolbar_tooltip"))
