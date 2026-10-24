@@ -70,21 +70,17 @@ const RIGHT: &[&[Slot]] = &[
 
 /// Controls that move into the overflow menu when the strip is too narrow, the first to go
 /// first.
-const OVERFLOW_ORDER: [Slot; 14] = [
+const OVERFLOW_ORDER: [Slot; 10] = [
     S::QuickSearch,
     S::Compare,
     S::Templates,
     S::Save,
-    S::LayoutName,
-    S::Layouts,
     S::Screenshot,
     S::Fullscreen,
-    S::Alert,
     S::Indicators,
     S::Settings,
     S::Redo,
     S::Undo,
-    S::Replay,
 ];
 
 /// Space between the controls of a group.
@@ -153,11 +149,6 @@ impl Slot {
             S::Screenshot => (&embedded_icons::CAMERA, "Snapshot", A::TakeScreenshot),
             S::Interval | S::ChartType => return None,
         })
-    }
-
-    /// Whether the control loses its label in a narrow strip.
-    fn compacts(self) -> bool {
-        matches!(self, S::Indicators | S::Alert | S::Replay)
     }
 
     /// The host control that hides this slot, if any.
@@ -372,10 +363,9 @@ impl TopToolbar {
             S::Symbol => Self::symbol_trigger(symbol).width(ui),
             S::Interval => self.timeframe_selector.trigger().width(ui),
             S::ChartType => self.chart_type_selector.trigger().width(ui),
-            S::Compare | S::Templates | S::Layouts => self.config.btn_size,
+            S::Compare | S::Templates => self.config.btn_size,
             S::Save => Self::save_button(&self.config).width(ui),
-            S::LayoutName => self.layout_menu.width(ui),
-            c if c.compacts() && !compact => c.entry().map_or(icon_button, |(_, label, _)| {
+            S::Indicators if !compact => control.entry().map_or(icon_button, |(_, label, _)| {
                 IconTextButton::new(&embedded_icons::INDICATORS, label, &self.config).width(ui)
             }),
             _ => icon_button,
@@ -468,19 +458,6 @@ impl TopToolbar {
         action: &mut TopToolbarAction,
     ) {
         match control {
-            S::Layouts => {
-                if let Some(mode) = self.chart_grid_selector.show(ui) {
-                    *action = TopToolbarAction::Layout(LayoutAction::SelectGrid(mode));
-                }
-                return;
-            }
-            S::LayoutName => {
-                let layout_action = self.layout_menu.show(ui);
-                if layout_action != LayoutAction::None {
-                    *action = TopToolbarAction::Layout(layout_action);
-                }
-                return;
-            }
             S::Interval => {
                 if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui)
                     && let Some(tf) = tf.to_model()
@@ -580,15 +557,10 @@ impl TopToolbar {
                     "Nothing to redo"
                 })
             }
-            c if c.compacts() && !compact => {
-                IconTextButton::new(icon, label, &self.config).show(ui)
-            }
+            S::Indicators if !compact => IconTextButton::new(icon, label, &self.config).show(ui),
             _ => ToolbarIconButton::new(icon, label, &self.config).show(ui),
         };
         if response.clicked() {
-            if control == S::Replay {
-                self.state.toggle_replay();
-            }
             *action = clicked_action;
         }
     }
@@ -935,7 +907,7 @@ mod tests {
                     (S::Replay, "Replay", TopToolbarAction::ToggleReplay),
                 ] {
                     let direct = matches!(slot, S::Undo | S::Redo | S::Replay);
-                    if (!overflow && direct)
+                    if (!overflow && (direct || matches!(slot, S::Layouts | S::LayoutName)))
                         || (overflow && !direct && !matches!(slot, S::Layouts | S::LayoutName))
                     {
                         continue;
