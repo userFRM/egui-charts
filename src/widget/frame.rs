@@ -303,6 +303,17 @@ impl Chart {
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         self.show_elements();
+        let frame = ui.ctx().cumulative_frame_nr();
+        let width = ui.available_width();
+        if self
+            .last_layout
+            .is_none_or(|(previous, _)| previous != width)
+        {
+            self.last_layout = Some((width, frame));
+        }
+        let resized = self
+            .last_layout
+            .is_some_and(|(_, changed)| changed == frame);
         let previous_axis_width = self.measured_axis_width;
         self.last_rendered_indicator_panes.clear();
         self.sync_panes();
@@ -323,10 +334,13 @@ impl Chart {
                 .calculate_layout_rects(response.rect)
                 .price_rect
                 .width();
-            let frame = ui.ctx().cumulative_frame_nr();
-            let first_frame = *self.first_layout_frame.get_or_insert(frame);
-            // Initial sizing passes retain the requested zoom while axis labels settle.
-            if (frame != first_frame || self.desired_visible_bars.is_some())
+            // Sizing passes follow the same zoom policy as the viewport resize.
+            if (!resized
+                || self.desired_visible_bars.is_some_and(|count| count > 0)
+                || self
+                    .chart_options
+                    .time_scale
+                    .lock_visible_time_range_on_resize)
                 && previous_axis_width > 0.0
                 && old_width > 0.0
                 && new_width > 0.0
