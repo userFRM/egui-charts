@@ -1318,13 +1318,11 @@ mod tests {
             [
                 ChartEvent::DataUpdated {
                     series: id,
-                    bars: 2,
-                    last: Some(data[2].clone())
+                    bars: 2
                 },
                 ChartEvent::DataUpdated {
                     series: SeriesId::MAIN,
-                    bars: 4,
-                    last: Some(bars(&[1.0, 2.0, 3.0, 4.0, 5.0])[3].clone())
+                    bars: 4
                 },
             ]
         );

@@ -107,16 +107,12 @@ pub enum ChartEvent {
         bars: usize,
     },
     /// A live bar from `update` or the chart's feed changed the bars of a series, or `pop_bars`
-    /// removed some. Changes of one series in a row are reported once, with the latest count and
-    /// last bar.
+    /// removed some. Changes of one series in a row are reported once, with the latest count.
     DataUpdated {
         /// Bar series whose bars changed.
         series: SeriesId,
         /// Total bars now held by that series.
         bars: usize,
-        /// The series' last bar after the change, with its colours and payload; `None` when the
-        /// series holds no bars.
-        last: Option<Bar>,
     },
     /// The symbol setter accepted a different symbol.
     SymbolChanged(String),
@@ -187,19 +183,16 @@ impl Chart {
 
     pub(super) fn data_updated(&mut self, series: SeriesId) {
         let bars = self.bars(series).len();
-        let last = self.bars(series).last().cloned();
         if let Some(ChartEvent::DataUpdated {
-            series: previous,
+            series: last,
             bars: count,
-            last: previous_last,
         }) = self.host_events.queue.back_mut()
-            && *previous == series
+            && *last == series
         {
             *count = bars;
-            *previous_last = last;
         } else {
             self.host_events
-                .push(ChartEvent::DataUpdated { series, bars, last });
+                .push(ChartEvent::DataUpdated { series, bars });
         }
     }
 
