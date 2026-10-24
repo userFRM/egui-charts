@@ -608,7 +608,9 @@ impl DemoApp {
     // --- selection / context helpers --------------------------------------
 
     fn open_chart_settings_dialog(&mut self) {
+        let alerts = self.settings_state.alerts.clone();
         self.settings_state = ChartSettingsState::from_chart(&self.chart);
+        self.settings_state.alerts = alerts;
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -2168,7 +2170,13 @@ mod tests {
         );
         assert_eq!(scale.options().scale_margins.top, 0.125);
         assert_eq!(scale.options().scale_margins.bottom, 0.075);
+        state.alerts.show_alerts = false;
+        state.alerts.show_alert_labels = false;
+        state.alerts.alert_color = egui::Color32::YELLOW;
+        app.settings_state.alerts = state.alerts.clone();
         app.open_chart_settings_dialog();
+        assert_eq!(app.settings_state.alerts, state.alerts);
+        assert_eq!(app.settings_dialog.settings().alerts, state.alerts);
         assert_eq!(app.settings_state.grid_lines, state.grid_lines);
         assert_eq!(app.settings_state.crosshair, state.crosshair);
         assert_eq!(app.settings_state.precision, state.precision);

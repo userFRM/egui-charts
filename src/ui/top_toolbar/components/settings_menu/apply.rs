@@ -14,7 +14,7 @@ use egui::Color32;
 
 impl ChartSettingsState {
     /// Read the chart's current display settings. Host-managed trading, alert and event groups
-    /// retain defaults; the dialog does not offer controls for those groups.
+    /// retain defaults; hosts preserve their current values when refreshing chart settings.
     pub fn from_chart(chart: &Chart) -> Self {
         let config = chart.config();
         let mut settings = Self::default();
