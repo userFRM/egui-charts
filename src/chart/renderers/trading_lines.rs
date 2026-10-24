@@ -45,8 +45,8 @@ pub struct TradingLineOptions<'a> {
     pub point_value: f64,
     /// The account's currency, such as "USD".
     pub currency: &'a str,
-    /// Rounds a dragged price to one the symbol trades at.
-    pub snap: &'a dyn Fn(f64) -> f64,
+    /// The positive tick size used to round dragged prices.
+    pub tick_size: f64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -171,7 +171,6 @@ pub fn render_trading_lines<'a>(
                     label.show(ui, mapping, options, &line, &mut tags)
                 })
                 .inner;
-            let mut changed = request.clone();
             let price = match (dragged, pressed) {
                 (Some(price), _) => Some(price),
                 (None, Some(Button::Cancel)) if level == Level::Entry => {
@@ -181,8 +180,24 @@ pub fn render_trading_lines<'a>(
                 (None, Some(_)) => None,
                 (None, None) => continue,
             };
+            let mut changed = request.clone();
             match level {
-                Level::Entry => changed.order_type = with_price(changed.order_type, price),
+                Level::Entry => {
+                    if let Some(price) = price {
+                        let delta = price - entry_price(&request.order_type).unwrap_or(price);
+                        changed.order_type = match request.order_type {
+                            OrderType::Limit(_) => OrderType::Limit(price),
+                            OrderType::Stop(_) => OrderType::Stop(price),
+                            OrderType::StopLimit { limit, .. } => OrderType::StopLimit {
+                                stop: price,
+                                limit: limit + delta,
+                            },
+                            other => other,
+                        };
+                        changed.take_profit = changed.take_profit.map(|exit| exit + delta);
+                        changed.stop_loss = changed.stop_loss.map(|exit| exit + delta);
+                    }
+                }
                 Level::TakeProfit => changed.take_profit = price,
                 Level::StopLoss => changed.stop_loss = price,
             }
@@ -202,23 +217,9 @@ fn entry_price(order_type: &OrderType) -> Option<f64> {
     }
 }
 
-/// `order_type` moved to `price`; a stop-limit order keeps the distance from its stop to its
-/// limit price.
-fn with_price(order_type: OrderType, price: Option<f64>) -> OrderType {
-    match (order_type, price) {
-        (OrderType::Limit(_), Some(price)) => OrderType::Limit(price),
-        (OrderType::Stop(_), Some(price)) => OrderType::Stop(price),
-        (OrderType::StopLimit { stop, limit }, Some(price)) => OrderType::StopLimit {
-            stop: price,
-            limit: limit + price - stop,
-        },
-        (order_type, _) => order_type,
-    }
-}
-
 /// The label at the right end of a trading line: a description, the open quantity and buttons.
-struct Label<'a, K> {
-    id: K,
+struct Label<'a> {
+    id: (&'a str, &'a str),
     body: String,
     body_color: Color32,
     quantity: f64,
@@ -226,7 +227,7 @@ struct Label<'a, K> {
     draggable: bool,
 }
 
-impl<K: std::hash::Hash + std::fmt::Debug> Label<'_, K> {
+impl Label<'_> {
     /// Draws the line and its label. Returns the price a finished drag ended at, and the button
     /// the user clicked.
     fn show(
@@ -262,9 +263,10 @@ impl<K: std::hash::Hash + std::fmt::Debug> Label<'_, K> {
         let mut value = staged;
         let grab = ui.interact(
             Rect::from_min_max(
-                rect.min,
+                pos2(mapping.rect.left(), rect.top()),
                 pos2(rect.max.x - HEIGHT * self.buttons.len() as f32, rect.max.y),
-            ),
+            )
+            .intersect(mapping.rect),
             key,
             if self.draggable {
                 Sense::drag()
@@ -279,9 +281,9 @@ impl<K: std::hash::Hash + std::fmt::Debug> Label<'_, K> {
             if grab.dragged()
                 && let Some(pointer) = grab.interact_pointer_pos()
             {
-                value = (options.snap)(
-                    mapping.y_to_price(pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom())),
-                );
+                let price =
+                    mapping.y_to_price(pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom()));
+                value = (price / options.tick_size).round() * options.tick_size;
                 if value.is_finite() {
                     ui.ctx().data_mut(|data| data.insert_temp(key, value));
                 }
@@ -312,7 +314,7 @@ impl<K: std::hash::Hash + std::fmt::Debug> Label<'_, K> {
         let y = mapping.price_to_y(value);
         let rect = rect.translate(vec2(0.0, y - rect.center().y));
         let stroke = Stroke::new(1.0, line.color);
-        clipped.rect_filled(rect, 2.0, ui.visuals().panel_fill);
+        clipped.rect_filled(rect, 2.0, ui.active_theme().ui.panel_bg);
         clipped.rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
         x = rect.left();
         if let Some(body) = body {
@@ -343,7 +345,11 @@ impl<K: std::hash::Hash + std::fmt::Debug> Label<'_, K> {
             x += HEIGHT;
             clipped.vline(cell.left(), cell.y_range(), stroke);
             let response = ui
-                .interact(cell, key.with(index), Sense::click())
+                .interact(
+                    cell.intersect(mapping.rect),
+                    key.with(index),
+                    Sense::click(),
+                )
                 .on_hover_text(match (button, self.buttons.len()) {
                     (Button::Cancel, 1) => "Cancel",
                     (Button::Cancel, _) => "Close",

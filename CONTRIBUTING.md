@@ -127,7 +127,7 @@ A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/
 - [`model`](src/model): domain types (`Bar`, `Symbol`, `Timeframe`, `ChartType`) and the Renko/Kagi/P&F transforms.
 - [`data`](src/data): the `Datafeed` contract, trades, depth and bar merging.
 - [`chart`](src/chart): rendering, hit-testing, coordinate mapping, overlays.
-- [`services`](src/services): traits a host implements for storage, symbol search, signals, alerts and a trading account; nothing calls them yet.
+- [`services`](src/services): traits a host implements for storage, symbol search, signals, alerts and a trading account; the trading UI routes confirmed orders to the broker.
 - [`drawings`](src/drawings): drawing tools, selection, handles, undo/redo.
 - [`studies`](src/studies): technical indicators, the `Indicator` trait, and `IndicatorRegistry`.
 - [`scales`](src/scales): price and time scales, tick generators, formatters.

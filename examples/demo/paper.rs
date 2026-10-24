@@ -25,8 +25,8 @@ struct State {
     next_id: u64,
     balance: f64,
     working: Vec<Order>,
-    /// The other exit of each bracket exit, cancelled when one of them fills.
-    exits: HashMap<OrderId, OrderId>,
+    /// Every bracket exit and its paired exit, if any.
+    exits: HashMap<OrderId, Option<OrderId>>,
     positions: HashMap<String, Position>,
     last: HashMap<String, f64>,
 }
@@ -107,10 +107,29 @@ impl State {
         );
         self.push(AccountEvent::Order(order.clone()));
         self.push(AccountEvent::Execution(execution));
-        self.push(AccountEvent::Position(position));
-        if let Some(other) = self.exits.remove(&order.id) {
-            self.exits.remove(&other);
+        self.push(AccountEvent::Position(position.clone()));
+        if let Some(Some(other)) = self.exits.remove(&order.id) {
             self.cancel_working(&other);
+        }
+        // Exits may only reduce the remaining position, including after a manual close or reverse.
+        for mut exit in self.working.clone() {
+            if exit.request.symbol != request.symbol || !self.exits.contains_key(&exit.id) {
+                continue;
+            }
+            let buy = exit.request.side == OrderSide::Buy;
+            if position.quantity == 0.0 || buy == (position.quantity > 0.0) {
+                self.cancel_working(&exit.id);
+            } else if exit.request.quantity > position.quantity.abs() {
+                exit.request.quantity = position.quantity.abs();
+                if let Some(working) = self
+                    .working
+                    .iter_mut()
+                    .find(|working| working.id == exit.id)
+                {
+                    *working = exit.clone();
+                }
+                self.push(AccountEvent::Order(exit));
+            }
         }
 
         let exit = |price, order_type: fn(f64) -> OrderType| {
@@ -138,11 +157,12 @@ impl State {
         .collect();
         if let [take_profit, stop_loss] = exits.as_slice() {
             self.exits
-                .insert(take_profit.id.clone(), stop_loss.id.clone());
+                .insert(take_profit.id.clone(), Some(stop_loss.id.clone()));
             self.exits
-                .insert(stop_loss.id.clone(), take_profit.id.clone());
+                .insert(stop_loss.id.clone(), Some(take_profit.id.clone()));
         }
         for exit in exits {
+            self.exits.entry(exit.id.clone()).or_insert(None);
             self.push(AccountEvent::Order(exit.clone()));
             self.working.push(exit);
         }
@@ -154,6 +174,11 @@ impl State {
             return false;
         };
         let mut order = self.working.remove(index);
+        if let Some(Some(other)) = self.exits.remove(id)
+            && let Some(pair) = self.exits.get_mut(&other)
+        {
+            *pair = None;
+        }
         order.status = OrderStatus::Cancelled;
         self.push(AccountEvent::Order(order));
         true
@@ -187,7 +212,7 @@ impl State {
             let fill = match order.request.order_type {
                 _ if order.request.symbol != symbol => None,
                 OrderType::Limit(limit) if (buy && price <= limit) || (!buy && price >= limit) => {
-                    Some(limit)
+                    Some(price)
                 }
                 OrderType::Stop(stop) if (buy && price >= stop) || (!buy && price <= stop) => {
                     Some(price)
@@ -206,6 +231,7 @@ impl State {
             if let Some(fill) = fill {
                 let order = self.working.remove(index);
                 self.fill(order, fill);
+                index = 0;
             } else {
                 index += 1;
             }
@@ -247,9 +273,6 @@ impl Broker for PaperAccount {
 
     fn cancel(&self, id: OrderId, reply: Reply<()>) {
         let mut state = self.0.lock().unwrap();
-        if let Some(other) = state.exits.remove(&id) {
-            state.exits.remove(&other);
-        }
         if state.cancel_working(&id) {
             reply.send(Ok(()));
         } else {
@@ -280,5 +303,53 @@ impl Broker for PaperAccount {
         let mut rules = TradingRules::new(symbol);
         rules.time_in_force = vec![TimeInForce::Day, TimeInForce::GoodTillCancelled];
         reply.send(Ok(rules));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bracket_exits_only_reduce_the_remaining_position() {
+        for stop_loss in [None, Some(95.0)] {
+            for closed in [1.0, 2.0, 4.0] {
+                let mut state = State::default();
+                let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
+                entry.take_profit = Some(105.0);
+                entry.stop_loss = stop_loss;
+                state.fill(
+                    Order::new(OrderId::new("entry"), entry, OrderStatus::Working),
+                    100.0,
+                );
+                let close = OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market);
+                state.fill(
+                    Order::new(OrderId::new("close"), close, OrderStatus::Working),
+                    100.0,
+                );
+                if closed == 1.0 {
+                    assert!(
+                        state
+                            .working
+                            .iter()
+                            .all(|order| order.request.quantity == 1.0)
+                    );
+                } else {
+                    assert!(state.working.is_empty());
+                }
+                state.reach("SYM", 106.0);
+                state.reach("SYM", 94.0);
+                assert_eq!(
+                    state.positions.get("SYM").map_or(0.0, |p| p.quantity),
+                    if closed == 4.0 { -2.0 } else { 0.0 }
+                );
+                if closed == 1.0 {
+                    assert_eq!(
+                        state.balance, 6.0,
+                        "a marketable limit fills at the better price"
+                    );
+                }
+            }
+        }
     }
 }

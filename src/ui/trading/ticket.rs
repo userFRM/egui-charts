@@ -108,6 +108,7 @@ pub(crate) struct Market<'a> {
     pub currency: &'a str,
     pub capabilities: Capabilities,
     pub rules: &'a TradingRules,
+    pub rules_ready: bool,
 }
 
 /// The state of the order ticket window.
@@ -169,6 +170,18 @@ impl OrderTicket {
             _ => (Kind::Market, 0.0, 0.0),
         };
         self.time_in_force = request.time_in_force;
+        for (target, value) in [
+            (&mut self.take_profit, request.take_profit),
+            (&mut self.stop_loss, request.stop_loss),
+        ] {
+            target.0 = value.is_some();
+            if let Some(value) = value {
+                target.1 = Bracket {
+                    mode: BracketMode::Price,
+                    value,
+                };
+            }
+        }
     }
 
     /// The price the order enters at: its limit price, its stop price, or the last price.
@@ -183,32 +196,47 @@ impl OrderTicket {
 
     /// The order the ticket describes, or what is wrong with it.
     pub fn request(&self, market: &Market<'_>) -> Result<OrderRequest, String> {
+        if !market.rules_ready {
+            return Err("Waiting for the symbol's trading rules".into());
+        }
         if !self.kind.accepted(&market.capabilities) {
             return Err("The account does not accept this order type".into());
         }
-        let entry = self.entry(market.last).ok_or("Enter a positive price")?;
+        let snap = |value| to_step(value, market.tick, f64::round);
+        let entry = self
+            .entry(market.last)
+            .map(snap)
+            .filter(|price| price.is_finite() && *price > 0.0)
+            .ok_or("Enter a positive price")?;
         let order_type = match self.kind {
             Kind::Market => OrderType::Market,
-            Kind::Limit => OrderType::Limit(self.price),
-            Kind::Stop => OrderType::Stop(self.price),
-            Kind::StopLimit if self.price.is_finite() && self.price > 0.0 => OrderType::StopLimit {
-                stop: self.price,
-                limit: self.limit,
-            },
+            Kind::Limit => OrderType::Limit(snap(self.price)),
+            Kind::Stop => OrderType::Stop(snap(self.price)),
+            Kind::StopLimit if self.price.is_finite() && snap(self.price) > 0.0 => {
+                OrderType::StopLimit {
+                    stop: snap(self.price),
+                    limit: snap(self.limit),
+                }
+            }
             Kind::StopLimit => return Err("Enter a positive stop price".into()),
         };
         let brackets = market.capabilities.brackets;
         let exit = |(enabled, bracket): (bool, Bracket), profit| {
-            (brackets && enabled).then(|| bracket.price(self.side, entry, market.tick, profit))
+            (brackets && enabled)
+                .then(|| snap(bracket.price(self.side, entry, market.tick, profit)))
         };
         let take_profit = exit(self.take_profit, true);
         let stop_loss = exit(self.stop_loss, false);
         // A buy exits above its entry for a profit and below it for a loss; a sell the other way.
         let above = |price: f64| (price > entry) == (self.side == OrderSide::Buy);
-        if take_profit.is_some_and(|price| !price.is_finite() || price <= 0.0 || !above(price)) {
+        if take_profit.is_some_and(|price| {
+            !price.is_finite() || price <= 0.0 || price == entry || !above(price)
+        }) {
             return Err("The take profit must lie on the profit side of the entry".into());
         }
-        if stop_loss.is_some_and(|price| !price.is_finite() || price <= 0.0 || above(price)) {
+        if stop_loss.is_some_and(|price| {
+            !price.is_finite() || price <= 0.0 || price == entry || above(price)
+        }) {
             return Err("The stop loss must lie on the loss side of the entry".into());
         }
 
@@ -221,19 +249,7 @@ impl OrderTicket {
                 self.amount / ((entry - stop).abs() * rules.point_value)
             }
         };
-        let quantity = round_down(quantity, rules.quantity_step);
-        if !quantity.is_finite() || quantity < rules.min_quantity {
-            return Err(format!(
-                "The quantity is below the minimum of {}",
-                rules.min_quantity
-            ));
-        }
-        if rules.max_quantity.is_some_and(|max| quantity > max) {
-            return Err(format!(
-                "The quantity is above the maximum of {}",
-                rules.max_quantity.unwrap_or_default()
-            ));
-        }
+        let quantity = order_quantity(quantity, rules)?;
         let mut request = OrderRequest::new(&self.symbol, self.side, quantity, order_type);
         request.take_profit = take_profit;
         request.stop_loss = stop_loss;
@@ -266,7 +282,10 @@ impl OrderTicket {
             .default_pos(anchor)
             .open(&mut open)
             .show(ctx, |ui| {
-                submitted = self.form(ui, market, presets, one_click)
+                submitted = egui::ScrollArea::vertical()
+                    .max_height((ctx.content_rect().height() - 80.0).max(0.0))
+                    .show(ui, |ui| self.form(ui, market, presets, one_click))
+                    .inner;
             });
         self.open = open && submitted.is_none();
         submitted
@@ -279,6 +298,9 @@ impl OrderTicket {
         presets: &mut Vec<OrderPreset>,
         one_click: &mut bool,
     ) -> Option<OrderRequest> {
+        if !market.rules.time_in_force.contains(&self.time_in_force) {
+            self.time_in_force = market.rules.time_in_force[0];
+        }
         let theme = ui.ctx().active_theme();
         let side_color = |side| match side {
             OrderSide::Buy => theme.ui.accent,
@@ -305,7 +327,7 @@ impl OrderTicket {
                 }
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (kind, label) in Kind::ALL {
                 if kind.accepted(&market.capabilities) {
                     ui.selectable_value(&mut self.kind, kind, label);
@@ -496,7 +518,7 @@ impl OrderTicket {
                         OrderSide::Buy => "Buy",
                         OrderSide::Sell => "Sell",
                     },
-                    format_quantity(request.quantity),
+                    request.quantity.to_string(),
                     request.symbol,
                     match request.order_type {
                         OrderType::Market => "MKT".to_owned(),
@@ -563,14 +585,146 @@ fn decimals(step: f64) -> usize {
         .map_or(0, |(_, fraction)| fraction.len())
 }
 
-/// A quantity without trailing zeros, such as "1" or "0.5".
-pub(crate) fn format_quantity(quantity: f64) -> String {
-    format!("{quantity}")
+/// Rounds a quantity down to the symbol's step and checks its bounds.
+pub(super) fn order_quantity(quantity: f64, rules: &TradingRules) -> Result<f64, String> {
+    let quantity = round_down(quantity, rules.quantity_step);
+    if !quantity.is_finite() || quantity < rules.min_quantity {
+        return Err(format!(
+            "The quantity is below the minimum of {}",
+            rules.min_quantity
+        ));
+    }
+    if rules.max_quantity.is_some_and(|max| quantity > max) {
+        return Err(format!(
+            "The quantity is above the maximum of {}",
+            rules.max_quantity.unwrap_or_default()
+        ));
+    }
+    Ok(quantity)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_a_ticket_replaces_brackets_and_prices() {
+        let mut ticket = OrderTicket::default();
+        let mut request = OrderRequest::new("ES", OrderSide::Buy, 2.0, OrderType::Limit(100.0));
+        request.take_profit = Some(105.0);
+        request.stop_loss = Some(95.0);
+        for brackets in [true, false] {
+            if !brackets {
+                request = OrderRequest::new("NQ", OrderSide::Sell, 1.0, OrderType::Market);
+            }
+            ticket.open(&request);
+            assert_eq!(ticket.take_profit.0, brackets);
+            assert_eq!(ticket.stop_loss.0, brackets);
+            if brackets {
+                assert_eq!(
+                    ticket.take_profit.1,
+                    Bracket {
+                        mode: BracketMode::Price,
+                        value: 105.0
+                    }
+                );
+                assert_eq!(
+                    ticket.stop_loss.1,
+                    Bracket {
+                        mode: BracketMode::Price,
+                        value: 95.0
+                    }
+                );
+            } else {
+                assert_eq!((ticket.price, ticket.limit), (0.0, 0.0));
+            }
+        }
+    }
+
+    #[test]
+    fn short_tickets_scroll_to_the_submit_button() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut ticket = OrderTicket::default();
+            ticket.open(&OrderRequest::new(
+                "ES",
+                OrderSide::Buy,
+                1.0,
+                OrderType::StopLimit {
+                    stop: 100.0,
+                    limit: 101.0,
+                },
+            ));
+            let mut rules = TradingRules::new("ES");
+            rules.time_in_force.push(TimeInForce::GoodTillCancelled);
+            let market = Market {
+                last: Some(100.0),
+                tick: 0.25,
+                decimals: 2,
+                currency: "USD",
+                rules: &rules,
+                rules_ready: true,
+                capabilities: Capabilities {
+                    market: true,
+                    limit: true,
+                    stop: true,
+                    stop_limit: true,
+                    brackets: true,
+                    ..Capabilities::default()
+                },
+            };
+            let mut visible_submit = false;
+            for pass in 0..12 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(320.0, 240.0),
+                        )),
+                        events: if pass > 2 {
+                            vec![
+                                egui::Event::PointerMoved(egui::pos2(160.0, 130.0)),
+                                egui::Event::MouseWheel {
+                                    unit: egui::MouseWheelUnit::Point,
+                                    source: egui::MouseWheelSource::Wheel,
+                                    phase: egui::TouchPhase::Move,
+                                    delta: egui::vec2(0.0, -400.0),
+                                    modifiers: Default::default(),
+                                },
+                            ]
+                        } else {
+                            vec![]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ticket.show(
+                            ui.ctx(),
+                            egui::pos2(310.0, 8.0),
+                            &market,
+                            &mut vec![],
+                            &mut false,
+                        );
+                    },
+                );
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.text().starts_with("Buy 1 ES @")
+                    {
+                        let rect = text.galley.rect.translate(text.pos.to_vec2());
+                        visible_submit |= shape.clip_rect.contains_rect(rect)
+                            && ctx.content_rect().contains_rect(rect);
+                    }
+                }
+                output.drop_without_applying_deltas();
+            }
+            assert!(
+                visible_submit,
+                "the submit button must be reachable in a short window"
+            );
+        }
+    }
 
     /// Guards sizing and brackets against the published definitions: value sizing buys
     /// value / (price * point value) units, risk sizing loses at most the risk at the stop, both
@@ -597,6 +751,7 @@ mod tests {
             currency: "USD",
             capabilities,
             rules: &rules,
+            rules_ready: true,
         };
         let ticks = |value| Bracket {
             mode: BracketMode::Ticks,
@@ -680,6 +835,34 @@ mod tests {
                 Ok((2.0, None, None)),
             ),
             (OrderSide::Buy, Sizing::Risk, 1_000.0, None, None, Err(())),
+            (
+                OrderSide::Buy,
+                Sizing::Units,
+                1.0,
+                None,
+                Some(ticks(0.0)),
+                Err(()),
+            ),
+            (
+                OrderSide::Sell,
+                Sizing::Units,
+                1.0,
+                Some(ticks(0.0)),
+                None,
+                Err(()),
+            ),
+            // Percent exits and explicit prices snap before sizing by their risk.
+            (
+                OrderSide::Buy,
+                Sizing::Risk,
+                25.0,
+                Some(percent(0.014)),
+                Some(Bracket {
+                    mode: BracketMode::Price,
+                    value: 3999.6,
+                }),
+                Ok((1.0, Some(4000.5), Some(3999.5))),
+            ),
         ];
         for (side, sizing, amount, take_profit, stop_loss, expected) in cases {
             let ticket = OrderTicket {

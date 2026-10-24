@@ -539,13 +539,19 @@ impl ChartContextMenu {
         }
         if !symbol.is_empty()
             && !self.hidden.contains(&Control::Trading)
-            && let Some(market) = self.market_price
+            && self.order_quantity.is_finite()
+            && self.order_quantity > 0.0
+            && self.click_price.is_finite()
+            && let Some(market) = self.market_price.filter(|price| price.is_finite())
         {
-            let price = self.tick_size.map_or(self.click_price, |tick| {
-                crate::ui::trading::to_step(self.click_price, tick, f64::round)
-            });
+            let price = self
+                .tick_size
+                .filter(|tick| tick.is_finite() && *tick > 0.0)
+                .map_or(self.click_price, |tick| {
+                    crate::ui::trading::to_step(self.click_price, tick, f64::round)
+                });
             // Above the market a sell waits as a limit order and a buy as a stop order; below it,
-            // the other way round. Either way the order does not fill at once.
+            // the other way round. At the market either order can fill immediately.
             let (limit, stop) = if price >= market {
                 (OrderSide::Sell, OrderSide::Buy)
             } else {
@@ -1000,8 +1006,8 @@ impl ChartMenus {
 mod tests {
     use super::*;
 
-    /// Guards #218: the order entries follow the click against the last price, so neither fills
-    /// at once (above it a sell limit and a buy stop, below it a buy limit and a sell stop), use
+    /// Guards #218: entries above the last price offer a sell limit and a buy stop; below it,
+    /// a buy limit and a sell stop. They use
     /// the configured quantity at the click rounded to the tick, and leave out order types the
     /// account does not accept. Fixed sides send a marketable order from a click below the market.
     #[test]
@@ -1035,6 +1041,7 @@ mod tests {
                 vec![(Buy, Limit(99.0)), (Sell, Stop(99.0))],
             ),
             (98.9, stop_only, vec![(Sell, Stop(99.0))]),
+            (f64::NAN, menu.order_types, vec![]),
         ] {
             menu.click_price = click;
             menu.order_types = types;

@@ -318,7 +318,7 @@ pub struct Chart {
     last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
-    theme_override: Option<crate::theme::Theme>,
+    pub(crate) theme_override: Option<crate::theme::Theme>,
     host_events: events::HostEvents,
     events: Vec<crate::model::Marker>,
     event_click: Option<String>,
