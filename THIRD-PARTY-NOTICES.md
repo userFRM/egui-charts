@@ -2,8 +2,6 @@
 
 ## Original interface icons
 
-`docs/layers-light.svg` and `docs/layers-dark.svg` are original project diagrams, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
-
 `src/ui/top_toolbar/menu.svg` is original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
 `assets/icons/lines/cursor-demonstration.svg`, `assets/icons/ui/compare-add.svg`, `assets/icons/ui/layout-single.svg`, `assets/icons/ui/drawing-keep.svg`, `assets/icons/ui/drawing-magnet.svg` and `assets/icons/ui/widget-bar-layers.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
