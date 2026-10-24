@@ -132,6 +132,7 @@ impl Chart {
             )
             .inner;
 
+        let mut host_clicks = Vec::new();
         let studies = if self.chart_type.is_time_independent() {
             &self.element_studies.studies
         } else {
@@ -509,6 +510,9 @@ impl Chart {
                 }
             }
             if !collapsed && let Some((pane_response, chart_rect, study_id)) = drawing_response {
+                if pane_response.clicked() || pane_response.secondary_clicked() {
+                    host_clicks.push(pane_response.clone());
+                }
                 let history = self.history.start_drawing_action(&mut self.drawings);
                 let mut drawings = std::mem::take(&mut self.drawings);
                 let mut cursors = std::mem::take(&mut self.cursor_modes);
@@ -569,6 +573,9 @@ impl Chart {
             }
             ui.allocate_space(panel_rect.size());
             pane_rects.push((pane_idx, pane_id, panel_rect, collapsed));
+        }
+        for response in host_clicks {
+            self.record_host_click(ui, &response);
         }
         self.pane_separators(ui, &pane_rects, main_rect);
         for (_, id, rect, collapsed) in pane_rects {

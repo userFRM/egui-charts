@@ -161,6 +161,8 @@ impl Chart {
             link.instrument = None;
         }
         if symbol != self.symbol {
+            self.host_events
+                .push(super::ChartEvent::SymbolChanged(symbol.clone()));
             self.anchor_drawing_points();
             self.drawings.cancel_curr_drawing();
             self.drawings.end_drag_handle();
@@ -200,6 +202,8 @@ impl Chart {
     /// checked against.
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
         if self.timeframe != Some(timeframe) {
+            self.host_events
+                .push(super::ChartEvent::TimeframeChanged(timeframe));
             self.bar_close_time = None;
         }
         if self.timeframe != Some(timeframe)
@@ -460,7 +464,7 @@ impl Chart {
         link.clock = clock;
         link.rebuild_bubbles();
         // Timestamp anchors survive the empty interval between history requests.
-        self.set_data(SeriesId::MAIN, Vec::new());
+        self.replace_main_data(Vec::new());
         self.feed = FeedState::default();
         if self.symbol.is_empty() {
             return;
@@ -530,6 +534,7 @@ impl Chart {
         }
         self.feed.loading_history = false;
         self.feed.history_complete |= page.end_of_history || empty || stale;
+        self.data_loaded(SeriesId::MAIN);
     }
 
     /// Retries transient failures, retaining the exact page boundary and independent attempts.
@@ -1089,10 +1094,26 @@ mod tests {
         let first_page = history("A", Timeframe::Min1, None);
         assert_eq!(feed.calls(), [Call::Resolve("A".into()), first_page], "a");
 
-        // b. The page reaches the bars.
+        assert!(
+            !chart
+                .drain_events()
+                .any(|event| matches!(event, super::super::ChartEvent::DataLoaded { .. })),
+            "starting history must not report a completed load"
+        );
+        // b. The page reaches the bars and notifies the host once.
         feed.page().send(page(bars(1000), false));
         frames.run(&mut chart);
         assert_eq!(chart.bars(main), bars(1000), "b");
+        assert_eq!(
+            chart
+                .drain_events()
+                .filter(|event| matches!(event, super::super::ChartEvent::DataLoaded { .. }))
+                .collect::<Vec<_>>(),
+            [super::super::ChartEvent::DataLoaded {
+                series: main,
+                bars: 1000
+            }]
+        );
         assert!(!chart.feed_state(main).unwrap().loading_history, "b");
 
         // c. The instrument subscribes and asks for trades once; a burst from another thread
@@ -1319,10 +1340,16 @@ mod tests {
         ];
         assert_eq!(feed.calls(), load, "f");
         assert!(!old_sink.is_active(), "f: old sink");
+        chart.drain_events().for_each(drop);
         old_sink.push_bar(bars(1)[0].clone());
         old_page.send(page(bars(10), false));
         frames.run(&mut chart);
         assert_eq!(chart.bars(main), [], "f: nothing of the old key");
+        assert!(
+            !chart
+                .drain_events()
+                .any(|event| matches!(event, super::super::ChartEvent::DataLoaded { .. }))
+        );
         assert_eq!(precision(&chart), None, "f: old precision cleared");
         let bubbles = chart
             .feed_link

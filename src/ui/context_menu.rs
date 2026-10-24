@@ -120,6 +120,20 @@ pub(crate) enum MenuEntry<A> {
     Separator,
 }
 
+/// Remove empty sections after controls have been filtered out.
+pub(crate) fn trim_separators<A>(entries: &mut Vec<MenuEntry<A>>) {
+    let mut previous_separator = true;
+    entries.retain(|entry| {
+        let separator = matches!(entry, MenuEntry::Separator);
+        let keep = !separator || !previous_separator;
+        previous_separator = separator;
+        keep
+    });
+    if matches!(entries.last(), Some(MenuEntry::Separator)) {
+        entries.pop();
+    }
+}
+
 /// Distance between the pointer and the corner a menu opens at.
 pub(crate) const POINTER_GAP: f32 = 2.0;
 
@@ -194,6 +208,9 @@ pub(crate) fn show_menu<A: Clone>(
     entries: &[MenuEntry<A>],
     just_opened: bool,
 ) -> Option<Option<A>> {
+    if entries.is_empty() {
+        return Some(None);
+    }
     let t = &DESIGN_TOKENS.sizing.context_menu;
     let frame = egui::Frame::menu(&ctx.global_style())
         .inner_margin(theme.spacing.sm)
@@ -577,6 +594,24 @@ impl ChartContextMenu {
                     .with_icon(&embedded_icons::SETTINGS_GEAR),
             ),
         ]);
+        items.retain(|entry| {
+            let control = match entry {
+                MenuEntry::Item(item) => match item.action {
+                    ContextMenuAction::ResetChart => Control::ResetView,
+                    ContextMenuAction::CopyPrice(_) => Control::CopyPrice,
+                    ContextMenuAction::ObjectTree => Control::ObjectTree,
+                    ContextMenuAction::RemoveAllIndicators => Control::Indicators,
+                    ContextMenuAction::ExportCsv => Control::ExportData,
+                    ContextMenuAction::OpenSettings | ContextMenuAction::OpenSeriesSettings => {
+                        Control::Settings
+                    }
+                    _ => return true,
+                },
+                MenuEntry::Separator => return true,
+            };
+            !self.hidden.contains(&control)
+        });
+        trim_separators(&mut items);
         items
     }
 
@@ -596,6 +631,10 @@ impl ChartContextMenu {
             return;
         }
         let entries = self.build_menu_items(shortcuts);
+        if entries.is_empty() {
+            self.close();
+            return;
+        }
         let just_opened = std::mem::take(&mut self.just_opened);
         let id = Id::unique("chart_ctx_menu");
         if let Some(action) = show_menu(
@@ -723,17 +762,28 @@ pub struct ChartMenus {
 }
 
 impl ChartMenus {
-    /// Shows or hides `control`: Alerts (the add alert rows of the chart and series menus)
-    /// and Trading (the chart menu's sell limit and buy stop rows). The menus ignore the other
-    /// controls.
+    /// Shows or hides named menu entries: Alerts, Trading, Settings, ObjectTree, Indicators,
+    /// ResetView, CopyPrice, ExportData, TimeZone and Session. `ContextMenus` disables all menus,
+    /// including drawings and axes. Controls belonging only to toolbars are ignored.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         set_control_visible(&mut self.chart.hidden, control, visible);
         set_control_visible(&mut self.series.hidden, control, visible);
+        set_control_visible(&mut self.axes.hidden, control, visible);
     }
 
     /// Opens the menu for the chart's last right-click, shows the open one and returns the
     /// chosen action. While a menu is open the chart draws no crosshair or tooltip under it.
     pub fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ChartContextAction> {
+        if self.chart.hidden.contains(&Control::ContextMenus) {
+            self.chart.close();
+            self.series.close();
+            self.drawing.close();
+            self.axes.close();
+            self.context = None;
+            chart.take_right_click();
+            chart.menu_open = false;
+            return None;
+        }
         if self.axes.open_from_pointer(ctx, chart) {
             self.chart.close();
             self.series.close();
@@ -890,7 +940,9 @@ impl ChartMenus {
                 continue;
             }
             if !separated {
-                entries.push(MenuEntry::Separator);
+                if !entries.is_empty() {
+                    entries.push(MenuEntry::Separator);
+                }
                 separated = true;
             }
             let mut item = MenuItem::new(
@@ -910,6 +962,96 @@ impl ChartMenus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each named control removes its row while leaving unrelated entries available; removing
+    /// every row closes the popup instead of leaving separators or stale actions.
+    #[test]
+    fn hidden_menu_controls_remove_rows_and_empty_sections() {
+        let controls = [
+            Control::Alerts,
+            Control::Trading,
+            Control::Settings,
+            Control::ObjectTree,
+            Control::Indicators,
+            Control::ResetView,
+            Control::CopyPrice,
+            Control::ExportData,
+        ];
+        for theme in [Theme::light(), Theme::dark()] {
+            for series in [false, true] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+                let mut menus = ChartMenus::default();
+                let frame = |menus: &mut ChartMenus, chart: &mut Chart| {
+                    let mut output = ctx.run_ui(Default::default(), |ui| {
+                        menus.show(ui.ctx(), chart);
+                    });
+                    let mut labels = Vec::new();
+                    fn collect(shape: &egui::Shape, labels: &mut Vec<String>) {
+                        match shape {
+                            egui::Shape::Vec(shapes) => {
+                                for shape in shapes {
+                                    collect(shape, labels);
+                                }
+                            }
+                            egui::Shape::Text(text) => labels.push(text.galley.text().to_owned()),
+                            _ => {}
+                        }
+                    }
+                    for shape in &output.shapes {
+                        collect(&shape.shape, &mut labels);
+                    }
+                    output.textures_delta.clear();
+                    output.drop_without_applying_deltas();
+                    labels
+                };
+                for visible in [true, false, true] {
+                    for control in controls {
+                        menus.set_control_visible(control, visible);
+                    }
+                    chart.symbol = "SYNTH".into();
+                    chart.right_click = Some(if series {
+                        RightClickTarget::Element {
+                            id: ChartElementId::Series(SeriesId::MAIN),
+                            bar_idx: 0,
+                            pos: Pos2::new(30.0, 30.0),
+                            price: 105.0,
+                        }
+                    } else {
+                        RightClickTarget::Background {
+                            pos: Pos2::new(30.0, 30.0),
+                            price: 105.0,
+                        }
+                    });
+                    frame(&mut menus, &mut chart);
+                    let labels = frame(&mut menus, &mut chart);
+                    assert_eq!(!labels.is_empty(), visible, "{labels:?}");
+                    assert_eq!(menus.chart.is_open() || menus.series.is_open(), visible);
+                }
+                menus.set_control_visible(Control::Settings, false);
+                menus.set_control_visible(Control::ObjectTree, false);
+                menus.set_control_visible(Control::Indicators, false);
+                chart.right_click = Some(RightClickTarget::Background {
+                    pos: Pos2::new(30.0, 30.0),
+                    price: 105.0,
+                });
+                let labels = frame(&mut menus, &mut chart);
+                assert!(labels.iter().any(|label| label.starts_with("Copy price")));
+                assert!(!labels.iter().any(|label| label.contains("Settings")
+                    || label.contains("Object Tree")
+                    || label.contains("indicator")));
+                menus.set_control_visible(Control::ContextMenus, false);
+                assert!(frame(&mut menus, &mut chart).is_empty());
+                assert!(!chart.menu_open);
+                menus.set_control_visible(Control::ContextMenus, true);
+                assert!(
+                    frame(&mut menus, &mut chart).is_empty(),
+                    "closed menus stay closed"
+                );
+            }
+        }
+    }
 
     #[test]
     fn host_menu_entries_filter_targets_and_return_the_original_click() {

@@ -295,6 +295,26 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        let theme = self.theme_override.clone();
+        let _theme_scope = theme
+            .as_ref()
+            .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
+        // Keep the same UI scope when an override is cleared, preserving focus and widget state.
+        ui.scope(|ui| {
+            if let Some(theme) = &theme {
+                crate::theme::apply_to_style(ui.style_mut(), theme);
+            }
+            self.show_themed_content(ui, footprint)
+        })
+        .inner
+    }
+
+    fn show_themed_content(
+        &mut self,
+        ui: &mut Ui,
+        footprint: Option<(&Footprint, &FootprintConfig)>,
+    ) -> Response {
+        self.host_events.volume_map = None;
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
@@ -356,6 +376,7 @@ impl Chart {
             }
             ui.ctx().request_discard("Chart measured its axis labels");
         }
+        self.record_host_events(ui);
         response
     }
 
@@ -936,6 +957,30 @@ impl Chart {
         } else {
             &self.studies
         };
+        let volume_map = volume_rect.is_positive().then(|| {
+            crate::scales::PriceMap::new(
+                crate::scales::PriceTransform::default(),
+                crate::scales::PriceRange::new(
+                    0.0,
+                    studies
+                        .indicators()
+                        .iter()
+                        .find(|study| study.is_volume() && study.is_overlay() && study.is_visible())
+                        .map_or(max_volume.max(1.0), |study| {
+                            super::volume::range(study.as_ref(), &(start_idx..end_idx)).1
+                        }),
+                ),
+                volume_rect.top(),
+                volume_rect.bottom(),
+                false,
+            )
+            .with_price_precision(Some(
+                self.instrument()
+                    .and_then(|instrument| instrument.volume_decimals)
+                    .unwrap_or(0),
+            ))
+        });
+        self.host_events.volume_map = volume_map;
         // Draw indicators
         for study in studies
             .indicators()
@@ -1629,30 +1674,9 @@ impl Chart {
                     bar_seconds,
                 );
 
-                if volume_rect.contains(hover_pos) {
-                    let map = crate::scales::PriceMap::new(
-                        crate::scales::PriceTransform::default(),
-                        crate::scales::PriceRange::new(
-                            0.0,
-                            studies
-                                .indicators()
-                                .iter()
-                                .find(|study| {
-                                    study.is_volume() && study.is_overlay() && study.is_visible()
-                                })
-                                .map_or(max_volume.max(1.0), |study| {
-                                    super::volume::range(study.as_ref(), &(start_idx..end_idx)).1
-                                }),
-                        ),
-                        volume_rect.top(),
-                        volume_rect.bottom(),
-                        false,
-                    )
-                    .with_price_precision(Some(
-                        self.instrument()
-                            .and_then(|instrument| instrument.volume_decimals)
-                            .unwrap_or(0),
-                    ));
+                if volume_rect.contains(hover_pos)
+                    && let Some(map) = volume_map
+                {
                     let mut pos = hover_pos;
                     if let Some(index) = index {
                         pos.x = coords.idx_to_x(index);
@@ -1923,6 +1947,7 @@ impl Chart {
             self.apply_study_action(action);
         }
         self.main_pane_actions(ui, rect, chart_rect);
+        self.record_host_click(ui, &response);
         shown
     }
 }

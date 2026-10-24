@@ -30,6 +30,7 @@ enum Action {
 pub(super) struct AxisMenus {
     open: Option<(bool, Pos2)>,
     just_opened: bool,
+    pub(super) hidden: std::collections::HashSet<crate::ui::Control>,
 }
 
 impl AxisMenus {
@@ -200,7 +201,25 @@ impl AxisMenus {
 
     pub(super) fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ContextMenuAction> {
         let (time, pos) = self.open?;
-        let entries = Self::entries(time, chart);
+        let mut entries = Self::entries(time, chart);
+        entries.retain(|entry| {
+            use crate::ui::Control;
+            let control = match entry {
+                MenuEntry::Item(item) => match item.action {
+                    Action::Settings => Control::Settings,
+                    Action::Timezone(_) => Control::TimeZone,
+                    Action::ExtendedHours | Action::SessionBreaks => Control::Session,
+                    _ => return true,
+                },
+                MenuEntry::Separator => return true,
+            };
+            !self.hidden.contains(&control)
+        });
+        super::context_menu::trim_separators(&mut entries);
+        if entries.is_empty() {
+            self.close();
+            return None;
+        }
         if let Some(action) = show_menu(
             ctx,
             Id::unique("axis_context_menu"),

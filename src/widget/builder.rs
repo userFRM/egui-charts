@@ -151,6 +151,8 @@ impl Chart {
             last_ratio_lock: false,
             axis_hover: None,
             scale_settings_requested: false,
+            theme_override: None,
+            host_events: Default::default(),
             events: Vec::new(),
             event_click: None,
             timeframe: None,
@@ -629,8 +631,9 @@ impl ChartBuilder {
 
     /// Set the visual theme (default: `Theme::dark()`).
     ///
-    /// The theme is applied to the [`ChartConfig`] during [`build`](Self::build),
-    /// controlling colors for background, candles, grid, axes, and overlays.
+    /// Applies colours to the [`ChartConfig`] and retains a per-chart override for text sizes,
+    /// axes, legends and overlays. It leaves egui and sibling charts unchanged.
+    /// Use [`Chart::set_theme_override`] to replace or clear it on a persistent chart.
     #[must_use]
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
@@ -773,6 +776,7 @@ impl ChartBuilder {
         let mut chart =
             Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
 
+        chart.theme_override = Some(self.theme);
         chart.set_chart_type(self.chart_type);
         chart.set_visible_bars(self.visible_candles);
         chart.set_symbol(self.symbol.unwrap_or_default());

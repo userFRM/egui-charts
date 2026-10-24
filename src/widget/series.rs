@@ -29,11 +29,17 @@ impl Chart {
             let (bars, rejected) = clean(bars, &self.clock());
             self.price_series[at].bars = bars;
             self.price_series[at].feed.rejected_bars += rejected;
+            self.data_loaded(series);
             return;
         }
         if !self.main_series_present || !holds_bars(series, "set_data") {
             return;
         }
+        self.replace_main_data(bars);
+        self.data_loaded(series);
+    }
+
+    pub(super) fn replace_main_data(&mut self, bars: Vec<Bar>) {
         let (bars, rejected) = clean(bars, &self.clock());
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();

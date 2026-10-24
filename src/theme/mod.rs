@@ -21,9 +21,9 @@ mod presets;
 
 pub use components::{ContextMenuStyle, DialogStyle, SettingsDialogStyle};
 pub use context::ThemeExt;
-pub(crate) use context::applied_theme;
 #[cfg(feature = "ui")]
 pub(crate) use context::{ThemeDerived, follow_active_theme, theme_derived};
+pub(crate) use context::{ThemeScope, applied_theme};
 pub use presets::presets;
 
 use crate::tokens::DESIGN_TOKENS;
@@ -416,13 +416,8 @@ pub(crate) fn readable_color(
         .unwrap_or(text)
 }
 
-/// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
-/// Also install Roboto ahead of the application's proportional fonts.
-///
-/// Call it once at startup and again after the theme changes. Inside `eframe::App::ui` the root
-/// `Ui` already exists, so follow the call with `ui.set_style(ui.ctx().global_style())` for the
-/// panels shown in that `Ui` to use the theme in the same frame.
-pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
+/// Applies the same palette and spacing to a local UI or to the global styles.
+pub(crate) fn apply_to_style(style: &mut egui::Style, theme: &Theme) {
     let mut visuals = if theme.dark {
         egui::Visuals::dark()
     } else {
@@ -537,17 +532,24 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
         state.corner_radius = theme.radius.sm.into();
     }
 
-    // egui keeps a dark and a light style and follows the system appearance by default, so
-    // style both: the theme then stays when the system switches.
     let spacing = &theme.spacing;
-    ctx.all_styles_mut(|style| {
-        style.visuals = visuals.clone();
-        style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
-        style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
-        style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
-        style.spacing.button_padding = egui::vec2(spacing.sm, DESIGN_TOKENS.spacing.hairline);
-        style.spacing.interact_size.y = DESIGN_TOKENS.sizing.control_height;
-    });
+    style.visuals = visuals;
+    style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
+    style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
+    style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
+    style.spacing.button_padding = egui::vec2(spacing.sm, DESIGN_TOKENS.spacing.hairline);
+    style.spacing.interact_size.y = DESIGN_TOKENS.sizing.control_height;
+}
+
+/// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
+/// Also install Roboto ahead of the application's proportional fonts.
+///
+/// Call it once at startup and again after the theme changes. Inside `eframe::App::ui` the root
+/// `Ui` already exists, so follow the call with `ui.set_style(ui.ctx().global_style())` for the
+/// panels shown in that `Ui` to use the theme in the same frame.
+pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
+    // Style both appearances so system changes keep the applied theme.
+    ctx.all_styles_mut(|style| apply_to_style(style, theme));
 
     // Interface text: Roboto, whose default digits are tabular, so prices keep their width.
     ctx.add_font(egui::FontInsert::new(
@@ -607,6 +609,76 @@ mod tests {
             assert_eq!(crosshair.label_text_color, theme.chart.crosshair_label_text);
             let tooltip = chart.chart_options().tooltip.resolved(&ctx);
             assert_eq!(tooltip.background_color, theme.chart.bg_tooltip);
+        }
+        // A builder theme must reach text and overlays locally, leaving the host palette and
+        // egui styles intact for the next chart in the same frame.
+        let global = Theme::dark();
+        apply_to_egui(&ctx, &global);
+        let original_style = ctx.global_style();
+        let mut local = Theme::light();
+        local.text.label = 19.0;
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_symbol("Scoped")
+            .with_theme(local.clone())
+            .build();
+        chart.set_data(SeriesId::MAIN, bars.clone());
+        let mut chart_id = None;
+        for clear_globally in [false, true] {
+            if clear_globally {
+                chart.set_theme_override(Some(local.clone()));
+            }
+            for clear in [false, true] {
+                if clear {
+                    if clear_globally {
+                        chart.set_theme(&ctx, &global);
+                    } else {
+                        chart.set_theme_override(None);
+                    }
+                }
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let response = chart.show(ui);
+                            if let Some(id) = chart_id {
+                                assert_eq!(
+                                    response.id, id,
+                                    "theme changes must retain chart UI state"
+                                );
+                                assert!(response.has_focus());
+                            } else {
+                                chart_id = Some(response.id);
+                                response.request_focus();
+                            }
+                        });
+                    },
+                );
+                let sizes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().parse::<f64>().is_ok() => {
+                            Some(text.galley.job.sections[0].format.font_id.size)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!sizes.is_empty());
+                assert_eq!(sizes.contains(&local.text.label), !clear, "{sizes:?}");
+                if clear {
+                    assert!(sizes.contains(&global.text.label), "{sizes:?}");
+                }
+                assert_eq!(ctx.active_theme(), global);
+                assert_eq!(ctx.global_style().visuals, original_style.visuals);
+                assert_eq!(ctx.global_style().spacing, original_style.spacing);
+                output.drop_without_applying_deltas();
+            }
         }
     }
 

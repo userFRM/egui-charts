@@ -152,6 +152,19 @@ impl SeriesContextMenu {
                     .with_icon(&embedded_icons::SETTINGS_GEAR),
             ),
         ]);
+        items.retain(|entry| {
+            let control = match entry {
+                MenuEntry::Item(item) => match item.action {
+                    SeriesContextMenuAction::AddIndicator => Control::Indicators,
+                    SeriesContextMenuAction::CopyPrice => Control::CopyPrice,
+                    SeriesContextMenuAction::OpenSettings => Control::Settings,
+                    _ => return true,
+                },
+                MenuEntry::Separator => return true,
+            };
+            !self.hidden.contains(&control)
+        });
+        crate::ui::context_menu::trim_separators(&mut items);
         items
     }
 
@@ -171,6 +184,10 @@ impl SeriesContextMenu {
             return;
         }
         let entries = self.build_menu_items(shortcuts);
+        if entries.is_empty() {
+            self.close();
+            return;
+        }
         let just_opened = std::mem::take(&mut self.just_opened);
         let id = Id::unique("series_context_menu");
         if let Some(action) = show_menu(
