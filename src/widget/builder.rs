@@ -186,6 +186,10 @@ impl Chart {
             next_price_line: 0,
             #[cfg(feature = "ui")]
             trading_tags: Vec::new(),
+            #[cfg(feature = "ui")]
+            order_quantity: None,
+            #[cfg(feature = "ui")]
+            quantity_clicked: None,
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,

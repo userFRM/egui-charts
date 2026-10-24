@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::chart::selection::SeriesId;
-use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines};
+use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines, to_step};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
     Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
@@ -71,7 +71,8 @@ pub struct Trading {
     /// Decimals of the chart's prices, for notifications.
     decimals: usize,
     /// The quantity the ticket opens with, and that instant orders and the chart menu's orders
-    /// use. Positive, in the symbol's trading units.
+    /// use. Positive, in the symbol's trading units. The chart's legend shows it under the quote
+    /// buttons' spread, where a click opens a calculator that changes it.
     pub quantity: f64,
     /// The quantity and brackets the user saved in the ticket. Persist them in the host.
     pub presets: Vec<OrderPreset>,
@@ -82,6 +83,8 @@ pub struct Trading {
     pub display: TradingSettings,
     /// The sound asked for by fills since the host last took it.
     sound: Option<String>,
+    /// The open quantity calculator: where it sits and the text of its field.
+    calculator: Option<(egui::Pos2, String)>,
 }
 
 impl Default for Trading {
@@ -106,6 +109,7 @@ impl Default for Trading {
             presets: Vec::new(),
             display: TradingSettings::default(),
             sound: None,
+            calculator: None,
         }
     }
 }
@@ -466,6 +470,33 @@ impl Trading {
             }
         }
 
+        // The legend shows the order quantity under the spread; clicking it toggles the calculator.
+        chart.order_quantity = self.service.is_some().then_some(self.quantity);
+        let toggled = chart.quantity_clicked.take();
+        if let Some(anchor) = toggled {
+            self.calculator = match self.calculator {
+                Some(_) => None,
+                None => Some((
+                    anchor.left_bottom() + egui::vec2(0.0, 4.0),
+                    self.quantity.to_string(),
+                )),
+            };
+        }
+        if let Some((at, text)) = &mut self.calculator {
+            let area = egui::Area::new(ui.scope_id().with("order_quantity"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(*at)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        calculator(ui, text, &mut self.quantity, &self.rules);
+                    });
+                });
+            let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+            if escape || toggled.is_none() && area.response.clicked_elsewhere() {
+                self.calculator = None;
+            }
+        }
+
         if !self.ticket.open {
             return;
         }
@@ -523,6 +554,64 @@ impl Trading {
             }
             _ => {}
         }
+    }
+}
+
+/// The quantity calculator: a field for the quantity, minus and plus by the quantity step, preset
+/// quantities, a button that clears the field and one that resets the quantity to the minimum.
+/// A positive number in the field becomes the order quantity.
+fn calculator(ui: &mut egui::Ui, text: &mut String, quantity: &mut f64, rules: &TradingRules) {
+    use crate::icons::icons;
+    use crate::theme::ThemeExt;
+    let theme = ui.ctx().active_theme();
+    ui.set_width(200.0);
+    ui.label(egui::RichText::new("Quantity").color(theme.ui.text_secondary));
+    if ui
+        .add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY))
+        .changed()
+        && let Ok(value) = text.trim().parse::<f64>()
+        && value.is_finite()
+        && value > 0.0
+    {
+        *quantity = value;
+    }
+    let step = rules.quantity_step;
+    let icon =
+        |icon: &crate::icons::Icon| icon.as_image_tinted(egui::vec2(14.0, 14.0), theme.ui.text);
+    let mut set = None;
+    egui::Grid::new("order_quantity_buttons")
+        .num_columns(2)
+        .spacing([6.0, 6.0])
+        .show(ui, |ui| {
+            let button = |ui: &mut egui::Ui, button: egui::Button<'_>| {
+                ui.add_sized([97.0, 28.0], button).clicked()
+            };
+            if button(ui, egui::Button::image(icon(&icons::MINUS))) {
+                set = Some(to_step(*quantity - step, step, f64::round).max(rules.min_quantity));
+            }
+            if button(ui, egui::Button::image(icon(&icons::PLUS))) {
+                set = Some(to_step(*quantity + step, step, f64::round));
+            }
+            ui.end_row();
+            for pair in [[1.0, 5.0], [25.0, 100.0], [500.0, 1000.0]] {
+                for preset in pair {
+                    if button(ui, egui::Button::new(format!("{preset}"))) {
+                        set = Some(preset);
+                    }
+                }
+                ui.end_row();
+            }
+            if button(ui, egui::Button::new("C")) {
+                text.clear();
+            }
+            if button(ui, egui::Button::image(icon(&icons::ROTATE_CCW))) {
+                set = Some(rules.min_quantity);
+            }
+            ui.end_row();
+        });
+    if let Some(value) = set.filter(|value| value.is_finite() && *value > 0.0) {
+        *quantity = value;
+        *text = value.to_string();
     }
 }
 
@@ -1120,6 +1209,100 @@ mod tests {
             assert!(!covered, "the position's label is drawn over the marks");
             assert_eq!(chart.trading_tags.is_empty(), !drawn);
         }
+    }
+
+    /// The legend shows the order quantity under the spread; clicking it opens the calculator,
+    /// whose presets set the quantity that Buy and Sell use, and a click elsewhere closes it.
+    #[test]
+    fn the_quantity_box_opens_a_calculator_that_sets_the_order_quantity() {
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.symbol = "SYM".into();
+        chart.set_quote(Some(crate::model::Level1Quote {
+            symbol: "SYM".into(),
+            ts: chart.bars(SeriesId::MAIN)[99].time,
+            bid: 99.0,
+            ask: 101.0,
+            bid_size: 1.0,
+            ask_size: 1.0,
+        }));
+        let mut trading = Trading::default();
+        trading.set_service(Arc::new(Recorder::default()));
+        trading.quantity = 3.25;
+        let ctx = egui::Context::default();
+        let frame = |trading: &mut Trading, chart: &mut Chart, events: Vec<egui::Event>| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    trading.poll(ui.ctx(), &mut Toasts::new());
+                    chart.show(ui);
+                    trading.show(ui, chart);
+                },
+            );
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.galley.rect.translate(text.pos.to_vec2()).center(),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            texts
+        };
+        // A click at `at` and the frame after it.
+        let click = |at| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            [
+                vec![egui::Event::PointerMoved(at)],
+                vec![button(true)],
+                vec![button(false)],
+                vec![],
+            ]
+        };
+        let find = |texts: &[(String, egui::Pos2)], wanted: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == wanted)
+                .map(|(_, at)| *at)
+        };
+        frame(&mut trading, &mut chart, vec![]);
+        let texts = frame(&mut trading, &mut chart, vec![]);
+        let quantity = find(&texts, "3.25").expect("the quantity under the spread");
+        assert!(find(&texts, "1000").is_none());
+
+        let mut texts = Vec::new();
+        for events in click(quantity) {
+            texts = frame(&mut trading, &mut chart, events);
+        }
+        let preset = find(&texts, "25").expect("the calculator's presets");
+        for events in click(preset) {
+            texts = frame(&mut trading, &mut chart, events);
+        }
+        assert_eq!(trading.quantity, 25.0);
+        assert!(find(&texts, "1000").is_some(), "a preset keeps it open");
+
+        for events in click(egui::pos2(300.0, 300.0)) {
+            texts = frame(&mut trading, &mut chart, events);
+        }
+        assert!(
+            find(&texts, "1000").is_none(),
+            "a click elsewhere closes it"
+        );
+        assert!(
+            find(&texts, "25").is_some(),
+            "the legend shows the new quantity"
+        );
     }
 
     #[test]

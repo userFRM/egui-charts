@@ -1675,7 +1675,11 @@ impl Chart {
                 legend.show_volume = self.main_series_visible
                     && self.chart_type.supports_volume()
                     && self.config.show_legend_volume;
-                let (quote_action, study_settings, bottom) = ui
+                #[cfg(feature = "ui")]
+                {
+                    legend.quantity = self.order_quantity;
+                }
+                let (quote_action, study_settings, bottom, quantity) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(
                             ui,
@@ -1693,6 +1697,12 @@ impl Chart {
                 if let Some(action) = quote_action {
                     self.quote_action = Some(action);
                 }
+                #[cfg(feature = "ui")]
+                if quantity.is_some() {
+                    self.quantity_clicked = quantity;
+                }
+                #[cfg(not(feature = "ui"))]
+                let _ = quantity;
                 study_action = study_settings;
                 legend_bottom = bottom;
             }

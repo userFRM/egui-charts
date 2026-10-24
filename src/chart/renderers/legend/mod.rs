@@ -81,6 +81,9 @@ pub struct Legend<'a> {
     pub show_indicator_inputs: bool,
     /// Display study outputs.
     pub show_indicator_values: bool,
+    /// The order quantity shown in a box under the quote buttons' spread, which the user clicks
+    /// to change it.
+    pub(crate) quantity: Option<f64>,
 }
 
 impl<'a> Legend<'a> {
@@ -107,6 +110,7 @@ impl<'a> Legend<'a> {
             show_indicator_titles: true,
             show_indicator_inputs: true,
             show_indicator_values: true,
+            quantity: None,
         }
     }
 
@@ -134,20 +138,21 @@ impl<'a> Legend<'a> {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
-        let (quote, study, _) = self.show_with_colors(ui, plot, &colors);
+        let (quote, study, _, _) = self.show_with_colors(ui, plot, &colors);
         (quote, study)
     }
 
+    /// Also returns the bottom of the legend and the quantity box, when the user clicked it.
     pub(crate) fn show_with_colors(
         &self,
         ui: &mut Ui,
         plot: Rect,
         colors: &StyleColors,
-    ) -> (Option<QuoteSide>, Option<StudyAction>, f32) {
+    ) -> (Option<QuoteSide>, Option<StudyAction>, f32, Option<Rect>) {
         let theme = ui.active_theme();
         let bounds = plot.shrink(8.0);
         if !bounds.is_positive() {
-            return (None, None, plot.top());
+            return (None, None, plot.top(), None);
         }
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
@@ -335,13 +340,13 @@ impl<'a> Legend<'a> {
             layout.new_row();
         }
 
-        let action = self.quote.and_then(|quote| {
+        let (action, quantity) = self.quote.map_or((None, None), |quote| {
             let (bid, ask) = (quote.bid, quote.ask);
             if !bid.is_finite() || !ask.is_finite() || bid > ask || !quote.spread().is_finite() {
-                return None;
+                return (None, None);
             }
             let precision = self.price_precision(bid.abs().max(ask.abs()));
-            let action = paint_quotes(ui, &mut layout, bid, ask, precision, id);
+            let action = paint_quotes(ui, &mut layout, bid, ask, precision, self.quantity, id);
             layout.new_row();
             layout.pos.y += 4.0;
             action
@@ -535,7 +540,12 @@ impl<'a> Legend<'a> {
                 ui.ctx().data_mut(|data| data.insert_temp(id, !collapsed));
             }
         }
-        (action, study_settings, layout.pos.y + layout.height)
+        (
+            action,
+            study_settings,
+            layout.pos.y + layout.height,
+            quantity,
+        )
     }
 
     fn title(&self) -> String {
@@ -781,14 +791,17 @@ impl<'a> Layout<'a> {
     }
 }
 
+/// The Sell and Buy buttons with the spread between them and, under it, `quantity` in a box.
+/// Returns the button clicked and the quantity box, when clicked.
 fn paint_quotes(
     ui: &mut Ui,
     layout: &mut Layout<'_>,
     bid: f64,
     ask: f64,
     precision: usize,
+    quantity: Option<f64>,
     id: egui::Id,
-) -> Option<QuoteSide> {
+) -> (Option<QuoteSide>, Option<Rect>) {
     let spread = format!("{:.precision$}", ask - bid);
     let theme = ui.active_theme();
     let spread_galley = layout.painter.layout_no_wrap(
@@ -837,8 +850,46 @@ fn paint_quotes(
         Vec2::new(gap, 34.0),
     );
     layout.painter.rect_filled(spread_rect, 0.0, theme.chart.bg);
+    let quantity = quantity.map(|quantity| {
+        let text = layout.painter.layout_no_wrap(
+            format!("{quantity}"),
+            FontId::proportional(typography::SM),
+            layout.colors.text,
+        );
+        let rect = Rect::from_center_size(
+            Pos2::new(spread_rect.center().x, spread_rect.bottom() - 9.0),
+            Vec2::new((text.size().x + 10.0).max(gap - 8.0), 18.0),
+        );
+        let response = ui
+            .interact(
+                rect.intersect(layout.painter.clip_rect()),
+                id.with("quantity"),
+                Sense::click(),
+            )
+            .on_hover_text("Order quantity");
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Order quantity"));
+        let fill = if response.hovered() {
+            theme.ui.btn_bg_active
+        } else {
+            theme.ui.btn_bg_hover
+        };
+        layout.painter.rect_filled(rect, 3.0, fill);
+        layout
+            .painter
+            .galley(rect.center() - text.size() / 2.0, text, layout.colors.text);
+        (rect, response.clicked())
+    });
+    // With the quantity box under it, the spread sits at the top.
+    let spread_y = match quantity {
+        Some((rect, _)) => (spread_rect.top() + rect.top() - spread_galley.size().y) / 2.0,
+        None => spread_rect.center().y - spread_galley.size().y / 2.0,
+    };
     layout.painter.galley(
-        spread_rect.center() - spread_galley.size() / 2.0,
+        Pos2::new(
+            spread_rect.center().x - spread_galley.size().x / 2.0,
+            spread_y,
+        ),
         spread_galley,
         layout.colors.text,
     );
@@ -853,13 +904,15 @@ fn paint_quotes(
         "Buy at ask",
         id.with("buy"),
     );
-    if sell_response.clicked() {
+    let action = if sell_response.clicked() {
         Some(QuoteSide::Sell)
     } else if buy_response.clicked() {
         Some(QuoteSide::Buy)
     } else {
         None
-    }
+    };
+    let clicked = quantity.and_then(|(rect, clicked)| clicked.then_some(rect));
+    (action, clicked)
 }
 
 fn quote_box(
