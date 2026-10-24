@@ -46,12 +46,6 @@ impl DemoApp {
     pub(super) fn current_study_template(&self) -> Vec<StudyTemplate> {
         self.chart
             .indicators()
-            .filter(|(id, _)| {
-                !self
-                    .comparisons
-                    .iter()
-                    .any(|(_, comparison, _)| comparison == id)
-            })
             .map(|(_, study)| StudyTemplate::from_study(study))
             .collect()
     }

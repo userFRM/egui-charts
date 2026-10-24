@@ -788,11 +788,7 @@ impl DemoApp {
 
     fn remove_all_indicators(&mut self) {
         let chart = &mut self.chart;
-        let ids: Vec<SeriesId> = chart
-            .indicators()
-            .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
-            .map(|(id, _)| id)
-            .collect();
+        let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
         for id in ids {
             chart.remove_series(id);
         }
@@ -1280,11 +1276,7 @@ impl DemoApp {
             }
             DrawingToolbarAction::HideAllIndicators => {
                 let chart = &mut self.chart;
-                let ids: Vec<SeriesId> = chart
-                    .indicators()
-                    .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
-                    .map(|(id, _)| id)
-                    .collect();
+                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
                 for id in ids {
                     chart.set_indicator_visible(id, false);
                 }

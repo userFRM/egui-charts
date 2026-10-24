@@ -114,17 +114,26 @@ impl DemoApp {
         let (spacing, offset) = source.get_time_scale_state();
         chart.apply_synced_time_scale(spacing, offset);
         let copied_comparisons = super::comparison::copy(&mut chart, source, comparisons);
+        let mut study_ids = std::collections::HashMap::new();
         for (id, indicator) in source.indicators() {
             let copy = chart.add_indicator(indicator.clone_box());
+            study_ids.insert(id.0, copy.0);
             if let Some(inputs) = source.indicator_inputs(id) {
                 chart.set_indicator_inputs(copy, inputs);
             }
         }
         chart.drawings_mut().drawings = source.drawings().drawings.clone();
-        for drawing in &mut chart.drawings_mut().drawings {
+        chart.drawings_mut().drawings.retain_mut(|drawing| {
+            if let Some(pane) = drawing.pane {
+                let Some(&copied) = study_ids.get(&pane) else {
+                    return false;
+                };
+                drawing.pane = Some(copied);
+            }
             drawing.stored_id = None;
             drawing.created_at = None;
-        }
+            true
+        });
         DemoChart {
             chart,
             live,
@@ -548,5 +557,40 @@ mod tests {
         app.ensure_chart_slots(ChartLayoutMode::Four);
         app.activate_chart_slot(3);
         assert_eq!(app.chart.config().candle_width, 0.8);
+
+        let removed =
+            app.chart
+                .add_indicator(Box::new(egui_charts::studies::CustomIndicator::new(
+                    "Removed",
+                    |_| Vec::new(),
+                )));
+        app.chart.remove_series(removed);
+        let pane = app.chart.add_indicator(Box::new(
+            egui_charts::studies::CustomIndicator::new("Copied pane", |_| Vec::new())
+                .with_overlay(false),
+        ));
+        let mut drawing = app.chart.drawings().drawings[0].clone();
+        drawing.id = 8;
+        drawing.pane = Some(pane.0);
+        app.chart.drawings_mut().drawings.push(drawing);
+        let copied = app.copy_chart(&app.chart, &app.live, &app.comparisons);
+        let copied_pane = copied
+            .chart
+            .indicators()
+            .find(|(_, study)| study.name() == "Copied pane")
+            .unwrap()
+            .0;
+        assert_eq!(
+            copied
+                .chart
+                .drawings()
+                .drawings
+                .iter()
+                .find(|d| d.id == 8)
+                .unwrap()
+                .pane,
+            Some(copied_pane.0),
+            "layout copies remap pane ownership after series ids change"
+        );
     }
 }

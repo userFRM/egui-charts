@@ -165,7 +165,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Shared comparison scales retain manual bounds when members are hidden, removed or reassigned. Comparison lines remain visible beyond the main history, relative axes retain their units in whitespace, and hidden study axes no longer consume comparison gutters. Removing the main series keeps its feed stopped when playback resumes. ([#87](https://github.com/userFRM/egui-charts/issues/87))
+- Shared comparison scales retain manual bounds when members are hidden, removed or reassigned. Comparison lines remain visible beyond the main history, relative axes retain their units in whitespace, and hidden study axes no longer consume comparison gutters. Removing the main series keeps its feed stopped when playback resumes. Copied layouts remap drawing pane ownership to the copied studies. ([#87](https://github.com/userFRM/egui-charts/issues/87))
 
 - Applying drawing templates preserves the target study pane, and saved defaults omit pane ownership. Standalone drawing managers release cached geometry after drawings are deleted. Chart layouts keep study-owned drawings local rather than copying their chart-local study ids into another chart. ([#151](https://github.com/userFRM/egui-charts/issues/151))
 
