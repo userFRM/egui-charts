@@ -160,6 +160,13 @@ pub(crate) mod tool_interaction;
 pub use keyboard::{ShortcutMap, ShortcutRequest};
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
+/// A built time formatter and the time scale options it was built for: seconds visibility,
+/// time visibility and the display time zone.
+type FrameTimeFormatter = (
+    (bool, bool, crate::scales::TimezoneMode),
+    std::sync::Arc<dyn crate::scales::TimeFormatter>,
+);
+
 /// Interactive financial chart widget for egui.
 ///
 /// `Chart` is the core rendering and interaction engine for displaying OHLCV
@@ -328,12 +335,8 @@ pub struct Chart {
     locale: Option<String>,
     date_format: Option<String>,
     time_formatter: Option<std::sync::Arc<dyn crate::scales::TimeFormatter>>,
-    /// Formatter of the time labels, built from the three fields above and kept with the time
-    /// scale options it was built for: seconds and time visibility and the display time zone.
-    frame_time_formatter: Option<(
-        (bool, bool, crate::scales::TimezoneMode),
-        std::sync::Arc<dyn crate::scales::TimeFormatter>,
-    )>,
+    /// Formatter of the time labels, built from the three fields above.
+    frame_time_formatter: Option<FrameTimeFormatter>,
     price_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     percentage_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
