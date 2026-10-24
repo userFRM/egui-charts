@@ -198,22 +198,39 @@ impl LiveFeed {
         tape
     }
 
-    /// The latest price and the close of the previous UTC day, for the watchlist row of the
-    /// chart symbol.
+    /// The last displayed trade and previous session close, on the chart's session and price basis.
     pub(super) fn day_change(&self) -> Option<(f64, f64)> {
         let sim = self.state();
-        let midnight = sim.now.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
-        let prev_close = match sim.trades.iter().rev().find(|trade| trade.ts < midnight) {
+        let extended = sim.subscription.as_ref()?.extended_hours;
+        let (time, last) = sim
+            .trades
+            .iter()
+            .rev()
+            .find_map(|trade| sim.shown_trade(trade, extended))
+            .map(|trade| (trade.ts, trade.price))
+            .or_else(|| {
+                sim.shown_history(extended)
+                    .last()
+                    .map(|bar| (bar.time, bar.close))
+            })?;
+        let midnight = time.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
+        let prev_close = match sim
+            .trades
+            .iter()
+            .rev()
+            .filter(|trade| trade.ts < midnight)
+            .find_map(|trade| sim.shown_trade(trade, extended))
+        {
             Some(trade) => trade.price,
             None => {
-                sim.history
+                sim.shown_history(extended)
                     .iter()
                     .rev()
                     .find(|bar| bar.time < midnight)?
                     .close
             }
         };
-        Some((sim.price_ticks as f64 * sim.tick_size, prev_close))
+        Some((last, prev_close))
     }
 
     pub(super) fn paused(&self) -> bool {
@@ -619,6 +636,13 @@ mod tests {
             }
             let expected = feed.snapshot(Timeframe::Min1, chart.bar_clock(), extended);
             assert_eq!(chart.bars(SeriesId::MAIN), expected);
+            let last = expected.last().unwrap();
+            let previous = expected
+                .iter()
+                .rev()
+                .find(|bar| bar.time.date_naive() < last.time.date_naive())
+                .unwrap();
+            assert_eq!(feed.day_change(), Some((last.close, previous.close)));
             let hours = egui_charts::model::ExchangeSessionProvider::new(
                 egui_charts::model::TimezoneId::utc(),
                 Some(sample_session()),

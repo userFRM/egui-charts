@@ -5,8 +5,8 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use egui::{
-    Align, Align2, Color32, EventFilter, Key, Layout, Modifiers, Sense, Shape, Stroke, TextStyle,
-    Ui, pos2, vec2,
+    Align, Align2, Color32, EventFilter, Key, Label, Layout, Modifiers, RichText, Sense, Shape,
+    Stroke, TextStyle, Ui, pos2, vec2,
 };
 use serde::{Deserialize, Serialize};
 
@@ -92,10 +92,14 @@ impl Watchlist {
     }
 
     /// Appends `symbol`, trimmed. Returns false, leaving the list unchanged, for an empty symbol,
-    /// one containing a comma, or one the list already holds.
+    /// one containing a text separator or starting with `###`, or one the list already holds.
     pub fn add_symbol(&mut self, symbol: &str) -> bool {
         let symbol = symbol.trim();
-        if symbol.is_empty() || symbol.contains(',') || self.symbols().any(|s| s == symbol) {
+        if symbol.is_empty()
+            || symbol.contains([',', '\n', '\r'])
+            || symbol.starts_with("###")
+            || self.symbols().any(|s| s == symbol)
+        {
             return false;
         }
         self.items.push(WatchlistItem::Symbol {
@@ -190,8 +194,8 @@ pub enum WatchlistAction {
     Export { name: String, text: String },
 }
 
-/// The drag payload of a row: its index in the list.
-struct RowDrag(usize);
+/// The source list and row index, so separate panels cannot exchange row indices.
+struct RowDrag(egui::Id, usize);
 
 /// Watchlists fed by host quotes.
 ///
@@ -343,7 +347,7 @@ impl WatchlistPanel {
         });
 
         let order = display_order(&list.items, quotes, *sort);
-        let list_id = ui.scope_id().with("watchlist_rows");
+        let list_id = ui.scope_id().with(("watchlist_rows", *active));
         // Arrow keys move the selection instead of the keyboard focus.
         let arrows = EventFilter {
             vertical_arrows: true,
@@ -383,14 +387,21 @@ impl WatchlistPanel {
         let font = TextStyle::Body.resolve(ui.style());
         let small = TextStyle::Small.resolve(ui.style());
         let columns = |rect: egui::Rect| {
-            let number = ((rect.width() - 8.0) * 0.22).clamp(48.0, 96.0);
             let right = rect.right() - 8.0;
-            [
+            let number = ((rect.width() - 18.0).max(0.0) * 0.22).min(96.0);
+            let edges = [
                 rect.left() + 10.0,
+                right - 3.0 * number,
                 right - 2.0 * number,
                 right - number,
                 right,
-            ]
+            ];
+            std::array::from_fn::<_, 4, _>(|i| {
+                egui::Rect::from_min_max(
+                    pos2(edges[i], rect.top()),
+                    pos2((edges[i + 1] - 4.0).max(edges[i]), rect.bottom()),
+                )
+            })
         };
 
         let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
@@ -410,7 +421,14 @@ impl WatchlistPanel {
                 Align2::RIGHT_CENTER
             };
             let text = ui.painter().text(
-                egui::pos2(x[index], header.center().y),
+                egui::pos2(
+                    if index == 0 {
+                        x[index].left()
+                    } else {
+                        x[index].right()
+                    },
+                    header.center().y,
+                ),
                 align,
                 label,
                 small.clone(),
@@ -486,10 +504,13 @@ impl WatchlistPanel {
                     };
                     let response = ui.interact(rect, list_id.with(index), sense);
                     if response.dragged() {
-                        response.dnd_set_drag_payload(RowDrag(index));
+                        response.dnd_set_drag_payload(RowDrag(list_id, index));
                     }
-                    if let Some(from) = response.dnd_hover_payload::<RowDrag>() {
-                        let y = if from.0 < index {
+                    if let Some(from) = response.dnd_hover_payload::<RowDrag>()
+                        && from.0 == list_id
+                        && sort.is_none()
+                    {
+                        let y = if from.1 < index {
                             rect.bottom()
                         } else {
                             rect.top()
@@ -497,20 +518,27 @@ impl WatchlistPanel {
                         ui.painter()
                             .hline(rect.x_range(), y, Stroke::new(2.0, theme.ui.accent));
                     }
-                    if let Some(from) = response.dnd_release_payload::<RowDrag>() {
-                        moved = Some((from.0, index));
+                    if let Some(from) = response.dnd_release_payload::<RowDrag>()
+                        && from.0 == list_id
+                        && sort.is_none()
+                        && from.1 < list.items.len()
+                    {
+                        moved = Some((from.1, index));
                     }
                     let x = columns(rect);
-                    let y = rect.center().y;
-                    let painter = ui.painter();
+                    let painter = ui.painter().clone();
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
-                            painter.text(
-                                egui::pos2(x[0], y),
-                                Align2::LEFT_CENTER,
-                                title.to_uppercase(),
-                                small.clone(),
-                                theme.ui.text_secondary,
+                            ui.put(
+                                rect.shrink2(vec2(10.0, 0.0)),
+                                Label::new(
+                                    RichText::new(title.to_uppercase())
+                                        .font(small.clone())
+                                        .color(theme.ui.text_secondary),
+                                )
+                                .truncate()
+                                .halign(Align::LEFT)
+                                .selectable(false),
                             );
                             response.context_menu(|ui| {
                                 ui.text_edit_singleline(title);
@@ -535,12 +563,16 @@ impl WatchlistPanel {
                                     egui::Rect::from_min_size(rect.min, vec2(3.0, rect.height()));
                                 painter.rect_filled(bar, 0.0, flag.color());
                             }
-                            painter.text(
-                                egui::pos2(x[0], y),
-                                Align2::LEFT_CENTER,
-                                symbol.as_str(),
-                                font.clone(),
-                                theme.ui.text,
+                            ui.put(
+                                x[0],
+                                Label::new(
+                                    RichText::new(symbol.as_str())
+                                        .font(font.clone())
+                                        .color(theme.ui.text),
+                                )
+                                .truncate()
+                                .halign(Align::LEFT)
+                                .selectable(false),
                             );
                             if let Some(quote) = quotes.get(symbol.as_str()) {
                                 let decimals = quote
@@ -559,12 +591,14 @@ impl WatchlistPanel {
                                     (2, signed(change, usize::from(decimals)), color),
                                     (3, format!("{}%", signed(quote.change_percent(), 2)), color),
                                 ] {
-                                    painter.text(
-                                        egui::pos2(x[column], y),
-                                        Align2::RIGHT_CENTER,
-                                        text,
-                                        font.clone(),
-                                        color,
+                                    ui.put(
+                                        x[column],
+                                        Label::new(
+                                            RichText::new(text).font(font.clone()).color(color),
+                                        )
+                                        .truncate()
+                                        .halign(Align::RIGHT)
+                                        .selectable(false),
                                     );
                                 }
                             }
@@ -622,7 +656,7 @@ impl WatchlistPanel {
 /// `value` with an explicit sign, unsigned when zero, or a dash when not finite.
 fn signed(value: f64, decimals: usize) -> String {
     if !value.is_finite() {
-        "\u{2014}".to_owned()
+        "-".to_owned()
     } else if value == 0.0 {
         format!("{:.*}", decimals, 0.0)
     } else {
@@ -704,6 +738,12 @@ mod tests {
             ]
         );
         assert_eq!(list.to_text(), "AAPL,###Tech,MSFT,###Crypto,BTCUSD");
+        let mut list = list;
+        for invalid in ["", " ", "AAPL", "A,B", "A\nB", "A\rB", "###Section"] {
+            assert!(!list.add_symbol(invalid), "{invalid:?}");
+        }
+        assert!(list.add_symbol(" EURUSD "));
+        assert_eq!(Watchlist::from_text("Mine", &list.to_text()), list);
         let mut titled = Watchlist::new("Titles");
         titled
             .items
@@ -775,6 +815,62 @@ mod tests {
         assert_eq!(quote(-37.63, -10.0).change_percent(), -276.3);
     }
 
+    #[test]
+    fn row_drops_only_reorder_their_own_unsorted_list() {
+        for (foreign, sorted, expected) in [
+            (false, false, "A,C,B"),
+            (true, false, "A,B,C"),
+            (false, true, "A,B,C"),
+        ] {
+            let ctx = egui::Context::default();
+            let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "A,B,C")]);
+            panel.sort = sorted.then_some((WatchlistColumn::Symbol, false));
+            let frame = |panel: &mut WatchlistPanel, events| {
+                let mut id = egui::Id::NULL;
+                ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        id = ui.scope_id().with(("watchlist_rows", 0_usize));
+                        panel.show(ui);
+                    },
+                )
+                .drop_without_applying_deltas();
+                id
+            };
+            let id = frame(&mut panel, vec![]);
+            let target = ctx.read_response(id.with(1_usize)).unwrap().rect.center();
+            frame(
+                &mut panel,
+                vec![
+                    egui::Event::PointerMoved(target),
+                    egui::Event::PointerButton {
+                        pos: target,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+            );
+            egui::DragAndDrop::set_payload(
+                &ctx,
+                RowDrag(if foreign { id.with("other") } else { id }, 2),
+            );
+            frame(
+                &mut panel,
+                vec![egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+            assert_eq!(panel.lists()[0].to_text(), expected);
+        }
+    }
+
     /// After a click, the arrow keys move through the displayed order and select each symbol.
     #[test]
     fn arrow_keys_after_a_click_select_the_next_displayed_symbol() {
@@ -794,7 +890,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    list_id = ui.scope_id().with("watchlist_rows");
+                    list_id = ui.scope_id().with(("watchlist_rows", 0_usize));
                     action = panel.show(ui);
                 },
             )

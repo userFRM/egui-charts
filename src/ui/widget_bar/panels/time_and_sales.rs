@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 
 use chrono_tz::Tz;
-use egui::{Align2, Sense, Stroke, TextStyle, Ui, vec2};
+use egui::{Align, Align2, Label, RichText, Sense, Stroke, TextStyle, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
 use super::object_tree::format_price;
@@ -115,26 +115,31 @@ impl TimeAndSalesPanel {
             }
         });
         let mut removed = None;
-        for (index, filter) in self.filters.iter_mut().enumerate() {
-            ui.push_id(index, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Size ≥");
-                    ui.add(
-                        egui::DragValue::new(&mut filter.min_size)
-                            .range(0.0..=f64::MAX)
-                            .speed(1.0),
-                    );
-                    ui.checkbox(&mut filter.sound, "Sound");
-                    if IconButton::new(&icons::TRASH)
-                        .tooltip("Remove filter")
-                        .show(ui)
-                        .clicked()
-                    {
-                        removed = Some(index);
-                    }
-                });
+        egui::ScrollArea::vertical()
+            .id_salt("size_filters")
+            .max_height(ui.available_height() * 0.4)
+            .show(ui, |ui| {
+                for (index, filter) in self.filters.iter_mut().enumerate() {
+                    ui.push_id(index, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Size ≥");
+                            ui.add(
+                                egui::DragValue::new(&mut filter.min_size)
+                                    .range(0.0..=f64::MAX)
+                                    .speed(1.0),
+                            );
+                            ui.checkbox(&mut filter.sound, "Sound");
+                            if IconButton::new(&icons::TRASH)
+                                .tooltip("Remove filter")
+                                .show(ui)
+                                .clicked()
+                            {
+                                removed = Some(index);
+                            }
+                        });
+                    });
+                }
             });
-        }
         if let Some(index) = removed {
             self.filters.remove(index);
         }
@@ -144,14 +149,32 @@ impl TimeAndSalesPanel {
         let small = TextStyle::Small.resolve(ui.style());
         let columns = |rect: egui::Rect| {
             let right = rect.right() - 8.0;
-            let size = (rect.width() * 0.3).clamp(56.0, 110.0);
-            [rect.left() + 8.0, right - size - 8.0, right]
+            let width = (rect.width() - 16.0).max(0.0);
+            let edges = [
+                rect.left() + 8.0,
+                rect.left() + 8.0 + width * 0.34,
+                right - width * 0.3,
+                right,
+            ];
+            std::array::from_fn::<_, 3, _>(|i| {
+                egui::Rect::from_min_max(
+                    pos2(edges[i], rect.top()),
+                    pos2((edges[i + 1] - 4.0).max(edges[i]), rect.bottom()),
+                )
+            })
         };
         let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
         let x = columns(header);
         for (index, label) in ["Time", "Price", "Size"].into_iter().enumerate() {
             ui.painter().text(
-                egui::pos2(x[index], header.center().y),
+                egui::pos2(
+                    if index == 0 {
+                        x[index].left()
+                    } else {
+                        x[index].right()
+                    },
+                    header.center().y,
+                ),
                 if index == 0 {
                     Align2::LEFT_CENTER
                 } else {
@@ -188,7 +211,6 @@ impl TimeAndSalesPanel {
                         Sense::hover(),
                     );
                     let x = columns(rect);
-                    let y = rect.center().y;
                     let color = match trade.side {
                         Some(TradeSide::Buy) => theme.chart.candle_up,
                         Some(TradeSide::Sell) => theme.chart.candle_down,
@@ -213,16 +235,16 @@ impl TimeAndSalesPanel {
                             color,
                         ),
                     ] {
-                        ui.painter().text(
-                            egui::pos2(x[column], y),
-                            if column == 0 {
-                                Align2::LEFT_CENTER
-                            } else {
-                                Align2::RIGHT_CENTER
-                            },
-                            text,
-                            font.clone(),
-                            color,
+                        ui.put(
+                            x[column],
+                            Label::new(RichText::new(text).font(font.clone()).color(color))
+                                .truncate()
+                                .halign(if column == 0 {
+                                    Align::LEFT
+                                } else {
+                                    Align::RIGHT
+                                })
+                                .selectable(false),
                         );
                     }
                 }

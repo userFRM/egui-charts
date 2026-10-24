@@ -1653,9 +1653,10 @@ impl DemoApp {
         let symbols: Vec<String> = self.watchlist.symbols().map(str::to_owned).collect();
         for symbol in symbols {
             if let Some(mut quote) = live::watchlist_quote(&symbol, now) {
-                if symbol == self.chart.symbol()
+                if symbol.eq_ignore_ascii_case(self.chart.symbol())
                     && let Some((last, prev_close)) = self.live.day_change()
                 {
+                    self.watchlist.set_selected(&symbol);
                     quote.last = last;
                     quote.prev_close = prev_close;
                 }
@@ -1702,8 +1703,8 @@ impl DemoApp {
                 }
             }
             WatchlistAction::Import => self.watchlist_import = Some(String::new()),
-            WatchlistAction::Export { name, text } => {
-                let file = format!("{name}.txt");
+            WatchlistAction::Export { text, .. } => {
+                let file = "watchlist.txt";
                 #[cfg(not(target_arch = "wasm32"))]
                 let path = std::env::temp_dir().join(file);
                 #[cfg(target_arch = "wasm32")]
