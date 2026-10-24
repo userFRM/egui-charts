@@ -28,9 +28,10 @@ impl Chart {
     ) {
         // Normal markers of added series, and all markers in other panes, are painted with
         // each series.
-        for item in self.main_pane_series().filter(|item| {
-            layer != MarkerZOrder::Normal && item.marker_options.z_order == layer
-        }) {
+        for item in self
+            .main_pane_series()
+            .filter(|item| layer != MarkerZOrder::Normal && item.marker_options.z_order == layer)
+        {
             let map = self.series_map(item, ctx.rect);
             self.paint_series_markers(ctx.painter, ctx.rect, item, map);
         }

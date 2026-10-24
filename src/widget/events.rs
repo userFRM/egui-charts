@@ -240,7 +240,11 @@ impl Chart {
                 .map(|index| shown[index].volume)
                 .into_iter()
                 .collect();
-            (SeriesId::VOLUME, magnet(map, values), pane_index(super::PaneId::MAIN))
+            (
+                SeriesId::VOLUME,
+                magnet(map, values),
+                pane_index(super::PaneId::MAIN),
+            )
         } else if plot.contains(pos) {
             let snapped = bar_at.map_or(pos, |index| {
                 self.snap_crosshair(pos, &self.last_price_map, index)
