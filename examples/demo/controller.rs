@@ -113,6 +113,35 @@ fn indicator_from_tree_id(id: usize) -> Option<SeriesId> {
     }
 }
 
+/// How much of the window the account panel takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccountPanelSize {
+    Closed,
+    Normal,
+    Minimized,
+    Maximized,
+}
+
+/// Example tiles beside the paper account in the broker picker. They show what a host's tiles
+/// carry; connecting to them only reports that the demo has no broker behind them.
+fn example_brokers() -> Vec<egui_charts::ui::trading::BrokerTile> {
+    use egui_charts::ui::trading::BrokerTile;
+    [
+        ("example-stocks", "Example Stocks", 4.8, true),
+        ("example-futures", "Example Futures", 4.6, false),
+        ("example-crypto", "Example Crypto", 4.5, false),
+    ]
+    .into_iter()
+    .map(|(id, name, rating, featured)| {
+        let mut tile = BrokerTile::new(id, name);
+        tile.rating = Some(rating);
+        tile.featured = featured;
+        tile.description = format!("{name} is an example tile: a host lists its brokers here.");
+        tile
+    })
+    .collect()
+}
+
 /// Which right-hand side panel is open, if any.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SidePanel {
@@ -247,9 +276,14 @@ pub struct DemoApp {
     alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
 
-    // Session-only paper account, traded through the library's order ticket.
+    // Session-only paper account, connected from the broker picker and traded through the
+    // library's order ticket and account panel.
     trading: egui_charts::ui::trading::Trading,
     paper: Arc<egui_charts::services::PaperAccount>,
+    broker_picker: egui_charts::ui::trading::BrokerPicker,
+    account_panel: AccountPanelSize,
+    // The account settings ask whether to reset the paper account.
+    paper_reset: bool,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
     // Text pasted for a watchlist import, while its window is open.
@@ -468,6 +502,9 @@ impl DemoApp {
             paper: Arc::new(
                 egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
             ),
+            broker_picker: egui_charts::ui::trading::BrokerPicker::new(example_brokers()),
+            account_panel: AccountPanelSize::Normal,
+            paper_reset: false,
             watchlist: WatchlistPanel::new(
                 cc.storage
                     .and_then(|storage| eframe::get_value(storage, "watchlists"))
@@ -518,7 +555,6 @@ impl DemoApp {
             .templates
             .set_storage(app.template_storage.clone());
         app.alerts.set_service(app.alert_host.clone());
-        app.trading.set_service(app.paper.clone());
         app.top_toolbar.state.can_trade = true;
         app.watchlist.set_selected(symbol);
         app.alert_dialog.set_storage(app.alert_host.clone());
@@ -1088,6 +1124,7 @@ impl eframe::App for DemoApp {
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.show_side_panel(ui);
+        self.show_account_panel(ui, panel_bg);
         self.show_bottom_toolbar(ui, panel_bg);
         self.show_chart(ui, panel_bg);
         self.show_replay_control(&ctx);
@@ -1266,7 +1303,13 @@ impl DemoApp {
                 return;
             }
             TopToolbarAction::ToggleTrading => {
-                self.trading.toggle_ticket(self.chart.symbol().to_owned());
+                if !self.trading.is_connected() {
+                    self.broker_picker.open();
+                } else if self.account_panel == AccountPanelSize::Closed {
+                    self.account_panel = AccountPanelSize::Normal;
+                } else {
+                    self.account_panel = AccountPanelSize::Closed;
+                }
                 return;
             }
             TopToolbarAction::Layout(action) => {
@@ -1906,6 +1949,104 @@ impl DemoApp {
         }
     }
 
+    /// The account panel of the connected broker, under the chart and its interval bar.
+    fn show_account_panel(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        use egui_charts::ui::trading::{AccountPanelAction, BrokerPickerAction, BrokerTile};
+
+        match self.broker_picker.show(ui.ctx()) {
+            Some(BrokerPickerAction::Connect(id)) if id == BrokerTile::PAPER => {
+                self.trading.set_service(self.paper.clone());
+                self.trading.account_panel.broker = "Paper Trading".to_owned();
+                self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
+                self.account_panel = AccountPanelSize::Normal;
+            }
+            Some(BrokerPickerAction::Connect(_)) => {
+                self.notify("Example brokers have no account behind them in this demo");
+            }
+            Some(BrokerPickerAction::NeedBroker) => {
+                self.notify("Host action: show how to open a broker account");
+            }
+            _ => {}
+        }
+        if self.paper_reset {
+            let result = egui_charts::ui_kit::modal::dialogs::ConfirmDialog::new(
+                "paper_reset",
+                "Reset paper account",
+                "Close every position, cancel every order and return the balance to 100,000 USD?",
+            )
+            .confirm_text("Reset")
+            .show(ui.ctx(), &mut self.paper_reset);
+            if result.is_confirmed() {
+                self.paper.reset();
+                self.trading.set_service(self.paper.clone());
+                self.paper_reset = false;
+            }
+        }
+        if !self.trading.is_connected() || self.account_panel == AccountPanelSize::Closed {
+            return;
+        }
+        let height = match self.account_panel {
+            AccountPanelSize::Minimized => 42.0,
+            AccountPanelSize::Maximized => (ui.available_height() - 160.0).max(320.0),
+            _ => 320.0,
+        };
+        let symbol = self.chart.symbol().to_owned();
+        let trading = &mut self.trading;
+        let action = egui::Panel::bottom("account_panel")
+            .exact_size(height)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
+                top: 1,
+                ..egui::Margin::ZERO
+            }))
+            .show(ui, |ui| trading.show_account_panel(ui, &symbol))
+            .inner;
+        match action {
+            Some(AccountPanelAction::SelectSymbol(symbol)) => {
+                if DemoSymbol::catalog()
+                    .iter()
+                    .any(|spec| spec.symbol.eq_ignore_ascii_case(&symbol))
+                {
+                    self.switch_symbol(&symbol);
+                } else {
+                    self.notify(format!("{symbol} has no synthetic data in this demo"));
+                }
+            }
+            Some(AccountPanelAction::Disconnect) => self.trading.disconnect(),
+            Some(AccountPanelAction::Settings) => self.paper_reset = true,
+            Some(AccountPanelAction::Minimize) => {
+                self.account_panel = if self.account_panel == AccountPanelSize::Minimized {
+                    AccountPanelSize::Normal
+                } else {
+                    AccountPanelSize::Minimized
+                };
+            }
+            Some(AccountPanelAction::Maximize) => {
+                self.account_panel = if self.account_panel == AccountPanelSize::Maximized {
+                    AccountPanelSize::Normal
+                } else {
+                    AccountPanelSize::Maximized
+                };
+            }
+            Some(AccountPanelAction::Export { name, csv }) => {
+                let file = format!("{}.csv", name.to_lowercase().replace(' ', "_"));
+                #[cfg(not(target_arch = "wasm32"))]
+                let path = std::env::temp_dir().join(file);
+                #[cfg(target_arch = "wasm32")]
+                let path = std::path::PathBuf::from(file);
+                #[cfg(not(target_arch = "wasm32"))]
+                let result = std::fs::write(&path, csv).map_err(|e| e.to_string());
+                #[cfg(target_arch = "wasm32")]
+                let result = browser_download(csv.as_bytes(), &path);
+                self.notify(match result {
+                    Ok(()) => format!("Export successful: {}", path.display()),
+                    Err(error) => format!("Export failed: {error}"),
+                });
+            }
+            _ => {}
+        }
+    }
+
     fn show_bottom_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::Panel::bottom("bottom")
             .exact_size(39.0)
@@ -2095,7 +2236,11 @@ impl DemoApp {
                         egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
                         egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
                     };
-                    self.trading.trade(self.chart.symbol().to_owned(), side);
+                    if self.trading.is_connected() {
+                        self.trading.trade(self.chart.symbol().to_owned(), side);
+                    } else {
+                        self.broker_picker.open();
+                    }
                 }
                 if self.replay.is_none() {
                     if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {

@@ -307,6 +307,12 @@ pub mod icons {
     pub const LAYOUT_TABS: Icon = crate::icon_from_path!("ui/layout-tabs.svg");
     pub const LAYOUT_SETUP: Icon = crate::icon_from_path!("ui/layout-setup.svg");
     pub const CLOSE: Icon = crate::icon_from_path!("ui/close.svg");
+    /// Three columns, for a table's column chooser.
+    pub const COLUMNS: Icon = crate::icon_from_path!("ui/columns.svg");
+    /// An empty square, for maximizing a panel.
+    pub const MAXIMIZE: Icon = crate::icon_from_path!("ui/maximize.svg");
+    /// A square with a plus.
+    pub const SQUARE_PLUS: Icon = crate::icon_from_path!("ui/square-plus.svg");
     pub const MOVE_PANE: Icon = crate::icon_from_path!("ui/move-pane.svg");
     pub const WATCHLIST: Icon = crate::icon_from_path!("ui/watchlist.svg");
     pub const UI_DRAG_HANDLE: Icon = crate::icon_from_path!("ui/drag-handle.svg");

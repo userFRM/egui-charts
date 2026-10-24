@@ -1,9 +1,13 @@
-//! Trading from the chart through the host's [`Broker`]: the order ticket and the Buy and Sell
-//! buttons. The broker holds the account; this module shows what it pushes and sends the orders
-//! the user confirms.
+//! Trading from the chart through the host's [`Broker`]: the broker picker, the order ticket,
+//! the Buy and Sell buttons and the account panel. The broker holds the account; this module
+//! shows what it pushes and sends the orders the user confirms.
 
+mod account_panel;
+mod broker_picker;
 mod ticket;
 
+pub use account_panel::{AccountPanel, AccountPanelAction};
+pub use broker_picker::{BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use ticket::{Bracket, BracketMode, OrderPreset};
 
 use std::sync::Arc;
@@ -70,6 +74,8 @@ pub struct Trading {
     pub one_click: bool,
     /// The quantity and brackets the user saved in the ticket. Persist them in the host.
     pub presets: Vec<OrderPreset>,
+    /// The account panel's names and the history it lists.
+    pub account_panel: AccountPanel,
 }
 
 impl Default for Trading {
@@ -91,6 +97,7 @@ impl Default for Trading {
             quantity: 1.0,
             one_click: false,
             presets: Vec::new(),
+            account_panel: AccountPanel::default(),
         }
     }
 }
@@ -106,6 +113,19 @@ impl Trading {
         self.connect();
     }
 
+    /// Disconnects from the broker, dropping the account's state.
+    pub fn disconnect(&mut self) {
+        self.listener = None;
+        self.service = None;
+        self.ticket.open = false;
+        self.connect();
+    }
+
+    /// Whether a broker is connected.
+    pub fn is_connected(&self) -> bool {
+        self.service.is_some()
+    }
+
     fn connect(&mut self) {
         self.pending = None;
         self.rules = TradingRules::new("");
@@ -113,6 +133,7 @@ impl Trading {
         self.account = None;
         self.orders.clear();
         self.positions.clear();
+        self.account_panel.clear();
         // Stream keys are even; symbol rules use odd keys, and order replies use zero.
         self.generation += 2;
         let (listener, events) = Listener::new(&self.inbox, self.generation);
@@ -287,6 +308,7 @@ impl Trading {
         if !valid {
             return;
         }
+        self.account_panel.record(&event);
         match event {
             AccountEvent::Account(account) => {
                 if matches!(self.pending, Some(TradingLineAction::Modify(_, _)))
