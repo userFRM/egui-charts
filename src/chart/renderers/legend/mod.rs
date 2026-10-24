@@ -153,6 +153,8 @@ impl<'a> Legend<'a> {
         ui.skip_ahead_auto_ids(1);
         let painter = ui.painter().with_clip_rect(bounds);
         let mut layout = Layout::new(&painter, bounds, colors);
+        #[cfg(feature = "icons")]
+        let title_start = layout.pos;
         if self.show_title {
             if let Some(badge) = &self.badge {
                 let rect = layout.reserve(Vec2::splat(18.0));
@@ -176,7 +178,6 @@ impl<'a> Legend<'a> {
                         + 16.0
                 })
                 .sum::<f32>();
-            let title_start = layout.pos;
             let title_width = (bounds.right() - layout.pos.x - status_width - 64.0).max(0.0);
             layout.text(title, typography::XXL, colors.text, title_width);
             for status in self.statuses {
@@ -189,75 +190,6 @@ impl<'a> Legend<'a> {
                 painter.rect_filled(rect, 4.0, status.background);
                 painter.galley(rect.center() - galley.size() / 2.0, galley, status.color);
             }
-            #[cfg(feature = "icons")]
-            {
-                // Reserve the same space before and during hover so values cannot shift under controls.
-                let controls = layout.reserve(Vec2::new(48.0, 20.0));
-                let title_rect = Rect::from_min_max(
-                    title_start,
-                    Pos2::new(controls.right().min(bounds.right()), title_start.y + 24.0),
-                );
-                let hovered = ui.rect_contains_pointer(title_rect);
-                let flagged = ui
-                    .ctx()
-                    .data(|data| data.get_temp::<bool>(id.with("flag")).unwrap_or(false));
-                if hovered
-                    || flagged
-                    || egui::Popup::is_id_open(ui.ctx(), id.with("more").with("popup"))
-                {
-                    let flag =
-                        Rect::from_min_size(controls.min, Vec2::splat(20.0)).intersect(bounds);
-                    let more =
-                        Rect::from_min_size(controls.min + Vec2::new(28.0, 0.0), Vec2::splat(20.0))
-                            .intersect(bounds);
-                    painter.rect_stroke(
-                        title_rect,
-                        3,
-                        Stroke::new(1.0, theme.ui.border_control),
-                        egui::StrokeKind::Inside,
-                    );
-                    let flag_response = ui.interact(flag, id.with("flag"), Sense::click());
-                    crate::icons::icons::FLAG_MARK
-                        .as_image_tinted(
-                            Vec2::splat(16.0),
-                            if flagged {
-                                theme.ui.accent
-                            } else {
-                                theme.ui.text
-                            },
-                        )
-                        .paint_at(ui, flag.shrink(2.0));
-                    if flag_response.on_hover_text("Flag instrument").clicked() {
-                        ui.ctx()
-                            .data_mut(|data| data.insert_temp(id.with("flag"), !flagged));
-                    }
-                    let more_response = ui
-                        .interact(more, id.with("more"), Sense::click())
-                        .on_hover_text("Series actions");
-                    crate::icons::icons::UI_MORE_HORIZONTAL
-                        .as_image_tinted(Vec2::splat(16.0), theme.ui.text)
-                        .paint_at(ui, more.shrink(2.0));
-                    egui::Popup::menu(&more_response).show(|ui| {
-                        if ui.button("Copy symbol").clicked() {
-                            ui.ctx().copy_text(self.symbol.to_owned());
-                            ui.close();
-                        }
-                        if ui.button("Copy values").clicked() {
-                            ui.ctx().copy_text(format!(
-                                "Open {} High {} Low {} Close {} Vol {}",
-                                self.bar.open,
-                                self.bar.high,
-                                self.bar.low,
-                                self.bar.close,
-                                self.bar.volume
-                            ));
-                            ui.close();
-                        }
-                    });
-                }
-            }
-            #[cfg(not(feature = "icons"))]
-            let _ = title_start;
         }
         let precision = self.price_precision(self.bar.close);
         if self.show_ohlc {
@@ -286,6 +218,75 @@ impl<'a> Legend<'a> {
                 colors.bar_color(change >= 0.0),
                 bounds.width(),
             );
+        }
+        // Values follow the title directly; the controls take the space after them on hover.
+        #[cfg(feature = "icons")]
+        if self.show_title {
+            let controls = layout.reserve(Vec2::new(48.0, 20.0));
+            let row_right = if layout.pos.y > title_start.y {
+                bounds.right()
+            } else {
+                controls.right().min(bounds.right())
+            };
+            let title_rect =
+                Rect::from_min_max(title_start, Pos2::new(row_right, controls.bottom()));
+            let hovered = ui.rect_contains_pointer(title_rect);
+            let flagged = ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(id.with("flag")).unwrap_or(false));
+            if hovered
+                || flagged
+                || egui::Popup::is_id_open(ui.ctx(), id.with("more").with("popup"))
+            {
+                let flag = Rect::from_min_size(controls.min, Vec2::splat(20.0)).intersect(bounds);
+                let more =
+                    Rect::from_min_size(controls.min + Vec2::new(28.0, 0.0), Vec2::splat(20.0))
+                        .intersect(bounds);
+                painter.rect_stroke(
+                    title_rect,
+                    3,
+                    Stroke::new(1.0, theme.ui.border_control),
+                    egui::StrokeKind::Inside,
+                );
+                let flag_response = ui.interact(flag, id.with("flag"), Sense::click());
+                crate::icons::icons::FLAG_MARK
+                    .as_image_tinted(
+                        Vec2::splat(16.0),
+                        if flagged {
+                            theme.ui.accent
+                        } else {
+                            theme.ui.text
+                        },
+                    )
+                    .paint_at(ui, flag.shrink(2.0));
+                if flag_response.on_hover_text("Flag instrument").clicked() {
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(id.with("flag"), !flagged));
+                }
+                let more_response = ui
+                    .interact(more, id.with("more"), Sense::click())
+                    .on_hover_text("Series actions");
+                crate::icons::icons::UI_MORE_HORIZONTAL
+                    .as_image_tinted(Vec2::splat(16.0), theme.ui.text)
+                    .paint_at(ui, more.shrink(2.0));
+                egui::Popup::menu(&more_response).show(|ui| {
+                    if ui.button("Copy symbol").clicked() {
+                        ui.ctx().copy_text(self.symbol.to_owned());
+                        ui.close();
+                    }
+                    if ui.button("Copy values").clicked() {
+                        ui.ctx().copy_text(format!(
+                            "Open {} High {} Low {} Close {} Vol {}",
+                            self.bar.open,
+                            self.bar.high,
+                            self.bar.low,
+                            self.bar.close,
+                            self.bar.volume
+                        ));
+                        ui.close();
+                    }
+                });
+            }
         }
         if self.show_title || self.show_ohlc || self.show_change || self.show_change_percent {
             layout.new_row();

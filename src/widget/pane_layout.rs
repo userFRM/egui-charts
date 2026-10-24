@@ -218,6 +218,7 @@ impl Chart {
         if rect.height() < 48.0 {
             return;
         }
+        let hovered = ui.rect_contains_pointer(rect);
         let rect = Rect::from_min_max(rect.min + egui::vec2(0.0, 24.0), rect.max);
         if self
             .studies
@@ -232,6 +233,7 @@ impl Chart {
             .indicators()
             .iter()
             .any(|study| study.is_overlay())
+            || !(hovered || egui::Popup::is_any_open(ui.ctx()))
         {
             return;
         }
@@ -245,7 +247,10 @@ impl Chart {
                 .max_rect(button),
         );
         let mut moved = None;
-        child.menu_button("...", |ui| {
+        egui::containers::menu::MenuButton::from_button(
+            egui::Button::new("...").frame_when_inactive(false),
+        )
+        .ui(&mut child, |ui| {
             for (idx, study) in self
                 .studies
                 .indicators()

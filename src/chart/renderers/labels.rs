@@ -877,7 +877,7 @@ mod tests {
                     .collect();
                 if width >= 1200.0 {
                     assert!(centres.iter().all(|y| (*y - centres[0]).abs() < 0.1));
-                } else if width <= 400.0 {
+                } else if width <= 300.0 {
                     assert!(centres.iter().any(|y| *y > centres[0]));
                 }
                 for field in text
