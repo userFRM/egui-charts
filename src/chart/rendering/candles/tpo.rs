@@ -262,7 +262,7 @@ fn cached_profiles(
 
 /// Render a real Market Profile for the sessions of the visible bars, anchored in chart time.
 ///
-/// This is the live entry point of the TPO chart type. It builds the profiles
+/// This is the live entry point of the TPO chart type and the TPO study. It builds the profiles
 /// of the whole sessions that the bars `visible` of `full_data` belong to, in the sessions of
 /// `clock`, reuses unchanged sessions, and anchors each profile at its session's first bar, or
 /// at the plot's left edge while that bar is out of view, fitting it within the session's width. Coordinates flow through the chart's shared price

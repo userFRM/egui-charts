@@ -1050,6 +1050,29 @@ impl Chart {
                 );
             }
         }
+        // TPO studies draw the chart type's profiles beside the bars.
+        for config in studies
+            .indicators()
+            .iter()
+            .filter(|study| study.is_visible() && study.is_overlay())
+            .filter_map(|study| study.tpo())
+            .filter(|_| !self.chart_type.is_time_independent())
+        {
+            rendering::candles::tpo::render_live_tpo(
+                &clipped_painter,
+                price_rect,
+                &self.state.data().bars,
+                start_idx..start_idx + visible_data.len(),
+                self.state.revision(),
+                &price_map,
+                config,
+                &bar_clock,
+                idx_to_coord,
+                chart_rect.min.x,
+                self.config.bullish_color,
+                self.config.bearish_color,
+            );
+        }
         renderers::IndicatorRenderer::render(
             &price_ctx,
             studies.indicators(),
