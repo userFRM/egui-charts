@@ -17,7 +17,7 @@ use chrono::{Duration, Utc};
 use egui_charts::ChartType;
 use egui_charts::model::{Bar, BarData, PriceLine, Timeframe};
 use egui_charts::theme::Theme;
-use egui_charts::widget::{Chart, SeriesId};
+use egui_charts::widget::{Chart, ChartEvent, SeriesId};
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -34,6 +34,7 @@ fn main() -> eframe::Result {
 
 struct BasicChartApp {
     chart: Chart,
+    last_click: Option<(chrono::DateTime<Utc>, f64)>,
 }
 
 impl BasicChartApp {
@@ -52,7 +53,10 @@ impl BasicChartApp {
         chart.set_timeframe(Timeframe::Hour1);
         chart.set_price_lines(SeriesId::MAIN, vec![entry]);
 
-        Self { chart }
+        Self {
+            chart,
+            last_click: None,
+        }
     }
 }
 
@@ -67,6 +71,14 @@ impl eframe::App for BasicChartApp {
         egui::CentralPanel::default().show(ui, |ui| {
             // Render the chart -- it handles pan, zoom, and crosshair automatically
             self.chart.show(ui);
+            for event in self.chart.drain_events() {
+                if let ChartEvent::Click { position, .. } = event {
+                    self.last_click = Some((position.time, position.price));
+                }
+            }
+            if let Some((time, price)) = self.last_click {
+                ui.label(format!("Clicked {time}: {price:.2}"));
+            }
         });
     }
 }

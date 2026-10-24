@@ -29,6 +29,7 @@ impl Chart {
             let (bars, rejected) = clean(bars, &self.clock());
             self.price_series[at].bars = bars;
             self.price_series[at].feed.rejected_bars += rejected;
+            self.data_loaded(series);
             return;
         }
         if !self.main_series_present || !holds_bars(series, "set_data") {
@@ -46,6 +47,7 @@ impl Chart {
         let first_changed = self.state.set_data(BarData::from_bars(bars));
         self.project_drawing_points();
         self.bars_changed(before, first_changed);
+        self.data_loaded(series);
     }
 
     /// Merges `bar` into the bars of `series` as [`Sink::push_bar`](crate::data::Sink::push_bar)

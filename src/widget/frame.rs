@@ -295,6 +295,7 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        self.host_events.volume_map = None;
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
@@ -356,6 +357,7 @@ impl Chart {
             }
             ui.ctx().request_discard("Chart measured its axis labels");
         }
+        self.record_host_events(ui);
         response
     }
 
@@ -1653,6 +1655,7 @@ impl Chart {
                             .and_then(|instrument| instrument.volume_decimals)
                             .unwrap_or(0),
                     ));
+                    self.host_events.volume_map = Some(map);
                     let mut pos = hover_pos;
                     if let Some(index) = index {
                         pos.x = coords.idx_to_x(index);
@@ -1923,6 +1926,7 @@ impl Chart {
             self.apply_study_action(action);
         }
         self.main_pane_actions(ui, rect, chart_rect);
+        self.record_host_click(ui, &response);
         shown
     }
 }

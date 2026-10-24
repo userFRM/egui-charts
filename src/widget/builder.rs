@@ -151,6 +151,7 @@ impl Chart {
             last_ratio_lock: false,
             axis_hover: None,
             scale_settings_requested: false,
+            host_events: Default::default(),
             events: Vec::new(),
             event_click: None,
             timeframe: None,

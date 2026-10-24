@@ -124,7 +124,9 @@ mod anchors;
 pub mod builder;
 mod clipboard;
 mod crosshair;
+mod events;
 mod feed;
+pub use events::{ChartEvent, ChartPointer};
 mod frame;
 mod history;
 pub(crate) mod interaction;
@@ -314,6 +316,7 @@ pub struct Chart {
     last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
+    host_events: events::HostEvents,
     events: Vec<crate::model::Marker>,
     event_click: Option<String>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
