@@ -36,7 +36,15 @@ impl Chart {
             })
             .flat_map(|study| {
                 (0..study.line_cnt())
-                    .filter(|line| study.plot_style(*line).visible)
+                    .filter(|line| {
+                        let plot = study.plot_style(*line);
+                        plot.visible
+                            && !matches!(
+                                plot.plot_type,
+                                crate::studies::PlotType::BarColor
+                                    | crate::studies::PlotType::BackgroundColor
+                            )
+                    })
                     .filter_map(move |line| study.plot_value(line, index))
             });
         if let Some(value) = snap_to_values(pos.y, map, ohlc.chain(studies)) {

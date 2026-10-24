@@ -118,15 +118,22 @@ impl Chart {
                 for price in [bar.open, bar.high, bar.low, bar.close] {
                     add_price(price);
                 }
-                for study in self
-                    .studies
-                    .indicators()
-                    .iter()
-                    .filter(|s| !strong && s.is_visible() && s.is_overlay())
-                {
-                    for line in (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible)
-                    {
-                        if let Some(price) = study.values().value(line, i) {
+                for study in self.studies.indicators().iter().filter(|s| {
+                    !strong
+                        && s.is_visible()
+                        && s.is_overlay()
+                        && s.scale() == crate::studies::StudyScale::Main
+                }) {
+                    for line in (0..study.line_cnt()).filter(|line| {
+                        let plot = study.plot_style(*line);
+                        plot.visible
+                            && !matches!(
+                                plot.plot_type,
+                                crate::studies::PlotType::BarColor
+                                    | crate::studies::PlotType::BackgroundColor
+                            )
+                    }) {
+                        if let Some(price) = study.plot_value(line, i) {
                             add_price(price);
                         }
                     }
@@ -236,7 +243,7 @@ mod tests {
         use crate::studies::{CustomIndicator, IndicatorValue};
         use egui::{Pos2, vec2};
 
-        for (magnet, strong, price, overlay_visible, snaps, offset, off_scale) in [
+        for ((magnet, strong, price, overlay_visible, snaps, offset, off_scale), kind) in [
             (true, false, 10.0, true, true, 3.0, false),
             (true, false, 20.0, true, true, 3.0, false),
             (true, false, 12.0, true, true, 3.0, false),
@@ -248,15 +255,44 @@ mod tests {
             (true, false, 20.0, false, false, 40.0, false),
             (true, true, 10.0, false, true, 40.0, false),
             (true, true, 20.0, false, true, 3.0, true),
-        ] {
+        ]
+        .into_iter()
+        .map(|case| (case, "main"))
+        .chain([
+            ((true, false, 15.0, true, false, 3.0, false), "independent"),
+            ((true, false, 15.0, true, false, 3.0, false), "none"),
+            ((true, false, 15.0, true, false, 3.0, false), "background"),
+            ((true, false, 15.0, true, true, 3.0, false), "displaced"),
+        ]) {
             let ctx = Context::default();
             let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
-            let overlay = CustomIndicator::new("Two levels", |bars| {
+            let overlay = CustomIndicator::new("Two levels", move |bars| {
                 bars.iter()
-                    .map(|_| IndicatorValue::Multiple(vec![15.0, 17.0]))
+                    .enumerate()
+                    .map(|(index, _)| {
+                        if kind == "displaced" && index % 3 != 0 {
+                            IndicatorValue::None
+                        } else {
+                            IndicatorValue::Multiple(vec![15.0, 17.0])
+                        }
+                    })
                     .collect()
             })
-            .with_line_cnt(2);
+            .with_line_cnt(2)
+            .with_offsets(vec![if kind == "displaced" { 1 } else { 0 }; 2])
+            .with_plot_types(vec![
+                if kind == "background" {
+                    crate::studies::PlotType::BackgroundColor
+                } else {
+                    crate::studies::PlotType::Line
+                };
+                2
+            ])
+            .with_scale(match kind {
+                "independent" => crate::studies::StudyScale::Independent,
+                "none" => crate::studies::StudyScale::None,
+                _ => crate::studies::StudyScale::Main,
+            });
             let id = chart.add_indicator(Box::new(overlay));
             chart.set_indicator_visible(id, overlay_visible);
             let single = chart.add_indicator(Box::new(CustomIndicator::new("One level", |bars| {

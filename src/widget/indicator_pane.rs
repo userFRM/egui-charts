@@ -394,8 +394,8 @@ impl IndicatorPane {
         &mut self,
         ui: &mut Ui,
         indicator: &dyn Indicator,
-        _bars: &[Bar],
-        visible_range: Range<usize>,
+        bars: &[Bar],
+        _visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) {
         if !indicator.is_visible() {
@@ -457,13 +457,7 @@ impl IndicatorPane {
 
         // Draw indicator lines with aligned coordinates
         self.draw_indicator_lines_aligned(
-            painter,
-            chart_rect,
-            indicator,
-            &visible_range,
-            y_min,
-            y_max,
-            &coords,
+            painter, chart_rect, indicator, bars, y_min, y_max, &coords,
         );
 
         // Draw y-axis labels
@@ -499,14 +493,14 @@ impl IndicatorPane {
         &mut self,
         ui: &mut Ui,
         indicator: &dyn Indicator,
-        _bars: &[Bar],
-        visible_range: Range<usize>,
+        bars: &[Bar],
+        _visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) -> Option<PaneInteraction> {
         self.show_aligned_interactive_in(
             ui,
             indicator,
-            visible_range,
+            bars,
             coords,
             None,
             false,
@@ -519,7 +513,7 @@ impl IndicatorPane {
         &mut self,
         ui: &mut Ui,
         indicator: &dyn Indicator,
-        visible_range: Range<usize>,
+        bars: &[Bar],
         coords: IndicatorCoordParams,
         plot_x: Option<egui::emath::Rangef>,
         collapsed: bool,
@@ -598,7 +592,15 @@ impl IndicatorPane {
                         pos.y,
                         &mapping.price,
                         (0..indicator.line_cnt())
-                            .filter(|line| indicator.plot_style(*line).visible)
+                            .filter(|line| {
+                                let plot = indicator.plot_style(*line);
+                                plot.visible
+                                    && !matches!(
+                                        plot.plot_type,
+                                        crate::studies::PlotType::BarColor
+                                            | crate::studies::PlotType::BackgroundColor
+                                    )
+                            })
                             .filter_map(|line| indicator.plot_value(line, index)),
                     )
                 {
@@ -635,7 +637,7 @@ impl IndicatorPane {
                 plot_painter,
                 chart_rect,
                 indicator,
-                &visible_range,
+                bars,
                 y_min,
                 y_max,
                 &coords,
@@ -745,7 +747,14 @@ impl IndicatorPane {
         let mut min_val = f64::MAX;
         let mut max_val = f64::MIN;
 
-        for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible) {
+        for line in (0..indicator.line_cnt()).filter(|line| {
+            let plot = indicator.plot_style(*line);
+            plot.visible
+                && !matches!(
+                    plot.plot_type,
+                    crate::studies::PlotType::BarColor | crate::studies::PlotType::BackgroundColor
+                )
+        }) {
             for bar in visible_range.clone() {
                 if let Some(value) = indicator.plot_value(line, bar) {
                     min_val = min_val.min(value);
@@ -1075,7 +1084,7 @@ impl IndicatorPane {
         painter: &egui::Painter,
         rect: Rect,
         indicator: &dyn Indicator,
-        _visible_range: &Range<usize>,
+        bars: &[Bar],
         y_min: f64,
         y_max: f64,
         coords: &IndicatorCoordParams,
@@ -1087,7 +1096,7 @@ impl IndicatorPane {
         crate::chart::renderers::IndicatorRenderer::render_study(
             &crate::chart::renderers::RenderContext::new(painter, rect),
             indicator,
-            &[],
+            bars,
             0,
             &mapping.price,
             &mapping,
@@ -1396,42 +1405,73 @@ mod tests {
 
     #[test]
     fn volume_units_reach_pane_axes_and_legends() {
-        use crate::studies::OnBalanceVolume;
-        let mut study = OnBalanceVolume::new();
+        use crate::studies::{OnBalanceVolume, StudyFormat};
         let bars: Vec<_> = [10.0, 11.0, 12.0]
             .into_iter()
             .map(|price| Bar::new(chrono::Utc::now(), price, price, price, price, 1_000_000.0))
             .collect();
-        study.calculate(&bars);
-        let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
-        let job = pane.legend_job(&study, Color32::WHITE, Color32::BLACK);
-        assert!(job.text.contains("2.00M"), "{}", job.text);
-        let ctx = egui::Context::default();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            pane.draw_y_axis_labels(
-                ui.painter(),
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0)),
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(300.0, 300.0)),
-                0.0,
-                3_000_000.0,
-                &study,
-                Some(crate::scales::PriceScaleId::Right),
-                None,
+        let shifted = CustomIndicator::new("Shifted", |_| {
+            vec![
+                IndicatorValue::Single(0.0),
+                IndicatorValue::Single(1_000_000.0),
+                IndicatorValue::Single(2_000_000.0),
+            ]
+        })
+        .with_value_format(StudyFormat::Volume)
+        .with_offsets(vec![1]);
+        for (mut study, expected) in [
+            (
+                Box::new(OnBalanceVolume::new()) as Box<dyn Indicator>,
+                "2.00M",
+            ),
+            (Box::new(shifted), "1.00M"),
+        ] {
+            study.calculate(&bars);
+            let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+            let job = pane.legend_job(study.as_ref(), Color32::WHITE, Color32::BLACK);
+            assert!(job.text.contains(expected), "{}", job.text);
+            let ctx = egui::Context::default();
+            let mut study = crate::studies::ConfiguredStudy::new(study);
+            study.set_overlay(true);
+            let studies: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+            let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(0);
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
+                pane.draw_y_axis_labels(
+                    ui.painter(),
+                    rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(300.0, 300.0)),
+                    0.0,
+                    3_000_000.0,
+                    studies[0].as_ref(),
+                    Some(crate::scales::PriceScaleId::Right),
+                    None,
+                );
+                let mut legend = crate::chart::renderers::Legend::new("SAMPLE", "1h", &bars[2]);
+                legend.studies = &studies;
+                legend.bar_index = 2;
+                legend.instrument = Some(&instrument);
+                legend.show(ui, rect);
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            // Both the last-value tag and overlay legend use displayed values and study units.
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| label.as_str() == expected)
+                    .count(),
+                2,
+                "{labels:?}"
             );
-        });
-        let labels: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                _ => None,
-            })
-            .collect();
-        output.drop_without_applying_deltas();
-        assert!(
-            labels.iter().any(|label| label.ends_with('M')),
-            "{labels:?}"
-        );
+        }
     }
 
     #[test]

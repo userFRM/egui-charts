@@ -195,7 +195,15 @@ impl Chart {
                         return None;
                     }
                     (0..study.line_cnt())
-                        .filter(|line| study.plot_style(*line).visible)
+                        .filter(|line| {
+                            let plot = study.plot_style(*line);
+                            plot.visible
+                                && !matches!(
+                                    plot.plot_type,
+                                    crate::studies::PlotType::BarColor
+                                        | crate::studies::PlotType::BackgroundColor
+                                )
+                        })
                         .find_map(|line| {
                             displayed_range
                                 .clone()
@@ -213,9 +221,15 @@ impl Chart {
                     let idx = self.study_ids.iter().position(|study| study == id).unwrap();
                     let study = self.studies.indicators()[idx].as_ref();
                     if study.is_visible() {
-                        for line in
-                            (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible)
-                        {
+                        for line in (0..study.line_cnt()).filter(|line| {
+                            let plot = study.plot_style(*line);
+                            plot.visible
+                                && !matches!(
+                                    plot.plot_type,
+                                    crate::studies::PlotType::BarColor
+                                        | crate::studies::PlotType::BackgroundColor
+                                )
+                        }) {
                             for value in displayed_range
                                 .clone()
                                 .filter_map(|bar| study.plot_value(line, bar))
@@ -322,7 +336,15 @@ impl Chart {
                                 .filter(|study| study.is_visible())
                                 .flat_map(|study| {
                                     (0..study.line_cnt())
-                                        .filter(|line| study.plot_style(*line).visible)
+                                        .filter(|line| {
+                                            let plot = study.plot_style(*line);
+                                            plot.visible
+                                                && !matches!(
+                                                    plot.plot_type,
+                                                    crate::studies::PlotType::BarColor
+                                                        | crate::studies::PlotType::BackgroundColor
+                                                )
+                                        })
                                         .filter_map(move |line| study.plot_value(line, bar))
                                 }),
                         )
@@ -338,7 +360,7 @@ impl Chart {
                 if let Some(interaction) = panel.show_aligned_interactive_in(
                     &mut child,
                     indicator.as_ref(),
-                    visible_range.clone(),
+                    self.state.shown(),
                     coords,
                     Some(plot.x_range()),
                     collapsed,

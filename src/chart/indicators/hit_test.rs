@@ -100,7 +100,7 @@ where
         let hit = match plot.plot_type {
             PlotType::BackgroundColor => (click_pos.x - point.x).abs() <= coords.bar_spacing * 0.5,
             PlotType::BarColor => false,
-            PlotType::Histogram | PlotType::Columns | PlotType::Area => {
+            PlotType::Histogram | PlotType::Columns => {
                 let baseline = value_to_y(0.0);
                 let baseline = if baseline.is_finite() {
                     baseline.clamp(rect.top(), rect.bottom())
@@ -113,6 +113,24 @@ where
                 )
                 .expand(HIT_TOLERANCE)
                 .contains(click_pos)
+            }
+            PlotType::Area => {
+                let Some(next) = indicator.plot_value(line_idx, bar + 1) else {
+                    continue;
+                };
+                let next = Pos2::new(coords.idx_to_x(bar + 1), value_to_y(next));
+                if !next.is_finite() || click_pos.x < point.x || click_pos.x > next.x {
+                    continue;
+                }
+                let t = (click_pos.x - point.x) / (next.x - point.x);
+                let edge = point.y + t * (next.y - point.y);
+                let baseline = value_to_y(0.0);
+                let baseline = if baseline.is_finite() {
+                    baseline.clamp(rect.top(), rect.bottom())
+                } else {
+                    rect.bottom()
+                };
+                (edge.min(baseline)..=edge.max(baseline)).contains(&click_pos.y)
             }
             PlotType::Circles
             | PlotType::Crosses
@@ -215,6 +233,11 @@ mod tests {
                 (PlotType::Circles, Pos2::new(99.0, 20.0), false),
                 (PlotType::Circles, Pos2::new(149.0, 20.0), true),
                 (PlotType::Line, Pos2::new(99.0, 20.0), true),
+                (PlotType::Columns, Pos2::new(79.0, 60.0), true),
+                (PlotType::StepLine, Pos2::new(99.0, 20.0), true),
+                (PlotType::Area, Pos2::new(99.0, 60.0), true),
+                (PlotType::Area, Pos2::new(99.0, 5.0), false),
+                (PlotType::Area, Pos2::new(160.0, 60.0), false),
             ] {
                 let mut study = ConfiguredStudy::new(Box::new(
                     CustomIndicator::new("Plot", |_| vec![IndicatorValue::Single(80.0); 2])

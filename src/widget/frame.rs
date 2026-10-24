@@ -1220,22 +1220,26 @@ impl Chart {
         }
         let mut independent_axis_width = 0.0_f32;
         if show_price_axis {
-            let slot_width = self
-                .measured_axis_width
-                .max(self.config.right_axis_width)
-                .max(self.config.left_axis_width);
+            let axes = studies.indicators().iter().filter(|study| {
+                study.is_visible()
+                    && study.is_overlay()
+                    && !study.is_volume()
+                    && study.scale() == crate::studies::StudyScale::Independent
+            });
             let mut edge = price_rect.left()
                 - if self.config.show_left_axis {
                     self.config.left_axis_width.max(self.measured_axis_width)
                 } else {
                     0.0
                 };
-            for study in studies.indicators().iter().filter(|study| {
-                study.is_visible()
-                    && study.is_overlay()
-                    && !study.is_volume()
-                    && study.scale() == crate::studies::StudyScale::Independent
-            }) {
+            let padding = self
+                .config
+                .padding
+                .max(0.0)
+                .min(rect.width().min(rect.height()).max(0.0) / 2.0);
+            let slot_width =
+                (edge - rect.left() - padding).max(0.0) / axes.clone().count().max(1) as f32;
+            for study in axes {
                 let mapping = crate::chart::renderers::study_mapping(study.as_ref(), &coords);
                 let axis = Rect::from_min_max(
                     Pos2::new(edge - slot_width, price_rect.top()),
@@ -2948,13 +2952,22 @@ mod tests {
 
     #[test]
     fn plot_uses_the_interior_and_configured_axis_widths() {
-        let mut chart = chart(&[100.0], &[110.0]);
-        for (width, height, padding, left, right) in [
-            (800.0, 600.0, 0.0, 0.0, 70.0),
-            (640.0, 450.0, 2.0, 50.0, 80.0),
-            (45.0, 20.0, 0.0, 0.0, 70.0),
-            (800.0, 600.0, 8.0, 0.0, 0.0),
+        for (width, height, padding, left, right, studies, gutter) in [
+            (800.0, 600.0, 0.0, 0.0, 70.0, 0, 0.0),
+            (640.0, 450.0, 2.0, 50.0, 80.0, 0, 0.0),
+            (45.0, 20.0, 0.0, 0.0, 70.0, 0, 0.0),
+            (800.0, 600.0, 8.0, 0.0, 0.0, 0, 0.0),
+            (240.0, 450.0, 0.0, 0.0, 70.0, 3, 85.0),
+            (320.0, 450.0, 0.0, 50.0, 70.0, 3, 100.0),
+            (800.0, 600.0, 0.0, 0.0, 70.0, 1, 70.0),
         ] {
+            let mut chart = chart(&[100.0], &[110.0]);
+            for _ in 0..studies {
+                chart.add_indicator(Box::new(
+                    crate::studies::CustomIndicator::new("Independent", |_| Vec::new())
+                        .with_scale(crate::studies::StudyScale::Independent),
+                ));
+            }
             chart.config.padding = padding;
             chart.config.show_left_axis = left > 0.0;
             chart.config.left_axis_width = left;
@@ -2966,11 +2979,11 @@ mod tests {
             assert_eq!(layout.price_rect.top(), widget.top() + padding);
             assert_eq!(
                 layout.price_rect.left(),
-                widget.left() + (padding + left).min(width)
+                widget.left() + (padding + left + gutter).min(width)
             );
             assert_eq!(
                 layout.price_rect.width(),
-                (width - 2.0 * padding - left - right).max(0.0)
+                (width - 2.0 * padding - left - right - gutter).max(0.0)
             );
             assert_eq!(
                 layout.price_rect.height(),

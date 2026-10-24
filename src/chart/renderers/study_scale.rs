@@ -76,7 +76,12 @@ pub(crate) fn render_study_axis(
     let mut labels = Vec::new();
     if show_values && let Some(bar) = study.values().len().checked_sub(1) {
         for line in 0..study.line_cnt() {
-            if study.plot_style(line).visible
+            let plot = study.plot_style(line);
+            if plot.visible
+                && !matches!(
+                    plot.plot_type,
+                    PlotType::BarColor | PlotType::BackgroundColor
+                )
                 && let Some(value) = study.plot_value(line, bar)
             {
                 labels.push((value, Some(study.plot_style(line).color)));

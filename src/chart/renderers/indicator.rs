@@ -156,15 +156,20 @@ fn paint_band(
     inverted: Option<Color32>,
 ) {
     let polygon = |points: Vec<Pos2>, below: bool| {
-        painter.add(egui::Shape::convex_polygon(
-            points,
-            if below {
-                inverted.unwrap_or(color)
-            } else {
-                color
-            },
-            Stroke::NONE,
-        ));
+        let color = if below {
+            inverted.unwrap_or(color)
+        } else {
+            color
+        };
+        // Adjacent bands share edges; antialiasing each polygon leaves visible seams.
+        let mut mesh = egui::Mesh::default();
+        for point in points {
+            mesh.colored_vertex(point, color);
+        }
+        for index in 2..mesh.vertices.len() as u32 {
+            mesh.add_triangle(0, index - 1, index);
+        }
+        painter.add(egui::Shape::mesh(mesh));
     };
     let (left, right) = (a.y - c.y, b.y - d.y);
     if (left < 0.0 && right > 0.0) || (left > 0.0 && right < 0.0) {
@@ -346,7 +351,9 @@ impl IndicatorRenderer {
                 color = next_color;
                 if plot.plot_type == PlotType::BarColor {
                     if values.value(line_idx, i).is_some()
-                        && let Some(bar) = i.checked_sub(bars_start).and_then(|i| bars.get(i))
+                        && let Some(bar) = display_bar
+                            .checked_sub(bars_start)
+                            .and_then(|i| bars.get(i))
                     {
                         let width = coords.bar_spacing * 0.8;
                         let open = price_scale.price_to_y(bar.open);
@@ -376,7 +383,11 @@ impl IndicatorRenderer {
 
                 if let Some(price) = price {
                     // Convert price to screen Y coord
-                    let y = price_scale.price_to_y(price);
+                    let y = if plot.plot_type == PlotType::BackgroundColor {
+                        context.rect.center().y
+                    } else {
+                        price_scale.price_to_y(price)
+                    };
 
                     // Keep off-scale endpoints: clipping must retain segments crossing the plot.
                     if y.is_finite() {
@@ -468,9 +479,7 @@ impl IndicatorRenderer {
             .iter()
             .filter(|_| (0..line_cnt).any(|line| indicator.plot_style(line).visible))
         {
-            if marker.bar < coords.start_idx
-                || marker.bar >= coords.start_idx + bars.len()
-                || !marker.value.is_finite()
+            if marker.bar < display_start || marker.bar >= display_end || !marker.value.is_finite()
             {
                 continue;
             }
@@ -482,6 +491,9 @@ impl IndicatorRenderer {
                 CrossDirection::Up => (1.0, DESIGN_TOKENS.semantic.extended.success),
                 CrossDirection::Down => (-1.0, DESIGN_TOKENS.semantic.extended.error),
             };
+            if !at.is_finite() {
+                continue;
+            }
             let triangle = vec![
                 at + egui::vec2(0.0, sign * 4.0),
                 at + egui::vec2(-4.0, sign * 11.0),
@@ -637,8 +649,8 @@ mod tests {
                     assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Path(path) if path.points.len() == 3 && path.fill == color)).count(), 2);
                 }
                 PlotType::Area => {
-                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
-                        if path.points == [points[0], points[1], Pos2::new(20.0, 20.0), Pos2::new(10.0, 20.0)] && path.fill == color)));
+                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Mesh(mesh)
+                        if mesh.vertices.iter().map(|vertex| vertex.pos).collect::<Vec<_>>() == [points[0], points[1], Pos2::new(20.0, 20.0), Pos2::new(10.0, 20.0)] && mesh.vertices.iter().all(|vertex| vertex.color == color))));
                 }
                 PlotType::BackgroundColor => {
                     assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == color && rect.rect.height() == 100.0)).count(), 2);
@@ -702,7 +714,11 @@ mod tests {
             let bands: Vec<_> = shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    Shape::Path(path) if path.fill.a() == 51 => Some(path),
+                    Shape::Mesh(mesh)
+                        if mesh.vertices.iter().all(|vertex| vertex.color.a() == 51) =>
+                    {
+                        Some(mesh)
+                    }
                     _ => None,
                 })
                 .collect();
@@ -710,23 +726,23 @@ mod tests {
             assert_eq!(bands.len(), 2);
             let crossing = Pos2::new(209.0, 60.0);
             for band in &bands {
-                assert_eq!(band.points.len(), 3);
-                assert!(band.points.contains(&crossing), "{:?}", band.points);
+                assert_eq!(band.vertices.len(), 3);
+                assert!(band.vertices.iter().any(|vertex| vertex.pos == crossing));
                 assert!(
-                    band.points
+                    band.vertices
                         .iter()
-                        .all(|point| (194.0..=224.0).contains(&point.x))
+                        .all(|vertex| (194.0..=224.0).contains(&vertex.pos.x))
                 );
             }
-            assert_eq!(bands[0].fill, blue);
-            assert_eq!(bands[1].fill, red);
+            assert!(bands[0].vertices.iter().all(|vertex| vertex.color == blue));
+            assert!(bands[1].vertices.iter().all(|vertex| vertex.color == red));
         }
     }
 
     #[test]
     fn bar_colours_preserve_bodies_on_inverted_scales() {
         use crate::studies::{CustomIndicator, IndicatorValue};
-        let bars: Vec<_> = [(1.0, 2.0), (2.0, 1.0)]
+        let bars: Vec<_> = [(1.0, 2.0), (2.0, 0.5)]
             .into_iter()
             .map(|(open, close)| {
                 Bar::new(Utc.timestamp_opt(0, 0).unwrap(), open, 2.5, 0.5, close, 1.0)
@@ -742,7 +758,8 @@ mod tests {
                 })
             });
         study.calculate(&bars);
-        for inverted in [false, true] {
+        for (inverted, offset) in [(false, 0), (true, 0), (false, 1), (true, 1)] {
+            let study = study.clone().with_offsets(vec![offset]);
             let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(240.0, 120.0));
             let map = PriceMap::new(
                 PriceTransform::default(),
@@ -764,7 +781,16 @@ mod tests {
             });
             let shapes = std::mem::take(&mut output.shapes);
             output.drop_without_applying_deltas();
-            for color in [Color32::GREEN, Color32::RED] {
+            for (color, bottom) in [
+                (Color32::GREEN, if offset == 0 { 80.0 } else { 100.0 }),
+                (Color32::RED, 100.0),
+            ] {
+                if offset == 1 && color == Color32::RED {
+                    assert!(!shapes.iter().any(
+                        |shape| matches!(&shape.shape, Shape::Rect(body) if body.fill == color)
+                    ));
+                    continue;
+                }
                 let body = shapes
                     .iter()
                     .find_map(|shape| match &shape.shape {
@@ -772,7 +798,12 @@ mod tests {
                         _ => None,
                     })
                     .unwrap();
-                assert_eq!(body.y_range(), egui::emath::Rangef::new(40.0, 80.0));
+                let expected = if inverted {
+                    egui::emath::Rangef::new(120.0 - bottom, 80.0)
+                } else {
+                    egui::emath::Rangef::new(40.0, bottom)
+                };
+                assert_eq!(body.y_range(), expected);
             }
         }
     }
@@ -811,7 +842,7 @@ mod tests {
                 assert!(
                     painted
                         .iter()
-                        .any(|shape| matches!(shape, Shape::Path(path) if path.fill.a() == 51)),
+                        .any(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.vertices.iter().all(|vertex| vertex.color.a() == 51))),
                     "band between the outer lines"
                 );
             }
@@ -849,7 +880,16 @@ mod tests {
         for (study, filled, marked) in [
             (Box::new(MARibbon::new()) as Box<dyn Indicator>, true, false),
             (Box::new(MARibbon::muted()), false, false),
-            (Box::new(cross), false, true),
+            (Box::new(cross.clone()), false, true),
+            (
+                {
+                    let mut pane = crate::studies::ConfiguredStudy::new(Box::new(cross));
+                    pane.set_overlay(false);
+                    Box::new(pane)
+                },
+                false,
+                true,
+            ),
         ] {
             for (_, theme) in crate::theme::presets() {
                 let mut chart = chart(&[0.0], &[1.0, 2.0]);

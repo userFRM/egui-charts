@@ -139,10 +139,14 @@ pub(crate) fn render_study_tags(
     let transform = map.transform();
     for line in 0..study.line_cnt() {
         let plot_style = study.plot_style(line);
-        let Some(value) = values.value(line, bar) else {
+        let Some(value) = study.plot_value(line, bar) else {
             continue;
         };
         if !plot_style.visible
+            || matches!(
+                plot_style.plot_type,
+                crate::studies::PlotType::BarColor | crate::studies::PlotType::BackgroundColor
+            )
             || plot_style.width <= 0.0
             || !map.range().contains(transform.to_scale(value))
         {

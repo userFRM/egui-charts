@@ -19,7 +19,7 @@ impl StudyFormat {
     /// Format a finite value with an optional precision override; non-finite values use a dash.
     pub fn format(self, value: f64, precision: Option<usize>) -> String {
         if !value.is_finite() {
-            return "\u{2014}".to_owned();
+            return "-".to_owned();
         }
         let decimals = precision
             .unwrap_or(match self {

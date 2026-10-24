@@ -284,8 +284,8 @@ mod tests {
             (Fixed(4), 0.0004, None, "0.0004"),
             (Fixed(4), 1.25, Some(1), "1.2"),
             (Fixed(usize::MAX), 1.0, None, "1.000000000000"),
-            (Volume, f64::NAN, None, "\u{2014}"),
-            (Percent, f64::INFINITY, None, "\u{2014}"),
+            (Volume, f64::NAN, None, "-"),
+            (Percent, f64::INFINITY, None, "-"),
         ] {
             assert_eq!(format.format(value, precision), expected, "{format:?}");
             if format == Volume && value > 0.0 && precision.is_none() {

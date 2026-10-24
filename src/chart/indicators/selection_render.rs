@@ -46,7 +46,13 @@ pub fn render_indicator_selection_dots<F>(
 ) where
     F: Fn(f64) -> f32,
 {
-    if !indicator.plot_style(line_idx).visible {
+    let plot = indicator.plot_style(line_idx);
+    if !plot.visible
+        || matches!(
+            plot.plot_type,
+            crate::studies::PlotType::BarColor | crate::studies::PlotType::BackgroundColor
+        )
+    {
         return;
     }
 
