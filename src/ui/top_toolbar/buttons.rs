@@ -389,11 +389,6 @@ impl Trigger<'_> {
         (icon + gap + label_width + theme.spacing.lg * 2.0).max(self.min_width)
     }
 
-    pub(crate) fn width(&self, ui: &Ui) -> f32 {
-        let theme = ui.active_theme();
-        self.width_for(&theme, self.galley(ui, &theme).size().x)
-    }
-
     pub(crate) fn show(self, ui: &mut Ui, open: bool) -> Response {
         let theme = ui.active_theme();
         let galley = self.galley(ui, &theme);

@@ -349,6 +349,45 @@ impl Chart {
         } else {
             self.show_internal(ui, None, footprint)
         };
+        if !self.chart_type.is_time_independent() {
+            let source_marks = self.mark_source.as_ref().map(|source| &source.page);
+            let mut coords = self.get_chart_mapping();
+            coords.start_idx = 0;
+            let baseline = if has_panes {
+                let axis_height = if self.config.show_time_labels {
+                    crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME
+                        .min(response.rect.height())
+                } else {
+                    0.0
+                };
+                response.rect.bottom() - axis_height
+            } else {
+                coords.rect.bottom()
+            };
+            coords.rect.max.y = baseline;
+            let mut events = self.events.clone();
+            if let Some(source) = source_marks {
+                events.extend_from_slice(&source.time_scale_marks);
+            }
+            for event in self
+                .time_scale_events
+                .iter()
+                .chain(source_marks.into_iter().flat_map(|p| &p.events))
+            {
+                if self.event_visibility.shows(event.kind) {
+                    events.push(
+                        crate::model::Marker::event(event.time, event.kind.label())
+                            .with_id(&event.id)
+                            .with_tooltip(format!("{}\n{}", event.title, event.details)),
+                    );
+                }
+            }
+            if let Some(id) =
+                renderers::render_event_band(ui, &events, self.state.shown(), &coords, baseline)
+            {
+                self.event_click = Some(id);
+            }
+        }
         if self.last_rendered_price_rect.width() > 1.0
             && self
                 .last_layout
@@ -672,6 +711,7 @@ impl Chart {
         self.draw_watermark(&painter, chart_rect);
 
         if self.state.data().is_empty() {
+            self.pump_marks(ui.ctx());
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -750,6 +790,8 @@ impl Chart {
         self.last_price_map = price_map;
         self.last_rendered_price_rect = price_rect;
         self.last_rendered_volume_rect = volume_rect;
+
+        self.pump_marks(ui.ctx());
 
         // Get visible data
         let visible_data = self.state.visible_data();
@@ -1122,13 +1164,26 @@ impl Chart {
         self.render_main_chart_selection(&painter, &coords, visible_data, main_visible_range);
 
         // Render bar marks (Widget API annotations)
-        if self.main_series_visible && !self.marks.is_empty() {
+        let source_marks = self.mark_source.as_ref().map(|source| &source.page);
+        let combined_marks;
+        let bar_marks = if let Some(source) = source_marks.filter(|p| !p.bar_marks.is_empty()) {
+            combined_marks = self
+                .marks
+                .iter()
+                .chain(&source.bar_marks)
+                .cloned()
+                .collect::<Vec<_>>();
+            &combined_marks
+        } else {
+            &self.marks
+        };
+        if self.main_series_visible && !bar_marks.is_empty() {
             let markers;
             let marks = if time_based {
-                &self.marks
+                bar_marks
             } else {
                 markers = rendering::candles::price_based::markers(
-                    &self.marks,
+                    bar_marks,
                     &self.state,
                     self.chart_type,
                     &self.chart_type_params,
@@ -1605,7 +1660,17 @@ impl Chart {
                     && self.config.show_legend_volume;
                 let (quote_action, study_settings, bottom) = ui
                     .push_id(shown.id, |ui| {
-                        legend.show_with_colors(ui, price_rect, &colors)
+                        legend.show_with_colors(
+                            ui,
+                            Rect::from_min_max(
+                                price_rect.min,
+                                egui::pos2(
+                                    (price_rect.right() - 48.0).min(rect.right() - 100.0),
+                                    price_rect.bottom(),
+                                ),
+                            ),
+                            &colors,
+                        )
                     })
                     .inner;
                 if let Some(action) = quote_action {
@@ -1835,17 +1900,6 @@ impl Chart {
             if rendering::axes::axis_settings_button(ui, axis_corner).clicked() {
                 self.scale_settings_requested = true;
             }
-        }
-        if time_based
-            && let Some(id) = renderers::render_event_band(
-                ui,
-                &self.events,
-                visible_data,
-                &coords,
-                price_rect.bottom(),
-            )
-        {
-            self.event_click = Some(id);
         }
 
         let current_price = self

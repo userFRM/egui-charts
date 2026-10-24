@@ -2,7 +2,8 @@
 //!
 //! Symbol search, interval, chart type, indicators, undo and redo on the left;
 //! save, quick search, settings, fullscreen and screenshot on the right. Layouts,
-//! alerts and replay live in the overflow menu, alongside controls that leave a narrow strip.
+//! alerts and replay keep their order in a horizontally scrolling strip after
+//! the fixed main menu.
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::ThemeExt;
@@ -68,21 +69,6 @@ const RIGHT: &[&[Slot]] = &[
     &[S::QuickSearch, S::Settings, S::Fullscreen, S::Screenshot],
 ];
 
-/// Controls that move into the overflow menu when the strip is too narrow, the first to go
-/// first.
-const OVERFLOW_ORDER: [Slot; 10] = [
-    S::QuickSearch,
-    S::Compare,
-    S::Templates,
-    S::Save,
-    S::Screenshot,
-    S::Fullscreen,
-    S::Indicators,
-    S::Settings,
-    S::Redo,
-    S::Undo,
-];
-
 /// Space between the controls of a group.
 fn gap() -> f32 {
     DESIGN_TOKENS.spacing.sm
@@ -133,7 +119,6 @@ impl Slot {
                 "Toggle Theme",
                 A::ThemeToggle,
             ),
-            S::Layouts | S::LayoutName => (&embedded_icons::LAYOUT_GRID, "Chart layout", A::None),
             S::Save => (&embedded_icons::DATABASE, "Save chart", A::Save),
             S::QuickSearch => (
                 &embedded_icons::QUICK_SEARCH,
@@ -147,7 +132,7 @@ impl Slot {
                 A::ToggleFullscreen,
             ),
             S::Screenshot => (&embedded_icons::CAMERA, "Snapshot", A::TakeScreenshot),
-            S::Interval | S::ChartType => return None,
+            S::Interval | S::ChartType | S::Layouts | S::LayoutName => return None,
         })
     }
 
@@ -222,7 +207,7 @@ impl TopToolbar {
         self
     }
 
-    /// Shows or hides the named top-toolbar control, including its overflow entry and popup.
+    /// Shows or hides the named top-toolbar control, including its popup.
     /// Controls for other components are ignored. This controls UI visibility; configure chart
     /// behavior and shortcut bindings separately through `ChartOptions` and `ShortcutMap`.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
@@ -267,9 +252,10 @@ impl TopToolbar {
     /// Show host menu content before the symbol and host actions at the far right.
     ///
     /// The menu slot is 48 px wide. Keep host actions compact; their measured width is
-    /// reserved before built-in controls compact or move into overflow. The closures
+    /// reserved alongside the built-in controls. The closures
     /// handle their own responses and may open menus or return actions to the host.
-    /// The strip scrolls horizontally when its remaining controls cannot fit.
+    /// The strip after the menu slot scrolls horizontally when its controls cannot fit, without a
+    /// visible scroll bar; the menu slot stays at the left edge.
     pub fn show_with_slots(
         &mut self,
         ui: &mut Ui,
@@ -277,63 +263,81 @@ impl TopToolbar {
         menu: impl FnOnce(&mut Ui),
         actions: impl FnOnce(&mut Ui),
     ) -> TopToolbarAction {
-        let width = ui.available_width();
-        egui::ScrollArea::horizontal()
-            .id_salt("top_toolbar")
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                ui.set_width(width);
-                ui.horizontal(|ui| {
-                    ui.set_height(self.config.height);
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    if !self.host_hidden.contains(&Control::Menu) {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(48.0, self.config.height),
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                            menu,
-                        );
+        ui.horizontal_top(|ui| {
+            if !self.host_hidden.contains(&Control::Menu) {
+                // The strip follows the slot directly but keeps the default spacing, which it
+                // uses as the margin when scrolling a focused control into view.
+                let spacing = std::mem::take(&mut ui.spacing_mut().item_spacing.x);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(48.0, self.config.height),
+                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                    menu,
+                );
+                ui.spacing_mut().item_spacing.x = spacing;
+            }
+            let width = ui.available_width();
+            egui::ScrollArea::horizontal()
+                .id_salt("top_toolbar")
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .scroll_source(egui::scroll_area::ScrollSource::ALL)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    let row = ui.horizontal(|ui| {
+                        ui.set_height(self.config.height);
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let width_id = ui.scope_id().with("host_actions_width");
+                        let actions_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
+                        let action = ui
+                            .allocate_ui_with_layout(
+                                egui::vec2(
+                                    (ui.available_width() - actions_width).max(0.0),
+                                    self.config.height,
+                                ),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| self.show_contents_desktop(ui, app_state.active_symbol()),
+                            )
+                            .inner;
+                        ui.add_space((ui.available_width() - actions_width).max(0.0));
+                        let mut host_action = TopToolbarAction::None;
+                        let width = ui
+                            .allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), self.config.height),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    for entry in &self.host_entries {
+                                        entry.show(ui, &mut host_action);
+                                    }
+                                    actions(ui);
+                                },
+                            )
+                            .response
+                            .rect
+                            .width();
+                        if (width - actions_width).abs() > 0.5 {
+                            ui.data_mut(|d| d.insert_temp(width_id, width));
+                            ui.ctx().request_discard("Host actions changed width");
+                        }
+                        if host_action != TopToolbarAction::None {
+                            host_action
+                        } else {
+                            action
+                        }
+                    });
+                    if let Some(response) = ui
+                        .ctx()
+                        .memory(|m| m.focused())
+                        .and_then(|id| ui.ctx().read_response(id))
+                        && response.gained_focus()
+                        && row.response.rect.contains_rect(response.rect)
+                    {
+                        response.scroll_to_me(None);
                     }
-                    let width_id = ui.scope_id().with("host_actions_width");
-                    let actions_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
-                    let action = ui
-                        .allocate_ui_with_layout(
-                            egui::vec2(
-                                (ui.available_width() - actions_width).max(0.0),
-                                self.config.height,
-                            ),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| self.show_contents_desktop(ui, app_state.active_symbol()),
-                        )
-                        .inner;
-                    ui.add_space((ui.available_width() - actions_width).max(0.0));
-                    let mut host_action = TopToolbarAction::None;
-                    let width = ui
-                        .allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), self.config.height),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                for entry in &self.host_entries {
-                                    entry.show(ui, &mut host_action);
-                                }
-                                actions(ui);
-                            },
-                        )
-                        .response
-                        .rect
-                        .width();
-                    if (width - actions_width).abs() > 0.5 {
-                        ui.data_mut(|d| d.insert_temp(width_id, width));
-                        ui.ctx().request_discard("Host actions changed width");
-                    }
-                    if host_action != TopToolbarAction::None {
-                        host_action
-                    } else {
-                        action
-                    }
+                    row.inner
                 })
                 .inner
-            })
-            .inner
+        })
+        .inner
     }
 
     fn show_menu(ui: &mut Ui, action: &mut TopToolbarAction, visible: [bool; 2]) {
@@ -371,98 +375,35 @@ impl TopToolbar {
             .text_styles
             .insert(egui::TextStyle::Button, font);
 
-        // The widest arrangement that fits: full, then icon-only labels, then overflow.
-        let available = ui.available_width();
-        let mut hidden: Vec<_> = [S::Alert, S::Replay, S::Layouts, S::LayoutName]
-            .into_iter()
-            .filter(|&c| self.is_shown(c))
-            .collect();
-        let compact = self.strip_width(ui, symbol, false, &hidden) > available;
-        if compact {
-            for control in OVERFLOW_ORDER {
-                if self.strip_width(ui, symbol, true, &hidden) <= available {
-                    break;
-                }
-                // Host-hidden slots never reach the overflow menu.
-                if self.is_shown(control) && !hidden.contains(&control) {
-                    hidden.push(control);
-                }
-            }
-        }
-        let hidden = hidden.as_slice();
         ui.add_space(DESIGN_TOKENS.spacing.lg);
-        self.show_groups(ui, LEFT, compact, hidden, symbol, &mut action);
-        let right = self.groups_width(ui, RIGHT, compact, hidden, symbol)
-            + Self::overflow_width(hidden)
-            + DESIGN_TOKENS.spacing.lg;
-        ui.add_space((ui.available_width() - right).max(0.0));
-        self.show_groups(ui, RIGHT, compact, hidden, symbol, &mut action);
-        if !hidden.is_empty() {
-            ui.add_space(gap());
-            self.show_overflow(ui, hidden, &mut action);
-        }
-
+        self.show_groups(ui, LEFT, symbol, &mut action);
+        let right = self.groups_width(ui, RIGHT) + DESIGN_TOKENS.spacing.lg;
+        ui.add_space((ui.available_width() - right).max(separator()));
+        self.show_groups(ui, RIGHT, symbol, &mut action);
+        ui.add_space(DESIGN_TOKENS.spacing.lg);
         action
     }
 
-    /// Width of `control` in the strip.
-    fn control_width(&self, ui: &Ui, control: Slot, compact: bool, symbol: &str) -> f32 {
-        let icon_button = self.config.btn_size;
-        match control {
-            S::Symbol => Self::symbol_trigger(symbol).width(ui),
-            S::Interval => self.timeframe_selector.trigger().width(ui),
-            S::ChartType => self.chart_type_selector.trigger().width(ui),
-            S::Compare | S::Templates => self.config.btn_size,
-            S::Save => Self::save_button(&self.config).width(ui),
-            S::Indicators if !compact => control.entry().map_or(icon_button, |(_, label, _)| {
-                IconTextButton::new(&embedded_icons::INDICATORS, label, &self.config).width(ui)
-            }),
-            _ => icon_button,
-        }
-    }
-
-    /// Width of the visible controls of `groups` with their gaps and separators.
-    fn groups_width(
-        &self,
-        ui: &Ui,
-        groups: &[&[Slot]],
-        compact: bool,
-        hidden: &[Slot],
-        symbol: &str,
-    ) -> f32 {
+    /// Width of the right-hand controls with their gaps and separators.
+    fn groups_width(&self, ui: &Ui, groups: &[&[Slot]]) -> f32 {
         let mut width = 0.0;
         let mut shown = 0_usize;
         for group in groups {
-            let visible = group
-                .iter()
-                .filter(|&&c| !hidden.contains(&c) && self.is_shown(c));
-            let (mut group_width, mut count) = (0.0, 0);
-            for &control in visible {
-                group_width += self.control_width(ui, control, compact, symbol);
+            let mut count = 0;
+            for &control in group.iter().filter(|&&c| self.is_shown(c)) {
+                width += match control {
+                    S::LayoutName => self.layout_menu.width(ui),
+                    S::Save => Self::save_button(&self.config).width(ui),
+                    _ => self.config.btn_size,
+                };
                 count += 1;
             }
             if count > 0 {
-                width += group_width + gap() * (count - 1) as f32;
+                width += gap() * (count - 1) as f32;
                 shown += 1;
             }
         }
         width + separator() * shown.saturating_sub(1) as f32
-    }
-
-    /// Width of the strip with `hidden` controls in the overflow menu.
-    fn strip_width(&self, ui: &Ui, symbol: &str, compact: bool, hidden: &[Slot]) -> f32 {
-        let left = self.groups_width(ui, LEFT, compact, hidden, symbol);
-        let right = self.groups_width(ui, RIGHT, compact, hidden, symbol);
-        // The two parts stay at least a separator apart.
-        2.0 * DESIGN_TOKENS.spacing.lg + left + separator() + right + Self::overflow_width(hidden)
-    }
-
-    fn overflow_width(hidden: &[Slot]) -> f32 {
-        if hidden.is_empty() {
-            0.0
-        } else {
-            gap() + super::config::BUTTON_SIZE
-        }
     }
 
     /// Draw the visible controls of `groups`, with separators between groups.
@@ -470,8 +411,6 @@ impl TopToolbar {
         &mut self,
         ui: &mut Ui,
         groups: &[&[Slot]],
-        compact: bool,
-        hidden: &[Slot],
         symbol: &str,
         action: &mut TopToolbarAction,
     ) {
@@ -480,7 +419,7 @@ impl TopToolbar {
             let visible: Vec<Slot> = group
                 .iter()
                 .copied()
-                .filter(|&c| !hidden.contains(&c) && self.is_shown(c))
+                .filter(|&c| self.is_shown(c))
                 .collect();
             if visible.is_empty() {
                 continue;
@@ -493,7 +432,7 @@ impl TopToolbar {
                 if i > 0 {
                     ui.add_space(gap());
                 }
-                self.show_control(ui, control, compact, symbol, action);
+                self.show_control(ui, control, symbol, action);
             }
         }
     }
@@ -502,11 +441,23 @@ impl TopToolbar {
         &mut self,
         ui: &mut Ui,
         control: Slot,
-        compact: bool,
         symbol: &str,
         action: &mut TopToolbarAction,
     ) {
         match control {
+            S::Layouts => {
+                if let Some(mode) = self.chart_grid_selector.show(ui) {
+                    *action = TopToolbarAction::Layout(LayoutAction::SelectGrid(mode));
+                }
+                return;
+            }
+            S::LayoutName => {
+                let layout_action = self.layout_menu.show(ui);
+                if layout_action != LayoutAction::None {
+                    *action = TopToolbarAction::Layout(layout_action);
+                }
+                return;
+            }
             S::Interval => {
                 if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui)
                     && let Some(tf) = tf.to_model()
@@ -606,10 +557,13 @@ impl TopToolbar {
                     "Nothing to redo"
                 })
             }
-            S::Indicators if !compact => IconTextButton::new(icon, label, &self.config).show(ui),
+            S::Indicators => IconTextButton::new(icon, label, &self.config).show(ui),
             _ => ToolbarIconButton::new(icon, label, &self.config).show(ui),
         };
         if response.clicked() {
+            if control == S::Replay {
+                self.state.toggle_replay();
+            }
             *action = clicked_action;
         }
     }
@@ -642,66 +596,6 @@ impl TopToolbar {
                     }
                 });
         }
-    }
-
-    /// The overflow button and its menu of the controls that left the strip.
-    fn show_overflow(&mut self, ui: &mut Ui, hidden: &[Slot], action: &mut TopToolbarAction) {
-        let response = IconButton::new(&embedded_icons::UI_MORE_HORIZONTAL)
-            .tooltip("More")
-            .show(ui);
-        egui::Popup::menu(&response).show(|ui| {
-            ui.set_width(DESIGN_TOKENS.sizing.dialog.submenu_width);
-            let strip_order = LEFT.iter().chain(RIGHT).flat_map(|group| group.iter());
-            for control in strip_order.filter(|&c| hidden.contains(c)) {
-                if *control == S::Layouts {
-                    egui::containers::menu::SubMenuButton::new("Chart layout")
-                        .config(
-                            egui::containers::menu::MenuConfig::new()
-                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
-                        )
-                        .ui(ui, |ui| {
-                            if let Some(mode) = self.chart_grid_selector.show_menu(ui) {
-                                *action = TopToolbarAction::Layout(LayoutAction::SelectGrid(mode));
-                            }
-                        });
-                } else if *control == S::LayoutName {
-                    egui::containers::menu::SubMenuButton::new("Named layouts")
-                        .config(
-                            egui::containers::menu::MenuConfig::new()
-                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
-                        )
-                        .ui(ui, |ui| {
-                            let a = self.layout_menu.show_menu(ui);
-                            if a != LayoutAction::None {
-                                *action = TopToolbarAction::Layout(a);
-                            }
-                        });
-                } else if *control == S::Templates {
-                    ui.menu_button("Indicator templates", |ui| {
-                        self.show_indicator_templates(ui, action)
-                    });
-                } else if let Some((icon, label, clicked_action)) = control.entry() {
-                    let enabled = match control {
-                        S::Undo => self.state.can_undo,
-                        S::Redo => self.state.can_redo,
-                        _ => true,
-                    };
-                    if ui
-                        .add_enabled(enabled, |ui: &mut Ui| {
-                            ListItem::new()
-                                .selected(*control == S::Replay && self.state.replay_active)
-                                .show_with_icon(ui, label, icon)
-                        })
-                        .clicked()
-                    {
-                        if *control == S::Replay {
-                            self.state.toggle_replay();
-                        }
-                        *action = clicked_action;
-                    }
-                }
-            }
-        });
     }
 
     fn symbol_trigger(symbol: &str) -> Trigger<'static> {
@@ -789,6 +683,8 @@ mod tests {
     fn menu_triggers_fit_without_input_outlines_or_chart_type_text() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for (width, host_label) in [
+                (320.0, "Host action"),
+                (393.0, "Host action"),
                 (640.0, "Host action"),
                 (1440.0, "Host action"),
                 (600.0, "Search   Trade   Publish"),
@@ -797,8 +693,17 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut toolbar = TopToolbar::new();
                 toolbar.timeframe_selector.current = Timeframe::new(1, TimeframeUnit::Hour);
+                toolbar.state.can_undo = true;
+                toolbar.state.can_redo = true;
+                ctx.global_style_mut(|style| {
+                    style.scroll_animation = egui::style::ScrollAnimation::none();
+                    style.spacing.scroll.kinetic.decay_time = 0.0;
+                });
+                let mut menu_rect = None;
                 let mut frame = |events| {
                     let mut host_rect = Rect::NOTHING;
+                    let mut action = TopToolbarAction::None;
+                    let mut strip = Rect::NOTHING;
                     let output = ctx.run_ui(
                         RawInput {
                             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 50.0))),
@@ -806,11 +711,19 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
-                            toolbar.show_with_slots(
+                            action = toolbar.show_with_slots(
                                 ui,
                                 &State,
                                 |ui| {
-                                    IconButton::new(&embedded_icons::MENU).show(ui);
+                                    let rect = IconButton::new(&embedded_icons::MENU)
+                                        .tooltip("Menu")
+                                        .show(ui)
+                                        .rect;
+                                    assert_eq!(
+                                        *menu_rect.get_or_insert(rect),
+                                        rect,
+                                        "menu must not scroll with the strip"
+                                    );
                                 },
                                 |ui| {
                                     host_rect = crate::ui_kit::buttons::Button::new(host_label)
@@ -819,6 +732,7 @@ mod tests {
                                         .rect;
                                 },
                             );
+                            strip = ui.min_rect();
                             if !ui.ctx().will_discard() {
                                 assert!(
                                     ui.min_rect().right() <= width,
@@ -827,10 +741,14 @@ mod tests {
                             }
                         },
                     );
-                    (output, host_rect)
+                    (output, host_rect, action, strip)
                 };
-                let (mut output, host_rect) = frame(vec![]);
+                let (mut output, host_rect, _, strip) = frame(vec![]);
                 output.textures_delta.clear();
+                assert_eq!(strip.height(), 38.0, "scrollbar must take no space");
+                if width < 1000.0 {
+                    assert!(host_rect.left() > width, "controls must stay in the row");
+                }
                 let mut interval = false;
                 for shape in &output.shapes {
                     match &shape.shape {
@@ -838,7 +756,12 @@ mod tests {
                             assert_ne!(text.galley.text(), "Candles");
                             interval |= text.galley.text() == "1h";
                             assert!(
-                                text.galley.rect.translate(text.pos.to_vec2()).right() <= width,
+                                text.galley
+                                    .rect
+                                    .translate(text.pos.to_vec2())
+                                    .intersect(shape.clip_rect)
+                                    .right()
+                                    <= width,
                                 "{} outside toolbar at {} with width {}",
                                 text.galley.text(),
                                 text.pos.x,
@@ -867,31 +790,152 @@ mod tests {
                 }
                 output.drop_without_applying_deltas();
                 assert!(interval);
+                if width < 1000.0 {
+                    let pointer = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    };
+                    let touch = |pos, phase| Event::Touch {
+                        device_id: egui::TouchDeviceId(0),
+                        id: egui::TouchId(0),
+                        pos,
+                        phase,
+                        force: None,
+                    };
+                    // Both ends are over the symbol button: movement must cancel its click.
+                    let start = pos2(200.0, 19.0);
+                    let end = pos2(100.0, 19.0);
+                    frame(vec![Event::PointerMoved(start)])
+                        .0
+                        .drop_without_applying_deltas();
+                    frame(vec![
+                        touch(start, egui::TouchPhase::Start),
+                        pointer(start, true),
+                    ])
+                    .0
+                    .drop_without_applying_deltas();
+                    frame(vec![
+                        touch(pos2(180.0, 19.0), egui::TouchPhase::Move),
+                        Event::PointerMoved(pos2(180.0, 19.0)),
+                    ])
+                    .0
+                    .drop_without_applying_deltas();
+                    frame(vec![
+                        touch(end, egui::TouchPhase::Move),
+                        Event::PointerMoved(end),
+                    ])
+                    .0
+                    .drop_without_applying_deltas();
+                    let (out, moved, action, _) = frame(vec![]);
+                    assert_eq!(action, TopToolbarAction::None);
+                    assert!(
+                        host_rect.left() - moved.left() > 50.0,
+                        "button drag must scroll: {host_rect:?} -> {moved:?}, dragged {:?}",
+                        ctx.dragged_id()
+                    );
+                    out.drop_without_applying_deltas();
+                    let (out, _, action, _) =
+                        frame(vec![touch(end, egui::TouchPhase::End), pointer(end, false)]);
+                    assert_eq!(action, TopToolbarAction::None, "swipe must not activate");
+                    out.drop_without_applying_deltas();
+                    for source in [
+                        egui::MouseWheelSource::Wheel,
+                        egui::MouseWheelSource::Trackpad,
+                    ] {
+                        for delta in [-2000.0, 2000.0] {
+                            let (out, before, _, _) =
+                                frame(vec![Event::PointerMoved(pos2(150.0, 19.0))]);
+                            out.drop_without_applying_deltas();
+                            frame(vec![Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                delta: vec2(delta, 0.0),
+                                phase: egui::TouchPhase::Move,
+                                source,
+                                modifiers: Default::default(),
+                            }])
+                            .0
+                            .drop_without_applying_deltas();
+                            for _ in 0..60 {
+                                frame(vec![]).0.drop_without_applying_deltas();
+                            }
+                            let (out, after, _, _) = frame(vec![]);
+                            out.drop_without_applying_deltas();
+                            assert!(
+                                (after.left() - before.left()) * delta > 0.0,
+                                "horizontal wheel must scroll"
+                            );
+                            if delta < 0.0 {
+                                assert!(after.right() <= width, "last control must be reachable");
+                            }
+                        }
+                    }
+                    frame(vec![Event::PointerMoved(start)])
+                        .0
+                        .drop_without_applying_deltas();
+                    frame(vec![
+                        touch(start, egui::TouchPhase::Start),
+                        pointer(start, true),
+                    ])
+                    .0
+                    .drop_without_applying_deltas();
+                    let (out, _, action, _) = frame(vec![
+                        touch(start, egui::TouchPhase::End),
+                        pointer(start, false),
+                    ]);
+                    assert_eq!(
+                        action,
+                        TopToolbarAction::OpenSymbolSearch,
+                        "plain tap must activate"
+                    );
+                    out.drop_without_applying_deltas();
+                    ctx.memory_mut(|m| {
+                        if let Some(id) = m.focused() {
+                            m.surrender_focus(id);
+                        }
+                    });
+                }
+                let mut labels = Vec::new();
                 let mut previous = None;
                 let mut reached_host = false;
                 for index in 0..30 {
-                    let (output, host_rect) = frame(vec![Event::Key {
+                    let (output, _, _, _) = frame(vec![Event::Key {
                         key: egui::Key::Tab,
                         physical_key: None,
                         pressed: true,
                         repeat: false,
                         modifiers: egui::Modifiers::NONE,
                     }]);
+                    for event in &output.platform_output.events {
+                        if let egui::output::OutputEvent::FocusGained(info) = event
+                            && let Some(label) = &info.label
+                        {
+                            labels.push(label.clone());
+                        }
+                    }
+                    output.drop_without_applying_deltas();
+                    for _ in 0..3 {
+                        frame(vec![]).0.drop_without_applying_deltas();
+                    }
+                    let (output, host_rect, _, _) = frame(vec![]);
                     let focused = ctx
                         .memory(|m| m.focused())
                         .and_then(|id| ctx.read_response(id))
                         .unwrap()
                         .rect;
+                    assert!(
+                        focused.left() >= 0.0 && focused.right() <= width,
+                        "focus must scroll into view: {focused:?}"
+                    );
                     assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-                        egui::Shape::Rect(r) if r.rect == focused.expand(2.0) && r.stroke.width == 2.0)), "focused control has no ring: {focused:?}");
+                        egui::Shape::Rect(r) if (r.rect.min - focused.expand(2.0).min).length() < 1.5 && (r.rect.max - focused.expand(2.0).max).length() < 1.5 && r.stroke.width == 2.0)), "focused control has no ring: {focused:?}");
                     output.drop_without_applying_deltas();
+                    let content_x = focused.center().x - host_rect.right();
                     if let Some(center) = previous {
-                        assert!(
-                            focused.center().x >= center,
-                            "Tab moved backwards: {focused:?}"
-                        );
+                        assert!(content_x >= center, "Tab moved backwards: {focused:?}");
                     }
-                    previous = Some(focused.center().x);
+                    previous = Some(content_x);
                     if focused == host_rect {
                         assert!(index > 1, "host actions preceded built-in controls");
                         reached_host = true;
@@ -899,6 +943,31 @@ mod tests {
                     }
                 }
                 assert!(reached_host);
+                assert_eq!(
+                    labels,
+                    [
+                        "Menu",
+                        "Symbol search",
+                        "Compare symbols",
+                        "1 hour",
+                        "Candles",
+                        "Indicators",
+                        "Indicator templates",
+                        "Chart layout",
+                        "Alert",
+                        "Replay",
+                        "Undo",
+                        "Redo",
+                        "Named layouts",
+                        "Save chart",
+                        "Quick Search",
+                        "Settings",
+                        "Fullscreen",
+                        "Snapshot",
+                        host_label,
+                    ],
+                    "accessible controls must keep their order at every width"
+                );
             }
         }
     }
@@ -908,200 +977,158 @@ mod tests {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
-            for overflow in [false, true] {
-                for (slot, label, expected) in [
-                    (
-                        S::QuickSearch,
-                        "Quick Search",
-                        TopToolbarAction::OpenQuickSearch,
-                    ),
-                    (S::Symbol, "Symbol", TopToolbarAction::OpenSymbolSearch),
-                    (
-                        S::Screenshot,
-                        "Download image",
-                        TopToolbarAction::TakeScreenshot,
-                    ),
-                    (
-                        S::Save,
-                        "Save layout",
-                        TopToolbarAction::Layout(LayoutAction::Save),
-                    ),
-                    (
-                        S::Layouts,
-                        "2x2 Grid",
-                        TopToolbarAction::Layout(LayoutAction::SelectGrid(
-                            crate::widget::ChartLayoutMode::Four,
-                        )),
-                    ),
-                    (
-                        S::LayoutName,
-                        "Save layout",
-                        TopToolbarAction::Layout(LayoutAction::Save),
-                    ),
-                    (
-                        S::LayoutName,
-                        "Rename layout…",
-                        TopToolbarAction::Layout(LayoutAction::Rename(
-                            "Unnamed".into(),
-                            "Desk".into(),
-                        )),
-                    ),
-                    (
-                        S::LayoutName,
-                        "Save layout as…",
-                        TopToolbarAction::Layout(LayoutAction::SaveAs("Desk".into())),
-                    ),
-                    (
-                        S::Templates,
-                        "Save indicator template",
-                        TopToolbarAction::SaveIndicatorTemplate,
-                    ),
-                    (
-                        S::Templates,
-                        "My studies",
-                        TopToolbarAction::ApplyIndicatorTemplate("custom-id".into()),
-                    ),
-                    (S::Undo, "Undo", TopToolbarAction::Undo),
-                    (S::Undo, "Undo", TopToolbarAction::None),
-                    (S::Redo, "Redo", TopToolbarAction::Redo),
-                    (S::Redo, "Redo", TopToolbarAction::None),
-                    (S::Replay, "Replay", TopToolbarAction::ToggleReplay),
-                ] {
-                    let direct = matches!(slot, S::Undo | S::Redo | S::Replay);
-                    if (!overflow && (direct || matches!(slot, S::Layouts | S::LayoutName)))
-                        || (overflow && !direct && !matches!(slot, S::Layouts | S::LayoutName))
-                    {
-                        continue;
-                    }
-                    let mut toolbar = TopToolbar::new();
-                    toolbar.state.can_undo = expected != TopToolbarAction::None;
-                    toolbar.state.can_redo = expected != TopToolbarAction::None;
-                    toolbar
-                        .indicator_templates
-                        .push(("custom-id".into(), "My studies".into()));
-                    let mut frame = |events| {
-                        let mut action = TopToolbarAction::None;
-                        let mut rect = Rect::NOTHING;
-                        let output = ctx.run_ui(
-                            RawInput {
-                                screen_rect: Some(Rect::from_min_size(
-                                    Pos2::ZERO,
-                                    vec2(1440.0, 900.0),
-                                )),
-                                events,
-                                ..Default::default()
-                            },
-                            |ui| {
-                                rect = ui
-                                    .horizontal(|ui| {
-                                        if overflow {
-                                            toolbar.show_overflow(ui, &[slot], &mut action);
-                                        } else {
-                                            toolbar.show_control(
-                                                ui,
-                                                slot,
-                                                false,
-                                                "SAMPLE",
-                                                &mut action,
-                                            );
-                                        }
-                                    })
-                                    .response
-                                    .rect;
-                            },
-                        );
-                        let labels: Vec<_> = output
-                            .shapes
-                            .iter()
-                            .filter_map(|shape| match &shape.shape {
-                                egui::Shape::Text(text) => Some((
-                                    text.galley.text().to_owned(),
-                                    text.pos + text.galley.size() / 2.0,
-                                )),
-                                _ => None,
-                            })
-                            .collect();
-                        output.drop_without_applying_deltas();
-                        (action, rect, labels)
-                    };
-                    let (_, rect, _) = frame(vec![]);
-                    let pos = if slot == S::Save && !overflow {
-                        pos2(rect.right() - 8.0, rect.center().y)
-                    } else {
-                        rect.center()
-                    };
-                    frame(vec![Event::PointerMoved(pos)]);
-                    let click = |pos, pressed| Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Default::default(),
-                    };
-                    frame(vec![click(pos, true)]);
-                    let (action, _, _) = frame(vec![click(pos, false)]);
-                    if matches!(slot, S::QuickSearch | S::Symbol) {
-                        assert_eq!(action, expected);
-                        continue;
-                    }
-                    assert_eq!(
-                        action,
-                        TopToolbarAction::None,
-                        "opening the menu must not capture an image"
+            for (slot, label, expected) in [
+                (
+                    S::QuickSearch,
+                    "Quick Search",
+                    TopToolbarAction::OpenQuickSearch,
+                ),
+                (S::Symbol, "Symbol", TopToolbarAction::OpenSymbolSearch),
+                (
+                    S::Screenshot,
+                    "Download image",
+                    TopToolbarAction::TakeScreenshot,
+                ),
+                (
+                    S::Save,
+                    "Save layout",
+                    TopToolbarAction::Layout(LayoutAction::Save),
+                ),
+                (
+                    S::Layouts,
+                    "2x2 Grid",
+                    TopToolbarAction::Layout(LayoutAction::SelectGrid(
+                        crate::widget::ChartLayoutMode::Four,
+                    )),
+                ),
+                (
+                    S::LayoutName,
+                    "Save layout",
+                    TopToolbarAction::Layout(LayoutAction::Save),
+                ),
+                (
+                    S::LayoutName,
+                    "Rename layout…",
+                    TopToolbarAction::Layout(LayoutAction::Rename("Unnamed".into(), "Desk".into())),
+                ),
+                (
+                    S::LayoutName,
+                    "Save layout as…",
+                    TopToolbarAction::Layout(LayoutAction::SaveAs("Desk".into())),
+                ),
+                (
+                    S::Templates,
+                    "Save indicator template",
+                    TopToolbarAction::SaveIndicatorTemplate,
+                ),
+                (
+                    S::Templates,
+                    "My studies",
+                    TopToolbarAction::ApplyIndicatorTemplate("custom-id".into()),
+                ),
+                (S::Undo, "Undo", TopToolbarAction::Undo),
+                (S::Undo, "Undo", TopToolbarAction::None),
+                (S::Redo, "Redo", TopToolbarAction::Redo),
+                (S::Redo, "Redo", TopToolbarAction::None),
+                (S::Replay, "Replay", TopToolbarAction::ToggleReplay),
+            ] {
+                let direct = matches!(slot, S::Undo | S::Redo | S::Replay);
+                let mut toolbar = TopToolbar::new();
+                toolbar.state.can_undo = expected != TopToolbarAction::None;
+                toolbar.state.can_redo = expected != TopToolbarAction::None;
+                toolbar
+                    .indicator_templates
+                    .push(("custom-id".into(), "My studies".into()));
+                let mut frame = |events| {
+                    let mut action = TopToolbarAction::None;
+                    let mut rect = Rect::NOTHING;
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            rect = ui
+                                .horizontal(|ui| {
+                                    toolbar.show_control(ui, slot, "SAMPLE", &mut action);
+                                })
+                                .response
+                                .rect;
+                        },
                     );
-                    frame(vec![]);
-                    if overflow && !direct {
-                        let submenu = if slot == S::Layouts {
-                            "Chart layout"
-                        } else {
-                            "Named layouts"
-                        };
-                        let (_, _, labels) = frame(vec![]);
-                        let pos = labels
-                            .iter()
-                            .find(|(text, _)| text == submenu)
-                            .expect("layout submenu")
-                            .1;
-                        frame(vec![Event::PointerMoved(pos)]);
-                        frame(vec![click(pos, true)]);
-                        frame(vec![click(pos, false)]);
-                        frame(vec![]);
-                    }
-                    let (_, _, labels) = frame(vec![]);
-                    let pos = labels
+                    let labels: Vec<_> = output
+                        .shapes
                         .iter()
-                        .find(|(text, _)| text == label)
-                        .expect("menu choice")
-                        .1;
-                    frame(vec![Event::PointerMoved(pos)]);
-                    frame(vec![click(pos, true)]);
-                    let (mut action, _, _) = frame(vec![click(pos, false)]);
-                    if matches!(
-                        expected,
-                        TopToolbarAction::Layout(
-                            LayoutAction::Rename(_, _) | LayoutAction::SaveAs(_)
-                        )
-                    ) {
-                        let (_, _, labels) = frame(vec![]);
-                        assert!(
-                            labels.iter().any(|(text, _)| text == "Apply"),
-                            "editing must keep the popup open"
-                        );
-                        let key = |key, modifiers| Event::Key {
-                            key,
-                            physical_key: None,
-                            pressed: true,
-                            repeat: false,
-                            modifiers,
-                        };
-                        frame(vec![key(egui::Key::A, egui::Modifiers::COMMAND)]);
-                        frame(vec![Event::Text("Desk".into())]);
-                        action = frame(vec![key(egui::Key::Enter, egui::Modifiers::NONE)]).0;
-                    }
-                    assert_eq!(action, expected, "overflow {overflow}");
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some((
+                                text.galley.text().to_owned(),
+                                text.pos + text.galley.size() / 2.0,
+                            )),
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    (action, rect, labels)
+                };
+                let (_, rect, _) = frame(vec![]);
+                let pos = if slot == S::Save {
+                    pos2(rect.right() - 8.0, rect.center().y)
+                } else {
+                    rect.center()
+                };
+                frame(vec![Event::PointerMoved(pos)]);
+                let click = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                frame(vec![click(pos, true)]);
+                let (action, _, _) = frame(vec![click(pos, false)]);
+                if matches!(slot, S::QuickSearch | S::Symbol) || direct {
+                    assert_eq!(action, expected);
                     if slot == S::Replay {
                         assert!(toolbar.state.replay_active);
                     }
+                    continue;
                 }
+                assert_eq!(
+                    action,
+                    TopToolbarAction::None,
+                    "opening the menu must not capture an image"
+                );
+                frame(vec![]);
+                let (_, _, labels) = frame(vec![]);
+                let pos = labels
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .expect("menu choice")
+                    .1;
+                frame(vec![Event::PointerMoved(pos)]);
+                frame(vec![click(pos, true)]);
+                let (mut action, _, _) = frame(vec![click(pos, false)]);
+                if matches!(
+                    expected,
+                    TopToolbarAction::Layout(LayoutAction::Rename(_, _) | LayoutAction::SaveAs(_))
+                ) {
+                    let (_, _, labels) = frame(vec![]);
+                    assert!(
+                        labels.iter().any(|(text, _)| text == "Apply"),
+                        "editing must keep the popup open"
+                    );
+                    let key = |key, modifiers| Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    };
+                    frame(vec![key(egui::Key::A, egui::Modifiers::COMMAND)]);
+                    frame(vec![Event::Text("Desk".into())]);
+                    action = frame(vec![key(egui::Key::Enter, egui::Modifiers::NONE)]).0;
+                }
+                assert_eq!(action, expected);
             }
         }
     }

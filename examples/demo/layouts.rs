@@ -102,6 +102,10 @@ impl DemoApp {
             .build();
         chart.set_main_series_visible(source.is_main_series_visible());
         chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
+        chart.set_event_visibility(source.event_visibility().clone());
+        chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks(
+            chart.bars(SeriesId::MAIN).to_vec(),
+        ))));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);
         } else {
@@ -210,6 +214,9 @@ impl DemoApp {
     }
 
     pub(super) fn show_layout_tabs(&mut self, ui: &mut egui::Ui) {
+        if self.layout_tabs.len() <= 1 {
+            return;
+        }
         let bars = self.chart.bars(SeriesId::MAIN);
         let last = bars.last().map_or(0.0, |b| b.close);
         let previous = bars
@@ -408,6 +415,128 @@ mod tests {
     use super::*;
 
     #[test]
+    fn compact_demo_keeps_hidden_rail_panels_reachable_without_a_single_layout_strip() {
+        for width in [393.0, 599.0, 600.0, 1440.0] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            let frame = |app: &mut DemoApp| {
+                let mut remaining = egui::Rect::NOTHING;
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 852.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let before = ui.available_rect_before_wrap();
+                        app.show_layout_tabs(ui);
+                        assert_eq!(
+                            ui.available_rect_before_wrap().top(),
+                            before.top(),
+                            "one layout needs no strip"
+                        );
+                        app.show_widget_bar(ui, app.theme.ui.panel_bg);
+                        remaining = ui.available_rect_before_wrap();
+                        assert_eq!(
+                            before.right() - remaining.right(),
+                            if width < 600.0 { 0.0 } else { 49.0 }
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+                remaining
+            };
+            frame(&mut app);
+            frame(&mut app);
+            if width < 600.0 {
+                let menu_frame = |app: &mut DemoApp, events| {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 852.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.show_top_toolbar(ui, app.theme.ui.panel_bg),
+                    );
+                    let labels = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some((
+                                text.galley.text().to_owned(),
+                                egui::Rect::from_min_size(text.pos, text.galley.size()),
+                            )),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    output.drop_without_applying_deltas();
+                    labels
+                };
+                let click = |app: &mut DemoApp, pos| {
+                    menu_frame(app, vec![egui::Event::PointerMoved(pos)]);
+                    menu_frame(
+                        app,
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                    menu_frame(
+                        app,
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                    menu_frame(app, vec![])
+                };
+                menu_frame(&mut app, vec![]);
+                for (label, panel) in [
+                    ("Object Tree", Some(super::super::SidePanel::ObjectTree)),
+                    ("Alerts", Some(super::super::SidePanel::Alerts)),
+                    ("Data Window", Some(super::super::SidePanel::DataWindow)),
+                    ("Session notes", None),
+                    ("Keyboard shortcuts", None),
+                ] {
+                    let labels = click(&mut app, egui::pos2(22.0, 20.0));
+                    let rect = labels
+                        .iter()
+                        .find(|(text, _)| text == label)
+                        .unwrap_or_else(|| panic!("missing menu entry: {label}"))
+                        .1;
+                    click(&mut app, rect.center());
+                    if let Some(panel) = panel {
+                        assert!(app.open_panel == Some(panel));
+                        assert_eq!(app.widget_bar.active_widget, None);
+                    } else if label == "Session notes" {
+                        assert!(app.open_panel.is_none());
+                        assert_eq!(app.widget_bar.active_widget, Some(2));
+                    } else {
+                        assert!(app.keyboard_shortcuts.is_open);
+                    }
+                }
+            }
+            app.new_layout(None);
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                let top = ui.available_rect_before_wrap().top();
+                app.show_layout_tabs(ui);
+                assert_eq!(ui.available_rect_before_wrap().top() - top, 26.0);
+            })
+            .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
     fn keyboard_cycles_charts_and_layout_switches_keep_history_closed() {
         use super::super::TopToolbarAction;
         use eframe::App;
@@ -489,9 +618,28 @@ mod tests {
             .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
         app.chart.drawings_mut().drawings.push(drawing);
         app.chart.set_main_series_visible(false);
+        app.chart
+            .set_event_visibility(egui_charts::model::EventVisibility {
+                show_earnings: true,
+                show_economic_events: true,
+                ..Default::default()
+            });
         app.handle_comparison(super::super::CompareAction::AddSymbol("AAPL".into()));
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
+        for copy in &mut app.extra_charts {
+            assert_eq!(copy.chart.event_visibility(), app.chart.event_visibility());
+            copy.chart.set_visible_bars(200);
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                copy.chart.show(ui);
+            });
+            let has_event = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text)
+                    if matches!(text.galley.text(), "D" | "S" | "E" | "Ec" | "N"))
+            });
+            output.drop_without_applying_deltas();
+            assert!(has_event, "copied charts retain their event source");
+        }
         let frame = |app: &mut DemoApp| {
             ctx.run_ui(egui::RawInput::default(), |ui| {
                 app.show_chart(ui, app.theme.chart.bg)
