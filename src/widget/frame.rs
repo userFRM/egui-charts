@@ -441,8 +441,10 @@ impl Chart {
         if visible_data.len() < 2 {
             return Timeframe::default();
         }
+        // An even sample of the gaps keeps a zoomed-out frame from sorting all of them.
         let mut gaps_ms: Vec<i64> = visible_data
             .windows(2)
+            .step_by((visible_data.len() / 1024).max(1))
             .map(|w| (w[1].time - w[0].time).num_milliseconds())
             .filter(|&g| g > 0)
             .collect();
@@ -816,8 +818,32 @@ impl Chart {
             return shown;
         }
 
+        // With several bars to a pixel, read and draw them in groups of a pixel (see `merge`).
+        let factor = super::merge::factor(
+            self.state.time_scale().bar_spacing(),
+            ui.ctx().pixels_per_point(),
+        )
+        .min(if time_based { usize::MAX } else { 1 });
+        self.merge_groups.update(
+            self.state.shown(),
+            self.state.revision(),
+            factor,
+            self.config.price_source,
+        );
+        let groups = (factor > 1).then(|| {
+            let covering = self
+                .merge_groups
+                .covering(start_idx..start_idx + visible_data.len());
+            (covering.start, &self.merge_groups.groups[covering])
+        });
+        // The first bar of each group, at the group's position, for the time axis and sessions.
+        let time_bars: Option<Vec<_>> =
+            groups.map(|(_, groups)| groups.iter().map(|group| group.bar.clone()).collect());
+
         // Largest visible volume: the volume pane and volume candles scale by it
-        let max_volume = visible_data
+        let max_volume = time_bars
+            .as_deref()
+            .unwrap_or(visible_data)
             .iter()
             .map(|c| c.volume)
             .filter(|v| v.is_finite())
@@ -841,6 +867,13 @@ impl Chart {
             self.state.time_scale().right_offset(),
             price_map,
         );
+        let (time_data, time_coords) = match (&time_bars, groups) {
+            (Some(bars), Some((start, _))) => (
+                bars.as_slice(),
+                super::merge::group_mapping(&coords, factor, start),
+            ),
+            _ => (visible_data, coords),
+        };
         let colors = StyleColors {
             bullish: self.config.bullish_color,
             bearish: self.config.bearish_color,
@@ -859,8 +892,8 @@ impl Chart {
             if time_based {
                 renderers::render_time_grid(
                     &RenderContext::new(&painter, chart_rect),
-                    visible_data,
-                    &coords,
+                    time_data,
+                    &time_coords,
                     formatter.as_ref(),
                     &self.chart_options.time_scale,
                     self.config
@@ -895,13 +928,25 @@ impl Chart {
                 .unwrap_or(&exchange_session);
             let background =
                 renderers::SessionBackgroundRenderer::from_background(self.config.background_color);
-            background.render(&session_ctx, visible_data, provider, &coords, start_idx);
+            background.render(
+                &session_ctx,
+                time_data,
+                provider,
+                &time_coords,
+                time_coords.start_idx,
+            );
             renderers::SessionBreakRenderer::new(renderers::SessionBreakRenderConfig {
                 line_color: self.config.session_break_color,
                 line_width: 1.0,
                 style: self.config.session_break_style,
             })
-            .render(&session_ctx, visible_data, provider, &coords, start_idx);
+            .render(
+                &session_ctx,
+                time_data,
+                provider,
+                &time_coords,
+                time_coords.start_idx,
+            );
         }
         if time_based
             && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms()
@@ -914,10 +959,10 @@ impl Chart {
             };
             renderers::render_extended_hours(
                 &session_ctx,
-                visible_data,
+                time_data,
                 &exchange_session,
-                &coords,
-                start_idx,
+                &time_coords,
+                time_coords.start_idx,
                 color,
             );
         }
@@ -973,6 +1018,46 @@ impl Chart {
             rendering::CoordMapping::new(chart_rect.min.x),
             self.config.price_source,
         );
+        // Draw one merged bar, or a column's line points, for each group.
+        let merged = super::merge::line_style(self.chart_type)
+            .filter(|_| factor > 1)
+            .map(|line| {
+                let merge = |line| {
+                    super::merge::Merged::new(
+                        self.state.shown(),
+                        &self.merge_groups,
+                        start_idx..start_idx + visible_data.len(),
+                        line,
+                        self.config.price_source,
+                    )
+                };
+                // Volume columns merge as bars beneath a merged line.
+                let volume = (line && render_params.show_volume()).then(|| merge(false));
+                (merge(line), volume)
+            });
+        let merged_x = |merged: &super::merge::Merged, index: usize, min_x: f32| {
+            // Past the last merged bar, as a renderer measuring its pitch asks for.
+            let past = |last: f32| last + (index + 1 - merged.index.len()) as f32 * factor as f32;
+            let index = merged
+                .index
+                .get(index)
+                .copied()
+                .unwrap_or_else(|| merged.index.last().map_or(0.0, |&last| past(last)));
+            self.state
+                .time_scale()
+                .idx_to_coord_precise(index, min_x, chart_rect_width)
+        };
+        let merged_params = rendering::ChartTypeParams::new(
+            rendering::BarDimensions::new(bar_width * factor as f32, self.config.wick_width),
+            rendering::VolumeSettings::new(
+                render_params.show_volume() && merged.as_ref().is_some_and(|m| m.1.is_none()),
+                max_volume,
+            ),
+            &self.chart_type_params,
+            rendering::TradingColors::new(self.config.bullish_color, self.config.bearish_color),
+            rendering::CoordMapping::new(chart_rect.min.x),
+            self.config.price_source,
+        );
 
         let studies = if self.chart_type.is_time_independent() {
             &self.element_studies.studies
@@ -991,6 +1076,7 @@ impl Chart {
                 self.state.shown(),
                 max_volume,
                 main_visible_range.clone(),
+                Some(&self.merge_groups),
             )
             .filter(|(id, _)| {
                 self.main_series_visible
@@ -1025,6 +1111,29 @@ impl Chart {
                         flow,
                         config,
                     );
+                } else if let Some((merged, volume)) = &merged {
+                    rendering::render_chart_type(
+                        self.chart_type,
+                        &rendering::CandleDataContext {
+                            visible_data: &merged.bars[merged.start..],
+                            full_data: &merged.bars,
+                            start_idx: merged.start,
+                            ..render_ctx
+                        },
+                        &merged_params,
+                        |index, min_x| merged_x(merged, index, min_x),
+                    );
+                    if let Some(volume) = volume {
+                        rendering::candles::volume::render_volume_bars(
+                            &clipped_volume_ctx,
+                            &volume.bars[volume.start..],
+                            volume.start,
+                            max_volume,
+                            &colors,
+                            chart_rect.min.x,
+                            |index, min_x| merged_x(volume, index, min_x),
+                        );
+                    }
                 } else {
                     rendering::render_chart_type(
                         self.chart_type,
@@ -1063,7 +1172,12 @@ impl Chart {
                         .iter()
                         .find(|study| study.is_volume() && study.is_overlay() && study.is_visible())
                         .map_or(max_volume.max(1.0), |study| {
-                            super::volume::range(study.as_ref(), &(start_idx..end_idx)).1
+                            super::volume::range(
+                                study.as_ref(),
+                                &(start_idx..end_idx),
+                                Some(&self.merge_groups),
+                            )
+                            .1
                         }),
                 ),
                 volume_rect.top(),
@@ -1084,7 +1198,11 @@ impl Chart {
         {
             if self.main_series_visible {
                 let rect = super::volume::overlay_rect(price_rect, &self.config);
-                let (min, max) = super::volume::range(study.as_ref(), &(start_idx..end_idx));
+                let (min, max) = super::volume::range(
+                    study.as_ref(),
+                    &(start_idx..end_idx),
+                    Some(&self.merge_groups),
+                );
                 super::volume::paint(
                     &painter,
                     rect,
@@ -1093,6 +1211,7 @@ impl Chart {
                     &coords,
                     min,
                     max,
+                    Some(&self.merge_groups),
                 );
             }
         }
@@ -1490,6 +1609,7 @@ impl Chart {
                             rect,
                             study.as_ref(),
                             &(start_idx..end_idx),
+                            Some(&self.merge_groups),
                         );
                         super::volume::tags(
                             &painter,
@@ -2062,8 +2182,8 @@ impl Chart {
             let chart_ctx = RenderContext::new(&painter, axis_context_rect);
             rendering::render_time_labels(
                 &chart_ctx,
-                visible_data,
-                &coords,
+                time_data,
+                &time_coords,
                 &colors,
                 formatter.as_ref(),
                 &tags,
@@ -2920,6 +3040,57 @@ mod tests {
             let positions = order.map(|color| first(&painted, color).unwrap());
             assert!(positions.is_sorted(), "{enabled} {price}: {positions:?}");
         }
+    }
+
+    #[test]
+    fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
+        use crate::model::{Bar, BarData};
+        use chrono::{TimeZone, Utc};
+        let bars = (0..100_000)
+            .map(|i| {
+                let t = Utc.timestamp_opt(1_600_000_000 + i * 60, 0).unwrap();
+                let (low, high) = match i {
+                    54_321 => (100.0, 1000.0),
+                    77_777 => (1.0, 101.0),
+                    _ => (100.0, 101.0 + (i % 7) as f64),
+                };
+                Bar::new(t, 100.0, high, low, 101.0, 1.0)
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.config.show_volume = false;
+        let mut options = chart.chart_options().clone();
+        options.time_scale.min_bar_spacing = 0.0;
+        chart.set_chart_options(options);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        chart.apply_synced_time_scale(chart.get_rendered_price_rect().width() / 100_000.0, 0.0);
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        let painted = shapes(&ctx, &mut chart, 0.2, Vec::new());
+        let color = chart.config().bullish_color;
+        let ys: Vec<f32> = painted
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::Rect(rect) if rect.fill == color => vec![rect.rect.min.y, rect.rect.max.y],
+                Shape::LineSegment { points, stroke } if stroke.color == color => {
+                    points.iter().map(|point| point.y).collect()
+                }
+                Shape::Mesh(mesh) => mesh
+                    .vertices
+                    .iter()
+                    .filter(|vertex| vertex.color == color)
+                    .map(|vertex| vertex.pos.y)
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        // About one bar per pixel column, each still reaching the highest and lowest price.
+        assert!(ys.len() < 20_000, "{} points", ys.len());
+        let map = chart.get_chart_mapping();
+        let top = ys.iter().copied().fold(f32::INFINITY, f32::min);
+        let bottom = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!((top - map.price_to_y(1000.0)).abs() < 1.0, "{top}");
+        assert!((bottom - map.price_to_y(1.0)).abs() < 1.0, "{bottom}");
     }
 
     #[test]

@@ -127,6 +127,7 @@ mod crosshair;
 mod events;
 mod feed;
 mod marks;
+mod merge;
 pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
 pub mod export;
 mod frame;
@@ -389,6 +390,8 @@ pub struct Chart {
     pub(crate) menu_open: bool,
     /// Size to allocate instead of the available space; see [`Chart::set_size`].
     size: Option<Vec2>,
+    /// The main bars in groups that fall within one pixel, while zoomed out that far.
+    merge_groups: merge::Groups,
 }
 
 /// The object a right-click landed on, with the data needed to position and

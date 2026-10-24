@@ -189,6 +189,7 @@ impl Chart {
             right_click: None,
             menu_open: false,
             size: None,
+            merge_groups: Default::default(),
         }
     }
 
