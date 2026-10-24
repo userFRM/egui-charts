@@ -81,6 +81,7 @@ impl Chart {
 
         Self {
             state,
+            replay: None,
             config: ChartConfig::default(),
             applied_config_scale_mode: Default::default(),
             start_idx: 0,

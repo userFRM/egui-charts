@@ -138,6 +138,7 @@ mod pane_layout;
 mod panes;
 mod price_series;
 mod readout;
+mod replay;
 mod selection;
 mod series;
 pub use price_series::SeriesOptions;
@@ -214,6 +215,7 @@ pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 pub struct Chart {
     /// Backend state holding OHLCV data and coordinate system (time scale, price range).
     pub(crate) state: ChartState,
+    replay: Option<replay::ReplayWindow>,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
     pub(crate) config: ChartConfig,
     applied_config_scale_mode: crate::scales::PriceScaleMode,
@@ -504,6 +506,10 @@ impl Chart {
     /// Supplies the current bid and ask, independently of the hovered historical bar.
     /// Pass `None` when quotes are unavailable or the symbol changes.
     pub fn set_quote(&mut self, quote: Option<crate::model::Level1Quote>) {
+        if let Some(replay) = &mut self.replay {
+            replay.quote = quote;
+            return;
+        }
         self.quote = quote;
     }
 
@@ -543,6 +549,10 @@ impl Chart {
 
     /// Supplies an independent extended-session price and qualifier. `None` hides the tag.
     pub fn set_session_quote(&mut self, quote: Option<crate::model::quote::SessionQuote>) {
+        if let Some(replay) = &mut self.replay {
+            replay.session_quote = quote;
+            return;
+        }
         self.session_quote = quote;
     }
 

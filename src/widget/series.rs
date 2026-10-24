@@ -25,6 +25,14 @@ impl Chart {
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
+        if (series == SeriesId::MAIN && self.main_series_present
+            || self.price_series.iter().any(|item| item.id == series))
+            && self.replay.is_some()
+        {
+            self.replay_set_data(series, bars);
+            self.data_loaded(series);
+            return;
+        }
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
             let (bars, rejected) = clean(bars, &self.clock());
             self.price_series[at].bars = bars;
@@ -63,6 +71,13 @@ impl Chart {
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
     pub fn update(&mut self, series: SeriesId, bar: Bar) {
+        if (series == SeriesId::MAIN && self.main_series_present
+            || self.price_series.iter().any(|item| item.id == series))
+            && self.replay.is_some()
+        {
+            self.replay_update(series, bar);
+            return;
+        }
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
             let clock = self.clock();
             let item = &mut self.price_series[at];

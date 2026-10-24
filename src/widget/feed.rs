@@ -40,7 +40,7 @@ pub(crate) struct FeedLink {
     wake: Arc<Mutex<Option<ViewportId>>>,
     /// The symbol or timeframe changed: the next `pump` reloads.
     reload_pending: bool,
-    paused: bool,
+    pub(super) paused: bool,
     next_key: u64,
     /// Requests not answered yet; an answer under any other key is stale and dropped.
     pending: Vec<(u64, Request, u32)>,
@@ -130,7 +130,7 @@ impl Chart {
     /// host. Bars supplied while paused are matched by exact opening time.
     /// A removed main series stays paused.
     pub fn set_feed_paused(&mut self, paused: bool) {
-        let paused = paused || !self.main_series_present;
+        let paused = paused || !self.main_series_present || self.replay.is_some();
         if let Some(link) = &mut self.feed_link
             && link.paused != paused
         {
@@ -154,6 +154,9 @@ impl Chart {
     /// [`set_data`](Self::set_data).
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
         let symbol = symbol.into();
+        if symbol != self.symbol {
+            self.set_replay_time(None);
+        }
         if symbol != self.symbol
             && let Some(link) = &mut self.feed_link
         {
@@ -211,7 +214,8 @@ impl Chart {
         {
             link.reload_pending = true;
         }
-        if self.timeframe != Some(timeframe) {
+        let changed = self.timeframe != Some(timeframe);
+        if changed {
             self.pending_scroll_time = None;
         }
         self.timeframe = Some(timeframe);
@@ -219,6 +223,9 @@ impl Chart {
             study.set_timeframe(timeframe);
         }
         self.drawings.curr_timeframe = timeframe.as_str().into_owned();
+        if changed {
+            self.apply_replay_window();
+        }
     }
 
     /// Requests regular hours (`false`, the default) or regular and extended hours (`true`).
