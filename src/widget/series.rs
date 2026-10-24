@@ -191,6 +191,7 @@ impl Chart {
             indicator.set_timeframe(timeframe);
         }
         indicator.set_instrument(self.instrument());
+        indicator.set_bar_clock(&self.bar_clock());
         indicator.calculate(&self.state.data().bars);
         let id = SeriesId(self.next_series);
         self.next_series += 1;
@@ -341,9 +342,12 @@ impl Chart {
     /// other bars. Returns how long until the next waiting study is due, zero if one is due now.
     pub(super) fn refresh_studies(&mut self, now: f64) -> Option<f64> {
         let instrument = self.instrument().cloned();
+        let clock = self.bar_clock();
         let bars = &self.state.data().bars;
         for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
-            if study.set_instrument(instrument.as_ref()) {
+            let instrument_changed = study.set_instrument(instrument.as_ref());
+            let clock_changed = study.set_bar_clock(&clock);
+            if instrument_changed || clock_changed {
                 self.pending_from[at] = Some(0);
                 self.element_studies.dirty = true;
             }

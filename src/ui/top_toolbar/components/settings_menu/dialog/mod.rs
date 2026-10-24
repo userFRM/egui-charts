@@ -32,7 +32,7 @@ use std::collections::HashSet;
 
 /// Modal settings dialog with tabbed interface.
 ///
-/// Edits chart display settings and host alert-overlay visibility, labels and colour.
+/// Edits chart display settings, event category visibility and host alert-overlay preferences.
 pub struct SettingsDialog {
     /// Whether the dialog is currently open
     pub is_open: bool,
@@ -229,7 +229,7 @@ impl SettingsDialog {
         } else {
             match self.active_tab {
                 SettingsTab::Symbol => 616.0,
-                SettingsTab::Alerts => 500.0,
+                SettingsTab::Alerts | SettingsTab::Events => 500.0,
                 _ => 840.0,
             }
         };
@@ -310,6 +310,7 @@ impl SettingsDialog {
                                 }
                                 SettingsTab::Canvas => self.draw_canvas_tab(ui, style),
                                 SettingsTab::Alerts => self.draw_alerts_tab(ui, style),
+                                SettingsTab::Events => self.draw_events_tab(ui, style),
                             }
                         });
                 },
@@ -731,7 +732,7 @@ mod tests {
                         }
                         _ => None,
                     });
-                    let inactive = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if matches!(text.galley.text(), "Trading" | "Events")));
+                    let inactive = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Trading"));
                     output.drop_without_applying_deltas();
                     assert!(!inactive, "inactive settings must not be offered");
                     assert_eq!(dialog.settings, settings);

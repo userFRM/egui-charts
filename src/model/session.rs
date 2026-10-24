@@ -208,7 +208,7 @@ impl SessionProvider for DailySessionProvider {
 /// Daily session provider for an exchange: a day starts at each session open of its trading
 /// hours, in its time zone, so bars outside the hours stay with the session before them.
 /// Without trading hours a day starts at midnight in the time zone.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExchangeSessionProvider {
     time_zone: TimezoneId,
     session: Option<Session>,
@@ -308,9 +308,18 @@ impl ExchangeSessionProvider {
     }
 
     /// Closing instant of the active trading window. Outside trading hours, including holidays,
-    /// returns `None`. Extended windows participate only when requested.
+    /// returns `None`. Continuous sessions end at the next local midnight.
+    /// Extended windows participate only when requested.
     pub fn session_close(&self, time: DateTime<Utc>, extended: bool) -> Option<DateTime<Utc>> {
         let session = self.session.as_ref()?;
+        if session.windows.is_empty() && session.extended_windows.is_empty() {
+            let date = self.wall_time(time).date();
+            return if session.holidays.contains(&date) {
+                None
+            } else {
+                self.instant(date.succ_opt()?.and_time(NaiveTime::MIN))
+            };
+        }
         session
             .windows
             .iter()
@@ -416,7 +425,7 @@ impl ExchangeSessionProvider {
     /// far from every time are skipped, so the work follows the times, not the span between
     /// them. An open that falls in a repeated hour is its first instant, and one that falls in
     /// a skipped hour is the instant the clocks jump.
-    fn opens(
+    pub(crate) fn opens(
         &self,
         times: impl IntoIterator<Item = DateTime<Utc>>,
     ) -> Vec<(DateTime<Utc>, NaiveDate)> {

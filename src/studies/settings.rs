@@ -135,6 +135,12 @@ impl Indicator for ConfiguredStudy {
         self.timeframe = Some(timeframe);
         self.study.set_timeframe(timeframe);
     }
+    fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
+        self.study.set_bar_clock(clock)
+    }
+    fn candles(&self) -> &[super::StudyCandle] {
+        self.study.candles()
+    }
     fn values(&self) -> &IndicatorValues {
         self.study.values()
     }

@@ -14,6 +14,7 @@ pub struct BarClock {
     /// `None` for a clock that matches bars by their exact open time.
     timeframe: Option<Timeframe>,
     timezone: Option<Tz>,
+    session: Option<super::ExchangeSessionProvider>,
 }
 
 impl BarClock {
@@ -22,6 +23,7 @@ impl BarClock {
         Self {
             timeframe: Some(timeframe),
             timezone: Some(chrono_tz::UTC),
+            session: None,
         }
     }
 
@@ -38,6 +40,22 @@ impl BarClock {
         self
     }
 
+    /// Align intraday buckets to the first selected exchange-session window. Calendar bars
+    /// keep their trading-date labels; use `data::resample_with_session` to derive those labels
+    /// from intraday history. Extended windows participate only when requested.
+    pub fn with_session(
+        mut self,
+        zone: super::TimezoneId,
+        mut session: super::Session,
+        extended_hours: bool,
+    ) -> Self {
+        if !extended_hours {
+            session.extended_windows.clear();
+        }
+        self.session = Some(super::ExchangeSessionProvider::new(zone, Some(session)));
+        self
+    }
+
     /// Clock in which every instant opens a bar of its own, for bars of an unknown timeframe.
     #[cfg_attr(
         not(feature = "widget"),
@@ -47,6 +65,7 @@ impl BarClock {
         Self {
             timeframe: None,
             timezone: Some(chrono_tz::UTC),
+            session: None,
         }
     }
 
@@ -59,6 +78,20 @@ impl BarClock {
         };
         if matches!(timeframe, Timeframe::Ticks(_)) {
             return t;
+        }
+        if timeframe.duration_ms() < DAY_MS
+            && let Some(session) = &self.session
+        {
+            let opens = session.opens([t]);
+            let n = opens.partition_point(|(open, _)| *open <= t);
+            if let Some((open, _)) = n.checked_sub(1).and_then(|i| opens.get(i)) {
+                let elapsed = (t - *open).num_milliseconds();
+                return open
+                    .checked_add_signed(TimeDelta::milliseconds(
+                        elapsed - elapsed.rem_euclid(timeframe.duration_ms()),
+                    ))
+                    .unwrap_or(t);
+            }
         }
         let offset = self.offset_at(t);
         let local = t
@@ -141,6 +174,16 @@ impl BarClock {
         if matches!(timeframe, Timeframe::Ticks(_)) {
             return None;
         }
+        if timeframe.duration_ms() < DAY_MS
+            && let Some(session) = &self.session
+        {
+            let next = open.checked_add_signed(timeframe.duration())?;
+            return Some(
+                session
+                    .session_close(open, true)
+                    .map_or(next, |close| next.min(close)),
+            );
+        }
         let mut at = open.checked_add_signed(timeframe.duration())?;
         loop {
             let next = self.bar_open(at);
@@ -163,6 +206,24 @@ impl BarClock {
             }
             at = at.checked_add_signed(TimeDelta::hours(1))?;
         }
+    }
+
+    #[cfg(feature = "studies")]
+    pub(crate) fn for_timeframe(&self, timeframe: Timeframe) -> Self {
+        Self {
+            timeframe: Some(timeframe),
+            ..self.clone()
+        }
+    }
+
+    /// Label a trading date in this clock's calendar before finding its containing period.
+    pub(crate) fn open_on_date(&self, date: chrono::NaiveDate) -> Option<DateTime<Utc>> {
+        let midnight = date.and_time(NaiveTime::MIN);
+        let time = match self.timezone {
+            Some(zone) => super::session::local_instant(zone, midnight),
+            None => super::session::local_instant(chrono::Local, midnight),
+        }?;
+        Some(self.bar_open(time))
     }
 
     /// The timeframe of the bars, `None` for a clock that matches bars by their exact open time.
@@ -271,5 +332,14 @@ mod tests {
             assert_eq!(clock.bar_open(t(at)), t(open));
             assert_eq!(clock.next_open(t(open)), Some(t(next)));
         }
+        let clock = BarClock::new("7min".parse().unwrap()).with_session(
+            super::super::TimezoneId::utc(),
+            super::super::Session::new([]),
+            false,
+        );
+        assert_eq!(
+            clock.next_open(t("2024-03-15T23:55:00Z")),
+            Some(t("2024-03-16T00:00:00Z"))
+        );
     }
 }

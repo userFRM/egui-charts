@@ -66,6 +66,8 @@ pub enum SettingsTab {
     Canvas,
     /// Alert display settings
     Alerts,
+    /// Corporate, economic and news event visibility.
+    Events,
 }
 
 impl SettingsTab {
@@ -76,6 +78,7 @@ impl SettingsTab {
             SettingsTab::ScalesAndLines,
             SettingsTab::Canvas,
             SettingsTab::Alerts,
+            SettingsTab::Events,
         ]
     }
 
@@ -86,6 +89,7 @@ impl SettingsTab {
             SettingsTab::ScalesAndLines => "Scales and lines",
             SettingsTab::Canvas => "Canvas",
             SettingsTab::Alerts => "Alerts",
+            SettingsTab::Events => "Events",
         }
     }
 }

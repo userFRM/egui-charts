@@ -298,25 +298,8 @@ impl Default for AlertsSettings {
     }
 }
 
-/// Events tab settings
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct EventsSettings {
-    pub show_dividends: bool,
-    pub show_splits: bool,
-    pub show_earnings: bool,
-    pub show_economic_events: bool,
-}
-
-impl Default for EventsSettings {
-    fn default() -> Self {
-        Self {
-            show_dividends: true,
-            show_splits: true,
-            show_earnings: false,
-            show_economic_events: false,
-        }
-    }
-}
+/// Event category visibility shared with the chart.
+pub type EventsSettings = crate::model::EventVisibility;
 
 /// Comprehensive chart settings state
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

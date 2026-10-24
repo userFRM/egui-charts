@@ -192,6 +192,7 @@ impl Chart {
             self.quote_action = None;
             self.session_quote = None;
             self.events.clear();
+            self.time_scale_events.clear();
             self.event_click = None;
             self.axis_hover = None;
             self.state.price_scale_mut().set_price_precision(None);
@@ -302,9 +303,21 @@ impl Chart {
     /// Calendar boundaries selected by the chart, including the resolved exchange or local zone.
     pub fn bar_clock(&self) -> BarClock {
         let clock = BarClock::new(self.timeframe.unwrap_or_default());
-        match self.display_timezone() {
+        let clock = match self.display_timezone() {
             crate::scales::TimezoneMode::Local => clock.with_local_timezone(),
             zone => clock.with_timezone(zone.to_tz().unwrap_or(chrono_tz::UTC)),
+        };
+        match self.instrument().and_then(|instrument| {
+            Some((
+                instrument
+                    .time_zone
+                    .clone()
+                    .unwrap_or_else(crate::model::TimezoneId::utc),
+                instrument.session.clone()?,
+            ))
+        }) {
+            Some((zone, session)) => clock.with_session(zone, session, self.extended_hours()),
+            None => clock,
         }
     }
 
