@@ -9,18 +9,18 @@
 //! - Session separators
 //! - Multiple color modes and display modes
 //!
-//! The live entry point is [`render_live_tpo`], which builds the profiles from
-//! the currently visible bars and anchors each session's letter histogram under
-//! the session it summarises, staying correct under pan and zoom.
+//! The live entry point is [`render_live_tpo`], which builds the profiles of the
+//! whole sessions of the visible bars and anchors each session's letter histogram
+//! at the session it summarises, staying correct under pan and zoom.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use crate::scales::PriceMap;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 
 use crate::model::{
-    Bar, SpanCache, TPOColorMode, TPOConfig, TPODisplayMode, TPOProfile, derive_tick_size,
-    to_tpo_profiles,
+    Bar, BarClock, ExchangeSessionProvider, SessionProvider, SpanCache, TPOColorMode, TPOConfig,
+    TPODisplayMode, TPOProfile, derive_tick_size, to_tpo_profiles,
 };
 use crate::theme::{ChartColors, ThemeExt, readable_color};
 use crate::tokens::DESIGN_TOKENS;
@@ -34,8 +34,8 @@ const TARGET_ROWS: usize = 40;
 
 /// Fixed pixel width of one TPO period column.
 ///
-/// Letters/blocks for successive 30-minute periods stack horizontally to the
-/// right of each session's anchor; this is the per-period horizontal step.
+/// Letters/blocks for successive periods stack horizontally to the right of
+/// each session's anchor; this is the widest per-period horizontal step.
 const PERIOD_COLUMN_PX: f32 = 9.0;
 
 /// Below this column width letters become unreadable, so we switch to blocks,
@@ -113,6 +113,7 @@ struct CachedProfile {
     len: usize,
     last: Bar,
     config: TPOConfig,
+    clock: BarClock,
     profiles: Rc<Vec<TPOProfile>>,
 }
 
@@ -121,13 +122,69 @@ thread_local! {
     static PROFILE_CACHE: RefCell<Vec<CachedProfile>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Profiles of the visible sessions, reusing those whose inputs are unchanged.
+/// Whether profiles built with `old` equal those built with `new`.
+fn same_profiles(old: &TPOConfig, new: &TPOConfig) -> bool {
+    old.tick_size.to_bits() == new.tick_size.to_bits()
+        && old.period_minutes == new.period_minutes
+        && old.initial_balance_minutes == new.initial_balance_minutes
+        && old.value_area_pct.to_bits() == new.value_area_pct.to_bits()
+        && old.custom_letters == new.custom_letters
+        && old.split_sessions == new.split_sessions
+        && old.composites == new.composites
+}
+
+/// The bars of the sessions that `visible` (or with `config.latest_session_only`, the last bar)
+/// belongs to, widened over the composites they are part of, so profiles cover whole sessions.
+fn whole_sessions(
+    full: &[Bar],
+    visible: Range<usize>,
+    sessions: &ExchangeSessionProvider,
+    config: &TPOConfig,
+) -> Range<usize> {
+    // Bars are chronological, so the bars before `i` in another session come first.
+    let start_of = |i: usize| {
+        full[..i].partition_point(|bar| {
+            sessions
+                .session_break_between(&bar.time, &full[i].time)
+                .is_some()
+        })
+    };
+    let end_of = |i: usize| {
+        i + 1
+            + full[i + 1..].partition_point(|bar| {
+                sessions
+                    .session_break_between(&full[i].time, &bar.time)
+                    .is_none()
+            })
+    };
+    let composite = |i: usize| {
+        let open = &full[start_of(i)].time;
+        config.composites.iter().find(|range| range.contains(open))
+    };
+    let (mut start, mut end) = if config.latest_session_only {
+        (start_of(full.len() - 1), full.len())
+    } else {
+        (start_of(visible.start), end_of(visible.end - 1))
+    };
+    if let Some(range) = composite(start) {
+        start = start_of(full.partition_point(|bar| bar.time < *range.start()));
+    }
+    if let Some(range) = composite(end - 1) {
+        end = end_of(full.partition_point(|bar| bar.time <= *range.end()) - 1);
+    }
+    start..end
+}
+
+/// Profiles of the sessions in `bars`, each with the index of its first bar and its bar count,
+/// reusing those whose inputs are unchanged. Sessions in one composite are built together.
 fn cached_profiles(
     mut bars: &[Bar],
     revision: u64,
     mut start_idx: usize,
     config: &TPOConfig,
-) -> Vec<Rc<Vec<TPOProfile>>> {
+    clock: &BarClock,
+    sessions: &ExchangeSessionProvider,
+) -> Vec<(usize, usize, Rc<Vec<TPOProfile>>)> {
     // Sessions must share the visible series' grid, including when only one session changes.
     let tick = config.tick_size;
     let grid = GRID_CACHE.with_borrow_mut(|cache| {
@@ -139,20 +196,33 @@ fn cached_profiles(
         tick_size: *grid,
         ..config.clone()
     };
+    // Session ends, leaving sessions that open in one composite together.
+    let composite = |bar: &Bar| {
+        config
+            .composites
+            .iter()
+            .position(|range| range.contains(&bar.time))
+    };
+    let mut ends = Vec::new();
+    let mut open = 0;
+    let breaks = sessions.session_breaks(bars).into_iter().map(|(i, _)| i);
+    for end in breaks.chain([bars.len()]) {
+        if bars.get(end).is_some_and(|next| {
+            composite(&bars[open]).is_some_and(|group| composite(next) == Some(group))
+        }) {
+            continue;
+        }
+        ends.push(end - open);
+        open = end;
+    }
     PROFILE_CACHE.with_borrow_mut(|cache| {
         let mut profiles = Vec::new();
-        while let Some(first) = bars.first() {
-            let day = first.time.date_naive();
-            let end = bars.partition_point(|bar| bar.time.date_naive() == day);
-            let (session, rest) = bars.split_at(end);
+        for len in ends {
+            let (session, rest) = bars.split_at(len);
             let last = session.last().unwrap();
             let pos = cache.iter().position(|entry| {
-                let old = &entry.config;
-                old.tick_size.to_bits() == config.tick_size.to_bits()
-                    && old.period_minutes == config.period_minutes
-                    && old.initial_balance_minutes == config.initial_balance_minutes
-                    && old.value_area_pct.to_bits() == config.value_area_pct.to_bits()
-                    && old.custom_letters == config.custom_letters
+                same_profiles(&entry.config, &config)
+                    && entry.clock == *clock
                     && entry.revision == revision
                     && entry.first == start_idx
                     && entry.len == session.len()
@@ -172,10 +242,11 @@ fn cached_profiles(
                     len: session.len(),
                     last: last.clone(),
                     config: config.clone(),
-                    profiles: Rc::new(to_tpo_profiles(session, &config)),
+                    clock: clock.clone(),
+                    profiles: Rc::new(to_tpo_profiles(session, &config, clock)),
                 },
             };
-            profiles.push(Rc::clone(&entry.profiles));
+            profiles.push((start_idx, session.len(), Rc::clone(&entry.profiles)));
             cache.push(entry);
             start_idx += session.len();
             bars = rest;
@@ -189,14 +260,14 @@ fn cached_profiles(
     })
 }
 
-/// Render a real Market Profile for the visible bars, anchored in chart time.
+/// Render a real Market Profile for the sessions of the visible bars, anchored in chart time.
 ///
-/// This is the live entry point used by `render_chart_type`. It builds the
-/// profiles from the currently visible bars, reuses unchanged sessions, and anchors
-/// each session's letter histogram at its first visible bar's x-coordinate.
-/// Coordinates flow through the chart's shared price mapping ([`PriceMap`])
-/// and the supplied `idx_to_coord`, so the profile stays correct under pan and
-/// zoom.
+/// This is the live entry point of the TPO chart type and the TPO study. It builds the profiles
+/// of the whole sessions that the bars `visible` of `full_data` belong to, in the sessions of
+/// `clock`, reuses unchanged sessions, and anchors each profile at its session's first bar, or
+/// at the plot's left edge while that bar is out of view, fitting it within the session's width.
+/// Coordinates flow through the chart's shared price mapping ([`PriceMap`]) and the supplied
+/// `idx_to_coord`, so the profile stays correct under pan and zoom.
 ///
 /// The price-bin (tick) size auto-derives from the visible price range toward a
 /// readable row count unless the caller pins it via `config.tick_size`. Letters
@@ -206,17 +277,18 @@ fn cached_profiles(
 pub fn render_live_tpo(
     painter: &Painter,
     price_rect: Rect,
-    visible_data: &[Bar],
+    full_data: &[Bar],
+    visible: Range<usize>,
     revision: u64,
-    start_idx: usize,
     price_map: &PriceMap,
     base_config: &TPOConfig,
+    clock: &BarClock,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     chart_rect_min_x: f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    if visible_data.is_empty() {
+    if visible.is_empty() || visible.end > full_data.len() {
         return;
     }
 
@@ -232,48 +304,59 @@ pub fn render_live_tpo(
         config.tick_size = derive_tick_size(price_range, TARGET_ROWS);
     }
 
-    let profiles = cached_profiles(visible_data, revision, start_idx, &config);
-    if profiles.is_empty() {
-        return;
-    }
-
+    let sessions = clock.sessions();
+    let bars = whole_sessions(full_data, visible, &sessions, &config);
+    let start_idx = bars.start;
+    let units = cached_profiles(
+        &full_data[bars],
+        revision,
+        start_idx,
+        &config,
+        clock,
+        &sessions,
+    );
     let render_config = TpoRenderConfig::default();
+    let units = if config.latest_session_only {
+        &units[units.len().saturating_sub(1)..]
+    } else {
+        &units[..]
+    };
 
-    // Map each profile back to the index of its first visible bar so it anchors
-    // under the session it summarises. Sessions split on calendar day, mirroring
-    // `to_tpo_profiles`; a profile with no matching visible bar is skipped.
-    let mut profile_iter = profiles.iter().flat_map(|session| session.iter());
-    let mut current = profile_iter.next();
-    let mut anchor_idx: Option<usize> = None;
-    let mut last_day = None;
-
-    for (offset, bar) in visible_data.iter().enumerate() {
-        let day = bar.time.date_naive();
-        let new_session = last_day.map(|d| d != day).unwrap_or(true);
-        last_day = Some(day);
-
-        if new_session {
-            // Flush the profile for the previous session before starting this one.
-            if let (Some(profile), Some(idx)) = (current, anchor_idx) {
-                draw_session_profile(
-                    painter,
-                    price_rect,
-                    price_map,
-                    profile,
-                    &config,
-                    &render_config,
-                    idx_to_coord(idx, chart_rect_min_x),
-                    bullish_color,
-                    bearish_color,
-                );
-                current = profile_iter.next();
+    // Each profile with its left edge, its session's width and whether it starts out of view.
+    let mut placed = Vec::new();
+    for (first, len, profiles) in units {
+        let session = &full_data[*first..first + len];
+        // Each profile, split off within the session or not, starts at its first bar.
+        let anchors: Vec<_> = profiles
+            .iter()
+            .map(|profile| first + session.partition_point(|bar| bar.time < profile.session_date))
+            .chain([first + len])
+            .collect();
+        for (profile, span) in profiles.iter().zip(anchors.windows(2)) {
+            // The forming session has the empty space after the last bar to grow into.
+            let end_x = if span[1] == full_data.len() {
+                f32::INFINITY
+            } else {
+                idx_to_coord(span[1], chart_rect_min_x)
+            };
+            // A session that opened left of the plot keeps its profile at the plot's edge.
+            let open_x = idx_to_coord(span[0], chart_rect_min_x);
+            let anchor_x = open_x.max(price_rect.left());
+            let widest = profile.price_tpo_count.values().max().copied().unwrap_or(0);
+            if end_x > anchor_x && widest > 0 {
+                let fit = (end_x - anchor_x) / widest as f32;
+                placed.push((profile, anchor_x, fit, open_x < anchor_x));
             }
-            anchor_idx = Some(start_idx + offset);
         }
     }
-
-    // Flush the final (or only) session.
-    if let (Some(profile), Some(idx)) = (current, anchor_idx) {
+    // One column width for every profile that fits its whole session, so all show letters or
+    // all show blocks; a profile cut by the plot's edge narrows further on its own.
+    let column = placed
+        .iter()
+        .filter(|(.., cut)| !cut)
+        .map(|&(_, _, fit, _)| fit)
+        .fold(PERIOD_COLUMN_PX, f32::min);
+    for (profile, anchor_x, fit, _) in placed {
         draw_session_profile(
             painter,
             price_rect,
@@ -281,14 +364,16 @@ pub fn render_live_tpo(
             profile,
             &config,
             &render_config,
-            idx_to_coord(idx, chart_rect_min_x),
+            anchor_x,
+            column.min(fit).max(1.0),
             bullish_color,
             bearish_color,
         );
     }
 }
 
-/// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward.
+/// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward in columns of
+/// `column_width` pixels.
 #[allow(clippy::too_many_arguments)]
 fn draw_session_profile(
     painter: &Painter,
@@ -298,16 +383,16 @@ fn draw_session_profile(
     config: &TPOConfig,
     render_config: &TpoRenderConfig,
     anchor_x: f32,
+    column_width: f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    if profile.letters.is_empty() {
+    let Some(&widest) = profile.price_tpo_count.values().max() else {
         return;
-    }
+    };
 
     let chart = painter.ctx().active_theme().chart;
     let tick_size = profile.tick_size;
-    let column_width = PERIOD_COLUMN_PX;
     let use_letters = column_width >= LETTER_MIN_COLUMN_PX
         && matches!(
             config.display_mode,
@@ -330,8 +415,7 @@ fn draw_session_profile(
     if config.show_value_area {
         let va_top = coords.price_to_y(profile.value_area_high + tick_size * 0.5);
         let va_bottom = coords.price_to_y(profile.value_area_low - tick_size * 0.5);
-        // Width spans the widest row drawn below; approximate with profile width.
-        let va_right = anchor_x + profile.width() as f32 * column_width;
+        let va_right = anchor_x + widest as f32 * column_width;
         let va_rect = Rect::from_min_max(
             Pos2::new(anchor_x, va_top.min(va_bottom)),
             Pos2::new(va_right, va_top.max(va_bottom)),
@@ -345,10 +429,9 @@ fn draw_session_profile(
             continue;
         }
 
-        // Letters at this level, one per period, left-justified by period order.
+        // Letters at this level, one per period of each session, left-justified in time order.
         let mut letters_at_price: Vec<_> = profile.letters_at(price, tick_size);
-        letters_at_price.sort_by_key(|l| l.period_idx);
-        letters_at_price.dedup_by_key(|l| l.period_idx);
+        letters_at_price.sort_by_key(|l| l.ts);
 
         for (col, letter) in letters_at_price.iter().enumerate() {
             let x = anchor_x + col as f32 * column_width + column_width * 0.5;
@@ -406,6 +489,17 @@ fn draw_session_profile(
                 );
             }
         }
+    }
+
+    // Initial balance: a bar beside the profile from its low to its high.
+    if config.show_initial_balance && config.initial_balance_minutes > 0 {
+        let top = coords.price_to_y(profile.initial_balance_high);
+        let bottom = coords.price_to_y(profile.initial_balance_low);
+        painter.rect_filled(
+            Rect::from_x_y_ranges(anchor_x - 2.0..=anchor_x, top.min(bottom)..=top.max(bottom)),
+            0.0,
+            render_config.initial_balance_color,
+        );
     }
 
     // Opening marker: a small triangle at the session open, tinted by direction.
@@ -470,7 +564,7 @@ fn letter_color(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, to_tpo_profiles};
+    use crate::model::{Bar, Timeframe, to_tpo_profiles};
     use chrono::{Duration, Utc};
 
     fn create_test_bars() -> Vec<Bar> {
@@ -517,7 +611,8 @@ mod tests {
             tick_size: 1.0,
             ..Default::default()
         };
-        let profile = to_tpo_profiles(&create_test_bars(), &model).remove(0);
+        let profile =
+            to_tpo_profiles(&create_test_bars(), &model, &Timeframe::Min1.into()).remove(0);
         for (name, theme) in crate::theme::presets() {
             for mode in [
                 TPOColorMode::ByPeriod,
@@ -557,7 +652,7 @@ mod tests {
             ..Default::default()
         };
 
-        let profiles = to_tpo_profiles(&bars, &config);
+        let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min1.into());
         assert!(!profiles.is_empty());
 
         let profile = &profiles[0];
@@ -572,6 +667,42 @@ mod tests {
         assert!(config.poc_line_width > 0.0);
         assert!(config.letter_font_size > 0.0);
         assert!(config.row_height > 0.0);
+    }
+
+    #[test]
+    fn profiles_cover_the_whole_sessions_of_the_visible_bars() {
+        // Three UTC days of four bars each: indices 0..4, 4..8 and 8..12
+        let bars: Vec<_> = (0..12)
+            .map(|i| {
+                let minute = i / 4 * 1440 + i % 4 * 30;
+                let time = chrono::DateTime::UNIX_EPOCH + Duration::minutes(minute);
+                Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0)
+            })
+            .collect();
+        let sessions = BarClock::new(Timeframe::Min30).sessions();
+        let day = |d: i64| chrono::DateTime::UNIX_EPOCH + Duration::days(d);
+        // (visible bars, latest session only, composites, bars to build)
+        let cases = [
+            (5..7, false, vec![], 4..8),
+            (3..5, false, vec![], 0..8),
+            (11..12, false, vec![], 8..12),
+            (1..2, true, vec![], 8..12),
+            (5..6, false, vec![day(0)..=day(1)], 0..8),
+            (1..2, false, vec![day(0)..=day(2)], 0..12),
+            (1..2, true, vec![day(1)..=day(2)], 4..12),
+        ];
+        for (visible, latest_session_only, composites, expected) in cases {
+            let config = TPOConfig {
+                latest_session_only,
+                composites,
+                ..Default::default()
+            };
+            assert_eq!(
+                whole_sessions(&bars, visible.clone(), &sessions, &config),
+                expected,
+                "{visible:?}, {config:?}"
+            );
+        }
     }
 
     #[test]
@@ -590,7 +721,16 @@ mod tests {
         let mut config = TPOConfig::default();
         let mut revision = 1;
         let mut start_idx = 0;
-        let mut previous = cached_profiles(&bars, revision, start_idx, &config);
+        let mut clock = BarClock::new(Timeframe::Min1);
+        let sessions = |clock: &BarClock| clock.sessions();
+        let mut previous = cached_profiles(
+            &bars,
+            revision,
+            start_idx,
+            &config,
+            &clock,
+            &sessions(&clock),
+        );
         // (input change, reused sessions, letters per session, first letter, row height)
         let cases = [
             ("steady", [true, true], [6, 3], 'A', 1.0),
@@ -606,6 +746,7 @@ mod tests {
             ("letters", [false, false], [4, 4], 'x', 1.0),
             ("grid", [false, false], [3, 3], 'x', 2.0),
             ("global span", [false, false], [2, 502], 'x', 4.0),
+            ("zone", [false, false], [2, 502], 'x', 4.0),
         ];
         for (change, reused, counts, first_letter, tick) in cases {
             match change {
@@ -624,19 +765,28 @@ mod tests {
                 "letters" => config.custom_letters = Some("xy".into()),
                 "grid" => config.tick_size = 2.0,
                 "global span" => bars.last_mut().unwrap().high = 2103.0,
+                "zone" => clock = clock.with_timezone(chrono_tz::Asia::Tokyo),
                 _ => unreachable!(),
             }
-            let current = cached_profiles(&bars, revision, start_idx, &config);
+            let current = cached_profiles(
+                &bars,
+                revision,
+                start_idx,
+                &config,
+                &clock,
+                &sessions(&clock),
+            );
             assert_eq!(current.len(), 2, "{change}");
             for (i, profile) in current.iter().enumerate() {
                 assert_eq!(
-                    Rc::ptr_eq(profile, &previous[i]),
+                    Rc::ptr_eq(&profile.2, &previous[i].2),
                     reused[i],
                     "{change}, session {i}"
                 );
-                assert_eq!(profile[0].letters.len(), counts[i], "{change}, session {i}");
-                assert_eq!(profile[0].letters[0].letter, first_letter, "{change}");
-                assert_eq!(profile[0].tick_size, tick, "{change}");
+                let profile = &profile.2[0];
+                assert_eq!(profile.letters.len(), counts[i], "{change}, session {i}");
+                assert_eq!(profile.letters[0].letter, first_letter, "{change}");
+                assert_eq!(profile.tick_size, tick, "{change}");
             }
             previous = current;
         }

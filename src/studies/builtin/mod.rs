@@ -15,35 +15,51 @@
 //!
 //! ## Momentum / oscillators
 //! [`RSI`], [`MACD`], [`Stochastic`], [`StochasticRSI`], [`WilliamsR`],
-//! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`],
+//! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`], [`RsiDivergence`],
 //! [`UltimateOscillator`], [`ConnorsRSI`], [`CoppockCurve`], [`TRIX`],
 //! [`ElderRay`], [`FisherTransform`], [`ForceIndex`], [`MassIndex`],
 //! [`DetrendedPriceOscillator`], [`KDJ`], [`PrettyGoodOscillator`],
 //! [`ChandeMomentumOscillator`], [`TrueStrengthIndex`],
 //! [`StochasticMomentumIndex`], [`SchaffTrendCycle`], [`PriceOscillator`],
-//! [`PercentageVolumeOscillator`]
+//! [`PercentageVolumeOscillator`], [`AcceleratorOscillator`], [`AroonOscillator`],
+//! [`BullBearPower`], [`AdvanceDeclineRatioBars`], [`PriceMomentumOscillator`], [`PringsSpecialK`],
+//! [`SMIErgodicIndicator`], [`SMIErgodicOscillator`], [`WoodiesCCI`]
 //!
 //! ## Trend
 //! [`ADX`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
-//! [`DirectionalMovement`], [`VortexIndicator`], [`SqueezeMomentum`]
+//! [`DirectionalMovement`], [`VortexIndicator`], [`SqueezeMomentum`],
+//! [`WilliamsAlligator`], [`ChopZone`], [`VolatilityStop`], [`ChandeKrollStop`]
 //!
 //! ## Volatility
 //! [`BollingerBands`], [`ATR`], [`KeltnerChannels`], [`DonchianChannels`],
 //! [`StandardDeviation`], [`HistoricalVolatility`], [`ChaikinVolatility`],
-//! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`], [`ParkinsonVol`], [`ZeroTrendVol`]
+//! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`], [`ParkinsonVol`], [`ZeroTrendVol`],
+//! [`AverageDailyRange`], [`BBTrend`], [`UlcerIndex`], [`RelativeVolatilityIndex`],
+//! [`Median`]
+//!
+//! ## Price
+//! [`BollingerBars`]
 //!
 //! ## Volume
 //! [`OnBalanceVolume`], [`VolumeWeightedAvgPrice`], [`MoneyFlowIndex`],
 //! [`AccumulationDistribution`], [`ChaikinMoneyFlow`],
 //! [`VolumeRateOfChange`], [`KlingerOscillator`], [`CVD`],
-//! [`VolProfileVisible`], [`VolProfileFixed`]
+//! [`VolProfileVisible`], [`VolProfileFixed`], [`ChaikinOscillator`], [`TimeWeightedAvgPrice`],
+//! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
-//! [`PivotPoints`], [`ZigZag`], [`PriceChannel`]
+//! [`PivotPoints`], [`PivotPointsHighLow`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
+//! [`PriceChannel`]
+//!
+//! ## Patterns
+//! [`CandlestickPatterns`]
 //!
 //! ## Statistics
 //! [`LinearRegression`], [`StandardError`],
-//! [`RankCorrelationIndex`], [`MajorityRule`]
+//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`]
+//!
+//! ## Time
+//! [`TradingSessions`]
 
 use crate::model::Bar;
 
@@ -52,8 +68,28 @@ pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studie
 mod trade_delta;
 pub use trade_delta::{TradeDeltaValue, trade_delta};
 
+mod candlestick_patterns;
+pub use candlestick_patterns::{CandlestickPatterns, PatternTrend, PatternType};
+
 mod higher_interval_candles;
 pub use higher_interval_candles::HigherIntervalCandles;
+
+// Price overlays and their pane companion
+mod bollinger_bars;
+mod chande_kroll_stop;
+mod chop_zone;
+mod median;
+mod volatility_stop;
+mod williams_alligator;
+pub use bollinger_bars::BollingerBars;
+pub use chande_kroll_stop::ChandeKrollStop;
+pub use chop_zone::ChopZone;
+pub use median::Median;
+pub use volatility_stop::VolatilityStop;
+pub use williams_alligator::WilliamsAlligator;
+
+mod time_price_opportunity;
+pub use time_price_opportunity::TimePriceOpportunity;
 
 mod bollinger_bands;
 mod ema;
@@ -88,11 +124,14 @@ mod williams_r;
 
 // Volume indicators
 mod acc_dist;
+mod anchor_period;
 mod cmf;
 mod mfi;
 mod obv;
+mod twap;
 mod volume;
 mod vwap;
+mod vwap_auto_anchored;
 
 // Trend indicators
 mod adx;
@@ -107,7 +146,11 @@ mod keltner;
 mod std_dev;
 
 // Support/Resistance indicators
+mod gaps;
 mod pivot_points;
+mod pivot_points_high_low;
+mod rsi_divergence;
+mod williams_fractals;
 mod zigzag;
 
 // Oscillator/Momentum indicators (additional)
@@ -215,6 +258,28 @@ mod week52_highlow;
 // Tenth batch - Other indicators
 mod bbw;
 
+// Eleventh batch - Oscillators
+mod accelerator_oscillator;
+mod advance_decline_ratio_bars;
+mod aroon_oscillator;
+mod average_daily_range;
+mod bbtrend;
+mod bull_bear_power;
+mod chaikin_oscillator;
+mod ulcer_index;
+// Standard oscillators
+mod price_momentum_oscillator;
+mod rci_ribbon;
+mod relative_volatility_index;
+mod smi_ergodic;
+mod special_k;
+mod woodies_cci;
+// Time studies
+mod relative_volume_at_time;
+mod seasonality;
+mod trading_sessions;
+mod volume_24h;
+
 // Re-exports - Original indicators
 pub use bollinger_bands::BollingerBands;
 pub use ema::EMA;
@@ -249,11 +314,14 @@ pub use williams_r::WilliamsR;
 
 // Re-exports - Volume indicators
 pub use acc_dist::AccumulationDistribution;
+pub use anchor_period::AnchorPeriod;
 pub use cmf::ChaikinMoneyFlow;
 pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
+pub use twap::TimeWeightedAvgPrice;
 pub use volume::{Volume, VolumeAverage, VolumeColorRule};
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
+pub use vwap_auto_anchored::{AutoAnchor, VwapAutoAnchored};
 
 // Re-exports - Trend indicators
 pub use adx::ADX;
@@ -268,7 +336,11 @@ pub use keltner::KeltnerChannels;
 pub use std_dev::StandardDeviation;
 
 // Re-exports - Support/Resistance indicators
-pub use pivot_points::{PivotMethod, PivotPoints};
+pub use gaps::Gaps;
+pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
+pub use pivot_points_high_low::PivotPointsHighLow;
+pub use rsi_divergence::RsiDivergence;
+pub use williams_fractals::WilliamsFractals;
 pub use zigzag::{ZigZag, ZigZagMode};
 
 // Re-exports - Additional Oscillator/Momentum indicators
@@ -376,10 +448,58 @@ pub use week52_highlow::{Week52HighLow, Week52HighLowLevels};
 // Re-exports - Tenth batch (Other)
 pub use bbw::BollingerBandsWidth;
 
+// Re-exports - Eleventh batch (Oscillators)
+pub use accelerator_oscillator::AcceleratorOscillator;
+pub use advance_decline_ratio_bars::AdvanceDeclineRatioBars;
+pub use aroon_oscillator::AroonOscillator;
+pub use average_daily_range::AverageDailyRange;
+pub use bbtrend::BBTrend;
+pub use bull_bear_power::BullBearPower;
+pub use chaikin_oscillator::ChaikinOscillator;
+pub use ulcer_index::UlcerIndex;
+// Re-exports - Standard oscillators
+pub use price_momentum_oscillator::PriceMomentumOscillator;
+pub use rci_ribbon::RciRibbon;
+pub use relative_volatility_index::RelativeVolatilityIndex;
+pub use smi_ergodic::{SMIErgodic, SMIErgodicIndicator, SMIErgodicOscillator};
+pub use special_k::PringsSpecialK;
+pub use woodies_cci::WoodiesCCI;
+// Re-exports - Time studies
+pub use relative_volume_at_time::{RelativeVolumeAnchor, RelativeVolumeAtTime, RelativeVolumeMode};
+pub use seasonality::Seasonality;
+pub use trading_sessions::TradingSessions;
+pub use volume_24h::Volume24h;
+
 /// A float parameter clamped into `min..=max`, NaN to `min`, the way constructors
 /// raise a length of 0 to 1.
 fn clamp_param(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
+}
+
+/// A recursive average `prev + alpha * (x - prev)` seeded with the mean of its first `length`
+/// values: alpha `2 / (length + 1)` gives an EMA, `1 / length` Wilder's smoothed average.
+/// Leading NaN inputs are skipped; the output is NaN until the seed.
+fn seeded_average(values: &[f64], length: usize, alpha: f64) -> Vec<f64> {
+    let (mut count, mut average) = (0, 0.0);
+    values
+        .iter()
+        .map(|&x| {
+            if count < length {
+                if x.is_nan() {
+                    return f64::NAN;
+                }
+                count += 1;
+                average += x;
+                if count < length {
+                    return f64::NAN;
+                }
+                average /= length as f64;
+            } else {
+                average += alpha * (x - average);
+            }
+            average
+        })
+        .collect()
 }
 
 /// `compute` run over the bars whose inputs `finite` accepts, the other bars given no

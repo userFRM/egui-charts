@@ -19,6 +19,8 @@ pub enum StoreKind {
     StudyTemplates,
     /// Named drawing property templates, without chart anchors.
     DrawingTemplates,
+    /// The user's notes on one symbol, one document per symbol, named by the symbol.
+    SymbolNotes,
 }
 
 /// Where the library keeps settings and drawings between sessions: files, browser storage or a

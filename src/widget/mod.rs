@@ -130,7 +130,7 @@ mod crosshair;
 mod events;
 mod feed;
 mod marks;
-pub use events::{ChartEvent, ChartPointer};
+pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
 pub mod export;
 mod frame;
 mod history;
@@ -151,6 +151,7 @@ pub use series::PriceLineId;
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
+mod time_scale;
 use feed::FeedLink;
 pub use sync::VisibleTimeRange;
 pub(crate) mod tool_interaction;
@@ -258,6 +259,10 @@ pub struct Chart {
     pub(crate) pending_start_idx: Option<usize>,
     /// Timestamp to centre, retained while older history is loading.
     pub(crate) pending_scroll_time: Option<DateTime<Utc>>,
+    /// Animated scroll requested by the host, advanced each frame (UI state only)
+    scroll_animation: Option<time_scale::ScrollAnimation>,
+    /// Time axis below the plots in the last frame; zero height while its labels are hidden
+    time_axis_rect: Rect,
     /// Chart type (candlestick, line, area, bar, Renko, Kagi)
     pub(crate) chart_type: ChartType,
     /// Parameters of the price-based chart types and the baseline
@@ -616,8 +621,6 @@ impl Chart {
     }
 
     fn pane_layout_rects(&self, widget_rect: Rect, show_time_labels: bool) -> ChartLayoutRects {
-        use crate::styles::sizing::chart as sizing;
-
         let padding = self
             .config
             .padding
@@ -670,7 +673,7 @@ impl Chart {
             .min((widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0) * 0.5);
         let left_axis = left_axis + study_axes;
         let bottom_padding = if show_time_labels {
-            sizing::BOTTOM_PADDING_WITH_TIME
+            self.time_axis_height()
         } else {
             0.0
         };
