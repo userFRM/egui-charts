@@ -121,6 +121,7 @@ impl Chart {
             next_series: 2,
             drawings: DrawingManager::new(),
             history: super::history::ChartHistory::default(),
+            pane_layout: super::pane_layout::PaneLayout::default(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
             zoom_just_applied: false,

@@ -2512,10 +2512,23 @@ mod tests {
                         (TopToolbarAction::Redo, 1, 1, true, false),
                     ] {
                         app.handle_top_toolbar(&ctx, action);
-                        assert_eq!(app.chart.indicators().count(), studies);
+                        assert_eq!(
+                            app.chart
+                                .indicators()
+                                .filter(|(_, study)| !study.is_volume())
+                                .count(),
+                            studies
+                        );
                         assert_eq!(app.chart.drawings().drawings.len(), drawings);
                         if studies == 1 {
-                            assert_eq!(app.chart.indicators().next().unwrap().0, id);
+                            assert_eq!(
+                                app.chart
+                                    .indicators()
+                                    .find(|(_, study)| !study.is_volume())
+                                    .unwrap()
+                                    .0,
+                                id
+                            );
                         }
                         ctx.run_ui(RawInput::default(), |ui| {
                             app.show_top_toolbar(ui, egui::Color32::BLACK)
@@ -2753,7 +2766,9 @@ mod tests {
                 }
                 assert!(painted, "comparison prices must be painted");
                 app.handle_top_toolbar(&ctx, TopToolbarAction::SaveIndicatorTemplate);
-                assert!(app.indicator_templates.last().unwrap().studies.is_empty());
+                let saved = &app.indicator_templates.last().unwrap().studies;
+                assert_eq!(saved.len(), 1);
+                assert!(saved[0].is_volume());
                 app.handle_top_toolbar(
                     &ctx,
                     TopToolbarAction::ApplyIndicatorTemplate("Study set 1".into()),

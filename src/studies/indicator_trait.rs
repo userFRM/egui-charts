@@ -91,6 +91,19 @@ impl Default for IndicatorLineStyle {
     }
 }
 
+/// Default layout and reference levels supplied by a study for its separate pane.
+#[derive(Clone, Debug, Default)]
+pub struct StudyPane {
+    /// Preferred initial height in logical pixels; `None` shares the available space.
+    pub height: Option<f32>,
+    /// Fixed initial range, or automatic fitting to visible values.
+    pub range: Option<(f64, f64)>,
+    /// Reference level, colour and caption.
+    pub levels: Vec<(f64, Color32, &'static str)>,
+    /// Fill between the outer levels with the first plot colour at 20% opacity.
+    pub fill_between_levels: bool,
+}
+
 /// The core trait that every technical indicator must implement.
 ///
 /// The trait defines the full indicator lifecycle: naming, calculation,
@@ -293,6 +306,17 @@ pub trait Indicator: Send {
     /// Y-axis (e.g. RSI, MACD, OBV). Defaults to `true`.
     fn is_overlay(&self) -> bool {
         true
+    }
+
+    /// Default separate-pane layout and reference levels, independent of the study name.
+    fn pane(&self) -> StudyPane {
+        StudyPane::default()
+    }
+
+    /// Changes placement between the main chart and a separate pane.
+    /// Returns whether this study supports the change. The chart's presentation wrapper does.
+    fn set_overlay(&mut self, _overlay: bool) -> bool {
+        false
     }
 
     /// Volume plots use an independent zero-based scale: up columns, down columns and MA.

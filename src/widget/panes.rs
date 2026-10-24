@@ -27,46 +27,54 @@ impl Chart {
         let host_spacing = std::mem::take(&mut ui.spacing_mut().item_spacing);
 
         let available = ui.available_rect_before_wrap();
-        let pane_state = ui.next_auto_id().with("pane_collapsed");
-        let pane_count = self
-            .studies
-            .indicators()
+        self.sync_panes();
+        let maximized = self.pane_layout.maximized;
+        let mut panes: Vec<_> = self
+            .pane_layout
+            .panes
             .iter()
-            .filter(|study| !study.is_overlay() && study.is_visible())
-            .count();
+            .enumerate()
+            .filter(|(_, pane)| {
+                pane.studies.iter().any(|id| {
+                    self.study_ids
+                        .iter()
+                        .position(|study| study == id)
+                        .is_some_and(|idx| self.studies.indicators()[idx].is_visible())
+                })
+            })
+            .filter(|(_, pane)| maximized.is_none_or(|id| id == pane.id))
+            .map(|(idx, pane)| (idx, pane.id, false))
+            .collect();
+        let pane_count = panes.len();
         let axis_height = if self.config.show_time_labels {
             crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME.min(available.height())
         } else {
             0.0
         };
-        let gap = DESIGN_TOKENS
-            .spacing
-            .hairline
-            .min((available.height() - axis_height).max(0.0) / pane_count as f32);
+        let gap = if maximized.is_some() {
+            0.0
+        } else {
+            DESIGN_TOKENS
+                .spacing
+                .hairline
+                .min((available.height() - axis_height).max(0.0) / pane_count.max(1) as f32)
+        };
         let usable_height = (available.height() - axis_height - gap * pane_count as f32).max(0.0);
         let auto_collapse = usable_height / (3.0 + pane_count as f32) < 40.0;
-        let row_height = 24.0_f32.min(usable_height / pane_count as f32);
-        let mut expanded_budget = ((usable_height - row_height * pane_count as f32)
+        let row_height = 24.0_f32.min(usable_height / pane_count.max(1) as f32);
+        let mut expanded_budget = ((usable_height - row_height * pane_count as f32 - 40.0)
             / (40.0 - row_height))
             .max(0.0) as usize;
-        let panes: Vec<_> = self
-            .studies
-            .indicators()
-            .iter()
-            .enumerate()
-            .filter(|(_, study)| !study.is_overlay() && study.is_visible())
-            .map(|(idx, _)| {
-                let id = self.study_ids[idx];
-                let collapsed = ui
-                    .data(|d| d.get_temp::<bool>(pane_state.with(id)))
+        for (idx, _, collapsed) in &mut panes {
+            *collapsed = maximized.is_none()
+                && (self.pane_layout.panes[*idx]
+                    .collapsed
                     .unwrap_or(auto_collapse)
-                    || expanded_budget == 0;
-                if !collapsed {
-                    expanded_budget -= 1;
-                }
-                (idx, id, collapsed)
-            })
-            .collect();
+                    || expanded_budget == 0);
+            if !*collapsed {
+                expanded_budget = expanded_budget.saturating_sub(1);
+            }
+        }
         let collapsed_count = panes.iter().filter(|(_, _, collapsed)| *collapsed).count();
         let expanded_count = pane_count - collapsed_count;
         let remaining = (usable_height - row_height * collapsed_count as f32).max(0.0);
@@ -82,16 +90,34 @@ impl Chart {
             .map(|(idx, _, collapsed)| {
                 if *collapsed {
                     0.0
-                } else if self.studies.indicators()[*idx].name() == "RSI" {
-                    IndicatorPaneConfig::rsi().height
                 } else {
-                    pane_height
+                    self.pane_layout.panes[*idx].height.unwrap_or(pane_height)
                 }
             })
             .collect();
-        let desired_total: f32 = desired.iter().sum();
-        let scale = ((remaining - 40.0).max(0.0) / desired_total.max(1.0)).min(1.0);
-        let main_height = (remaining - desired_total * scale).max(0.0);
+        let mut desired = desired;
+        if maximized.is_some_and(|id| id != super::SeriesId::MAIN) {
+            desired.fill(usable_height);
+        }
+        let main_min = if maximized.is_some_and(|id| id != super::SeriesId::MAIN) {
+            0.0
+        } else {
+            40.0
+        };
+        let pane_budget = (remaining - main_min).max(0.0);
+        let minimum = (pane_budget / expanded_count.max(1) as f32).min(40.0);
+        let excess: f32 = desired
+            .iter()
+            .map(|height| (*height - minimum).max(0.0))
+            .sum();
+        let factor =
+            ((pane_budget - minimum * expanded_count as f32).max(0.0) / excess.max(1.0)).min(1.0);
+        for (height, (_, _, collapsed)) in desired.iter_mut().zip(&panes) {
+            if !collapsed {
+                *height = minimum + (*height - minimum).max(0.0) * factor;
+            }
+        }
+        let main_height = (remaining - desired.iter().sum::<f32>()).max(0.0);
         let main_rect =
             Rect::from_min_size(available.min, egui::vec2(available.width(), main_height));
         let plot = self.pane_layout_rects(main_rect, false).price_rect;
@@ -130,202 +156,322 @@ impl Chart {
         let mut pending_indicator_action = None;
         let current_selection = self.selection.selected_id();
 
-        for ((_, id, collapsed), height) in panes.into_iter().zip(desired) {
-            let Some(idx) = self.study_ids.iter().position(|study| *study == id) else {
-                continue;
-            };
-            let indicator = &self.studies.indicators()[idx];
+        let mut pane_rects = Vec::new();
+        for ((pane_idx, pane_id, collapsed), height) in
+            panes.iter().copied().zip(desired.iter().copied())
+        {
             ui.add_space(gap);
-
-            let mut config = match indicator.name() {
-                "RSI" => IndicatorPaneConfig::rsi(),
-                "MACD" => IndicatorPaneConfig::macd(),
-                "Stochastic" => IndicatorPaneConfig::stochastic(),
-                _ => IndicatorPaneConfig::default(),
-            };
-
-            config.show_name = self.config.show_indicator_labels;
-            config.show_values = self.config.show_indicator_last_val;
-            config.inputs = if self.config.show_indicator_inputs {
-                self.study_inputs[idx].clone()
-            } else {
-                String::new()
-            };
-            if self.config.show_indicator_inputs
-                && indicator.is_volume()
-                && indicator.plot_style(2).visible
-                && config.inputs.is_empty()
-            {
-                config.inputs = indicator.line_names().get(2).cloned().unwrap_or_default();
+            let panel_rect = Rect::from_min_size(
+                ui.next_widget_position(),
+                egui::vec2(
+                    available.width(),
+                    if collapsed { row_height } else { height },
+                ),
+            );
+            let members = self.pane_layout.panes[pane_idx].studies.clone();
+            let mut shared_range = (f64::INFINITY, f64::NEG_INFINITY);
+            for id in &members {
+                let idx = self.study_ids.iter().position(|study| study == id).unwrap();
+                let study = self.studies.indicators()[idx].as_ref();
+                if study.is_visible() {
+                    let range = IndicatorPane::with_config(IndicatorPaneConfig::from_study(study))
+                        .calculate_y_range(study, &visible_range);
+                    shared_range.0 = shared_range.0.min(range.0);
+                    shared_range.1 = shared_range.1.max(range.1);
+                }
             }
-            config.show_legend =
-                config.show_name || config.show_values || !config.inputs.is_empty();
-            config.height = if collapsed {
-                row_height
-            } else {
-                height * scale
-            };
-            let mut panel = IndicatorPane::with_config(config);
-            panel.bar_index = self.last_hover_bar_idx.and_then(|index| {
-                let index = index.round() as usize;
-                (index < self.state.shown().len()).then_some(index)
-            });
-            let hover_rect = Rect::from_min_max(plot.min, Pos2::new(plot.right(), time_axis.top()));
-            let hover = self
-                .axis_hover
-                .map(|(pos, _)| pos)
-                .or_else(|| {
-                    ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
-                        hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
+            let pane_scale = &mut self.pane_layout.panes[pane_idx].scale;
+            let mode = pane_scale.options().mode;
+            let base = members
+                .iter()
+                .find_map(|id| {
+                    let idx = self.study_ids.iter().position(|study| study == id)?;
+                    let study = self.studies.indicators()[idx].as_ref();
+                    (0..study.line_cnt()).find_map(|line| {
+                        visible_range
+                            .clone()
+                            .find_map(|bar| study.values().value(line, bar))
                     })
                 })
-                .or_else(|| {
-                    self.synced_crosshair_bar_idx
-                        .filter(|index| index.is_finite() && *index >= 0.0)
-                        .map(|index| {
-                            Pos2::new(
-                                coords
-                                    .to_mapping(plot, 0.0, 1.0)
-                                    .idx_to_x(index.round() as usize),
-                                plot.center().y,
-                            )
-                        })
-                        .filter(|pos| plot.contains(*pos))
-                })
-                .filter(|_| !egui::Popup::is_any_open(ui.ctx()));
-            let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
-            if self.drawings.eraser_mode {
-                crosshair_options.style = crate::config::CrosshairStyle::Arrow;
-            }
-
-            // Use show_aligned_interactive to get pane info for hit testing
-            if let Some(interaction) = panel.show_aligned_interactive_in(
-                ui,
-                indicator.as_ref(),
-                visible_range.clone(),
-                coords,
-                Some(plot.x_range()),
-                collapsed,
-                if self.config.show_right_axis {
-                    Some(crate::scales::PriceScaleId::Right)
-                } else if self.config.show_left_axis {
-                    Some(crate::scales::PriceScaleId::Left)
-                } else {
-                    None
-                },
-                hover.map(|pos| (pos, crosshair_options)),
-            ) {
-                self.measured_axis_width = self.measured_axis_width.max(panel.measured_axis_width);
-                let PaneInteraction {
-                    panel_rect,
-                    chart_rect,
-                    y_min,
-                    y_max,
-                    response: pane_response,
-                    close_response,
-                    visibility_response,
-                    settings_response,
-                } = interaction;
-
-                // A click on the legend's close "x" removes this study.
-                let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
-                if pane_response.double_clicked() {
-                    self.indicator_settings_request = Some(id);
-                }
-                if close_clicked {
-                    pending_indicator_action =
-                        Some(crate::chart::renderers::StudyAction::Remove(idx));
-                }
-
-                let visibility_clicked = visibility_response.as_ref().is_some_and(|r| r.clicked());
-                let settings_clicked = settings_response.as_ref().is_some_and(|r| r.clicked());
-                if visibility_clicked {
-                    pending_indicator_action =
-                        Some(crate::chart::renderers::StudyAction::ToggleVisibility(idx));
-                }
-                if settings_clicked {
-                    pending_indicator_action =
-                        Some(crate::chart::renderers::StudyAction::Settings(idx));
-                }
-                let control_clicked = close_clicked || visibility_clicked || settings_clicked;
-                let header = Rect::from_min_max(
-                    chart_rect.min,
-                    Pos2::new(
-                        visibility_response
-                            .as_ref()
-                            .map_or(chart_rect.right(), |r| {
-                                r.rect.left().min(chart_rect.right())
-                            }),
-                        (chart_rect.top() + 24.0).min(chart_rect.bottom()),
-                    ),
-                );
-                let toggle = ui
-                    .interact(header, pane_state.with((id, "toggle")), Sense::click())
-                    .on_hover_text(if collapsed {
-                        "Expand pane"
-                    } else {
-                        "Collapse pane"
-                    });
-                if toggle.clicked() && !control_clicked {
-                    ui.data_mut(|d| d.insert_temp(pane_state.with(id), !collapsed));
-                }
-                let pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
-
-                // Resolve a click on this pane: a hit on the line selects
-                // it, an empty-pane click clears the whole selection. A
-                // close-"x" click is handled above and must not also
-                // change the selection.
-                if !collapsed
-                    && !toggle.clicked()
-                    && !control_clicked
-                    && pane_response.clicked()
-                    && let Some(click_pos) = pane_response.interact_pointer_pos()
-                {
-                    let hit = hit_test_pane_indicator(
-                        click_pos,
-                        indicator.as_ref(),
-                        idx,
-                        visible_range.clone(),
-                        chart_rect,
-                        y_min,
-                        y_max,
-                        &pane_coords,
-                    );
-                    pending_pane_selection = Some(
-                        hit.map(|h| ChartElementId::Indicator(self.study_ids[h.indicator_idx])),
-                    );
-                }
-
-                // Draw selection handles when this pane is selected.
-                if !collapsed && current_selection == Some(ChartElementId::Indicator(id)) {
-                    let dot_config = SelectionDotConfig {
-                        dot_interval: calculate_dot_interval(pane_coords.bar_spacing),
-                        ..Default::default()
-                    };
-                    for line_idx in 0..indicator.line_cnt() {
-                        render_indicator_selection_dots(
-                            &ui.painter()
-                                .with_clip_rect(chart_rect.intersect(ui.clip_rect())),
-                            indicator.as_ref(),
-                            line_idx,
-                            visible_range.clone(),
-                            &pane_coords,
-                            |value| pane_coords.price_to_y(value),
-                            &dot_config,
-                        );
+                .filter(|base| *base != 0.0)
+                .unwrap_or(1.0);
+            let transform = crate::scales::PriceTransform { mode, base };
+            pane_scale.rebase(transform);
+            // Logarithmic scales fit drawable positive values, excluding zero histogram baselines.
+            if mode == crate::scales::PriceScaleMode::Logarithmic {
+                shared_range = (f64::INFINITY, f64::NEG_INFINITY);
+                for id in &members {
+                    let idx = self.study_ids.iter().position(|study| study == id).unwrap();
+                    let study = self.studies.indicators()[idx].as_ref();
+                    if study.is_visible() {
+                        for line in
+                            (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible)
+                        {
+                            for value in visible_range
+                                .clone()
+                                .filter_map(|bar| study.values().value(line, bar))
+                                .filter(|value| *value > 0.0)
+                            {
+                                shared_range.0 = shared_range.0.min(value);
+                                shared_range.1 = shared_range.1.max(value);
+                            }
+                        }
                     }
                 }
+            }
+            pane_scale.autoscale(
+                transform.to_scale(shared_range.0),
+                transform.to_scale(shared_range.1),
+            );
+            let map = pane_scale.map(transform, panel_rect.top(), panel_rect.bottom());
+            let mut member_row = 0;
+            let mut axis_tags = Vec::new();
+            for id in members {
+                let Some(idx) = self.study_ids.iter().position(|study| *study == id) else {
+                    continue;
+                };
+                let indicator = &self.studies.indicators()[idx];
+                if !indicator.is_visible() {
+                    continue;
+                }
+                let mut config = IndicatorPaneConfig::from_study(indicator.as_ref());
+                config.show_name = self.config.show_indicator_labels;
+                config.show_values = self.config.show_indicator_last_val;
+                config.inputs = if self.config.show_indicator_inputs {
+                    self.study_inputs[idx].clone()
+                } else {
+                    String::new()
+                };
+                if self.config.show_indicator_inputs
+                    && indicator.is_volume()
+                    && indicator.plot_style(2).visible
+                    && config.inputs.is_empty()
+                {
+                    config.inputs = indicator.line_names().get(2).cloned().unwrap_or_default();
+                }
+                config.show_legend =
+                    config.show_name || config.show_values || !config.inputs.is_empty();
+                config.height = if collapsed { row_height } else { height };
+                config.show_grid &= member_row == 0;
+                let mut panel = IndicatorPane::with_config(config);
+                panel.price_map = Some(map);
+                panel.axis_tags = axis_tags.clone();
+                panel.overlay = member_row > 0;
 
-                // Store the pane info for hit testing by platform
-                self.last_rendered_indicator_panes
-                    .push(RenderedIndicatorPane {
-                        indicator_idx: idx,
+                panel.legend_offset = member_row as f32 * 24.0;
+                panel.pane_controls = true;
+                member_row += 1;
+                panel.bar_index = self.last_hover_bar_idx.and_then(|index| {
+                    let index = index.round() as usize;
+                    (index < self.state.shown().len()).then_some(index)
+                });
+                let hover_rect =
+                    Rect::from_min_max(plot.min, Pos2::new(plot.right(), time_axis.top()));
+                let mut hover = self
+                    .axis_hover
+                    .map(|(pos, _)| pos)
+                    .or_else(|| {
+                        ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
+                            hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
+                        })
+                    })
+                    .or_else(|| {
+                        self.synced_crosshair_bar_idx
+                            .filter(|index| index.is_finite() && *index >= 0.0)
+                            .map(|index| {
+                                Pos2::new(
+                                    coords
+                                        .to_mapping(plot, 0.0, 1.0)
+                                        .idx_to_x(index.round() as usize),
+                                    plot.center().y,
+                                )
+                            })
+                            .filter(|pos| plot.contains(*pos))
+                    })
+                    .filter(|_| !egui::Popup::is_any_open(ui.ctx()));
+                let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
+                if self.drawings.eraser_mode {
+                    crosshair_options.style = crate::config::CrosshairStyle::Arrow;
+                }
+
+                if panel.overlay {
+                    hover = None;
+                } else if crosshair_options.mode == crate::config::CrosshairMode::Magnet {
+                    if let Some(pos) = &mut hover
+                        && panel_rect.contains(*pos)
+                        && let Some(bar) = panel.bar_index
+                        && let Some(value) = crate::chart::renderers::snap_to_values(
+                            pos.y,
+                            &map,
+                            self.pane_layout.panes[pane_idx]
+                                .studies
+                                .iter()
+                                .filter_map(|id| {
+                                    self.study_ids.iter().position(|study| study == id)
+                                })
+                                .map(|idx| self.studies.indicators()[idx].as_ref())
+                                .filter(|study| study.is_visible())
+                                .flat_map(|study| {
+                                    (0..study.line_cnt())
+                                        .filter(|line| study.plot_style(*line).visible)
+                                        .filter_map(move |line| study.values().value(line, bar))
+                                }),
+                        )
+                    {
+                        pos.y = map.price_to_y(value);
+                    }
+                    crosshair_options.mode = crate::config::CrosshairMode::Normal;
+                }
+
+                // Use show_aligned_interactive to get pane info for hit testing
+                let mut child =
+                    ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(panel_rect));
+                if let Some(interaction) = panel.show_aligned_interactive_in(
+                    &mut child,
+                    indicator.as_ref(),
+                    visible_range.clone(),
+                    coords,
+                    Some(plot.x_range()),
+                    collapsed,
+                    if self.config.show_right_axis {
+                        Some(crate::scales::PriceScaleId::Right)
+                    } else if self.config.show_left_axis {
+                        Some(crate::scales::PriceScaleId::Left)
+                    } else {
+                        None
+                    },
+                    hover.map(|pos| (pos, crosshair_options)),
+                ) {
+                    self.measured_axis_width =
+                        self.measured_axis_width.max(panel.measured_axis_width);
+                    axis_tags = panel.axis_tags.clone();
+                    let PaneInteraction {
                         panel_rect,
                         chart_rect,
                         y_min,
                         y_max,
-                        coords,
-                    });
+                        response: pane_response,
+                        close_response,
+                        visibility_response,
+                        settings_response,
+                    } = interaction;
+
+                    // A click on the legend's close "x" removes this study.
+                    let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
+                    if pane_response.double_clicked() {
+                        self.indicator_settings_request = Some(id);
+                    }
+                    if close_clicked {
+                        pending_indicator_action =
+                            Some(crate::chart::renderers::StudyAction::Remove(idx));
+                    }
+
+                    let visibility_clicked =
+                        visibility_response.as_ref().is_some_and(|r| r.clicked());
+                    let settings_clicked = settings_response.as_ref().is_some_and(|r| r.clicked());
+                    if visibility_clicked {
+                        pending_indicator_action =
+                            Some(crate::chart::renderers::StudyAction::ToggleVisibility(idx));
+                    }
+                    if settings_clicked {
+                        pending_indicator_action =
+                            Some(crate::chart::renderers::StudyAction::Settings(idx));
+                    }
+                    let control_clicked = close_clicked || visibility_clicked || settings_clicked;
+                    let header = Rect::from_min_max(
+                        chart_rect.min + egui::vec2(0.0, panel.legend_offset),
+                        Pos2::new(
+                            visibility_response
+                                .as_ref()
+                                .map_or(chart_rect.right() - 42.0, |r| {
+                                    r.rect.left().min(chart_rect.right())
+                                }),
+                            (chart_rect.top() + panel.legend_offset + 24.0)
+                                .min(chart_rect.bottom()),
+                        ),
+                    );
+                    let toggle = ui
+                        .interact(header, ui.scope_id().with((id, "toggle")), Sense::click())
+                        .on_hover_text(if collapsed {
+                            "Expand pane"
+                        } else {
+                            "Collapse pane"
+                        });
+                    if toggle.clicked() && !control_clicked {
+                        self.pane_layout.panes[pane_idx].collapsed = Some(!collapsed);
+                        ui.ctx().request_repaint();
+                    }
+                    let mut pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
+                    pane_coords.price = map;
+
+                    // Resolve a click on this pane: a hit on the line selects
+                    // it, an empty-pane click clears the whole selection. A
+                    // close-"x" click is handled above and must not also
+                    // change the selection.
+                    if !collapsed
+                        && !toggle.clicked()
+                        && !control_clicked
+                        && pane_response.clicked()
+                        && let Some(click_pos) = pane_response.interact_pointer_pos()
+                    {
+                        let hit = hit_test_pane_indicator(
+                            click_pos,
+                            indicator.as_ref(),
+                            idx,
+                            visible_range.clone(),
+                            chart_rect,
+                            y_min,
+                            y_max,
+                            &pane_coords,
+                        );
+                        if hit.is_some() || pending_pane_selection.is_none() {
+                            pending_pane_selection = Some(hit.map(|h| {
+                                ChartElementId::Indicator(self.study_ids[h.indicator_idx])
+                            }));
+                        }
+                    }
+
+                    // Draw selection handles when this pane is selected.
+                    if !collapsed && current_selection == Some(ChartElementId::Indicator(id)) {
+                        let dot_config = SelectionDotConfig {
+                            dot_interval: calculate_dot_interval(pane_coords.bar_spacing),
+                            ..Default::default()
+                        };
+                        for line_idx in 0..indicator.line_cnt() {
+                            render_indicator_selection_dots(
+                                &ui.painter()
+                                    .with_clip_rect(chart_rect.intersect(ui.clip_rect())),
+                                indicator.as_ref(),
+                                line_idx,
+                                visible_range.clone(),
+                                &pane_coords,
+                                |value| pane_coords.price_to_y(value),
+                                &dot_config,
+                            );
+                        }
+                    }
+
+                    // Store the pane info for hit testing by platform
+                    self.last_rendered_indicator_panes
+                        .push(RenderedIndicatorPane {
+                            indicator_idx: idx,
+                            panel_rect,
+                            chart_rect,
+                            y_min,
+                            y_max,
+                            coords,
+                            mapping: pane_coords,
+                        });
+                }
+            }
+            ui.allocate_space(panel_rect.size());
+            pane_rects.push((pane_idx, pane_id, panel_rect, collapsed));
+        }
+        self.pane_separators(ui, &pane_rects, main_rect);
+        for (_, id, rect, collapsed) in pane_rects {
+            if let Some(idx) = self.pane_layout.panes.iter().position(|pane| pane.id == id) {
+                self.pane_scale_interaction(ui, idx, rect, plot);
+                self.pane_actions(ui, idx, id, rect, plot, collapsed);
             }
         }
 
@@ -354,6 +500,315 @@ mod tests {
     use crate::studies::{MACD, RSI};
     use crate::widget::test_frames::chart;
     use egui::{Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+
+    fn pointer(ctx: &Context, chart: &mut crate::widget::Chart, pos: Pos2, pressed: Option<bool>) {
+        let mut events = vec![Event::PointerMoved(pos)];
+        if let Some(pressed) = pressed {
+            events.push(Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+        }
+        let time = ctx.input(|input| input.time) + 0.1;
+        crate::widget::test_frames::frame(ctx, chart, time, events);
+    }
+
+    fn click(ctx: &Context, chart: &mut crate::widget::Chart, pos: Pos2) {
+        for pressed in [None, Some(true), Some(false), None] {
+            pointer(ctx, chart, pos, pressed);
+        }
+    }
+
+    fn drag(ctx: &Context, chart: &mut crate::widget::Chart, from: Pos2, to: Pos2) {
+        pointer(ctx, chart, from, None);
+        pointer(ctx, chart, from, Some(true));
+        pointer(ctx, chart, from + (to - from) * 0.5, None);
+        pointer(ctx, chart, to, None);
+        pointer(ctx, chart, to, Some(false));
+        pointer(ctx, chart, to, None);
+    }
+
+    #[test]
+    fn pane_separators_resize_neighbors_and_maximize_restores_the_layout() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+            chart.add_indicator(Box::new(RSI::new(14)));
+            chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
+            crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+            crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+            let main = chart.get_rendered_price_rect();
+            let before = chart.get_rendered_indicator_panes().to_vec();
+            let separator = Pos2::new(main.center().x, before[1].panel_rect.top() - 0.5);
+            drag(
+                &ctx,
+                &mut chart,
+                separator,
+                separator + egui::vec2(0.0, 25.0),
+            );
+            let resized = chart.get_rendered_indicator_panes().to_vec();
+            assert!(
+                (resized[0].panel_rect.height() - before[0].panel_rect.height() - 25.0).abs() < 0.1
+            );
+            assert!(
+                (resized[1].panel_rect.height() - before[1].panel_rect.height() + 25.0).abs() < 0.1
+            );
+            assert_eq!(chart.get_rendered_price_rect(), main);
+            let maximize = Pos2::new(
+                resized[0].chart_rect.right() - 12.0,
+                resized[0].panel_rect.top() + 12.0,
+            );
+            click(&ctx, &mut chart, maximize);
+            let maximized = chart.get_rendered_indicator_panes();
+            assert_eq!(maximized.len(), 1);
+            assert!(maximized[0].panel_rect.height() > 500.0);
+            assert_eq!(maximized[0].chart_rect.x_range(), main.x_range());
+            let restore = Pos2::new(
+                maximized[0].chart_rect.right() - 12.0,
+                maximized[0].panel_rect.top() + 12.0,
+            );
+            click(&ctx, &mut chart, restore);
+            for (restored, resized) in chart.get_rendered_indicator_panes().iter().zip(&resized) {
+                assert_eq!(restored.panel_rect, resized.panel_rect);
+            }
+            let separator = Pos2::new(main.center().x, resized[0].panel_rect.top() - 0.5);
+            drag(
+                &ctx,
+                &mut chart,
+                separator,
+                separator - egui::vec2(0.0, 10_000.0),
+            );
+            assert!(chart.get_rendered_price_rect().height() >= 39.9);
+            assert!(
+                chart
+                    .get_rendered_indicator_panes()
+                    .iter()
+                    .all(|pane| pane.panel_rect.height() >= 39.9)
+            );
+            let last = chart.get_rendered_indicator_panes().last().unwrap();
+            assert!((last.panel_rect.bottom() - 564.0).abs() < 0.1);
+            let mut layout = crate::widget::layout::ChartLayout::default();
+            let mut show = |chart: &mut crate::widget::Chart, pos, pressed: Option<bool>| {
+                let mut events = vec![Event::PointerMoved(pos)];
+                if let Some(pressed) = pressed {
+                    events.push(Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    });
+                }
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        time: Some(ctx.input(|input| input.time) + 0.1),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            layout.show(ui, &mut [chart]);
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            show(&mut chart, Pos2::ZERO, None);
+            for maximized in [true, false] {
+                let pane = &chart.get_rendered_indicator_panes()[0];
+                let button =
+                    Pos2::new(pane.chart_rect.right() - 12.0, pane.panel_rect.top() + 12.0);
+                for pressed in [None, Some(true), Some(false), None] {
+                    show(&mut chart, button, pressed);
+                }
+                assert_eq!(
+                    chart.get_rendered_indicator_panes().len(),
+                    if maximized { 1 } else { 2 },
+                    "the layout menu must leave pane maximize and restore reachable"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pane_defaults_do_not_depend_on_the_study_name() {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.add_indicator(Box::new(
+            crate::studies::CustomIndicator::new("RSI", |bars| {
+                bars.iter()
+                    .map(|_| crate::studies::IndicatorValue::Single(200.0))
+                    .collect()
+            })
+            .with_overlay(false),
+        ));
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+        let pane = &chart.get_rendered_indicator_panes()[0];
+        // A flat value of 200 gets 10% of a 1% span (2): [199.8, 200.2].
+        assert!((pane.y_min - 199.8).abs() < 1e-9);
+        assert!((pane.y_max - 200.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn merged_panes_share_scales_and_studies_can_return_to_the_main_pane() {
+        use crate::scales::PriceScaleMode;
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        let first = chart.add_indicator(Box::new(RSI::new(14)));
+        let second = chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+        // Reach the pane menu through pointer input; the old pane has no such menu.
+        let pane = &chart.get_rendered_indicator_panes()[1];
+        let menu = Pos2::new(pane.chart_rect.right() - 32.0, pane.panel_rect.top() + 12.0);
+        click(&ctx, &mut chart, menu);
+        let shapes = crate::widget::test_frames::shapes(&ctx, &mut chart, 2.0, Vec::new());
+        let target = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text() == "Merge with pane above" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("pane merge action");
+        click(&ctx, &mut chart, target);
+        crate::widget::test_frames::frame(
+            &ctx,
+            &mut chart,
+            ctx.input(|input| input.time) + 0.1,
+            Vec::new(),
+        );
+        let panes = chart.get_rendered_indicator_panes();
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes[0].panel_rect, panes[1].panel_rect);
+        assert_eq!(
+            panes[0].mapping.price.range(),
+            panes[1].mapping.price.range()
+        );
+        let axis = Pos2::new(
+            panes[0].chart_rect.right() + 10.0,
+            panes[0].panel_rect.center().y,
+        );
+        let before = panes[0].mapping.price.range();
+        drag(&ctx, &mut chart, axis, axis + egui::vec2(0.0, 20.0));
+        let after = chart.get_rendered_indicator_panes()[0]
+            .mapping
+            .price
+            .range();
+        assert!(after.max - after.min > before.max - before.min);
+        assert!(chart.pane_layout.panes[0].scale.is_manual());
+        #[cfg(feature = "ui")]
+        {
+            let mut menus = crate::ui::context_menu::ChartMenus::default();
+            let mut shapes = Vec::new();
+            for clicked in [true, false] {
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        time: Some(ctx.input(|input| input.time) + 0.1),
+                        events: if clicked {
+                            vec![
+                                Event::PointerMoved(axis),
+                                Event::PointerButton {
+                                    pos: axis,
+                                    button: PointerButton::Secondary,
+                                    pressed: true,
+                                    modifiers: Modifiers::NONE,
+                                },
+                                Event::PointerButton {
+                                    pos: axis,
+                                    button: PointerButton::Secondary,
+                                    pressed: false,
+                                    modifiers: Modifiers::NONE,
+                                },
+                            ]
+                        } else {
+                            Vec::new()
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            chart.show(ui);
+                        });
+                        menus.show(&ctx, &mut chart);
+                    },
+                );
+                shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+            }
+            assert!(
+                !shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == "Lock price to bar ratio")),
+                "the main-axis menu must not open over a study axis"
+            );
+        }
+        // The same engine maps 10 and 1000 around 100 at the midpoint in logarithmic units.
+        let scale = &mut chart.pane_layout.panes[0].scale;
+        scale.options_mut().mode = PriceScaleMode::Logarithmic;
+        scale.reset();
+        scale.rebase(crate::scales::PriceTransform {
+            mode: PriceScaleMode::Logarithmic,
+            base: 1.0,
+        });
+        scale.set_range(10.0_f64.ln(), 1000.0_f64.ln());
+        crate::widget::test_frames::frame(
+            &ctx,
+            &mut chart,
+            ctx.input(|input| input.time) + 0.1,
+            Vec::new(),
+        );
+        let pane = &chart.get_rendered_indicator_panes()[0];
+        assert!((pane.mapping.price_to_y(100.0) - pane.chart_rect.center().y).abs() < 0.01);
+        assert!(chart.move_indicator_to_pane(second, second));
+        crate::widget::test_frames::frame(
+            &ctx,
+            &mut chart,
+            ctx.input(|input| input.time) + 0.1,
+            Vec::new(),
+        );
+        assert_ne!(
+            chart.get_rendered_indicator_panes()[0].panel_rect,
+            chart.get_rendered_indicator_panes()[1].panel_rect
+        );
+        assert!(chart.move_indicator_to_pane(second, crate::widget::SeriesId::MAIN));
+        crate::widget::test_frames::frame(
+            &ctx,
+            &mut chart,
+            ctx.input(|input| input.time) + 0.1,
+            Vec::new(),
+        );
+        assert_eq!(chart.get_rendered_indicator_panes().len(), 1);
+        assert!(
+            chart
+                .indicators()
+                .find(|(id, _)| *id == second)
+                .unwrap()
+                .1
+                .is_overlay()
+        );
+        assert!(chart.move_indicator_to_pane(second, first));
+        crate::widget::test_frames::frame(
+            &ctx,
+            &mut chart,
+            ctx.input(|input| input.time) + 0.1,
+            Vec::new(),
+        );
+        assert_eq!(
+            chart.get_rendered_indicator_panes()[0].panel_rect,
+            chart.get_rendered_indicator_panes()[1].panel_rect
+        );
+        assert!(!chart.move_indicator_to_pane(first, crate::widget::SeriesId(usize::MAX)));
+    }
 
     #[test]
     fn panes_fit_and_share_the_lowest_time_axis() {

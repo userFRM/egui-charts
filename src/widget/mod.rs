@@ -130,6 +130,7 @@ pub mod keyboard;
 pub mod layout;
 mod navigation;
 pub(crate) mod pan_zoom;
+mod pane_layout;
 mod panes;
 mod readout;
 mod selection;
@@ -215,6 +216,7 @@ pub struct Chart {
     pub(crate) chart_options: ChartOptions,
     pub(crate) keyboard: keyboard::KeyboardState,
     history: history::ChartHistory,
+    pane_layout: pane_layout::PaneLayout,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)
@@ -415,6 +417,8 @@ pub struct RenderedIndicatorPane {
     pub y_max: f64,
     /// Coordinate parameters for x-axis calculation
     pub coords: IndicatorCoordParams,
+    /// Full mapping, including manual ranges, scale modes and inversion.
+    pub mapping: crate::chart::coords::ChartMapping,
 }
 
 /// Pre-computed layout rectangles for the chart's sub-regions.

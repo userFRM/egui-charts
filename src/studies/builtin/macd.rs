@@ -179,6 +179,19 @@ impl Indicator for MACD {
         }
     }
 
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            range: None,
+            levels: vec![(
+                0.0,
+                crate::tokens::DESIGN_TOKENS.semantic.extended.chart_text,
+                "Zero Line",
+            )],
+            fill_between_levels: false,
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false // MACD is drawn in separate pane
     }

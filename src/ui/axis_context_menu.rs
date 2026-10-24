@@ -62,7 +62,7 @@ impl AxisMenus {
                 Pos2::new(plot.right(), plot.top()),
                 Pos2::new(
                     plot.right() + config.right_axis_width.max(chart.measured_axis_width),
-                    bottom,
+                    plot.bottom(),
                 ),
             )
             .contains(pos))
@@ -72,7 +72,7 @@ impl AxisMenus {
                         plot.left() - config.left_axis_width.max(chart.measured_axis_width),
                         plot.top(),
                     ),
-                    Pos2::new(plot.left(), bottom),
+                    Pos2::new(plot.left(), plot.bottom()),
                 )
                 .contains(pos));
         let time = config.show_time_labels
