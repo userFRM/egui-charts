@@ -2,7 +2,8 @@
 //!
 //! Symbol search, interval, chart type, indicators, undo and redo on the left;
 //! save, quick search, settings, fullscreen and screenshot on the right. Layouts,
-//! alerts and replay keep their order in a horizontally scrolling strip.
+//! alerts and replay keep their order in a horizontally scrolling strip after
+//! the fixed main menu.
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::ThemeExt;
@@ -253,7 +254,8 @@ impl TopToolbar {
     /// The menu slot is 48 px wide. Keep host actions compact; their measured width is
     /// reserved alongside the built-in controls. The closures
     /// handle their own responses and may open menus or return actions to the host.
-    /// The strip scrolls horizontally when its controls cannot fit, without a visible scroll bar.
+    /// The strip after the menu slot scrolls horizontally when its controls cannot fit, without a
+    /// visible scroll bar; the menu slot stays at the left edge.
     pub fn show_with_slots(
         &mut self,
         ui: &mut Ui,
@@ -261,74 +263,81 @@ impl TopToolbar {
         menu: impl FnOnce(&mut Ui),
         actions: impl FnOnce(&mut Ui),
     ) -> TopToolbarAction {
-        let width = ui.available_width();
-        egui::ScrollArea::horizontal()
-            .id_salt("top_toolbar")
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .scroll_source(egui::scroll_area::ScrollSource::ALL)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                ui.set_width(width);
-                let row = ui.horizontal(|ui| {
-                    ui.set_height(self.config.height);
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    if !self.host_hidden.contains(&Control::Menu) {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(48.0, self.config.height),
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                            menu,
-                        );
+        ui.horizontal_top(|ui| {
+            if !self.host_hidden.contains(&Control::Menu) {
+                // The strip follows the slot directly but keeps the default spacing, which it
+                // uses as the margin when scrolling a focused control into view.
+                let spacing = std::mem::take(&mut ui.spacing_mut().item_spacing.x);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(48.0, self.config.height),
+                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                    menu,
+                );
+                ui.spacing_mut().item_spacing.x = spacing;
+            }
+            let width = ui.available_width();
+            egui::ScrollArea::horizontal()
+                .id_salt("top_toolbar")
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .scroll_source(egui::scroll_area::ScrollSource::ALL)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    let row = ui.horizontal(|ui| {
+                        ui.set_height(self.config.height);
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let width_id = ui.scope_id().with("host_actions_width");
+                        let actions_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
+                        let action = ui
+                            .allocate_ui_with_layout(
+                                egui::vec2(
+                                    (ui.available_width() - actions_width).max(0.0),
+                                    self.config.height,
+                                ),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| self.show_contents_desktop(ui, app_state.active_symbol()),
+                            )
+                            .inner;
+                        ui.add_space((ui.available_width() - actions_width).max(0.0));
+                        let mut host_action = TopToolbarAction::None;
+                        let width = ui
+                            .allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), self.config.height),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    for entry in &self.host_entries {
+                                        entry.show(ui, &mut host_action);
+                                    }
+                                    actions(ui);
+                                },
+                            )
+                            .response
+                            .rect
+                            .width();
+                        if (width - actions_width).abs() > 0.5 {
+                            ui.data_mut(|d| d.insert_temp(width_id, width));
+                            ui.ctx().request_discard("Host actions changed width");
+                        }
+                        if host_action != TopToolbarAction::None {
+                            host_action
+                        } else {
+                            action
+                        }
+                    });
+                    if let Some(response) = ui
+                        .ctx()
+                        .memory(|m| m.focused())
+                        .and_then(|id| ui.ctx().read_response(id))
+                        && response.gained_focus()
+                        && row.response.rect.contains_rect(response.rect)
+                    {
+                        response.scroll_to_me(None);
                     }
-                    let width_id = ui.scope_id().with("host_actions_width");
-                    let actions_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
-                    let action = ui
-                        .allocate_ui_with_layout(
-                            egui::vec2(
-                                (ui.available_width() - actions_width).max(0.0),
-                                self.config.height,
-                            ),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| self.show_contents_desktop(ui, app_state.active_symbol()),
-                        )
-                        .inner;
-                    ui.add_space((ui.available_width() - actions_width).max(0.0));
-                    let mut host_action = TopToolbarAction::None;
-                    let width = ui
-                        .allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), self.config.height),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                for entry in &self.host_entries {
-                                    entry.show(ui, &mut host_action);
-                                }
-                                actions(ui);
-                            },
-                        )
-                        .response
-                        .rect
-                        .width();
-                    if (width - actions_width).abs() > 0.5 {
-                        ui.data_mut(|d| d.insert_temp(width_id, width));
-                        ui.ctx().request_discard("Host actions changed width");
-                    }
-                    if host_action != TopToolbarAction::None {
-                        host_action
-                    } else {
-                        action
-                    }
-                });
-                if let Some(response) = ui
-                    .ctx()
-                    .memory(|m| m.focused())
-                    .and_then(|id| ui.ctx().read_response(id))
-                    && response.gained_focus()
-                    && row.response.rect.contains_rect(response.rect)
-                {
-                    response.scroll_to_me(None);
-                }
-                row.inner
-            })
-            .inner
+                    row.inner
+                })
+                .inner
+        })
+        .inner
     }
 
     fn show_menu(ui: &mut Ui, action: &mut TopToolbarAction, visible: [bool; 2]) {
@@ -690,6 +699,7 @@ mod tests {
                     style.scroll_animation = egui::style::ScrollAnimation::none();
                     style.spacing.scroll.kinetic.decay_time = 0.0;
                 });
+                let mut menu_rect = None;
                 let mut frame = |events| {
                     let mut host_rect = Rect::NOTHING;
                     let mut action = TopToolbarAction::None;
@@ -705,9 +715,15 @@ mod tests {
                                 ui,
                                 &State,
                                 |ui| {
-                                    IconButton::new(&embedded_icons::MENU)
+                                    let rect = IconButton::new(&embedded_icons::MENU)
                                         .tooltip("Menu")
-                                        .show(ui);
+                                        .show(ui)
+                                        .rect;
+                                    assert_eq!(
+                                        *menu_rect.get_or_insert(rect),
+                                        rect,
+                                        "menu must not scroll with the strip"
+                                    );
                                 },
                                 |ui| {
                                     host_rect = crate::ui_kit::buttons::Button::new(host_label)
