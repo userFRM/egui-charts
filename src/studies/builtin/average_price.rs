@@ -310,6 +310,10 @@ impl TrueRange {
 }
 
 impl Indicator for TrueRange {
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "TR"
     }

@@ -98,7 +98,8 @@ impl Chart {
                         &visible_range,
                     )
                 });
-                let coords = volume_coords.as_ref().unwrap_or(coords);
+                let study_coords = crate::chart::renderers::study_mapping(indicator, coords);
+                let coords = volume_coords.as_ref().unwrap_or(&study_coords);
                 let config = SelectionDotConfig {
                     dot_interval: calculate_dot_interval(coords.bar_spacing),
                     ..Default::default()
@@ -210,7 +211,8 @@ pub(super) fn hit_test_main_chart(
         } else {
             None
         };
-        let coords = volume_mapping.as_ref().unwrap_or(coords);
+        let study_coords = crate::chart::renderers::study_mapping(indicator.as_ref(), coords);
+        let coords = volume_mapping.as_ref().unwrap_or(&study_coords);
         if let Some(hit) = hit_test_indicator(
             click_pos,
             indicator.as_ref(),

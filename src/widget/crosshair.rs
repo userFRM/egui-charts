@@ -32,6 +32,7 @@ impl Chart {
                     && study.is_visible()
                     && study.is_overlay()
                     && !study.is_volume()
+                    && study.scale() == crate::studies::StudyScale::Main
             })
             .flat_map(|study| {
                 (0..study.line_cnt())

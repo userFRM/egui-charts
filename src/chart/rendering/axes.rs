@@ -129,7 +129,7 @@ pub(crate) fn render_study_tags(
     axis_right: f32,
     occupied: &mut Vec<Option<Rect>>,
 ) {
-    if !study.is_visible() {
+    if !study.is_visible() || study.scale() == crate::studies::StudyScale::None {
         return;
     }
     let values = study.values();
@@ -148,12 +148,16 @@ pub(crate) fn render_study_tags(
         {
             continue;
         }
-        let label = transform.label(
-            transform.to_scale(value),
-            study
-                .precision()
-                .unwrap_or_else(|| map.price_precision().unwrap_or(2)),
-        );
+        let label = if study.value_format() == crate::studies::StudyFormat::Price {
+            transform.label(
+                transform.to_scale(value),
+                study
+                    .precision()
+                    .unwrap_or_else(|| map.price_precision().unwrap_or(2)),
+            )
+        } else {
+            study.format_value(value)
+        };
         let color = plot_style.color;
         occupied.push(render_axis_value(
             painter,

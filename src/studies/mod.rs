@@ -58,7 +58,9 @@ mod builtin;
 mod custom;
 #[cfg(feature = "studies")]
 pub mod factory;
+mod format;
 mod indicator_trait;
+pub use format::{StudyFormat, StudyScale};
 mod inputs;
 pub use inputs::{InputKind, InputValue, StudyInput};
 mod plots;

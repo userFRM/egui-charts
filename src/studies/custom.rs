@@ -59,6 +59,8 @@ pub struct CustomIndicator {
     line_cnt: usize,
     line_names: Vec<String>,
     visible: bool,
+    value_format: Option<super::StudyFormat>,
+    scale: Option<super::StudyScale>,
     plot_types: Vec<super::PlotType>,
     offsets: Vec<isize>,
     fills: Vec<super::StudyFill>,
@@ -88,6 +90,8 @@ impl CustomIndicator {
             is_overlay: true,
             line_cnt: 1,
             visible: true,
+            value_format: None,
+            scale: None,
             plot_types: Vec::new(),
             offsets: Vec::new(),
             fills: Vec::new(),
@@ -126,6 +130,18 @@ impl CustomIndicator {
         self
     }
 
+    /// Set the units used by every readout of this study.
+    pub fn with_value_format(mut self, format: super::StudyFormat) -> Self {
+        self.value_format = Some(format);
+        self
+    }
+
+    /// Set the value scale independently of overlay or separate-pane placement.
+    pub fn with_scale(mut self, scale: super::StudyScale) -> Self {
+        self.scale = Some(scale);
+        self
+    }
+
     /// Set geometry per output; omitted outputs remain lines.
     pub fn with_plot_types(mut self, types: Vec<super::PlotType>) -> Self {
         self.plot_types = types;
@@ -161,6 +177,22 @@ impl CustomIndicator {
 }
 
 impl Indicator for CustomIndicator {
+    fn value_format(&self) -> super::StudyFormat {
+        self.value_format.unwrap_or(if self.is_overlay {
+            super::StudyFormat::Price
+        } else {
+            super::StudyFormat::Fixed(2)
+        })
+    }
+
+    fn scale(&self) -> super::StudyScale {
+        self.scale.unwrap_or(if self.is_overlay {
+            super::StudyScale::Main
+        } else {
+            super::StudyScale::Independent
+        })
+    }
+
     fn plot_style(&self, line: usize) -> super::PlotStyle {
         super::PlotStyle {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),

@@ -349,7 +349,11 @@ impl ChartState {
         };
         let study_values = indicators
             .into_iter()
-            .filter(|study| study.is_visible() && study.is_overlay())
+            .filter(|study| {
+                study.is_visible()
+                    && study.is_overlay()
+                    && study.scale() == crate::studies::StudyScale::Main
+            })
             .flat_map(|study| {
                 (0..study.line_cnt())
                     .filter(|&index| {

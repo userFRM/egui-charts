@@ -92,6 +92,10 @@ impl Default for AccumulationDistribution {
 }
 
 impl Indicator for AccumulationDistribution {
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Volume
+    }
+
     fn name(&self) -> &str {
         "A/D"
     }

@@ -393,7 +393,7 @@ impl<'a> Legend<'a> {
                     }) {
                         let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
                         let text = if value.is_finite() {
-                            format!("{value:.precision$}")
+                            study.value_format().format(value, Some(precision))
                         } else {
                             "∅".to_owned()
                         };

@@ -172,6 +172,10 @@ impl Default for Qstick {
 }
 
 impl Indicator for Qstick {
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Price
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX)
     ; {});

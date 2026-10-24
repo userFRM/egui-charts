@@ -602,6 +602,9 @@ impl IndicatorPane {
                     chart_rect.bottom(),
                 );
                 axis?;
+                if indicator.scale() == crate::studies::StudyScale::None {
+                    return None;
+                }
                 crate::chart::renderers::render_crosshair_price_tag(
                     &context,
                     pos,
@@ -615,6 +618,7 @@ impl IndicatorPane {
                         rect.right()
                     },
                     None,
+                    Some(indicator.format_value(mapping.price.y_to_price(pos.y))),
                 )
             });
             // Draw y-axis labels
@@ -1045,6 +1049,9 @@ impl IndicatorPane {
         axis: Option<crate::scales::PriceScaleId>,
         crosshair_tag: Option<Rect>,
     ) -> f32 {
+        if indicator.scale() == crate::studies::StudyScale::None {
+            return 0.0;
+        }
         let Some(axis) = axis else {
             return 0.0;
         };
@@ -1095,24 +1102,13 @@ impl IndicatorPane {
         for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
             let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = if indicator.is_volume() {
-                    crate::scales::PriceFormatter::format(
-                        &crate::scales::VolumeFormatter {
-                            precision: indicator.precision().unwrap_or(3),
-                        },
-                        mark.price,
-                    )
-                } else {
-                    mark.label
-                };
+                let label = indicator.format_value(mark.price);
                 let galley = painter.layout_no_wrap(
                     label,
                     crate::chart::rendering::axes::axis_font(painter.ctx()),
                     text_color,
                 );
-                if indicator.is_volume() {
-                    width = width.max(galley.size().x + 5.0 + 8.0);
-                }
+                width = width.max(galley.size().x + 5.0 + 8.0);
                 let bounds = align.anchor_size(Pos2::new(label_x, y), galley.size());
                 if tags.iter().flatten().any(|tag| tag.intersects(bounds)) {
                     continue;
@@ -1169,15 +1165,7 @@ impl IndicatorPane {
                         job.append("  ", 0.0, swatch);
                         job.append(" ", 0.0, format(text_color));
                     }
-                    let precision = indicator.precision().unwrap_or(2);
-                    let label = if indicator.is_volume() {
-                        crate::scales::PriceFormatter::format(
-                            &crate::scales::VolumeFormatter { precision },
-                            value,
-                        )
-                    } else {
-                        format!("{value:.precision$}")
-                    };
+                    let label = indicator.format_value(value);
                     job.append(
                         &label,
                         0.0,
@@ -1322,6 +1310,46 @@ mod tests {
             assert!((guide[0].y - 30.0).abs() < 0.001 || (guide[0].y - 70.0).abs() < 0.001);
             assert!((guide[1].x - guide[0].x - 4.0).abs() < 0.001);
         }
+    }
+
+    #[test]
+    fn volume_units_reach_pane_axes_and_legends() {
+        use crate::studies::OnBalanceVolume;
+        let mut study = OnBalanceVolume::new();
+        let bars: Vec<_> = [10.0, 11.0, 12.0]
+            .into_iter()
+            .map(|price| Bar::new(chrono::Utc::now(), price, price, price, price, 1_000_000.0))
+            .collect();
+        study.calculate(&bars);
+        let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+        let job = pane.legend_job(&study, Color32::WHITE, Color32::BLACK);
+        assert!(job.text.contains("2.00M"), "{}", job.text);
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            pane.draw_y_axis_labels(
+                ui.painter(),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0)),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(300.0, 300.0)),
+                0.0,
+                3_000_000.0,
+                &study,
+                Some(crate::scales::PriceScaleId::Right),
+                None,
+            );
+        });
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        assert!(
+            labels.iter().any(|label| label.ends_with('M')),
+            "{labels:?}"
+        );
     }
 
     #[test]

@@ -571,11 +571,32 @@ impl Chart {
             .padding
             .max(0.0)
             .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
-        let left_axis = if self.config.show_left_axis {
-            self.config.left_axis_width.max(self.measured_axis_width)
+        let study_axes = if !self.chart_type.is_time_independent()
+            && (self.config.show_left_axis || self.config.show_right_axis)
+        {
+            self.studies
+                .indicators()
+                .iter()
+                .filter(|study| {
+                    study.is_visible()
+                        && study.is_overlay()
+                        && !study.is_volume()
+                        && study.scale() == crate::studies::StudyScale::Independent
+                })
+                .count() as f32
+                * self
+                    .measured_axis_width
+                    .max(self.config.right_axis_width)
+                    .max(self.config.left_axis_width)
         } else {
             0.0
         };
+        let left_axis = study_axes
+            + if self.config.show_left_axis {
+                self.config.left_axis_width.max(self.measured_axis_width)
+            } else {
+                0.0
+            };
         let right_axis = if self.config.show_right_axis {
             self.config.right_axis_width.max(self.measured_axis_width)
         } else {

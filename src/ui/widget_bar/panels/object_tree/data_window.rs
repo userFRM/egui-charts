@@ -212,15 +212,7 @@ fn format_volume(volume: f64) -> String {
         return "\u{2014}".to_string();
     }
 
-    if volume >= 1_000_000_000.0 {
-        format!("{:.2}B", volume / 1_000_000_000.0)
-    } else if volume >= 1_000_000.0 {
-        format!("{:.2}M", volume / 1_000_000.0)
-    } else if volume >= 1_000.0 {
-        format!("{:.2}K", volume / 1_000.0)
-    } else {
-        format!("{volume:.0}")
-    }
+    crate::studies::StudyFormat::Volume.format(volume, None)
 }
 
 #[cfg(test)]
@@ -276,9 +268,29 @@ mod tests {
 
     #[test]
     fn test_format_volume() {
-        assert_eq!(format_volume(1_500_000_000.0), "1.50B");
-        assert_eq!(format_volume(2_500_000.0), "2.50M");
-        assert_eq!(format_volume(3_500.0), "3.50K");
-        assert_eq!(format_volume(500.0), "500");
+        use crate::studies::StudyFormat::*;
+        for (format, value, precision, expected) in [
+            (Volume, 1_500_000_000.0, None, "1.50B"),
+            (Volume, 2_500_000.0, None, "2.50M"),
+            (Volume, 3_500.0, None, "3.50K"),
+            (Volume, 500.0, None, "500"),
+            (Volume, -12_345_678.0, None, "-12.35M"),
+            (Volume, 0.0, Some(2), "0.00"),
+            (Volume, 1_234.0, Some(3), "1.234K"),
+            (Price, 1.23456, Some(5), "1.23456"),
+            (Price, -37.625, Some(3), "-37.625"),
+            (Percent, 5.125, None, "5.12%"),
+            (Percent, -2.5, Some(1), "-2.5%"),
+            (Fixed(4), 0.0004, None, "0.0004"),
+            (Fixed(4), 1.25, Some(1), "1.2"),
+            (Fixed(usize::MAX), 1.0, None, "1.000000000000"),
+            (Volume, f64::NAN, None, "\u{2014}"),
+            (Percent, f64::INFINITY, None, "\u{2014}"),
+        ] {
+            assert_eq!(format.format(value, precision), expected, "{format:?}");
+            if format == Volume && value > 0.0 && precision.is_none() {
+                assert_eq!(format_volume(value), expected);
+            }
+        }
     }
 }

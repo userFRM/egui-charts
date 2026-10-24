@@ -463,6 +463,8 @@ mod tests {
                 "short",
                 "profile",
                 "renko",
+                "independent",
+                "no_scale",
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
@@ -499,7 +501,13 @@ mod tests {
                         .collect()
                 })
                 .with_line_cnt(if case == "multiple" { 5 } else { 1 })
-                .with_overlay(case != "pane");
+                .with_overlay(case != "pane")
+                .with_scale(match case {
+                    "independent" => crate::studies::StudyScale::Independent,
+                    "no_scale" => crate::studies::StudyScale::None,
+                    "pane" => crate::studies::StudyScale::Independent,
+                    _ => crate::studies::StudyScale::Main,
+                });
                 let study: Box<dyn Indicator> = if case == "profile" {
                     Box::new(VolProfileVisible::default())
                 } else {

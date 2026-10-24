@@ -69,6 +69,10 @@ impl Default for OnBalanceVolume {
 }
 
 impl Indicator for OnBalanceVolume {
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Volume
+    }
+
     fn name(&self) -> &str {
         "OBV"
     }

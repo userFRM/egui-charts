@@ -239,13 +239,20 @@ impl IndicatorRenderer {
                 continue;
             }
 
+            let mapping = super::study_mapping(
+                indicator.as_ref(),
+                &ChartMapping {
+                    price: *price_scale,
+                    ..*coords
+                },
+            );
             Self::render_study(
                 context,
                 indicator.as_ref(),
                 bars,
                 coords.start_idx,
-                price_scale,
-                coords,
+                &mapping.price,
+                &mapping,
             );
         }
     }

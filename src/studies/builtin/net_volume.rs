@@ -29,6 +29,10 @@ impl Default for NetVolume {
 }
 
 impl Indicator for NetVolume {
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Volume
+    }
+
     fn name(&self) -> &str {
         "Net Volume"
     }

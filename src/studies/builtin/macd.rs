@@ -123,6 +123,10 @@ impl Indicator for MACD {
         }
     }
 
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "MACD"
     }

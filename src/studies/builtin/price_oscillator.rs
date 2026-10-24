@@ -130,6 +130,10 @@ impl Indicator for PriceOscillator {
         signal_period: length("Signal period", 1, usize::MAX)
     ; {});
 
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Percent
+    }
+
     fn name(&self) -> &str {
         "PPO"
     }

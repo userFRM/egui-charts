@@ -14,6 +14,8 @@ mod candle;
 mod context;
 mod crosshair;
 mod indicator;
+mod study_scale;
+pub(crate) use study_scale::{render_study_axis, study_mapping};
 mod labels;
 mod markers;
 mod session_breaks;

@@ -73,6 +73,10 @@ impl Default for WilliamsAD {
 }
 
 impl Indicator for WilliamsAD {
+    fn value_format(&self) -> crate::studies::StudyFormat {
+        crate::studies::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "WAD"
     }
