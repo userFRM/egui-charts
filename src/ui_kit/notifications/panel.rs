@@ -184,27 +184,27 @@ impl NotificationPanel {
 
                 ui.add_space(DESIGN_TOKENS.spacing.md);
 
-                // Content
-                ui.vertical(|ui| {
-                    // Title, then the message muted so the title stands out
-                    let mut message_color = text_color;
-                    if let Some(title) = &toast.title {
-                        ui.label(RichText::new(title).strong());
-                        message_color = theme.ui.text_secondary;
-                    }
-                    ui.label(RichText::new(&toast.message).color(message_color));
-                });
-
-                // Close button
-                if toast.dismissible {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                // The close button first, so that a long message wraps short of it.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    if toast.dismissible {
                         dismissed = IconButton::new(&icons::CLOSE)
                             .size(ButtonSize::SM)
                             .tooltip("Dismiss")
                             .show(ui)
                             .clicked();
+                    }
+
+                    // Content
+                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        // Title, then the message muted so the title stands out
+                        let mut message_color = text_color;
+                        if let Some(title) = &toast.title {
+                            ui.label(RichText::new(title).strong());
+                            message_color = theme.ui.text_secondary;
+                        }
+                        ui.label(RichText::new(&toast.message).color(message_color));
                     });
-                }
+                });
             });
 
             // Progress bar (if duration > 0)
@@ -238,23 +238,35 @@ impl NotificationPanel {
 mod tests {
     use super::*;
 
+    /// Toasts stack 8 points apart from the corner, and a long message wraps short of the close
+    /// button.
     #[test]
     fn toasts_stack_8_px_apart_16_px_from_the_corner() {
         let ctx = Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1000.0, 800.0));
         let mut toasts = Toasts::new();
         toasts.add(Toast::info("Chart layout saved").permanent());
-        toasts.add(Toast::error("Could not load symbol XYZ").permanent());
+        let long =
+            "Order rejected: Insufficient buying power: 762450.00 USD needed, 100000.00 available";
+        toasts.add(Toast::error(long).permanent());
         // A sizing pass, then a visible frame.
+        let mut wrap = f32::INFINITY;
         for _ in 0..2 {
             let input = egui::RawInput {
                 screen_rect: Some(screen),
                 ..Default::default()
             };
-            ctx.run_ui(input, |ui| {
+            let output = ctx.run_ui(input, |ui| {
                 NotificationPanel::new().show_with_toasts(ui.ctx(), &mut toasts);
-            })
-            .drop_without_applying_deltas();
+            });
+            for shape in &output.shapes {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.text() == long
+                {
+                    wrap = text.pos.x + text.galley.job.wrap.max_width;
+                }
+            }
+            output.drop_without_applying_deltas();
         }
         let rect = |toast: &Toast| {
             ctx.memory(|m| m.area_rect(egui::Id::unique("toast").with(toast.id)))
@@ -266,5 +278,11 @@ mod tests {
             screen.right_bottom() - Vec2::splat(16.0)
         );
         assert_eq!(newer.top() - older.bottom(), 8.0);
+        // The close button sits in the toast's inner margin's corner.
+        let button = newer.right() - ctx.active_theme().spacing.lg - DESIGN_TOKENS.sizing.button_sm;
+        assert!(
+            wrap <= button,
+            "the message wraps at {wrap}, past the close button at {button}"
+        );
     }
 }
