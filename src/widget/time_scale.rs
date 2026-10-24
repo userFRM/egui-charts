@@ -17,8 +17,8 @@ pub(super) struct ScrollAnimation {
 impl Chart {
     /// Fits every bar into the plot width, then restores the configured right offset.
     ///
-    /// A pixel right offset is kept free of bars; an offset in bars applies after fitting, so
-    /// it scrolls that many of the oldest bars out of view. The bar spacing limits still apply.
+    /// The right offset, in bars or pixels, is kept free of bars. The bar spacing limits still
+    /// apply.
     pub fn fit_content(&mut self) {
         self.cancel_view_motion();
         self.state.time_scale_mut().fit_content();
@@ -277,14 +277,14 @@ mod tests {
             Some(first + Duration::days(105))
         );
 
-        // 100 bars over the width, then the right offset scrolls 2.5 of them out of view.
+        // 100 bars and the 2.5-bar right offset share the width.
         chart.fit_content();
         assert_close(
             chart.get_time_scale_state().0.into(),
-            (width / 100.0).into(),
+            (width / 102.5).into(),
             "fit",
         );
-        assert_range(&chart, 2.5, 101.5, "fit");
+        assert_range(&chart, 0.0, 101.5, "fit");
         chart.reset_time_scale();
         assert_eq!(chart.get_time_scale_state(), (6.0, 2.5));
 

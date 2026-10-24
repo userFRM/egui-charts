@@ -330,12 +330,14 @@ impl TimeScale {
 
     /// Fit all data in view, then restore the configured right offset.
     ///
-    /// The bars share the width less a configured pixel offset; an offset in bars is applied
-    /// after fitting, so it scrolls that many of the oldest bars out of view.
+    /// The bars and the configured offset in bars share the width, or the bars share the width
+    /// less a configured pixel offset, so every bar stays in view.
     pub fn fit_content(&mut self) {
         if self.bar_cnt > 0 {
-            let pixels = self.live_right_offset_pixels.unwrap_or(0.0);
-            self.set_bar_spacing((self.width - pixels) / self.bar_cnt as f32);
+            let (pixels, bars) = self
+                .live_right_offset_pixels
+                .map_or((0.0, self.live_right_offset), |px| (px, 0.0));
+            self.set_bar_spacing((self.width - pixels) / (self.bar_cnt as f32 + bars).max(1.0));
             self.scroll_to_realtime();
         }
     }
