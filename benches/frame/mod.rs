@@ -15,6 +15,8 @@ pub struct Sample {
     pub tessellate: Duration,
     /// Shapes painted, counting each member of a `Shape::Vec`.
     pub shapes: usize,
+    /// Vertices of the tessellated meshes.
+    pub vertices: usize,
 }
 
 /// Runs `ui` for 60 warm-up frames and then `frames` measured ones on a `screen`-sized
@@ -50,13 +52,22 @@ pub fn measure(ctx: &egui::Context, input: RawInput, ui: impl FnMut(&mut egui::U
     out.textures_delta.clear(); // no renderer uploads the font atlas
     let shapes = out.shapes.iter().map(|s| count(&s.shape)).sum();
     let start = Instant::now();
+    let primitives = std::hint::black_box(ctx.tessellate(out.shapes, out.pixels_per_point));
+    let vertices = primitives
+        .iter()
+        .map(|p| match &p.primitive {
+            egui::epaint::Primitive::Mesh(mesh) => mesh.vertices.len(),
+            egui::epaint::Primitive::Callback(_) => 0,
+        })
+        .sum();
     // Dropped inside the timing, as a renderer drops it every frame.
-    std::hint::black_box(ctx.tessellate(out.shapes, out.pixels_per_point));
+    drop(primitives);
     let tessellate = start.elapsed();
     Sample {
         frame: painted + tessellate,
         tessellate,
         shapes,
+        vertices,
     }
 }
 

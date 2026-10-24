@@ -97,6 +97,8 @@ impl Chart {
             price_axis_drag: None,
             pending_start_idx: None,
             pending_scroll_time: None,
+            scroll_animation: None,
+            time_axis_rect: egui::Rect::NOTHING,
             chart_type: ChartType::Candles,
             chart_type_params: ChartTypeParams::default(),
             pending_box_sizes: [false; 4],
@@ -178,6 +180,8 @@ impl Chart {
             // Marks (Widget API)
             marks: Vec::new(),
             price_lines: Vec::new(),
+            #[cfg(feature = "ui")]
+            trading_tags: Vec::new(),
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,

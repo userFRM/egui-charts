@@ -317,6 +317,7 @@ impl Chart {
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
         self.host_events.volume_map = None;
+        self.host_events.target = None;
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
@@ -354,13 +355,7 @@ impl Chart {
             let mut coords = self.get_chart_mapping();
             coords.start_idx = 0;
             let baseline = if has_panes {
-                let axis_height = if self.config.show_time_labels {
-                    crate::styles::sizing::chart::BOTTOM_PADDING_WITH_TIME
-                        .min(response.rect.height())
-                } else {
-                    0.0
-                };
-                response.rect.bottom() - axis_height
+                response.rect.bottom() - self.time_axis_height().min(response.rect.height())
             } else {
                 coords.rect.bottom()
             };
@@ -467,15 +462,16 @@ impl Chart {
         shared_time_axis: Option<Rect>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
-        // Register the SVG image loader once per context so the embedded
-        // icons used by the toolbars and panels decode without the host app
-        // having to wire egui_extras itself.
+        // Register the SVG and icon image loaders once per context so the
+        // embedded icons used by the toolbars and panels decode without the
+        // host app having to wire egui_extras itself.
         #[cfg(feature = "icons")]
         {
             let ctx = ui.ctx().clone();
             let loaders_installed = egui::Id::unique("egui_charts::image_loaders_installed");
             if !ctx.data(|d| d.get_temp::<bool>(loaders_installed).unwrap_or(false)) {
                 egui_extras::install_image_loaders(&ctx);
+                crate::icons::install_loader(&ctx);
                 ctx.data_mut(|d| d.insert_temp(loaders_installed, true));
             }
         }
@@ -519,6 +515,7 @@ impl Chart {
         // to calculate constraint bounds. Without this, drawings drift during zoom
         // because constraints are calculated with stale width values.
         self.apply_timescale_config(chart_width);
+        self.advance_scroll_animation(ui);
 
         let navigation_rect = self.navigation_rect(ui, chart_rect);
         let navigation = navigation_rect
@@ -611,6 +608,13 @@ impl Chart {
                 Pos2::new(chart_rect.max.x, rect.max.y),
             )
         });
+        self.time_axis_rect = Rect::from_min_size(
+            time_axis_rect.min,
+            Vec2::new(
+                time_axis_rect.width(),
+                self.time_axis_height().min(time_axis_rect.height()),
+            ),
+        );
 
         // Handle double-click to reset axes
         self.handle_double_click(&response, price_axis_rect, time_axis_rect);
@@ -854,6 +858,7 @@ impl Chart {
                     visible_data,
                     &coords,
                     formatter.as_ref(),
+                    &self.chart_options.time_scale,
                     self.config
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
@@ -927,6 +932,15 @@ impl Chart {
         let clipped_price_ctx = RenderContext::new(&clipped_painter, price_rect);
         let clipped_volume_ctx = RenderContext::new(&clipped_painter, volume_rect);
 
+        let mut bar_clock = self.bar_clock();
+        // TPO days follow the instrument's zone, as the session breaks do, also without its hours.
+        if let Some(zone) = self
+            .instrument()
+            .filter(|instrument| instrument.session.is_none())
+            .and_then(|instrument| instrument.time_zone.as_ref())
+        {
+            bar_clock = bar_clock.with_timezone(zone.tz());
+        }
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
             volume_ctx: &clipped_volume_ctx,
@@ -938,6 +952,10 @@ impl Chart {
             full_data: &self.state.data().bars,
             revision: self.state.revision(),
             start_idx,
+            clock: &bar_clock,
+            tick_size: self
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
         };
 
         let render_params = rendering::ChartTypeParams::new(
@@ -1045,6 +1063,29 @@ impl Chart {
                 );
             }
         }
+        // TPO studies draw the chart type's profiles beside the bars.
+        for config in studies
+            .indicators()
+            .iter()
+            .filter(|study| study.is_visible() && study.is_overlay())
+            .filter_map(|study| study.tpo())
+            .filter(|_| !self.chart_type.is_time_independent())
+        {
+            rendering::candles::tpo::render_live_tpo(
+                &clipped_painter,
+                price_rect,
+                &self.state.data().bars,
+                start_idx..start_idx + visible_data.len(),
+                self.state.revision(),
+                &price_map,
+                config,
+                &bar_clock,
+                idx_to_coord,
+                chart_rect.min.x,
+                self.config.bullish_color,
+                self.config.bearish_color,
+            );
+        }
         renderers::IndicatorRenderer::render(
             &price_ctx,
             studies.indicators(),
@@ -1058,16 +1099,10 @@ impl Chart {
         // click clears the selection. Clicks in a study's pane are resolved
         // where the panes are rendered, outside this rect.
         let main_visible_range = start_idx..(start_idx + visible_data.len());
-        if response.clicked()
-            && let Some(click_pos) = response.interact_pointer_pos()
-        {
-            let volume_coords = if show_volume {
-                Some(coords.with_rect(volume_rect))
-            } else {
-                None
-            };
-            let hit = hit_test_main_chart(
-                click_pos,
+        let volume_coords = show_volume.then(|| coords.with_rect(volume_rect));
+        let element_at = |pos| {
+            hit_test_main_chart(
+                pos,
                 studies,
                 &self.study_ids,
                 &coords,
@@ -1079,8 +1114,12 @@ impl Chart {
             .filter(|(id, _)| {
                 self.main_series_visible
                     || matches!(id, crate::widget::ChartElementId::Indicator(_))
-            });
-            match hit {
+            })
+        };
+        if response.clicked()
+            && let Some(click_pos) = response.interact_pointer_pos()
+        {
+            match element_at(click_pos) {
                 Some((id, bar_idx)) => self.selection.select(id, Some(bar_idx)),
                 None => self.selection.deselect(),
             }
@@ -1119,26 +1158,7 @@ impl Chart {
                     pos: click_pos,
                 }
             } else {
-                let volume_coords = if show_volume {
-                    Some(coords.with_rect(volume_rect))
-                } else {
-                    None
-                };
-                let element_hit = hit_test_main_chart(
-                    click_pos,
-                    studies,
-                    &self.study_ids,
-                    &coords,
-                    volume_coords.as_ref(),
-                    self.state.shown(),
-                    max_volume,
-                    main_visible_range.clone(),
-                )
-                .filter(|(id, _)| {
-                    self.main_series_visible
-                        || matches!(id, crate::widget::ChartElementId::Indicator(_))
-                });
-                match element_hit {
+                match element_at(click_pos) {
                     Some((id, bar_idx)) => {
                         self.selection.select(id, Some(bar_idx));
                         RightClickTarget::Element {
@@ -1157,6 +1177,18 @@ impl Chart {
                     }
                 }
             });
+        }
+
+        // What the pointer is over, for host pointer events, in the right-click priority.
+        if let Some(pos) = ui
+            .input(|input| input.pointer.interact_pos())
+            .filter(|pos| chart_rect.contains(*pos))
+        {
+            self.host_events.target = self
+                .drawings
+                .hit_test(pos)
+                .map(super::PointerTarget::Drawing)
+                .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
         }
 
         // Draw selection handles for whichever element is currently selected on
@@ -1238,6 +1270,8 @@ impl Chart {
                 pending_values.push((line.price, line.color));
             }
         }
+        #[cfg(feature = "ui")]
+        pending_values.extend(std::mem::take(&mut self.trading_tags));
 
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
@@ -1984,7 +2018,7 @@ impl Chart {
                 &colors,
                 formatter.as_ref(),
                 &tags,
-                self.chart_options.time_scale.ticks_visible,
+                &self.chart_options.time_scale,
                 time_labels,
             );
         }
@@ -2160,18 +2194,7 @@ mod tests {
                 output.textures_delta.clear();
                 assert!(
                     output.shapes.iter().any(|shape| match &shape.shape {
-                        Shape::Rect(rect) =>
-                            rect.fill
-                                == if cfg!(feature = "studies") {
-                                    egui::Color32::from_rgba_unmultiplied(
-                                        38,
-                                        198,
-                                        218,
-                                        theme.chart.volume_alpha,
-                                    )
-                                } else {
-                                    theme.chart.volume_up()
-                                },
+                        Shape::Rect(rect) => rect.fill == theme.chart.volume_up(),
                         _ => false,
                     }),
                     "footprint keeps the volume histogram"
@@ -2254,6 +2277,13 @@ mod tests {
             config.show_indicator_last_val = hidden != 8;
             chart.set_main_series_visible(hidden != 11);
             frame(&ctx, &mut chart, 0.0, vec![]);
+            if let Some(volume) = chart.volume_study {
+                chart
+                    .indicator_mut(volume)
+                    .unwrap()
+                    .set_input("show_average", crate::studies::InputValue::Toggle(true))
+                    .unwrap();
+            }
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             assert_eq!(painted.iter().any(|shape| matches!(shape, Shape::Rect(rect)
                 if rect.fill == chart.config.bullish_color && chart.last_rendered_price_rect.contains(rect.rect.center()))), hidden != 11, "main series body: hidden={hidden}");
@@ -2283,9 +2313,9 @@ mod tests {
             }
             for (text, visible) in [
                 ("Vol 1", hidden == 10),
-                ("Volume", !matches!(hidden, 5 | 6 | 10 | 11)),
+                ("Vol", !matches!(hidden, 5 | 6 | 10 | 11)),
                 ("SMA 9", !matches!(hidden, 5 | 7 | 10 | 11)),
-                ("1.000", !matches!(hidden, 5 | 8 | 10 | 11)),
+                ("1", !matches!(hidden, 5 | 8 | 10 | 11)),
             ] {
                 assert_eq!(texts.contains(&text), visible, "{text}: hidden={hidden}");
             }
@@ -2605,6 +2635,35 @@ mod tests {
     }
 
     #[test]
+    fn tpo_days_follow_the_instrument_zone_without_trading_hours() {
+        use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe, TimezoneId};
+        // Half-hourly bars from 02:00 to 08:00 UTC, across midnight in New York at 05:00 UTC
+        let start: chrono::DateTime<chrono::Utc> = "2024-03-05T02:00:00Z".parse().unwrap();
+        let bars = (0..13)
+            .map(|i| {
+                let time = start + chrono::Duration::minutes(30 * i);
+                Bar::new(time, 100.0, 102.0, 99.0, 101.0, 1.0)
+            })
+            .collect();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.set_timeframe(Timeframe::Min30);
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        let new_york = TimezoneId::named("America/New_York").unwrap();
+        chart.set_instrument(Some(Instrument::new("FX").with_time_zone(new_york)));
+        let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
+        // One initial balance bar beside each profile
+        let initial_balance = crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance;
+        let profiles = painted
+            .iter()
+            .filter(|shape| {
+                matches!(shape, Shape::Rect(rect)
+                    if rect.fill == initial_balance && rect.rect.width() == 2.0)
+            })
+            .count();
+        assert_eq!(profiles, 2);
+    }
+
+    #[test]
     fn configured_sessions_reach_breaks_and_extended_shading() {
         use crate::model::{Bar, BarData, Timeframe};
         let times = [
@@ -2774,6 +2833,57 @@ mod tests {
             );
             let ticks = painted.iter().filter(|shape| matches!(shape, Shape::LineSegment { points, .. } if (points[0].y - map.rect.bottom()).abs() < 0.1 && (points[1].y - points[0].y - 3.0).abs() < 0.1)).count();
             assert_eq!(ticks > 0, ticks_visible, "tick visibility: {seconds}");
+        }
+    }
+
+    /// Daily bars put bold day and month labels on the axis; 20 characters space them at
+    /// least 200 points apart, which the default 8 (80 points) does not.
+    #[test]
+    fn time_scale_options_style_and_space_the_axis_labels() {
+        for (bold, border, characters) in [(true, false, 8), (false, true, 8), (true, false, 20)] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0], &[105.0]);
+            chart.config.show_volume = false;
+            let options = &mut chart.chart_options.time_scale;
+            options.allow_bold_labels = bold;
+            options.border_visible = border;
+            options.border_color = Some(egui::Color32::RED);
+            options.tick_mark_max_character_length = characters;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.y > plot.bottom() && text.pos.x < plot.right() =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let bolds = labels.iter().any(|text| {
+                text.galley
+                    .job
+                    .sections
+                    .iter()
+                    .any(|section| section.format.coords != Default::default())
+            });
+            assert_eq!(bolds, bold, "{characters} characters");
+            let borders = painted.iter().any(|shape| matches!(shape, Shape::LineSegment { points, stroke } if stroke.color == egui::Color32::RED && points[0].y == points[1].y && (points[0].y - plot.bottom()).abs() < 1.0 && points[1].x - points[0].x == plot.width()));
+            assert_eq!(borders, border);
+            let mut centres: Vec<_> = labels
+                .iter()
+                .map(|text| text.visual_bounding_rect().center().x)
+                .collect();
+            centres.sort_by(f32::total_cmp);
+            assert!(centres.len() >= 2, "{centres:?}");
+            let gap = centres
+                .windows(2)
+                .map(|pair| pair[1] - pair[0])
+                .fold(f32::INFINITY, f32::min);
+            assert_eq!(gap >= 200.0, characters == 20, "{centres:?}");
         }
     }
 
@@ -3116,9 +3226,9 @@ mod tests {
         use crate::theme::{Theme, apply_to_egui};
         use egui::Color32;
 
-        // Volume uses cyan and pink independently of candle colours.
+        // Volume uses the theme's volume colours with and without the volume study.
         // A second opacity checks that the default study inherits the applied theme.
-        for (mut theme, alpha, candle_width, kind, height_fraction, inset, expected, band) in [
+        for (mut theme, alpha, candle_width, kind, height_fraction, inset, expected) in [
             (
                 Theme::dark(),
                 153,
@@ -3126,7 +3236,6 @@ mod tests {
                 ChartType::Candles,
                 0.12,
                 12.0,
-                [[23, 119, 131, 153], [142, 38, 73, 153]],
                 [[23, 100, 92, 153], [143, 50, 48, 153]],
             ),
             (
@@ -3136,7 +3245,6 @@ mod tests {
                 ChartType::Heikin,
                 0.12,
                 12.0,
-                [[8, 40, 44, 51], [47, 13, 24, 51]],
                 [[8, 33, 31, 51], [48, 17, 16, 51]],
             ),
             (
@@ -3146,7 +3254,6 @@ mod tests {
                 ChartType::Line,
                 0.25,
                 0.0,
-                [[19, 99, 109, 128], [118, 32, 61, 128]],
                 [[19, 83, 77, 128], [120, 42, 40, 128]],
             ),
             (
@@ -3156,7 +3263,6 @@ mod tests {
                 ChartType::Area,
                 0.4,
                 6.0,
-                [[19, 99, 109, 128], [118, 32, 61, 128]],
                 [[19, 83, 77, 128], [120, 42, 40, 128]],
             ),
         ] {
@@ -3202,11 +3308,6 @@ mod tests {
             assert!(!dots.is_empty(), "missing volume selection handles");
             assert!(dots.iter().all(|dot| (dot.y - volume.top()).abs() < 0.001));
             let pitch = chart.state.time_scale().bar_spacing();
-            let expected = if cfg!(feature = "studies") {
-                expected
-            } else {
-                band
-            };
             for (colour, fraction) in expected.into_iter().zip([1.0, 0.5]) {
                 let colour =
                     Color32::from_rgba_premultiplied(colour[0], colour[1], colour[2], colour[3]);

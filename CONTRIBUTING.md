@@ -87,9 +87,9 @@ The bundled library examples can be run with the usual cargo invocation, for exa
 cargo bench --bench frame_time
 ```
 
-The scenarios are one chart of 5,000,000 bars zoomed out and zoomed in, four charts of 100,000 bars, and eight charts of 100,000 bars with ten studies each, in a 1920 by 1080 window with the pointer over the charts. `FRAME_TIME_FRAMES` sets the number of measured frames (default 300, after 60 warm-up frames), and arguments run only the scenarios whose name contains one of them, for example `cargo bench --bench frame_time -- "zoomed out"`. `benches/bare_chart.rs` times the frame of the `bare_chart` example in the same way.
+The scenarios are one chart of 5,000,000 bars zoomed out and zoomed in, four charts of 100,000 bars, eight charts of 100,000 bars with ten studies each, and one chart of 10,000 bars with 500 drawings, every drawing tool in turn, all in view or spread across the history, in a 1920 by 1080 window with the pointer over the charts. `FRAME_TIME_FRAMES` sets the number of measured frames (default 300, after 60 warm-up frames), and arguments run only the scenarios whose name contains one of them, for example `cargo bench --bench frame_time -- "zoomed out"`. `benches/bare_chart.rs` times the frame of the `bare_chart` example in the same way.
 
-A second table prints the first frame and the median and 95th percentile of steady, tick and new-bar frames for candles and the five price-based chart types on 1,000,000 one-minute bars; `-- price-based` runs it alone.
+A second table prints the first frame and the median and 95th percentile of steady, tick and new-bar frames for candles and the five price-based chart types on 1,000,000 one-minute bars; `-- price-based` runs it alone. A third prints the vertices, frame time and tessellation time of volume bubbles from 100,000 trades with 200 bars in view; `-- bubbles` runs it alone.
 
 `benches/stream.rs` feeds one chart 10,000 trades a second from a thread, with 10 or 30 studies on 100,000 and 1,000,000 bars and frames paced at 60 Hz on the wall clock. It prints frame p50, p99 and max, and full recomputes per second for a fallback study: `cargo bench --bench stream`. `FRAME_TIME_FRAMES` and name filters work as above; warm-up waits for every study to have one value per bar, then runs 60 more frames.
 
@@ -127,7 +127,7 @@ A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/
 - [`model`](src/model): domain types (`Bar`, `Symbol`, `Timeframe`, `ChartType`) and the Renko/Kagi/P&F transforms.
 - [`data`](src/data): the `Datafeed` contract, trades, depth and bar merging.
 - [`chart`](src/chart): rendering, hit-testing, coordinate mapping, overlays.
-- [`services`](src/services): traits a host implements for storage, symbol search, signals, alerts and a trading account; nothing calls them yet.
+- [`services`](src/services): traits a host implements for storage, symbol search, signals, alerts and a trading account; the trading UI routes confirmed orders to the broker.
 - [`drawings`](src/drawings): drawing tools, selection, handles, undo/redo.
 - [`studies`](src/studies): technical indicators, the `Indicator` trait, and `IndicatorRegistry`.
 - [`scales`](src/scales): price and time scales, tick generators, formatters.

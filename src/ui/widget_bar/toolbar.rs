@@ -17,7 +17,7 @@ type PanelContent = Box<dyn FnMut(&mut Ui)>;
 pub enum WidgetBarSection {
     /// Top section: Alerts, ObjectTree
     Top,
-    /// Bottom section: Help (separated by line)
+    /// Bottom section, at the foot of the bar: host entries, then a line, then Help
     Bottom,
 }
 
@@ -275,13 +275,15 @@ impl WidgetBar {
                     );
                     let mut y = rect.top() + self.config.top_padding;
                     for section in [WidgetBarSection::Top, WidgetBarSection::Bottom] {
+                        let built_in = self
+                            .icons
+                            .iter()
+                            .filter(|i| i.section() == section)
+                            .filter(|&&i| !self.hidden.contains(&control(i)))
+                            .count();
                         if section == WidgetBarSection::Bottom {
-                            let count = self
-                                .icons
-                                .iter()
-                                .filter(|i| i.section() == section)
-                                .filter(|&&i| !self.hidden.contains(&control(i)))
-                                .count()
+                            // Host entries sit just above the line, the built-in entries below it.
+                            let count = built_in
                                 + self.widgets.iter().filter(|w| w.section == section).count();
                             if count == 0 {
                                 continue;
@@ -289,12 +291,6 @@ impl WidgetBar {
                             y = y.max(
                                 rect.bottom() - count as f32 * pitch - DESIGN_TOKENS.spacing.md,
                             );
-                            let sep = Rect::from_min_size(
-                                Pos2::new(rect.left() + 8.0, y),
-                                Vec2::new(self.config.width - 16.0, 1.0),
-                            );
-                            painter.rect_filled(sep, 0.0, ui.active_theme().ui.border);
-                            y += 1.0 + DESIGN_TOKENS.spacing.md;
                         }
                         for widget in self.widgets.iter().filter(|w| w.section == section) {
                             let id = ui.scope_id().with(("host_widget", widget.id));
@@ -312,6 +308,14 @@ impl WidgetBar {
                                 action = WidgetBarAction::WidgetClicked(widget.id);
                             }
                             y += pitch;
+                        }
+                        if section == WidgetBarSection::Bottom && built_in > 0 {
+                            let sep = Rect::from_min_size(
+                                Pos2::new(rect.left() + 8.0, y),
+                                Vec2::new(self.config.width - 16.0, 1.0),
+                            );
+                            painter.rect_filled(sep, 0.0, ui.active_theme().ui.border);
+                            y += 1.0 + DESIGN_TOKENS.spacing.md;
                         }
                         for icon in self
                             .icons
@@ -699,6 +703,17 @@ mod tests {
                 assert_eq!(icons.last().unwrap().center().y, height - origin.y - 19.0);
                 assert_eq!(icons[0].center().y, origin.y + 26.0);
                 assert_eq!(icons[1].center().y - icons[0].center().y, 46.0);
+                let line = shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        Shape::Rect(r) if r.rect.height() == 1.0 => Some(r.rect),
+                        _ => None,
+                    })
+                    .expect("bottom section line");
+                assert!(
+                    icons[3].bottom() < line.top() && line.bottom() < icons[4].top(),
+                    "host entry above the line, Help below it: {line:?}"
+                );
                 bar.active_icon = Some(RightBarIcon::Alerts);
                 bar.set_notification_cnt(RightBarIcon::Alerts, 3);
                 let pos = icons[1].center();

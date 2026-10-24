@@ -157,11 +157,11 @@ pub struct WatchlistQuote {
 }
 
 impl WatchlistQuote {
-    fn change(&self) -> f64 {
+    pub(super) fn change(&self) -> f64 {
         self.last - self.prev_close
     }
 
-    fn change_percent(&self) -> f64 {
+    pub(super) fn change_percent(&self) -> f64 {
         if self.prev_close == 0.0 {
             f64::NAN
         } else {
@@ -663,7 +663,7 @@ impl WatchlistPanel {
 }
 
 /// `value` with an explicit sign, unsigned when zero, or a dash when not finite.
-fn signed(value: f64, decimals: usize) -> String {
+pub(super) fn signed(value: f64, decimals: usize) -> String {
     if !value.is_finite() {
         "-".to_owned()
     } else if value == 0.0 {
