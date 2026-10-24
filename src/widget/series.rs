@@ -1258,7 +1258,8 @@ mod tests {
     }
 
     /// A price-anchored marker in view widens the fit unless its options say otherwise, and one
-    /// out of view never does. Each layer paints the main series' marker under or over a series
+    /// out of view never does. Each layer paints the main series' marker and its text over the
+    /// main series' candles, the text on a background, and the marker under or over a series
     /// added after it and a price line.
     #[test]
     fn marker_options_fit_and_layer_the_markers() {
@@ -1284,6 +1285,7 @@ mod tests {
             Marker::new(time)
                 .with_shape(MarkerShape::Circle)
                 .with_color(Color32::RED)
+                .with_text("Fill")
                 .at_price(price, MarkerPos::AtPriceMiddle)
         };
         let markers = vec![marker(bars[95].time, 150.0), marker(bars[0].time, 300.0)];
@@ -1327,6 +1329,22 @@ mod tests {
                 .position(|shape| matches!(shape, Shape::Circle(c) if c.fill == Color32::RED))
                 .unwrap();
             let (series_line, price_line) = (line(Color32::GREEN), line(Color32::BLUE));
+            let candles = painted
+                .iter()
+                .rposition(|shape| {
+                    matches!(shape, Shape::Rect(r) if r.fill == chart.config().bullish_color
+                        && chart.get_rendered_price_rect().contains_rect(r.rect))
+                })
+                .unwrap();
+            let text = painted
+                .iter()
+                .position(|shape| matches!(shape, Shape::Text(t) if t.galley.text() == "Fill"))
+                .unwrap();
+            assert!(candles < mark && candles + 1 < text, "{z_order:?}");
+            assert!(
+                matches!(&painted[text - 1], Shape::Rect(r) if r.rect.contains_rect(painted[text].visual_bounding_rect())),
+                "{z_order:?}: the text has a background"
+            );
             assert!(
                 match z_order {
                     MarkerZOrder::Normal => mark < series_line.0,

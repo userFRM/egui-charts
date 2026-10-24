@@ -2,6 +2,7 @@ use super::context::{ChartMapping, RenderContext};
 /// Marker renderer for chart annotations
 use crate::model::{Bar, Marker, MarkerPos, MarkerShape};
 use crate::scales::PriceMap;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, epaint::StrokeKind};
 
@@ -17,6 +18,7 @@ pub fn render_markers(
     let price_y =
         |marker: &Marker, bar: &Bar| price_scale.price_to_y(marker.price.unwrap_or(bar.close));
     let mut tooltip_shown = false;
+    let background = context.painter.ctx().active_theme().chart.bg;
     for (marker_index, marker) in markers.iter().enumerate() {
         if !marker.size.is_finite() || marker.size <= 0.0 {
             continue;
@@ -69,19 +71,24 @@ pub fn render_markers(
             );
 
             let mut hit_rect = Rect::from_center_size(pos, Vec2::splat(24.0 * marker.size));
+            let ctx = context.painter.ctx();
             // Render text label if present
             if let Some(text) = &marker.text {
-                let text_pos = Pos2::new(pos.x, pos.y + 12.0 * marker.size);
-                hit_rect = hit_rect.union(context.painter.text(
-                    text_pos,
-                    egui::Align2::CENTER_TOP,
-                    text,
+                let galley = context.painter.layout_no_wrap(
+                    text.clone(),
                     FontId::proportional(10.0 * marker.size),
                     marker.color,
-                ));
+                );
+                let rect = egui::Align2::CENTER_TOP
+                    .anchor_size(Pos2::new(pos.x, pos.y + 12.0 * marker.size), galley.size());
+                // The chart's background keeps the text readable over the bars behind it.
+                context
+                    .painter
+                    .rect_filled(rect.expand(1.0), 2.0, background);
+                context.painter.galley(rect.min, galley, marker.color);
+                hit_rect = hit_rect.union(rect);
             }
 
-            let ctx = context.painter.ctx();
             let hit_rect = hit_rect
                 .intersect(context.rect)
                 .intersect(context.painter.clip_rect());
@@ -139,7 +146,6 @@ pub fn render_event_band(
     coords: &ChartMapping,
     baseline: f32,
 ) -> Option<String> {
-    use crate::theme::ThemeExt;
     let mut clicked = None;
     visible_data.first()?;
     let mut placed = Vec::<Rect>::new();
