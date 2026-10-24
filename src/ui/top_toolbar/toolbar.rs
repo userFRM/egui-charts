@@ -333,29 +333,22 @@ impl TopToolbar {
 
         // The widest arrangement that fits: full, then icon-only labels, then overflow.
         let available = ui.available_width();
-        let menu: Vec<_> = [S::Alert, S::Replay, S::Layouts, S::LayoutName]
+        let mut hidden: Vec<_> = [S::Alert, S::Replay, S::Layouts, S::LayoutName]
             .into_iter()
             .filter(|&c| self.is_shown(c))
             .collect();
-        let fits = |compact, hidden: &[Slot]| {
-            let hidden: Vec<_> = menu.iter().chain(hidden).copied().collect();
-            self.strip_width(ui, symbol, compact, &hidden) <= available
-        };
-        // Host-hidden slots never reach the overflow menu.
-        let order: Vec<Slot> = OVERFLOW_ORDER
-            .into_iter()
-            .filter(|&c| self.is_shown(c) && !menu.contains(&c))
-            .collect();
-        let (compact, hidden) = if fits(false, &[]) {
-            (false, &order[..0])
-        } else {
-            let n = (0..order.len())
-                .find(|&n| fits(true, &order[..n]))
-                .unwrap_or(order.len());
-            (true, &order[..n])
-        };
-
-        let hidden: Vec<_> = menu.iter().chain(hidden).copied().collect();
+        let compact = self.strip_width(ui, symbol, false, &hidden) > available;
+        if compact {
+            for control in OVERFLOW_ORDER {
+                if self.strip_width(ui, symbol, true, &hidden) <= available {
+                    break;
+                }
+                // Host-hidden slots never reach the overflow menu.
+                if self.is_shown(control) && !hidden.contains(&control) {
+                    hidden.push(control);
+                }
+            }
+        }
         let hidden = hidden.as_slice();
         ui.add_space(DESIGN_TOKENS.spacing.lg);
         self.show_groups(ui, LEFT, compact, hidden, symbol, &mut action);
@@ -666,10 +659,25 @@ impl TopToolbar {
                     ui.menu_button("Indicator templates", |ui| {
                         self.show_indicator_templates(ui, action)
                     });
-                } else if let Some((icon, label, clicked_action)) = control.entry()
-                    && ListItem::new().show_with_icon(ui, label, icon).clicked()
-                {
-                    *action = clicked_action;
+                } else if let Some((icon, label, clicked_action)) = control.entry() {
+                    let enabled = match control {
+                        S::Undo => self.state.can_undo,
+                        S::Redo => self.state.can_redo,
+                        _ => true,
+                    };
+                    if ui
+                        .add_enabled(enabled, |ui: &mut Ui| {
+                            ListItem::new()
+                                .selected(*control == S::Replay && self.state.replay_active)
+                                .show_with_icon(ui, label, icon)
+                        })
+                        .clicked()
+                    {
+                        if *control == S::Replay {
+                            self.state.toggle_replay();
+                        }
+                        *action = clicked_action;
+                    }
                 }
             }
         });
@@ -920,11 +928,21 @@ mod tests {
                         "My studies",
                         TopToolbarAction::ApplyIndicatorTemplate("custom-id".into()),
                     ),
+                    (S::Undo, "Undo", TopToolbarAction::Undo),
+                    (S::Undo, "Undo", TopToolbarAction::None),
+                    (S::Redo, "Redo", TopToolbarAction::Redo),
+                    (S::Redo, "Redo", TopToolbarAction::None),
+                    (S::Replay, "Replay", TopToolbarAction::ToggleReplay),
                 ] {
-                    if overflow && !matches!(slot, S::Layouts | S::LayoutName) {
+                    let direct = matches!(slot, S::Undo | S::Redo | S::Replay);
+                    if (!overflow && direct)
+                        || (overflow && !direct && !matches!(slot, S::Layouts | S::LayoutName))
+                    {
                         continue;
                     }
                     let mut toolbar = TopToolbar::new();
+                    toolbar.state.can_undo = expected != TopToolbarAction::None;
+                    toolbar.state.can_redo = expected != TopToolbarAction::None;
                     toolbar
                         .indicator_templates
                         .push(("custom-id".into(), "My studies".into()));
@@ -994,7 +1012,7 @@ mod tests {
                         "opening the menu must not capture an image"
                     );
                     frame(vec![]);
-                    if overflow {
+                    if overflow && !direct {
                         let submenu = if slot == S::Layouts {
                             "Chart layout"
                         } else {
@@ -1043,6 +1061,9 @@ mod tests {
                         action = frame(vec![key(egui::Key::Enter, egui::Modifiers::NONE)]).0;
                     }
                     assert_eq!(action, expected, "overflow {overflow}");
+                    if slot == S::Replay {
+                        assert!(toolbar.state.replay_active);
+                    }
                 }
             }
         }
