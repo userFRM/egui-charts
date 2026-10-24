@@ -249,8 +249,7 @@ impl Drawing {
         let end_x = chart_rect.max.x;
         let x_range = end_x - start_x;
 
-        let mut prev_point: Option<Pos2> = None;
-
+        let mut wave = Vec::with_capacity(segments + 1);
         for i in 0..=segments {
             let t = i as f32 / segments as f32;
             let x = start_x + t * x_range;
@@ -259,14 +258,13 @@ impl Drawing {
             let Some(y) = sine_line_y(p1, p2, x) else {
                 return;
             };
-
-            let current = Pos2::new(x, y);
-
-            if let Some(prev) = prev_point {
-                painter.line_segment([prev, current], Stroke::new(self.stroke_width, color));
-            }
-            prev_point = Some(current);
+            wave.push(Pos2::new(x, y));
         }
+        // One path, not a segment shape per sample, so the tessellator joins the samples.
+        painter.add(egui::Shape::line(
+            wave,
+            Stroke::new(self.stroke_width, color),
+        ));
 
         // Draw zero/center line (dashed)
         let zero_color =

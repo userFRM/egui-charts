@@ -394,7 +394,7 @@ impl Chart {
             self.state.time_scale_mut().set_right_offset(new_offset);
 
             let frames = (dt * 60.0).max(0.0);
-            let damping = self.chart_options.kinetic_scroll.dumping_coeff.powf(frames);
+            let damping = self.chart_options.kinetic_scroll.damping_coeff.powf(frames);
             self.kinetic_scroll.velocity *= damping;
 
             let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
