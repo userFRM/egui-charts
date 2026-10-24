@@ -47,7 +47,7 @@ impl ChartGridSelector {
         selected
     }
 
-    /// Menu contents, also used when the toolbar moves this control into overflow.
+    /// Grid presets and synchronization menu contents.
     pub fn show_menu(&mut self, ui: &mut Ui) -> Option<ChartLayoutMode> {
         ui.set_min_width(220.0);
         let mut selected = None;

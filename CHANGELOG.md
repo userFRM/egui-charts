@@ -180,6 +180,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The main menu button of the top toolbar stays at the left edge while the narrow strip scrolls; only the controls after it move. ([#810](https://github.com/userFRM/egui-charts/issues/810))
+
+- The top toolbar keeps every control in its original group and order at narrow widths, scrolling horizontally with touch drags and horizontal wheel or trackpad input. The scroll bar and overflow dropdown are removed. A drag beginning on a button scrolls without activating it; taps and keyboard focus keep working, and focused controls scroll into view. ([#806](https://github.com/userFRM/egui-charts/issues/806))
+
+- The web demo follows the dynamic viewport with a legacy height fallback, hides its right rail below 600 points with panels reachable from the main menu, and shows layout tabs only when there is more than one layout. Narrow legends show close and change instead of four OHLC fields, reserve space for pane actions, and keep title controls clear of values during hover. Study controls appear on pointer hover, keyboard focus or a touch row selection and dismiss on an outside tap. ([#806](https://github.com/userFRM/egui-charts/issues/806))
 - Replay reapplies its cutoff on interval changes, includes newly added layout slots while paused, and restores checkpoints from their saved source interval. ([#213](https://github.com/userFRM/egui-charts/issues/213))
 
 - Starting a feed reload no longer reports `DataLoaded` before history arrives. Successful pages and explicit data replacements still notify the host. ([#201](https://github.com/userFRM/egui-charts/issues/201))

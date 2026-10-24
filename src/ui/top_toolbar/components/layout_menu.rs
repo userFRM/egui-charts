@@ -61,7 +61,7 @@ impl LayoutMenu {
         }
     }
 
-    /// Width of the named trigger, for toolbar overflow measurement.
+    /// Width of the named trigger.
     pub fn width(&self, ui: &Ui) -> f32 {
         ui.fonts_mut(|f| {
             f.layout_no_wrap(
@@ -114,7 +114,7 @@ impl LayoutMenu {
         action
     }
 
-    /// Menu contents for use in a toolbar overflow menu.
+    /// Named layout menu contents, shared with the save dropdown.
     pub fn show_menu(&mut self, ui: &mut Ui) -> LayoutAction {
         ui.set_min_width(self.config.menu_width);
         let mut action = LayoutAction::None;

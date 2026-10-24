@@ -69,7 +69,7 @@ pub struct Legend<'a> {
     pub show_title: bool,
     /// Prefer the host description over the ticker.
     pub title_as_description: bool,
-    /// Display OHLC fields.
+    /// Display OHLC fields, or the close alone in a compact plot.
     pub show_ohlc: bool,
     /// Display absolute bar change.
     pub show_change: bool,
@@ -177,7 +177,7 @@ impl<'a> Legend<'a> {
                 })
                 .sum::<f32>();
             let title_start = layout.pos;
-            let title_width = (bounds.right() - layout.pos.x - status_width - 48.0).max(0.0);
+            let title_width = (bounds.right() - layout.pos.x - status_width - 64.0).max(0.0);
             layout.text(title, typography::XXL, colors.text, title_width);
             for status in self.statuses {
                 let galley = painter.layout_no_wrap(
@@ -191,12 +191,11 @@ impl<'a> Legend<'a> {
             }
             #[cfg(feature = "icons")]
             {
+                // Reserve the same space before and during hover so values cannot shift under controls.
+                let controls = layout.reserve(Vec2::new(48.0, 20.0));
                 let title_rect = Rect::from_min_max(
                     title_start,
-                    Pos2::new(
-                        (layout.pos.x + 48.0).min(bounds.right()),
-                        title_start.y + 24.0,
-                    ),
+                    Pos2::new(controls.right().min(bounds.right()), title_start.y + 24.0),
                 );
                 let hovered = ui.rect_contains_pointer(title_rect);
                 let flagged = ui
@@ -206,8 +205,11 @@ impl<'a> Legend<'a> {
                     || flagged
                     || egui::Popup::is_id_open(ui.ctx(), id.with("more").with("popup"))
                 {
-                    let flag = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
-                    let more = layout.reserve(Vec2::splat(20.0)).intersect(bounds);
+                    let flag =
+                        Rect::from_min_size(controls.min, Vec2::splat(20.0)).intersect(bounds);
+                    let more =
+                        Rect::from_min_size(controls.min + Vec2::new(28.0, 0.0), Vec2::splat(20.0))
+                            .intersect(bounds);
                     painter.rect_stroke(
                         title_rect,
                         3,
@@ -259,7 +261,15 @@ impl<'a> Legend<'a> {
         }
         let precision = self.price_precision(self.bar.close);
         if self.show_ohlc {
-            layout.ohlc(self.bar, precision);
+            if plot.width() < 600.0 {
+                layout.field(
+                    "C ",
+                    format!("{:.precision$}", self.bar.close),
+                    layout.bar_color(self.bar),
+                );
+            } else {
+                layout.ohlc(self.bar, precision);
+            }
         }
         if self.show_change || self.show_change_percent {
             let reference = self.previous_close.unwrap_or(self.bar.open);
@@ -406,7 +416,13 @@ impl<'a> Legend<'a> {
                     }
                 }
                 let controls = layout.reserve(Vec2::new(60.0, 20.0)).intersect(bounds);
-                let row = Rect::from_min_max(row_start, controls.right_bottom()).intersect(bounds);
+                let row_right = if layout.pos.y > row_start.y {
+                    bounds.right()
+                } else {
+                    controls.right()
+                };
+                let row = Rect::from_min_max(row_start, Pos2::new(row_right, controls.bottom()))
+                    .intersect(bounds);
                 let responses = study_controls(
                     ui,
                     row,
@@ -508,7 +524,54 @@ pub(crate) fn study_controls(
     visible: bool,
 ) -> [Response; 3] {
     let theme = ui.active_theme();
-    if ui.rect_contains_pointer(row) {
+    let touch_id = egui::Id::unique("legend_touch_input");
+    let input_touch = ui.input(|input| {
+        if input.any_touches()
+            || input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Touch { .. }))
+        {
+            Some(true)
+        } else if input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerMoved(_)))
+        {
+            Some(false)
+        } else {
+            None
+        }
+    });
+    let touch = ui.ctx().data_mut(|data| {
+        let touch = input_touch.unwrap_or_else(|| data.get_temp::<bool>(touch_id).unwrap_or(false));
+        data.insert_temp(touch_id, touch);
+        touch
+    });
+    let row_response = ui.interact(row, id.with("row"), Sense::click());
+    row_response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Study controls"));
+    let clicked_elsewhere = row_response.clicked_elsewhere();
+    let clicked = row_response.clicked();
+    let selected = ui.ctx().data_mut(|data| {
+        let mut selected = data.get_temp::<bool>(id).unwrap_or(false);
+        if clicked_elsewhere || !touch {
+            selected = false;
+        } else if clicked {
+            selected = true;
+        }
+        data.insert_temp(id, selected);
+        selected
+    });
+    // Keep controls focusable while Tab transfers focus from their row.
+    let focused = row_response.has_focus()
+        || row_response.lost_focus()
+        || (0..3_usize).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
+    let hovered = !touch
+        && ui.input(|input| input.pointer.hover_pos().is_some())
+        && ui.rect_contains_pointer(row);
+    let revealed = selected || focused || hovered;
+    if revealed {
         ui.painter().rect_stroke(
             row,
             3.0,
@@ -528,9 +591,19 @@ pub(crate) fn study_controls(
             1 => "Study settings",
             _ => "Remove study",
         };
-        let response = ui
-            .interact(rect, id.with(index), Sense::click())
-            .on_hover_text(label);
+        let response = ui.interact(
+            rect,
+            id.with(index),
+            if revealed {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
+        if !revealed {
+            return response;
+        }
+        let response = response.on_hover_text(label);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
         if response.hovered() {
             ui.painter().rect_filled(rect, 3.0, theme.ui.btn_bg_hover);
@@ -797,6 +870,187 @@ mod tests {
     use egui::{Context, Event, Key, PointerButton, Shape};
 
     #[test]
+    fn study_controls_reveal_on_touch_and_dismiss_outside() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let row = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(200.0, 20.0));
+            let controls = Rect::from_min_size(Pos2::new(150.0, 10.0), Vec2::new(60.0, 20.0));
+            let frame = |events| {
+                let mut clicked = [false; 3];
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        clicked =
+                            study_controls(ui, row, controls, egui::Id::unique("study"), true)
+                                .map(|response| response.clicked());
+                    },
+                );
+                let painted = output.shapes.iter().any(|s| match &s.shape {
+                    Shape::Rect(r) => r.rect == row,
+                    _ => false,
+                });
+                let focused_label = output.platform_output.events.iter().find_map(|event| {
+                    if let egui::output::OutputEvent::FocusGained(info) = event {
+                        info.label.clone()
+                    } else {
+                        None
+                    }
+                });
+                output.drop_without_applying_deltas();
+                (painted, clicked, focused_label)
+            };
+            let touch = |pos, phase| Event::Touch {
+                device_id: egui::TouchDeviceId(0),
+                id: egui::TouchId(0),
+                phase,
+                pos,
+                force: None,
+            };
+            let tap = |pos| {
+                frame(vec![
+                    touch(pos, egui::TouchPhase::Start),
+                    Event::PointerMoved(pos),
+                    Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                ]);
+                frame(vec![
+                    touch(pos, egui::TouchPhase::End),
+                    Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                    Event::PointerGone,
+                ])
+            };
+            assert!(!frame(vec![Event::PointerGone]).0);
+            let first = tap(controls.center());
+            assert_eq!(first.1, [false; 3], "the first tap only reveals controls");
+            let second = tap(controls.center());
+            assert_eq!(
+                second.1,
+                [false, true, false],
+                "the second tap opens settings"
+            );
+            tap(row.left_center() + Vec2::new(10.0, 0.0));
+            assert!(frame(vec![]).0, "touch selection must survive pointer exit");
+            tap(Pos2::new(250.0, 100.0));
+            assert!(!frame(vec![]).0, "outside tap must dismiss controls");
+            assert!(
+                frame(vec![Event::PointerMoved(row.center())]).0,
+                "mouse hover reveals controls"
+            );
+            assert!(!frame(vec![Event::PointerGone]).0);
+            for (index, label) in [
+                "Study controls",
+                "Hide study",
+                "Study settings",
+                "Remove study",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let focused = frame(vec![Event::Key {
+                    key: Key::Tab,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }]);
+                assert!(focused.0, "keyboard focus must reveal {label}");
+                assert_eq!(focused.2.as_deref(), Some(label));
+                assert!(frame(vec![]).0, "focused controls must stay visible");
+                let activated = frame(vec![Event::Key {
+                    key: Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }]);
+                assert_eq!(
+                    activated.1,
+                    std::array::from_fn(|button| index == button + 1)
+                );
+            }
+
+            // A wrapped row is selectable over its text, even when the controls wrap below it.
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let bar = Bar::new(
+                Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                100.0,
+                110.0,
+                90.0,
+                105.0,
+                1000.0,
+            );
+            let studies: Vec<Box<dyn Indicator>> = vec![Box::new(
+                crate::studies::CustomIndicator::new("A long overlay study title", |_| Vec::new())
+                    .with_overlay(true),
+            )];
+            let pos = Pos2::new(130.0, 16.0);
+            let frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut legend = Legend::new("SAMPLE", "1h", &bar);
+                        legend.show_title = false;
+                        legend.show_ohlc = false;
+                        legend.show_change = false;
+                        legend.show_change_percent = false;
+                        legend.show_volume = false;
+                        legend.studies = &studies;
+                        legend.show(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(160.0, 400.0)));
+                    },
+                );
+                let selected = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape,
+                    Shape::Rect(rect) if rect.stroke.width > 0.0 && rect.rect.contains(pos))
+                });
+                output.drop_without_applying_deltas();
+                selected
+            };
+            frame(vec![]);
+            frame(vec![
+                touch(pos, egui::TouchPhase::Start),
+                Event::PointerMoved(pos),
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ]);
+            frame(vec![
+                touch(pos, egui::TouchPhase::End),
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                },
+                Event::PointerGone,
+            ]);
+            assert!(
+                frame(vec![]),
+                "the full wrapped study row must respond to a tap"
+            );
+        }
+    }
+
+    #[test]
     fn quote_controls_and_collapse_belong_to_each_legend() {
         for (_, theme) in crate::theme::presets() {
             let ctx = Context::default();
@@ -928,15 +1182,24 @@ mod tests {
                 modifiers: Default::default(),
             };
             // Tab through both legends, then activate each control in the second one.
-            for (tabs, side) in [
-                (7, Some(QuoteSide::Sell)),
-                (1, Some(QuoteSide::Buy)),
-                (4, None),
+            for (index, side) in [
+                (3, Some(QuoteSide::Sell)),
+                (4, Some(QuoteSide::Buy)),
+                (5, None),
             ] {
-                for _ in 0..tabs {
+                let mut reached = false;
+                for _ in 0..24 {
                     frame(1, vec![key(Key::Tab, true)]);
                     frame(1, vec![key(Key::Tab, false)]);
+                    reached = ctx
+                        .memory(|memory| memory.focused())
+                        .and_then(|id| ctx.read_response(id))
+                        .is_some_and(|response| response.rect == buttons[index]);
+                    if reached {
+                        break;
+                    }
                 }
+                assert!(reached, "legend control must remain keyboard reachable");
                 let (_, actions) = frame(1, vec![key(Key::Enter, true)]);
                 assert_eq!(actions, [None, side]);
                 frame(1, vec![key(Key::Enter, false)]);
