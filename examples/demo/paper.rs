@@ -1,6 +1,7 @@
 //! Session-only paper account: market, limit, stop and stop-limit orders filled at the chart's
 //! last price, one net position per symbol, take-profit and stop-loss exits that cancel each
-//! other, and working orders whose prices can be changed.
+//! other, working orders whose prices can be changed, and orders rejected when the position
+//! would be worth more than the balance.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -259,6 +260,28 @@ impl Broker for PaperAccount {
         };
         let id = state.id();
         reply.send(Ok(id.clone()));
+        // Each symbol's position may be worth up to the balance; orders that reduce it always pass.
+        let held = state
+            .positions
+            .get(&order.symbol)
+            .map_or(0.0, |p| p.quantity);
+        let after = held
+            + match order.side {
+                OrderSide::Buy => order.quantity,
+                OrderSide::Sell => -order.quantity,
+            };
+        let (value, balance) = (after.abs() * last, BALANCE + state.balance);
+        if after.abs() > held.abs() && value > balance {
+            let reason = format!(
+                "Insufficient buying power: {value:.2} {CURRENCY} needed, {balance:.2} available"
+            );
+            state.push(AccountEvent::Order(Order::new(
+                id,
+                order,
+                OrderStatus::Rejected(reason),
+            )));
+            return;
+        }
         let order = Order::new(id, order, OrderStatus::Working);
         if order.request.order_type == OrderType::Market {
             state.fill(order, last);

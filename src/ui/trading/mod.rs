@@ -2,20 +2,23 @@
 //! buttons. The broker holds the account; this module shows what it pushes and sends the orders
 //! the user confirms.
 
+mod executions;
 mod ticket;
 
 pub use ticket::{Bracket, BracketMode, OrderPreset};
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::chart::selection::SeriesId;
 use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
-    Account, Capabilities, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType,
-    Position, TradingRules,
+    Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
+    OrderType, Position, TradingRules,
 };
 use crate::services::{AccountEvent, Broker, Listener};
+use crate::ui::top_toolbar::components::settings_menu::TradingSettings;
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::ui_kit::notifications::Toasts;
 use crate::widget::Chart;
@@ -54,6 +57,10 @@ pub struct Trading {
     account: Option<Account>,
     orders: Vec<Order>,
     positions: Vec<Position>,
+    /// The fills of this account, oldest first.
+    executions: Vec<Execution>,
+    /// The symbol and requested quantity of every order the broker reported, for its fills.
+    order_symbols: HashMap<OrderId, (String, f64)>,
     rules: TradingRules,
     rules_key: u64,
     rules_ready: bool,
@@ -70,6 +77,10 @@ pub struct Trading {
     pub one_click: bool,
     /// The quantity and brackets the user saved in the ticket. Persist them in the host.
     pub presets: Vec<OrderPreset>,
+    /// Which of positions, orders, executions and execution labels [`show`](Self::show) draws.
+    /// Copy the chart settings' [`trading`](crate::ui::top_toolbar::ChartSettingsState::trading)
+    /// options here when the user applies them.
+    pub display: TradingSettings,
 }
 
 impl Default for Trading {
@@ -82,6 +93,8 @@ impl Default for Trading {
             account: None,
             orders: Vec::new(),
             positions: Vec::new(),
+            executions: Vec::new(),
+            order_symbols: HashMap::new(),
             rules: TradingRules::new(""),
             rules_key: 1,
             rules_ready: false,
@@ -91,6 +104,7 @@ impl Default for Trading {
             quantity: 1.0,
             one_click: false,
             presets: Vec::new(),
+            display: TradingSettings::default(),
         }
     }
 }
@@ -103,6 +117,8 @@ impl Trading {
         self.inbox = Arc::default();
         self.ticket.open = false;
         self.one_click = false;
+        self.executions.clear();
+        self.order_symbols.clear();
         self.connect();
     }
 
@@ -269,6 +285,10 @@ impl Trading {
                     self.pending = None;
                 }
                 self.orders.retain(|working| working.id != order.id);
+                self.order_symbols.insert(
+                    order.id.clone(),
+                    (order.request.symbol.clone(), order.request.quantity),
+                );
                 match &order.status {
                     OrderStatus::Working => self.orders.push(order),
                     OrderStatus::Rejected(reason) => {
@@ -290,20 +310,37 @@ impl Trading {
                     self.positions.push(position);
                 }
             }
-            AccountEvent::Execution(fill) => toasts.info(format!(
-                "Filled: {} {} at {:.*}",
-                fill.side.label(),
-                fill.quantity,
-                self.decimals,
-                fill.price
-            )),
+            AccountEvent::Execution(fill) => {
+                let order = self.order_symbols.get(&fill.order);
+                let mut text = format!("{} {}", executions::side_name(fill.side), fill.quantity);
+                if let Some((symbol, _)) = order {
+                    text += &format!(" {symbol}");
+                }
+                text += &format!(" at {:.*}", self.decimals, fill.price);
+                let filled = fill.quantity
+                    + self
+                        .executions
+                        .iter()
+                        .filter(|earlier| earlier.order == fill.order)
+                        .map(|earlier| earlier.quantity)
+                        .sum::<f64>();
+                // Fills that add up to the order within rounding complete it.
+                match order {
+                    Some((_, quantity)) if filled < quantity * (1.0 - 1e-9) => {
+                        toasts.info(format!("Partially filled: {text} ({filled} of {quantity})"))
+                    }
+                    _ => toasts.success(format!("Filled: {text}")),
+                }
+                self.executions.push(fill);
+            }
             _ => {}
         }
     }
 
-    /// Draws the chart symbol's working orders, brackets and positions as lines on `chart`, and
-    /// the order ticket. Sends the order the user submits, and asks the user to confirm a change
-    /// made on a line before sending it.
+    /// Draws the chart symbol's working orders, brackets and positions as lines on `chart`, its
+    /// fills as arrows, and the order ticket, leaving out the layers [`display`](Self::display)
+    /// turns off. Sends the order the user submits, and asks the user to confirm a change made on
+    /// a line before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
         let symbol = chart.symbol().to_owned();
         let symbol = symbol.as_str();
@@ -344,18 +381,37 @@ impl Trading {
                 currency,
                 tick_size: tick,
             };
+            let display = &self.display;
             let lines = {
                 let _theme = chart
                     .theme_override
                     .as_ref()
                     .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
-                render_trading_lines(
+                let lines = render_trading_lines(
                     ui,
                     &mapping,
-                    self.orders.iter().filter(|o| o.request.symbol == symbol),
-                    self.positions.iter().filter(|p| p.symbol == symbol),
+                    self.orders
+                        .iter()
+                        .filter(|o| display.show_orders && o.request.symbol == symbol),
+                    self.positions
+                        .iter()
+                        .filter(|p| display.show_poss && p.symbol == symbol),
                     &options,
-                )
+                );
+                // Over the lines, so that a fill on the latest bar is not hidden by their labels.
+                if display.show_executions {
+                    let fills: Vec<_> = self
+                        .executions
+                        .iter()
+                        .filter(|fill| {
+                            self.order_symbols
+                                .get(&fill.order)
+                                .is_some_and(|(of, _)| of == symbol)
+                        })
+                        .collect();
+                    executions::show(ui, chart, &fills, display.show_execution_labels, decimals);
+                }
+                lines
             };
             chart.trading_tags = lines.tags;
             self.pending = self.pending.take().or(lines.action);
@@ -796,6 +852,115 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Each fill of the chart's symbol is an arrow with its tip on the fill's price, on the bar
+    /// its time falls in, and a second fill there stacks below the first; a fill of another
+    /// symbol is not drawn, and hovering an arrow describes its fill. A partial fill, the fill
+    /// that completes an order and a rejection each raise a notification, the rejection with the
+    /// broker's reason. The display options hide the fills, the orders and the positions.
+    #[test]
+    fn fills_are_drawn_on_their_bar_and_announced() {
+        use crate::theme::ThemeExt;
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.symbol = "SYM".into();
+        let time = chart.bars(SeriesId::MAIN)[95].time + chrono::Duration::hours(12);
+        let order = |id, symbol, status, filled| {
+            let request = OrderRequest::new(symbol, OrderSide::Buy, 3.0, OrderType::Limit(95.0));
+            let mut order = Order::new(OrderId::new(id), request, status);
+            order.filled = filled;
+            order
+        };
+        let fill = |id, side, quantity| {
+            AccountEvent::Execution(Execution::new(OrderId::new(id), time, side, 95.0, quantity))
+        };
+        let broker = Arc::new(Recorder {
+            state: vec![
+                AccountEvent::Order(order("1", "SYM", OrderStatus::Working, 0.0)),
+                fill("1", OrderSide::Buy, 1.0),
+                AccountEvent::Order(order("1", "SYM", OrderStatus::Filled, 3.0)),
+                fill("1", OrderSide::Buy, 2.0),
+                AccountEvent::Order(order("2", "OTHER", OrderStatus::Filled, 3.0)),
+                fill("2", OrderSide::Sell, 3.0),
+                AccountEvent::Order(order(
+                    "3",
+                    "SYM",
+                    OrderStatus::Rejected("Insufficient margin".into()),
+                    0.0,
+                )),
+                AccountEvent::Order(order("4", "SYM", OrderStatus::Working, 0.0)),
+                AccountEvent::Position(Position::new("SYM", 3.0, 95.0)),
+            ],
+            ..Recorder::default()
+        });
+        let mut trading = Trading::default();
+        trading.set_service(broker);
+        let mut toasts = Toasts::new();
+        trading.poll(&egui::Context::default(), &mut toasts);
+        let messages: Vec<_> = toasts.toasts().iter().map(|t| t.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "Partially filled: Buy 1 SYM at 95.00 (1 of 3)",
+                "Filled: Buy 2 SYM at 95.00",
+                "Filled: Sell 3 OTHER at 95.00",
+                "Order rejected: Insufficient margin",
+            ]
+        );
+
+        let ctx = egui::Context::default();
+        let hidden = TradingSettings {
+            show_poss: false,
+            show_orders: false,
+            show_executions: false,
+            ..TradingSettings::default()
+        };
+        let mut clock = 0.0;
+        for (display, drawn) in [(TradingSettings::default(), true), (hidden, false)] {
+            trading.display = display;
+            let (mut tips, mut hovered) = (Vec::new(), false);
+            for frame in 0..4 {
+                clock += 1.0;
+                // The pointer rests on the first arrow's head once it has been drawn.
+                let events = chart.index_to_x(95.0).filter(|_| frame == 1).map(|x| {
+                    let y = chart.get_chart_mapping().price_to_y(95.0);
+                    egui::Event::PointerMoved(egui::pos2(x, y + 4.0))
+                });
+                let input = egui::RawInput {
+                    time: Some(clock),
+                    events: events.into_iter().collect(),
+                    ..Default::default()
+                };
+                let output = ctx.run_ui(input, |ui| {
+                    chart.show(ui);
+                    trading.show(ui, &mut chart);
+                });
+                let (buy, sell) = (ctx.active_theme().ui.accent, ctx.active_theme().ui.error);
+                tips = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Path(path) if path.fill == buy || path.fill == sell => {
+                            Some(path.points[0])
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                // 1_700_000_000 is 2023-11-14 22:13:20 UTC; 95 days and 12 hours later.
+                let tooltip = "Buy 1 at 95.00\nSun 18 Feb '24 10:13:20";
+                hovered = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == tooltip)
+                });
+                output.drop_without_applying_deltas();
+            }
+            let x = chart.index_to_x(95.0).unwrap();
+            let y = chart.get_chart_mapping().price_to_y(95.0);
+            // An arrow is 12 points tall, and stacked arrows 3 points apart.
+            let expected = [egui::pos2(x, y), egui::pos2(x, y + 15.0)];
+            assert_eq!(tips, if drawn { &expected[..] } else { &[] });
+            assert_eq!(hovered, drawn, "hovering an arrow describes its fill");
+            assert_eq!(chart.trading_tags.is_empty(), !drawn);
         }
     }
 

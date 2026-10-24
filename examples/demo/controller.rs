@@ -287,6 +287,8 @@ pub struct DemoApp {
     toasts: Toasts,
     /// Handle of the demo's price line, moved and removed from the chart menu.
     demo_level: Option<egui_charts::widget::PriceLineId>,
+    /// Whether the sample markers, change marks and bar marks are on, from the quick search.
+    api_samples: bool,
 }
 
 impl DemoApp {
@@ -500,6 +502,7 @@ impl DemoApp {
                 .unwrap_or_default(),
             toasts: Toasts::new(),
             demo_level: None,
+            api_samples: false,
         };
         app.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, false);
@@ -678,8 +681,6 @@ impl DemoApp {
             }]);
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
-        self.chart
-            .set_mark_source(Some(Arc::new(marks::DemoMarks(self.bars.clone()))));
         self.annotate();
     }
 
@@ -740,9 +741,13 @@ impl DemoApp {
     // --- selection / context helpers --------------------------------------
 
     fn open_chart_settings_dialog(&mut self) {
-        let alerts = self.settings_state.alerts.clone();
+        let (alerts, trading) = (
+            self.settings_state.alerts.clone(),
+            self.settings_state.trading.clone(),
+        );
         self.settings_state = ChartSettingsState::from_chart(&self.chart);
         self.settings_state.alerts = alerts;
+        self.settings_state.trading = trading;
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -871,6 +876,7 @@ impl DemoApp {
     fn apply_chart_settings(&mut self, state: ChartSettingsState) {
         self.chart.begin_user_action();
         self.settings_state = state.clone();
+        self.trading.display = state.trading.clone();
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
     }

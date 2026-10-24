@@ -118,7 +118,7 @@ impl Chart {
         }
     }
 
-    fn build_time_formatter(&self) -> Box<dyn crate::scales::TimeFormatter> {
+    pub(crate) fn build_time_formatter(&self) -> Box<dyn crate::scales::TimeFormatter> {
         TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(self.chart_options.time_scale.seconds_visible)

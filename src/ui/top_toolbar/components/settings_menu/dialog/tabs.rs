@@ -607,6 +607,19 @@ impl SettingsDialog {
         }
     }
 
+    pub(super) fn draw_trading_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
+        self.draw_section_header(ui, "VISIBILITY", style);
+        let trading = &mut self.settings.trading;
+        for (value, label) in [
+            (&mut trading.show_poss, "Show positions"),
+            (&mut trading.show_orders, "Show orders"),
+            (&mut trading.show_executions, "Show executions"),
+            (&mut trading.show_execution_labels, "Show execution labels"),
+        ] {
+            styled_checkbox(ui, value, label, style.val_text);
+        }
+    }
+
     pub(super) fn draw_alerts_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
             ui.add_space(0.0);

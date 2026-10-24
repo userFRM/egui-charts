@@ -260,12 +260,20 @@ impl Default for ScalesAndLinesSettings {
     }
 }
 
-/// Trading tab settings
+/// Trading tab settings: the layers [`Trading::show`](crate::ui::trading::Trading::show) draws,
+/// through [`Trading::display`](crate::ui::trading::Trading::display). Saved settings without a
+/// field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct TradingSettings {
+    /// Draw the open positions.
     pub show_poss: bool,
+    /// Draw the working orders and their brackets.
     pub show_orders: bool,
+    /// Draw the fills as arrows.
     pub show_executions: bool,
+    /// Write the side and quantity beside each fill's arrow.
+    pub show_execution_labels: bool,
     pub show_buy_sell_btns: bool,
 }
 
@@ -275,6 +283,7 @@ impl Default for TradingSettings {
             show_poss: true,
             show_orders: true,
             show_executions: true,
+            show_execution_labels: false,
             show_buy_sell_btns: false,
         }
     }

@@ -136,7 +136,7 @@ pub enum AccountEvent {
     Order(Order),
     /// Adds the position in its symbol, or replaces it; a quantity of 0 removes it.
     Position(Position),
-    /// One fill.
+    /// One fill, drawn on charts of its order's symbol: push the order first.
     Execution(Execution),
     /// The connection to the broker.
     Status(FeedStatus),

@@ -19,6 +19,7 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("log", "Toggle logarithmic scale", "Settings"),
         ("invert", "Invert price scale", "Settings"),
         ("grid", "Toggle grid", "Settings"),
+        ("samples", "Show API samples", "Settings"),
     ]
     .into_iter()
     .map(|(id, label, category)| Command::new(id, label).category(category))
@@ -108,6 +109,11 @@ impl DemoApp {
             "grid" => {
                 let config = self.chart.config_mut();
                 config.show_grid = !config.show_grid;
+                return;
+            }
+            "samples" => {
+                self.api_samples = !self.api_samples;
+                self.show_api_samples();
                 return;
             }
             _ => return,
