@@ -49,6 +49,8 @@ pub struct ToolbarState {
     pub search_open: bool,
     /// Current search query
     pub search_query: String,
+    /// Glyph picker search, size and session recents.
+    pub glyph_picker: super::GlyphPicker,
     /// Whether to show values tooltip on long press
     pub values_tooltip_on_long_press: bool,
     /// Whether eraser mode is currently active
@@ -109,6 +111,7 @@ impl Default for ToolbarState {
             category_last_tool,
             search_open: false,
             search_query: String::new(),
+            glyph_picker: Default::default(),
             values_tooltip_on_long_press: true, // Default: enabled
             eraser_mode_enabled: false,
             lock_all: false,

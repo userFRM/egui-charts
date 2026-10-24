@@ -1345,6 +1345,12 @@ impl DemoApp {
             }
             DrawingToolbarAction::HideAllDrawings => dm.toggle_visibility_all(),
             DrawingToolbarAction::LockAllDrawings => dm.toggle_lock_all(),
+            DrawingToolbarAction::InsertGlyph { icon_name, size } => {
+                dm.start_icon_insertion(icon_name.to_string());
+                if let Some(drawing) = &mut dm.curr_drawing {
+                    drawing.font_size = size;
+                }
+            }
             DrawingToolbarAction::InsertEmoji { icon_name } => {
                 dm.start_icon_insertion(icon_name.to_string())
             }

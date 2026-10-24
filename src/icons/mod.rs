@@ -167,6 +167,10 @@ pub mod icons {
     pub const ARROW_MARK_UP: Icon = crate::icon_from_path!("shapes-annotations/arrow-mark-up.svg");
     pub const ARROW_MARK_DOWN: Icon =
         crate::icon_from_path!("shapes-annotations/arrow-mark-down.svg");
+    pub const ARROW_MARK_LEFT: Icon =
+        crate::icon_from_path!("shapes-annotations/arrow-mark-left.svg");
+    pub const ARROW_MARK_RIGHT: Icon =
+        crate::icon_from_path!("shapes-annotations/arrow-mark-right.svg");
     pub const RECT: Icon = crate::icon_from_path!("shapes-annotations/rectangle.svg");
     pub const ROTATED_RECT: Icon =
         crate::icon_from_path!("shapes-annotations/rotated-rectangle.svg");
@@ -175,6 +179,7 @@ pub mod icons {
     pub const ELLIPSE: Icon = crate::icon_from_path!("shapes-annotations/ellipse.svg");
     pub const POLYLINE: Icon = crate::icon_from_path!("shapes-annotations/polyline.svg");
     pub const TRIANGLE: Icon = crate::icon_from_path!("shapes-annotations/triangle.svg");
+    pub const SECTOR: Icon = crate::icon_from_path!("shapes-annotations/sector.svg");
     pub const ARC: Icon = crate::icon_from_path!("shapes-annotations/arc.svg");
     pub const BEZIER_QUADRO: Icon = crate::icon_from_path!("shapes-annotations/curve.svg");
     pub const BEZIER_CUBIC: Icon = crate::icon_from_path!("shapes-annotations/double-curve.svg");
@@ -192,6 +197,7 @@ pub mod icons {
     pub const IMAGE: Icon = crate::icon_from_path!("shapes-annotations/image.svg");
     pub const POST: Icon = crate::icon_from_path!("shapes-annotations/post.svg");
     pub const IDEAS: Icon = crate::icon_from_path!("shapes-annotations/idea.svg");
+    pub const STICKER: Icon = crate::icon_from_path!("shapes-annotations/sticker.svg");
     pub const EMOJI_ICON: Icon = crate::icon_from_path!("shapes-annotations/emoji.svg");
 
     // Chart types

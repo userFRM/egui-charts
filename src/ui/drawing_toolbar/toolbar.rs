@@ -6,7 +6,6 @@
 //! - `categories/` for tool category submenus
 //! - `utilities/` for bottom toolbar btns
 
-use super::SubmenuBuilder;
 use super::categories::cursors::CursorType;
 use crate::drawings::DrawingToolType;
 use crate::ext::UiExt;
@@ -19,22 +18,6 @@ use crate::ui::Control;
 use crate::ui_kit::buttons::IconButton;
 use egui::{Color32, Id, Key, Modifiers, Popup, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::collections::HashSet;
-
-/// The icons the Icons/Emojis menu offers: the glyph a drawing shows, and its name. They are
-/// drawn with the app's fonts, so the app needs emoji fonts, such as egui's
-/// `monochrome_emoji_fonts` feature, as the demo has.
-const ICONS: [(&str, &str); 10] = [
-    ("👍", "Thumbs up"),
-    ("👎", "Thumbs down"),
-    ("🔥", "Fire"),
-    ("🚀", "Rocket"),
-    ("⭐", "Star"),
-    ("⚠", "Warning"),
-    ("✅", "Check mark"),
-    ("❌", "Cross mark"),
-    ("📌", "Pin"),
-    ("💰", "Money bag"),
-];
 
 /// Data struct for passing cursor state to submenu via context
 #[derive(Clone, Copy, Debug)]
@@ -607,17 +590,7 @@ impl DrawingToolbar {
                 action
             }
             "Remove" => RemoveMenu::show_submenu(ui),
-            "Icons/Emojis" => {
-                let mut builder = SubmenuBuilder::new(ui);
-                for (icon_name, name) in ICONS {
-                    builder = builder.add_text_item_with_action(
-                        format!("{icon_name}  {name}"),
-                        format!("Place a {} icon", name.to_lowercase()),
-                        move || Some(DrawingToolbarAction::InsertEmoji { icon_name }),
-                    );
-                }
-                builder.show()
-            }
+            "Icons/Emojis" => state.glyph_picker.show(ui),
             _ => {
                 let favorites = &mut state.favorites;
                 let action = match category {
@@ -683,6 +656,13 @@ impl DrawingToolbar {
             A::HideAllPoss => self.state.hide_positions = !self.state.hide_positions,
             A::HideAllOrders => self.state.hide_orders = !self.state.hide_orders,
             A::InsertEmoji { .. } => self.select_tool(DrawingToolType::FontIcon),
+            A::InsertGlyph { icon_name, .. } => {
+                self.select_tool(if icon_name.starts_with("sticker:") {
+                    DrawingToolType::Sticker
+                } else {
+                    DrawingToolType::FontIcon
+                })
+            }
             A::OpenTemplateMenu => {
                 // "Save as template" closes the menu and opens the name dialog.
                 self.state.show_template_name_input = true;
@@ -1037,6 +1017,166 @@ impl DrawingToolbar {
 mod tests {
     use super::*;
     use egui::{Context, Event, Key, Modifiers, RawInput};
+
+    /// The flyout searches all families, emits the picked glyph and shows session recents first.
+    #[test]
+    fn glyph_flyout_searches_places_and_shows_recents() {
+        fn frame(
+            toolbar: &mut DrawingToolbar,
+            ctx: &egui::Context,
+            events: Vec<egui::Event>,
+        ) -> (Option<DrawingToolbarAction>, Vec<egui::Shape>) {
+            let mut action = None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    action = toolbar.draw_submenu(ui, "Icons/Emojis");
+                },
+            );
+            let shapes = output.shapes.iter().map(|s| s.shape.clone()).collect();
+            output.drop_without_applying_deltas();
+            (action, shapes)
+        }
+        fn click(
+            toolbar: &mut DrawingToolbar,
+            ctx: &egui::Context,
+            at: Pos2,
+        ) -> Option<DrawingToolbarAction> {
+            frame(toolbar, ctx, vec![egui::Event::PointerMoved(at)]);
+            frame(
+                toolbar,
+                ctx,
+                [true, false]
+                    .map(|pressed| egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    })
+                    .to_vec(),
+            )
+            .0
+        }
+        fn label(shapes: &[egui::Shape], value: &str) -> Option<Rect> {
+            shapes.iter().find_map(|s| match s {
+                egui::Shape::Text(t) if t.galley.job.text == value => {
+                    Some(t.visual_bounding_rect())
+                }
+                _ => None,
+            })
+        }
+        for dark in [false, true] {
+            for (width, height) in [(240.0, 320.0), (320.0, 400.0), (1440.0, 900.0)] {
+                let ctx = egui::Context::default();
+                ctx.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, height));
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                let mut toolbar = DrawingToolbar::new();
+                toolbar.state.glyph_picker.size = 48.0;
+                let anchor = Rect::from_min_size(Pos2::new(10., 100.), Vec2::splat(40.));
+                let mut previous = "Search icons, emoji and stickers";
+                for (query, glyph) in [
+                    ("star", "icon:star"),
+                    ("grinning", "😀"),
+                    ("idea", "sticker:idea"),
+                    ("", "sticker:idea"),
+                ] {
+                    toolbar.toggle_category(&ctx, "Icons/Emojis", anchor);
+                    frame(&mut toolbar, &ctx, vec![]);
+                    let (_, shapes) = frame(&mut toolbar, &ctx, vec![]);
+                    let input =
+                        label(&shapes, previous).expect("the flyout must have a search field");
+                    assert!(
+                        screen.contains_rect(input),
+                        "search field outside {screen:?}: {input:?}"
+                    );
+                    click(&mut toolbar, &ctx, input.center());
+                    let modifiers = Modifiers {
+                        ctrl: true,
+                        command: true,
+                        ..Modifiers::NONE
+                    };
+                    frame(
+                        &mut toolbar,
+                        &ctx,
+                        [true, false]
+                            .map(|pressed| egui::Event::Key {
+                                key: Key::A,
+                                physical_key: None,
+                                pressed,
+                                repeat: false,
+                                modifiers,
+                            })
+                            .to_vec(),
+                    );
+                    frame(&mut toolbar, &ctx, vec![egui::Event::Text(query.into())]);
+                    if query.is_empty() {
+                        frame(
+                            &mut toolbar,
+                            &ctx,
+                            [true, false]
+                                .map(|pressed| egui::Event::Key {
+                                    key: Key::Backspace,
+                                    physical_key: None,
+                                    pressed,
+                                    repeat: false,
+                                    modifiers: Modifiers::NONE,
+                                })
+                                .to_vec(),
+                        );
+                    }
+                    let (_, shapes) = frame(&mut toolbar, &ctx, vec![]);
+                    if query == "star" {
+                        assert!(label(&shapes, "Icons: shapes").is_some());
+                        assert!(label(&shapes, "Emoji: symbols").is_some());
+                        assert!(label(&shapes, "Emoji: faces").is_none());
+                    }
+                    if query.is_empty() {
+                        assert!(
+                            label(&shapes, "Recent").unwrap().top()
+                                < label(&shapes, "Icons: signals").unwrap().top()
+                        );
+                    }
+                    let cell = shapes
+                        .iter()
+                        .find_map(|s| match s {
+                            egui::Shape::Rect(r) if r.rect.size() == Vec2::splat(40.0) => {
+                                Some(r.rect.center())
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert!(
+                        screen.contains(cell),
+                        "first glyph outside {screen:?}: {cell:?}"
+                    );
+                    let action = click(&mut toolbar, &ctx, cell);
+                    assert_eq!(
+                        action,
+                        Some(DrawingToolbarAction::InsertGlyph {
+                            icon_name: glyph,
+                            size: 48.0
+                        })
+                    );
+                    previous = query;
+                }
+            }
+        }
+    }
 
     /// Host snapshots restore modes, clear conflicting zoom and retain menus and tool history.
     #[test]

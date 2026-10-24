@@ -224,6 +224,17 @@ impl Drawing {
                 outline.lines.extend(self.neckline().map(|(line, _)| line));
             }
             T::TrianglePattern => outline.lines = path(true),
+            T::Sector => {
+                let points = self.sector_points()?;
+                outline.lines = edges(&points);
+                if filled {
+                    outline.areas.extend(
+                        points[1..]
+                            .windows(2)
+                            .map(|edge| vec![points[0], edge[0], edge[1]]),
+                    );
+                }
+            }
             T::Triangle => {
                 let [a, b, c, ..] = *p else { return None };
                 outline.lines = vec![[a, b], [b, c], [c, a]];
@@ -471,14 +482,17 @@ impl Drawing {
             DrawingToolType::Brush => self.render_brush(painter),
             DrawingToolType::Highlighter => self.render_highlighter(painter),
 
-            // Arrows (4 tools)
+            // Arrows (6 tools)
             DrawingToolType::Arrow => self.render_arrow(painter, color, stroke),
             DrawingToolType::ArrowMarker => self.render_arrow_marker(painter, color),
             DrawingToolType::ArrowMarkUp => self.render_arrow_mark_up(painter),
             DrawingToolType::ArrowMarkDown => self.render_arrow_mark_down(painter),
+            DrawingToolType::ArrowMarkLeft => self.render_horizontal_mark(painter, -1.0),
+            DrawingToolType::ArrowMarkRight => self.render_horizontal_mark(painter, 1.0),
 
             // Additional tools
             DrawingToolType::Pitchfan => self.render_pitchfan(painter, rect),
+            DrawingToolType::Sector => self.render_sector(painter),
             DrawingToolType::Path => self.render_path(painter),
             DrawingToolType::Curve => self.render_curve(painter),
             DrawingToolType::PriceNote => self.render_price_note(painter, rect),
@@ -488,7 +502,7 @@ impl Drawing {
             DrawingToolType::Image => self.render_image_placeholder(painter),
             DrawingToolType::Tweet => self.render_tweet_placeholder(painter),
             DrawingToolType::Idea => self.render_idea_placeholder(painter),
-            DrawingToolType::FontIcon => self.render_font_icon(painter),
+            DrawingToolType::FontIcon | DrawingToolType::Sticker => self.render_font_icon(painter),
 
             // Cursor tools (4 - not rendered as drawings)
             DrawingToolType::CrossCursor
@@ -720,6 +734,19 @@ mod tests {
             };
             assert!(present, "{style:?}");
         }
+        let mut path = Drawing::new(7, DrawingToolType::Path);
+        path.points = vec![
+            Pos2::new(100., 100.),
+            Pos2::new(200., 100.),
+            Pos2::new(200., 200.),
+        ];
+        assert!(
+            !paint(&path)
+                .iter()
+                .any(|s| matches!(s, Shape::Circle(c) if c.center == path.points[2]))
+        );
+        // Final segment points down: the arrow base is eight pixels above the tip, four either side.
+        assert!(paint(&path).iter().any(|s| matches!(s, Shape::Path(p) if p.points == [Pos2::new(200.,200.), Pos2::new(196.,192.), Pos2::new(204.,192.)])));
         for tool in [
             DrawingToolType::InfoLine,
             DrawingToolType::TrendAngle,
@@ -803,6 +830,50 @@ mod tests {
             painted > 140.0 && painted < 157.0,
             "painted {painted} px of a 222.144 px arc"
         );
+    }
+
+    /// Bundled glyphs must use vector primitives even when the host has no emoji font.
+    #[test]
+    fn bundled_glyphs_use_vectors_at_their_independent_size() {
+        for id in [
+            "icon:star",
+            "icon:target",
+            "sticker:bull",
+            "sticker:bear",
+            "sticker:rocket",
+            "sticker:idea",
+        ] {
+            for size in [24.0, 48.0] {
+                for width in [2.0, 6.0] {
+                    let mut drawing = Drawing::new(7, DrawingToolType::FontIcon);
+                    drawing.text = Some(id.into());
+                    drawing.font_size = size;
+                    drawing.stroke_width = width;
+                    drawing.points = vec![Pos2::new(100., 100.)];
+                    let shapes = paint(&drawing);
+                    assert!(!shapes.is_empty());
+                    assert!(
+                        !shapes.iter().any(|s| matches!(s, Shape::Text(_))),
+                        "{id} used a host font"
+                    );
+                    let bounds = Rect::from_center_size(drawing.points[0], egui::Vec2::splat(size))
+                        .expand(width);
+                    let painted = shapes.iter().fold(Rect::NOTHING, |bounds, shape| {
+                        bounds.union(shape.visual_bounding_rect())
+                    });
+                    assert!(
+                        painted.width() > size * 0.6 && painted.height() > size * 0.6,
+                        "{id}: {painted:?} at {size}"
+                    );
+                    for shape in &shapes {
+                        assert!(
+                            bounds.contains_rect(shape.visual_bounding_rect()),
+                            "{id}: {shape:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn paint(drawing: &Drawing) -> Vec<Shape> {

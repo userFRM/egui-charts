@@ -220,8 +220,8 @@ pub enum DrawingToolType {
     /// Semi-transparent highlighter brush for marking chart regions.
     Highlighter,
 
-    // ============ ARROWS (4 tools) ============
-    /// Arrow marker (single-click directional indicator).
+    // ============ ARROWS (6 tools) ============
+    /// Two-point directional arrow marker.
     ArrowMarker,
     /// Two-point arrow with customizable head styles.
     Arrow,
@@ -230,12 +230,17 @@ pub enum DrawingToolType {
     /// Downward arrow marker (single-click, bearish signal).
     ArrowMarkDown,
 
-    // ============ SHAPES (10 tools) ============
+    /// Leftward arrow mark placed with one click at its tip.
+    ArrowMarkLeft,
+    /// Rightward arrow mark placed with one click at its tip.
+    ArrowMarkRight,
+
+    // ============ SHAPES (11 tools) ============
     /// Axis-aligned rectangle defined by two corner points.
     Rect,
     /// Rectangle that can be rotated to any angle.
     RotatedRect,
-    /// Multi-segment path (open polyline with optional fill).
+    /// Multi-segment path ending in an arrowhead.
     Path,
     /// Circle defined by center and edge point.
     Circle,
@@ -245,6 +250,8 @@ pub enum DrawingToolType {
     Polyline,
     /// Triangle defined by three corner points.
     Triangle,
+    /// Circular sector: center, radius endpoint, then end ray, swept clockwise on screen.
+    Sector,
     /// Circular arc between two points with adjustable curvature.
     Arc,
     /// Quadratic Bezier curve (3 control points: start, control, end).
@@ -284,9 +291,11 @@ pub enum DrawingToolType {
     /// Idea/note embed placeholder.
     Idea,
 
-    // ============ ICONS (1 tool) ============
-    /// Font icon or emoji placed on the chart at a single point.
+    // ============ ICONS (2 tools) ============
+    /// Bundled vector icon or Unicode emoji placed at a single point.
     FontIcon,
+    /// Bundled illustrated sticker placed with one click, sized by `Drawing::font_size`.
+    Sticker,
 }
 
 #[cfg(test)]
@@ -295,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_tool_count() {
-        assert_eq!(DrawingToolType::all().len(), 94);
+        assert_eq!(DrawingToolType::all().len(), 98);
     }
 
     #[test]

@@ -46,6 +46,9 @@ impl DrawingToolType {
             | Self::FlagNote
             | Self::ArrowMarkUp
             | Self::ArrowMarkDown
+            | Self::ArrowMarkLeft
+            | Self::ArrowMarkRight
+            | Self::Sticker
             | Self::AnchoredVWAP
             | Self::AnchoredVolumeProfile
             | Self::Table
@@ -89,6 +92,7 @@ impl DrawingToolType {
             // Multi-point tools
             Self::RotatedRect
             | Self::Arc
+            | Self::Sector
             | Self::FibonacciExtension
             | Self::FibonacciWedge
             | Self::TrendBasedFibTime
@@ -138,7 +142,11 @@ impl DrawingToolType {
     /// geometry anchors; the other multi-point tools can draw partial paths.
     pub(crate) fn anchors_needed(&self) -> usize {
         match self {
-            Self::ParallelChannel | Self::RotatedRect | Self::FibonacciWedge | Self::Pitchfan => 3,
+            Self::ParallelChannel
+            | Self::RotatedRect
+            | Self::FibonacciWedge
+            | Self::Pitchfan
+            | Self::Sector => 3,
             Self::DoubleCurve => 4,
             Self::Triangle
             | Self::FlatTopBottom
@@ -189,6 +197,7 @@ impl DrawingToolType {
                     | Self::TrendBasedFibTime
                     | Self::Pitchfan
                     | Self::Arc
+                    | Self::Sector
                     | Self::RotatedRect
                     | Self::Curve
                     | Self::ProjectionTool
@@ -237,6 +246,10 @@ mod tests {
             (FibonacciWedge, DrawingInteractionMode::MultiPoint, 3),
             (Pitchfan, DrawingInteractionMode::MultiPoint, 3),
             (Arc, DrawingInteractionMode::MultiPoint, 3),
+            (Sector, DrawingInteractionMode::MultiPoint, 3),
+            (ArrowMarkLeft, DrawingInteractionMode::SingleClick, 1),
+            (ArrowMarkRight, DrawingInteractionMode::SingleClick, 1),
+            (Sticker, DrawingInteractionMode::SingleClick, 1),
             (RotatedRect, DrawingInteractionMode::MultiPoint, 3),
             (ProjectionTool, DrawingInteractionMode::MultiPoint, 3),
             (FlatTopBottom, DrawingInteractionMode::MultiPoint, 3),

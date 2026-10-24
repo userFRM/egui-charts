@@ -131,13 +131,15 @@ pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
         DrawingToolType::Brush => &icons::BRUSH,
         DrawingToolType::Highlighter => &icons::HIGHLIGHTER,
 
-        // ============ ARROWS (4 tools) ============
+        // ============ ARROWS (6 tools) ============
         DrawingToolType::ArrowMarker => &icons::ARROW_MARKER,
         DrawingToolType::Arrow => &icons::ARROW_LINE,
         DrawingToolType::ArrowMarkUp => &icons::ARROW_MARK_UP,
+        DrawingToolType::ArrowMarkLeft => &icons::ARROW_MARK_LEFT,
+        DrawingToolType::ArrowMarkRight => &icons::ARROW_MARK_RIGHT,
         DrawingToolType::ArrowMarkDown => &icons::ARROW_MARK_DOWN,
 
-        // ============ SHAPES (10 tools) ============
+        // ============ SHAPES (11 tools) ============
         DrawingToolType::Rect => &icons::RECT,
         DrawingToolType::RotatedRect => &icons::ROTATED_RECT,
         DrawingToolType::Path => &icons::PATH,
@@ -145,6 +147,7 @@ pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
         DrawingToolType::Ellipse => &icons::ELLIPSE,
         DrawingToolType::Polyline => &icons::POLYLINE,
         DrawingToolType::Triangle => &icons::TRIANGLE,
+        DrawingToolType::Sector => &icons::SECTOR,
         DrawingToolType::Arc => &icons::ARC,
         DrawingToolType::Curve => &icons::BEZIER_QUADRO,
         DrawingToolType::DoubleCurve => &icons::BEZIER_CUBIC,
@@ -167,7 +170,8 @@ pub fn get_icon(tool: DrawingToolType) -> &'static Icon {
         DrawingToolType::Tweet => &icons::POST,
         DrawingToolType::Idea => &icons::IDEAS,
 
-        // ============ ICONS (1 tool) ============
+        // ============ ICONS (2 tools) ============
+        DrawingToolType::Sticker => &icons::STICKER,
         DrawingToolType::FontIcon => &icons::EMOJI_ICON,
     }
 }

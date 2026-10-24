@@ -4,9 +4,48 @@
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Stroke};
+use egui::{Color32, Pos2, Shape, Stroke};
 
 impl Drawing {
+    /// The first anchor is the center, the second fixes the radius, and the third fixes
+    /// the end ray. Positive screen angles sweep clockwise, including sectors over 180°.
+    pub(super) fn sector_points(&self) -> Option<Vec<Pos2>> {
+        let [center, start, end, ..] = *self.points else {
+            return None;
+        };
+        let radius = center.distance(start);
+        if radius < 1e-6 || center.distance_sq(end) < 1e-12 {
+            return None;
+        }
+        let from = (start - center).angle();
+        let sweep = ((end - center).angle() - from).rem_euclid(std::f32::consts::TAU);
+        let steps = ((sweep / std::f32::consts::TAU * 128.0).ceil() as usize).max(1);
+        let mut points = vec![center];
+        points.extend((0..=steps).map(|i| {
+            let angle = from + sweep * i as f32 / steps as f32;
+            center + egui::Vec2::angled(angle) * radius
+        }));
+        Some(points)
+    }
+
+    pub(super) fn render_sector(&self, painter: &egui::Painter) {
+        let Some(points) = self.sector_points() else {
+            return;
+        };
+        if let Some(fill) = self.fill_color32() {
+            // One mesh keeps translucent fill continuous across the fan's internal edges.
+            let mut mesh = egui::Mesh::default();
+            for &point in &points {
+                mesh.colored_vertex(point, fill);
+            }
+            for i in 1..points.len() - 1 {
+                mesh.add_triangle(0, i as u32, (i + 1) as u32);
+            }
+            painter.add(Shape::mesh(mesh));
+        }
+        painter.add(Shape::closed_line(points, self.stroke()));
+    }
+
     /// A rectangle whose first two anchors form its base and whose third sets the width.
     pub(crate) fn render_rotated_rect(&self, painter: &egui::Painter) {
         let Some(corners) = self.rotated_rect_corners() else {
@@ -125,8 +164,10 @@ impl Drawing {
             if i > 0 {
                 painter.line_segment([self.points[i - 1], point], stroke);
             }
-            // Draw small circles at each vertex
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
+            // Keep the endpoint clear for its arrowhead.
+            if i + 1 < self.points.len() || !self.arrow_end_style.is_visible() {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
+            }
         }
 
         // Larger circle at start point
@@ -201,6 +242,16 @@ mod tests {
         let rect = egui::Rect::from_min_max(egui::pos2(-400.0, -400.0), egui::pos2(400.0, 400.0));
         for (tool, anchors, want) in [
             (
+                DrawingToolType::Sector,
+                vec![(100.0, 100.0), (200.0, 100.0), (100.0, 150.0)],
+                vec![(200.0, 100.0), (170.71068, 170.71068), (100.0, 200.0)],
+            ),
+            (
+                DrawingToolType::Sector,
+                vec![(100.0, 100.0), (200.0, 100.0), (100.0, 50.0)],
+                vec![(200.0, 100.0), (0.0, 100.0), (100.0, 0.0)],
+            ),
+            (
                 DrawingToolType::RotatedRect,
                 vec![(0.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
                 vec![(50.0, 150.0), (-50.0, 50.0)],
@@ -234,6 +285,14 @@ mod tests {
                     "{tool:?} missing {point:?}"
                 );
             }
+        }
+        let mut sector = Drawing::new(0, DrawingToolType::Sector);
+        for points in [
+            vec![Pos2::ZERO; 3],
+            vec![Pos2::ZERO, Pos2::new(100.0, 0.0), Pos2::ZERO],
+        ] {
+            sector.points = points;
+            assert!(sector.outline(rect).is_none());
         }
         for category in crate::drawings::categories::CATEGORY_ORDER {
             #[cfg(feature = "ui")]

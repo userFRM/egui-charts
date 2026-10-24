@@ -152,6 +152,8 @@ impl FromStr for DrawingToolType {
             "arrowmarker" => Ok(Self::ArrowMarker),
             "arrowmarkup" | "arrow up" => Ok(Self::ArrowMarkUp),
             "arrowmarkdown" | "arrow down" => Ok(Self::ArrowMarkDown),
+            "arrowmarkleft" | "arrow left" => Ok(Self::ArrowMarkLeft),
+            "arrowmarkright" | "arrow right" => Ok(Self::ArrowMarkRight),
 
             // Shapes
             "rect" => Ok(Self::Rect),
@@ -290,6 +292,8 @@ impl DrawingToolType {
             Self::Arrow => "Arrow",
             Self::ArrowMarkUp => "Arrow Mark Up",
             Self::ArrowMarkDown => "Arrow Mark Down",
+            Self::ArrowMarkLeft => "Arrow Mark Left",
+            Self::ArrowMarkRight => "Arrow Mark Right",
 
             // Shapes
             Self::Rect => "Rectangle",
@@ -299,6 +303,7 @@ impl DrawingToolType {
             Self::Ellipse => "Ellipse",
             Self::Polyline => "Polyline",
             Self::Triangle => "Triangle",
+            Self::Sector => "Sector",
             Self::Arc => "Arc",
             Self::Curve => "Curve",
             Self::DoubleCurve => "Double Curve",
@@ -322,6 +327,7 @@ impl DrawingToolType {
             Self::Idea => "Idea",
 
             // Icons
+            Self::Sticker => "Sticker",
             Self::FontIcon => "Icon",
         }
     }
@@ -402,6 +408,8 @@ impl DrawingToolType {
             Self::Arrow => "LineToolArrow",
             Self::ArrowMarkUp => "LineToolArrowMarkUp",
             Self::ArrowMarkDown => "LineToolArrowMarkDown",
+            Self::ArrowMarkLeft => "LineToolArrowMarkLeft",
+            Self::ArrowMarkRight => "LineToolArrowMarkRight",
             Self::Rect => "LineToolRect",
             Self::RotatedRect => "LineToolRotatedRect",
             Self::Path => "LineToolPath",
@@ -409,6 +417,7 @@ impl DrawingToolType {
             Self::Ellipse => "LineToolEllipse",
             Self::Polyline => "LineToolPolyline",
             Self::Triangle => "LineToolTriangle",
+            Self::Sector => "LineToolSector",
             Self::Arc => "LineToolArc",
             Self::Curve => "LineToolBezierQuadro",
             Self::DoubleCurve => "LineToolBezierCubic",
@@ -426,6 +435,7 @@ impl DrawingToolType {
             Self::Image => "LineToolImage",
             Self::Tweet => "LineToolTweet",
             Self::Idea => "LineToolIdea",
+            Self::Sticker => "LineToolSticker",
             Self::FontIcon => "LineToolFontIcon",
         }
     }

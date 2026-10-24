@@ -173,18 +173,21 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 
 ### Arrows
 - [x] Arrow: Line + arrowhead
-- [x] Arrow Marker: Colored filled triangle
+- [x] Arrow Marker: two-point arrow with endpoint styling
 - [x] Arrow Mark Up
 - [x] Arrow Mark Down
+- [x] Arrow Mark Left
+- [x] Arrow Mark Right
 
 ### Shapes
 - [x] Rectangle: Fill, dashed midlines, dimension labels, 4-corner handles
 - [x] Circle
 - [x] Ellipse: Path approximation
 - [x] Triangle: 3-point polygon
-- [x] Arc: Arc/sector rendering
+- [x] Arc: circular arc through three anchors
+- [x] Sector: center, radius endpoint and end ray, with clockwise sweep and optional fill
 - [x] Polyline: Connected segments with vertex markers
-- [x] Path: Freeform connected segments
+- [x] Path: connected segments ending in an arrowhead by default
 - [x] Curve: Quadratic bezier
 - [ ] **Rotated Rectangle**: Renders as axis-aligned only; rotation not implemented
 - [ ] **Double Curve**: Uses sine offset approximation, not true cubic bezier
@@ -208,7 +211,8 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 - [ ] **Idea**: Decorative card only; no service connection
 
 ### Icons
-- [x] Font Icon: the drawing bar's Icons/Emojis menu picks an icon or emoji, and the next click places it
+- [x] Font Icon: searchable categories of bundled vector icons and Unicode emoji, with session recents first; the next click places the glyph at its independently saved size
+- [x] Sticker: bundled vector illustrations placed from the same picker
 - Note: Icons module is feature-gated behind `icons` feature (enabled by default)
 
 ### Cursors (4 modes, no rendering needed)
@@ -443,7 +447,7 @@ Studies share line renderers. Overlays also support crossing markers, direction 
 
 ### Other UI
 - [x] Context menu: entries with icons, shortcuts, disabled state, click-outside close
-- [x] Emoji picker: a menu of ten icons and emoji in the drawing bar (a list, not a searchable grid)
+- [x] Glyph picker: searchable icon, emoji and sticker categories, recent picks first, and an independent size setting
 - [ ] Multi-chart layout component (only ChartSyncOptions exists; module is a stub)
 - [x] Symbol header display
 - [x] Connection status indicator
@@ -533,7 +537,7 @@ The ui_kit components are generic building blocks:
 ### What's built
 - 19 of 19 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
-- `DrawingToolType` defines 94 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
+- `DrawingToolType` defines 98 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
 - 124 registered indicators with calculation code
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - Reusable ui_kit building blocks

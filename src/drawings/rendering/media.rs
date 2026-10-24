@@ -383,6 +383,10 @@ impl Drawing {
         let icon = self.text.as_deref().unwrap_or("*");
 
         let icon_size = self.font_size;
+        let rect = egui::Rect::from_center_size(pos, egui::Vec2::splat(icon_size));
+        if crate::drawings::glyphs::paint(painter, icon, rect, color) {
+            return;
+        }
 
         // Optional background circle
         let has_bg = self.stroke_width > 2.0;

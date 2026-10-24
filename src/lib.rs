@@ -48,7 +48,7 @@
 //! | **Data** | [`data`] | `Datafeed` contract for history and live data, `Reply`, `Sink`, bar resampling |
 //! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
 //! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays |
-//! | **Drawing tools** | [`drawings`] | 94 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
+//! | **Drawing tools** | [`drawings`] | 98 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
 //! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 124 indicator names in `IndicatorFactory` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |

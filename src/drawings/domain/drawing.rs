@@ -150,20 +150,27 @@ impl Drawing {
             color: [242, 54, 69, 255], // Default red (#F23645)
             stroke_width: 2.0,
             completed: false,
-            text: None,
+            text: (tool_type == DrawingToolType::Sticker).then(|| "sticker:bull".into()),
             // Styling defaults
             line_style: LineStyle::Solid,
             fill_color: None,
             locked: false,
             visible: true,
-            font_size: 12.0,
+            font_size: if matches!(
+                tool_type,
+                DrawingToolType::FontIcon | DrawingToolType::Sticker
+            ) {
+                32.0
+            } else {
+                12.0
+            },
             font_weight: FontWeight::Normal,
             extend_left: false,
             extend_right: false,
             arrow_start_style: ArrowStyle::None,
             arrow_end_style: if matches!(
                 tool_type,
-                DrawingToolType::Arrow | DrawingToolType::ArrowMarker
+                DrawingToolType::Arrow | DrawingToolType::ArrowMarker | DrawingToolType::Path
             ) {
                 ArrowStyle::Arrow
             } else {
