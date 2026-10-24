@@ -22,6 +22,7 @@ mod drawing;
 mod gann;
 mod options;
 mod pitchfork;
+mod template;
 // tool_type is now a subdirectory with multiple modules
 mod tool_type;
 
@@ -33,4 +34,5 @@ pub use options::{
     PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
+pub use template::DrawingTemplate;
 pub use tool_type::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};

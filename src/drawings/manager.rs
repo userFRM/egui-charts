@@ -162,6 +162,9 @@ pub(crate) struct TextEditState {
 /// # }
 /// ```
 pub struct DrawingManager {
+    /// Per-tool defaults, exportable with serde for host-owned application storage.
+    /// New drawings use these properties without copying geometry, identity or layer.
+    pub tool_defaults: std::collections::HashMap<DrawingToolType, super::DrawingTemplate>,
     /// All completed drawings on the chart.
     pub drawings: Vec<Drawing>,
     /// Currently active drawing tool, or `None` for selection/pointer mode.
@@ -230,6 +233,7 @@ impl DrawingManager {
     pub fn new() -> Self {
         Self {
             drawings: Vec::new(),
+            tool_defaults: Default::default(),
             active_tool: None,
             curr_drawing: None,
             preview_point: false,
@@ -685,9 +689,11 @@ impl DrawingManager {
         let mut drawing =
             Drawing::with_color(id, DrawingToolType::FontIcon, self.options.default_color);
 
-        // Store the icon name in the text field
-        drawing.text = Some(icon_name);
         drawing.font_size = 32.0; // Larger size for icons/emojis
+        if let Some(defaults) = self.tool_defaults.get(&drawing.tool_type) {
+            let _ = defaults.apply_to(&mut drawing);
+        }
+        drawing.text = Some(icon_name);
         drawing.completed = false; // Not complete until user clicks
 
         // Set as current drawing (will be placed on next click)
@@ -719,7 +725,14 @@ impl DrawingManager {
             Some(prepared) if prepared.tool_type == tool_type && prepared.points.is_empty() => {
                 prepared
             }
-            _ => Drawing::with_color(self.take_id(), tool_type, self.options.default_color),
+            _ => {
+                let mut drawing =
+                    Drawing::with_color(self.take_id(), tool_type, self.options.default_color);
+                if let Some(defaults) = self.tool_defaults.get(&tool_type) {
+                    let _ = defaults.apply_to(&mut drawing);
+                }
+                drawing
+            }
         };
         drawing.pane = self.pane;
         drawing.z_order = self.top_z_order();

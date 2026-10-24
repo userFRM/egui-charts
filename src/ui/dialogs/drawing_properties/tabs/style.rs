@@ -50,6 +50,7 @@ impl StyleTab {
                 let fill = props
                     .fill_color
                     .unwrap_or(ui.active_theme().ui.accent.gamma_multiply(0.2));
+                props.fill_color = Some(fill);
                 if let Some(picked) = color_swatch(ui, fill_picker, fill, "drawing_props_fill") {
                     // Palette swatches are opaque: keep the fill's opacity unless it was edited.
                     let [r, g, b, a] = picked.to_srgba_unmultiplied();
@@ -65,10 +66,6 @@ impl StyleTab {
                 ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
                 ui.checkbox(&mut props.extend_right, "Right");
             });
-            ui.end_row();
-
-            ui.label("Labels");
-            ui.checkbox(&mut props.show_price, "Show price");
             ui.end_row();
         });
     }
@@ -88,7 +85,7 @@ fn color_swatch(
 /// Swatches that draw each preset width, then a stepper for any width from 1 to 10 px.
 fn line_width_row(ui: &mut Ui, width: &mut f32) {
     let theme = ui.active_theme();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing.xs;
         for preset in LINE_WIDTHS {
             let size = Vec2::splat(ButtonSize::MD.pixels());

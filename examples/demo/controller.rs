@@ -32,12 +32,11 @@ use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
+use egui_charts::ui::dialogs::DrawingContextMenuAction;
 use egui_charts::ui::dialogs::{
     AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
-    DrawingProps, KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction,
-    SeriesSettingsDialog,
+    KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
 };
-use egui_charts::ui::dialogs::{DrawingContextMenuAction, DrawingLineStyle};
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
@@ -375,6 +374,10 @@ impl DemoApp {
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.apply_session();
         app.restore_drawings();
+        app.chart.drawings_mut().tool_defaults = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "drawing_defaults"))
+            .unwrap_or_default();
         app.settings_state = ChartSettingsState::from_chart(&app.chart);
         app
     }
@@ -733,35 +736,8 @@ impl DemoApp {
     }
 
     fn open_drawing_props_for(&mut self, drawing_id: usize) {
-        let dm = self.chart.drawings();
-        let Some(drawing) = dm.drawings.iter().find(|d| d.id == drawing_id) else {
-            return;
-        };
-        let props = DrawingProps {
-            color: drawing.color32(),
-            line_width: drawing.stroke_width,
-            line_style: match drawing.line_style {
-                egui_charts::drawings::LineStyle::Solid => DrawingLineStyle::Solid,
-                egui_charts::drawings::LineStyle::Dashed => DrawingLineStyle::Dashed,
-                egui_charts::drawings::LineStyle::Dotted => DrawingLineStyle::Dotted,
-            },
-            fill_color: drawing.fill_color32(),
-            fill_enabled: drawing.fill_color.is_some(),
-            extend_left: drawing.extend_left,
-            extend_right: drawing.extend_right,
-            font_size: drawing.font_size,
-            visible_all_timeframes: drawing.timeframe_visibility.show_on_all,
-            visible_timeframes: drawing
-                .timeframe_visibility
-                .visible_timeframes
-                .iter()
-                .cloned()
-                .collect(),
-            label: drawing.text.clone().unwrap_or_default(),
-            ..DrawingProps::default()
-        };
-        let name = drawing.tool_type.as_str().to_string();
-        self.drawing_props.open(DrawingId(drawing_id), name, props);
+        self.drawing_props
+            .open_for_chart(&self.chart, DrawingId(drawing_id));
     }
 
     fn open_indicator_settings(&mut self, id: SeriesId) {
@@ -846,8 +822,8 @@ impl DemoApp {
         }
 
         // Drawing properties.
-        match self.drawing_props.show(ctx) {
-            DrawingPropertiesAction::Apply(id, props) => self.apply_drawing_props(id, props),
+        match self.drawing_props.show_and_apply(ctx, &mut self.chart) {
+            DrawingPropertiesAction::Apply(..) => {}
             DrawingPropertiesAction::Delete(id) => {
                 self.chart
                     .user_action(|chart| chart.drawings_mut().delete_drawing(id.0));
@@ -893,34 +869,6 @@ impl DemoApp {
         for id in ids {
             chart.remove_series(id);
         }
-    }
-
-    fn apply_drawing_props(&mut self, id: DrawingId, props: DrawingProps) {
-        self.user_action(|app| app.apply_drawing_props_edit(id, props));
-    }
-
-    fn apply_drawing_props_edit(&mut self, id: DrawingId, props: DrawingProps) {
-        let manager = self.chart.drawings_mut();
-        if !manager.is_selected(id.0) {
-            manager.select(id.0);
-        }
-        manager.edit_selected(|drawing| {
-            drawing.color = props.color.to_srgba_unmultiplied();
-            drawing.stroke_width = props.line_width;
-            drawing.line_style = line_style_from_dialog(props.line_style);
-            drawing.extend_left = props.extend_left;
-            drawing.extend_right = props.extend_right;
-            drawing.text = (!props.label.is_empty()).then_some(props.label.clone());
-            drawing.fill_color = props
-                .fill_color
-                .filter(|_| props.fill_enabled)
-                .map(|c| c.to_srgba_unmultiplied());
-            drawing.font_size = props.font_size;
-            drawing.timeframe_visibility = egui_charts::drawings::TimeframeVisibility {
-                show_on_all: props.visible_all_timeframes,
-                visible_timeframes: props.visible_timeframes.iter().cloned().collect(),
-            };
-        });
     }
 
     fn clone_drawing(&mut self, id: usize) {
@@ -1031,6 +979,11 @@ impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.remember_drawings();
         eframe::set_value(storage, "drawings", &self.saved_drawings);
+        eframe::set_value(
+            storage,
+            "drawing_defaults",
+            &self.chart.drawings().tool_defaults,
+        );
         eframe::set_value(storage, "dark_theme", &self.theme.dark);
         eframe::set_value(
             storage,
@@ -2207,15 +2160,6 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .inner_margin(egui::Margin::ZERO)
 }
 
-fn line_style_from_dialog(style: DrawingLineStyle) -> egui_charts::drawings::LineStyle {
-    use egui_charts::drawings::LineStyle;
-    match style {
-        DrawingLineStyle::Solid => LineStyle::Solid,
-        DrawingLineStyle::Dashed => LineStyle::Dashed,
-        DrawingLineStyle::Dotted => LineStyle::Dotted,
-    }
-}
-
 fn apply_timezone(chart: &mut Chart, toolbar: &mut TimeframeToolbar, name: &str) {
     use egui_charts::config::TimezoneMode;
     let timezone = if name == "UTC" {
@@ -2251,6 +2195,7 @@ fn apply_settings_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_charts::ui::dialogs::{DrawingLineStyle, DrawingProps};
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
     #[test]
@@ -2268,6 +2213,10 @@ mod tests {
         let expected = drawing.chart_points.clone();
         let original_bars = app.chart.bars(SeriesId::MAIN).to_vec();
         app.chart.drawings_mut().drawings.push(drawing);
+        let mut props = DrawingProps::from_drawing(&app.chart.drawings().drawings[0], &app.chart);
+        props.line_width = 4.0;
+        props.save_as_default = true;
+        props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
         let mut storage = AppStorage::default();
         eframe::App::save(&mut app, &mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(ctx);
@@ -2276,6 +2225,16 @@ mod tests {
         assert_eq!(restored.chart.drawings().drawings.len(), 1);
         restored.chart.set_data(SeriesId::MAIN, original_bars);
         assert_eq!(restored.chart.drawings().drawings[0].chart_points, expected);
+        let defaults = &restored.chart.drawings().tool_defaults[&DrawingToolType::TrendLine];
+        assert_eq!(defaults.settings.stroke_width, 4.0);
+        assert!(defaults.settings.chart_points.is_empty());
+        restored.switch_symbol("AAPL");
+        assert_eq!(
+            restored.chart.drawings().tool_defaults[&DrawingToolType::TrendLine]
+                .settings
+                .stroke_width,
+            4.0
+        );
     }
 
     #[derive(Default)]
@@ -3424,6 +3383,351 @@ mod tests {
         }
     }
 
+    /// Family pages fit both themes and narrow windows; coordinate drafts apply as one undoable edit.
+    #[test]
+    fn drawing_properties_family_inputs_and_coordinates_apply_through_dialog() {
+        use chrono::{TimeZone, Utc};
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType as Tool};
+        use egui_charts::ui::dialogs::PropertiesTab;
+
+        fn frame(
+            app: &mut DemoApp,
+            ctx: &egui::Context,
+            events: Vec<egui::Event>,
+        ) -> Vec<(String, egui::Rect)> {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_dialogs(ui.ctx()),
+            );
+            let texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.job.text.clone(),
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            texts
+        }
+        fn click(app: &mut DemoApp, ctx: &egui::Context, point: egui::Pos2) {
+            frame(app, ctx, vec![egui::Event::PointerMoved(point)]);
+            frame(
+                app,
+                ctx,
+                [true, false]
+                    .map(|pressed| egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                    .to_vec(),
+            );
+        }
+        fn enter(app: &mut DemoApp, ctx: &egui::Context) {
+            frame(
+                app,
+                ctx,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            frame(
+                app,
+                ctx,
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        // Times 0, 60, 180 seconds: 120 is halfway between bars 1 and 2, so index 1.5.
+        app.chart.set_data(
+            SeriesId::MAIN,
+            [0, 60, 180]
+                .map(|seconds| {
+                    Bar::new(
+                        Utc.timestamp_opt(seconds, 0).unwrap(),
+                        100.0,
+                        120.0,
+                        90.0,
+                        110.0,
+                        1.0,
+                    )
+                })
+                .to_vec(),
+        );
+        for (tool, heading) in [
+            (Tool::FibonacciRetracement, "Fibonacci levels"),
+            (Tool::FibonacciExtension, "Fibonacci levels"),
+            (Tool::FibonacciChannel, "Fibonacci levels"),
+            (Tool::FibonacciWedge, "Fibonacci levels"),
+            (Tool::Pitchfork, "Pitchfork levels"),
+            (Tool::SchiffPitchfork, "Pitchfork levels"),
+            (Tool::ModifiedSchiffPitchfork, "Pitchfork levels"),
+            (Tool::InsidePitchfork, "Pitchfork levels"),
+            (Tool::GannBox, "Price divisions"),
+            (Tool::GannSquare, "Price divisions"),
+            (Tool::GannFixed, "Price divisions"),
+            (Tool::LongPos, "Size by"),
+            (Tool::ShortPos, "Size by"),
+            (Tool::FixedRangeVolumeProfile, "Rows"),
+            (Tool::AnchoredVolumeProfile, "Rows"),
+            (Tool::RegressionTrend, "Deviations"),
+            (Tool::ParallelChannel, "Show middle line"),
+        ] {
+            app.chart.drawings_mut().drawings.clear();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = vec![
+                ChartPoint::new(0.0, 100.0),
+                ChartPoint::new(2.0, 120.0),
+                ChartPoint::new(1.0, 95.0),
+            ];
+            let before = format!("{drawing:?}");
+            app.chart.drawings_mut().drawings.push(drawing);
+            app.open_drawing_props_for(7);
+            assert_eq!(
+                app.drawing_props.coordinates.points.len(),
+                3,
+                "{tool:?}: every anchor must be editable"
+            );
+            frame(&mut app, &ctx, vec![]);
+            let texts = frame(&mut app, &ctx, vec![]);
+            let inputs = texts
+                .iter()
+                .find(|(text, _)| text == "Inputs")
+                .unwrap_or_else(|| panic!("{tool:?}: tool-specific Inputs tab: {texts:?}"))
+                .1
+                .center();
+            click(&mut app, &ctx, inputs);
+            let texts = frame(&mut app, &ctx, vec![]);
+            assert!(
+                texts.iter().any(|(text, _)| text == heading),
+                "{tool:?}: {texts:?}"
+            );
+            assert_eq!(
+                format!("{:?}", app.chart.drawings().drawings[0]),
+                before,
+                "visiting a page must not change defaults"
+            );
+            for (theme, width) in [Theme::light(), Theme::dark()]
+                .into_iter()
+                .flat_map(|theme| [320.0, 360.0].map(|width| (theme.clone(), width)))
+            {
+                let narrow = egui::Context::default();
+                egui_charts::theme::apply_to_egui(&narrow, &theme);
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 640.0));
+                let tabs = if tool == Tool::FibonacciRetracement {
+                    PropertiesTab::all().to_vec()
+                } else {
+                    vec![PropertiesTab::Inputs]
+                };
+                for tab in tabs {
+                    app.drawing_props.active_tab = tab;
+                    for pass in 0..3 {
+                        let mut output = narrow.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ui| app.show_dialogs(ui.ctx()),
+                        );
+                        output.textures_delta.clear();
+                        if pass > 0 {
+                            let area = narrow
+                                .memory(|memory| {
+                                    memory.area_rect(egui::Id::unique(Some("Drawing Properties")))
+                                })
+                                .unwrap();
+                            assert!(
+                                screen.contains_rect(area),
+                                "{tool:?}, {tab:?}: dialog exceeds the window: {area:?}"
+                            );
+                        }
+                        let mut footer = Vec::new();
+                        for shape in &output.shapes {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && matches!(
+                                    text.galley.job.text.as_str(),
+                                    "Apply" | "Cancel" | "Remove" | "Clone" | "Delete"
+                                )
+                            {
+                                let bounds =
+                                    egui::Rect::from_min_size(text.pos, text.galley.size());
+                                if matches!(
+                                    text.galley.job.text.as_str(),
+                                    "Apply" | "Cancel" | "Clone" | "Delete"
+                                ) {
+                                    footer.push(bounds);
+                                }
+                                assert!(
+                                    screen.left() <= bounds.left()
+                                        && screen.right() >= bounds.right(),
+                                    "{tool:?}: control outside narrow window: {bounds:?}"
+                                );
+                                assert!(
+                                    shape.clip_rect.left() <= bounds.left()
+                                        && shape.clip_rect.right() >= bounds.right(),
+                                    "{tool:?}: horizontally clipped control: {bounds:?}, clip: {:?}",
+                                    shape.clip_rect
+                                );
+                            }
+                        }
+                        for (index, bounds) in footer.iter().enumerate() {
+                            assert!(
+                                footer[index + 1..]
+                                    .iter()
+                                    .all(|other| !bounds.intersects(*other)),
+                                "{tool:?}: overlapping footer controls: {footer:?}"
+                            );
+                        }
+                        output.drop_without_applying_deltas();
+                    }
+                }
+            }
+            app.drawing_props.close();
+        }
+        app.chart.drawings_mut().drawings[0].tool_type = Tool::TrendLine;
+        app.open_drawing_props_for(7);
+        app.drawing_props.active_tab = PropertiesTab::Coordinates;
+        assert_eq!(app.drawing_props.coordinates.points[1].time, "00:03:00");
+        app.drawing_props.coordinates.points[1].price = "123.5".into();
+        app.drawing_props.coordinates.points[1].time = "00:02".into();
+        app.drawing_props.coordinates.points[0].price = "NaN".into();
+        frame(&mut app, &ctx, vec![]);
+        enter(&mut app, &ctx);
+        assert!(app.drawing_props.is_open, "invalid drafts remain editable");
+        assert_eq!(
+            app.chart.drawings().drawings[0].chart_points[1].price,
+            120.0
+        );
+        app.drawing_props.coordinates.points[0].price = "100".into();
+        enter(&mut app, &ctx);
+        assert!(
+            !app.drawing_props.is_open,
+            "{:?}",
+            frame(&mut app, &ctx, vec![])
+        );
+        assert_eq!(
+            app.chart.drawings().drawings[0].chart_points[1],
+            ChartPoint::new(1.5, 123.5)
+        );
+        assert!(app.chart.undo());
+        assert_eq!(
+            app.chart.drawings().drawings[0].chart_points[1],
+            ChartPoint::new(2.0, 120.0)
+        );
+        assert!(app.chart.redo());
+        app.open_drawing_props_for(7);
+        app.drawing_props.coordinates.points[1].price = "124.5".into();
+        // History can arrive while the draft is open. The timestamp stays at 120 seconds,
+        // now halfway between indices 2 and 3; untouched anchors must move with history too.
+        app.chart.set_data(
+            SeriesId::MAIN,
+            [-60, 0, 60, 180]
+                .map(|seconds| {
+                    Bar::new(
+                        Utc.timestamp_opt(seconds, 0).unwrap(),
+                        100.0,
+                        120.0,
+                        90.0,
+                        110.0,
+                        1.0,
+                    )
+                })
+                .to_vec(),
+        );
+        frame(&mut app, &ctx, vec![]);
+        enter(&mut app, &ctx);
+        assert_eq!(
+            app.chart.drawings().drawings[0].chart_points[1],
+            ChartPoint::new(2.5, 124.5)
+        );
+        assert_eq!(
+            app.chart.drawings().drawings[0].chart_points[0].bar_idx,
+            1.0
+        );
+        app.chart.drawings_mut().drawings[0].visible = false;
+        app.open_drawing_props_for(7);
+        app.drawing_props.props.line_width = 4.0;
+        let texts = frame(&mut app, &ctx, vec![]);
+        let save = texts
+            .iter()
+            .find(|(text, _)| text == "Save as default for this tool")
+            .unwrap()
+            .1
+            .center();
+        click(&mut app, &ctx, save);
+        enter(&mut app, &ctx);
+        app.chart.drawings_mut().start_drawing_with_coords(
+            Tool::TrendLine,
+            egui::pos2(0.0, 100.0),
+            |x| x,
+            |y| y as f64,
+        );
+        assert_eq!(
+            app.chart
+                .drawings()
+                .curr_drawing
+                .as_ref()
+                .unwrap()
+                .stroke_width,
+            4.0
+        );
+        assert_eq!(
+            app.chart
+                .drawings()
+                .curr_drawing
+                .as_ref()
+                .unwrap()
+                .chart_points
+                .len(),
+            1,
+            "defaults cannot copy anchors"
+        );
+        assert!(
+            app.chart.drawings().curr_drawing.as_ref().unwrap().visible,
+            "a hidden source must not make new drawings invisible"
+        );
+        assert!(!app.chart.drawings().drawings[0].visible);
+        app.chart.drawings_mut().cancel_curr_drawing();
+        app.chart.drawings_mut().start_drawing_with_coords(
+            Tool::HorizontalLine,
+            egui::pos2(0.0, 100.0),
+            |x| x,
+            |y| y as f64,
+        );
+        assert_eq!(
+            app.chart.drawings().drawings.last().unwrap().stroke_width,
+            2.0,
+            "defaults belong to one tool"
+        );
+    }
+
     /// Existing drawing settings survive opening and applying the dialog, and the toolbar
     /// reflects locks changed through other drawing controls rather than an optimistic toggle.
     #[test]
@@ -3452,18 +3756,19 @@ mod tests {
         assert_eq!(props.font_size, 24.0);
         assert!(matches!(props.line_style, DrawingLineStyle::Dotted));
         assert!(props.extend_left);
-        app.apply_drawing_props(
-            DrawingId(7),
+        assert!(
             DrawingProps {
                 font_size: 40.0,
                 ..props.clone()
-            },
+            }
+            .apply_to_chart(DrawingId(7), &mut app.chart)
+            .is_err()
         );
         assert_eq!(app.chart.drawings().drawings[0].font_size, 24.0);
         app.chart
             .drawings_mut()
             .edit_drawing(7, |d| d.locked = false);
-        app.apply_drawing_props(DrawingId(7), props);
+        props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
         let mut second = app.chart.drawings().drawings[0].clone();
         second.id = 8;
         app.chart.drawings_mut().drawings.push(second);
@@ -3475,7 +3780,9 @@ mod tests {
             fill_enabled: false,
             ..app.drawing_props.props.clone()
         };
-        app.apply_drawing_props(DrawingId(7), changed);
+        changed
+            .apply_to_chart(DrawingId(7), &mut app.chart)
+            .unwrap();
         let saved = &app.chart.drawings().drawings[0];
         assert!(saved.timeframe_visibility.is_visible_on("4h"));
         assert!(!saved.timeframe_visibility.is_visible_on("1h"));
@@ -3515,6 +3822,92 @@ mod tests {
         })
         .drop_without_applying_deltas();
         assert!(!app.drawing_toolbar.state.lock_all);
+        use egui_charts::drawings::{
+            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, RegressionTrendConfig,
+            VolumeProfileConfig,
+        };
+        for tool in [
+            DrawingToolType::FibonacciRetracement,
+            DrawingToolType::Pitchfork,
+            DrawingToolType::GannBox,
+            DrawingToolType::LongPos,
+            DrawingToolType::FixedRangeVolumeProfile,
+            DrawingToolType::RegressionTrend,
+            DrawingToolType::ParallelChannel,
+        ] {
+            app.chart.drawings_mut().drawings.clear();
+            app.chart
+                .drawings_mut()
+                .drawings
+                .push(Drawing::new(7, tool));
+            let mut peer = Drawing::new(8, DrawingToolType::TrendLine);
+            peer.chart_points
+                .push(egui_charts::drawings::ChartPoint::new(5.0, 75.0));
+            app.chart.drawings_mut().drawings.push(peer);
+            app.chart.drawings_mut().select_drawings([7, 8]);
+            let mut props =
+                DrawingProps::from_drawing(&app.chart.drawings().drawings[0], &app.chart);
+            let settings = &mut props.tool_settings.as_mut().unwrap().settings;
+            settings.fib_config = Some(FibonacciConfig {
+                reverse: true,
+                ..Default::default()
+            });
+            settings.pitchfork = Some(PitchforkConfig {
+                background_opacity: 75,
+                ..Default::default()
+            });
+            settings.gann = Some(GannConfig {
+                price_levels: vec![0.0, 0.5, 1.0],
+                time_levels: vec![0.25, 0.75],
+            });
+            settings.position_size = Some(PositionSize::RiskPercent {
+                account_size: 10_000.0,
+                percent: 1.0,
+            });
+            settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
+            settings.regression_trend = RegressionTrendConfig::new(3.0);
+            settings.channel_midline = true;
+            let expected = format!("{:?}", settings.fib_config);
+            props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
+            let saved = &app.chart.drawings().drawings[0];
+            assert_eq!(format!("{:?}", saved.fib_config), expected);
+            assert_eq!(saved.pitchfork.as_ref().unwrap().background_opacity, 75);
+            assert_eq!(saved.gann.as_ref().unwrap().time_levels, [0.25, 0.75]);
+            assert_eq!(
+                saved.position_size.unwrap().quantity(100.0, 98.0),
+                Some(50.0)
+            );
+            assert_eq!(saved.volume_profile.unwrap().rows(), 48);
+            assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
+            assert!(saved.channel_midline);
+            assert!(app.chart.drawings().drawings[1].fib_config.is_none());
+            assert_eq!(app.chart.drawings().drawings[1].chart_points[0].price, 75.0);
+            assert!(app.chart.undo());
+            assert!(app.chart.drawings().drawings[0].fib_config.is_none());
+            assert!(app.chart.redo());
+            app.chart
+                .drawings_mut()
+                .edit_drawing(7, |d| d.locked = true);
+            props.font_size = 18.0;
+            props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
+            assert_eq!(app.chart.drawings().drawings[0].font_size, 12.0);
+            assert_eq!(app.chart.drawings().drawings[1].font_size, 18.0);
+            // A malformed ratio cannot partially change common style or another selected tool.
+            props
+                .tool_settings
+                .as_mut()
+                .unwrap()
+                .settings
+                .fib_config
+                .as_mut()
+                .unwrap()
+                .levels[0]
+                .value = f32::NAN;
+            props.line_width = 9.0;
+            assert!(props.apply_to_chart(DrawingId(7), &mut app.chart).is_err());
+            assert_eq!(app.chart.drawings().drawings[0].stroke_width, 2.0);
+            assert_eq!(app.chart.drawings().drawings[1].stroke_width, 2.0);
+        }
     }
 
     #[test]
