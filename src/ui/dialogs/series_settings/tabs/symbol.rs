@@ -269,6 +269,15 @@ impl SymbolTab {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 Self::optional_color_picker(ui, up, settings.bullish_color);
                 Self::optional_color_picker(ui, down, settings.bearish_color);
+                for (color, default, label) in [
+                    (up, settings.bullish_color, "Custom up"),
+                    (down, settings.bearish_color, "Custom down"),
+                ] {
+                    let mut custom = color.is_some();
+                    if ui.checkbox(&mut custom, label).changed() {
+                        *color = custom.then_some(color.unwrap_or(default));
+                    }
+                }
             });
             ui.end_row();
         }
@@ -289,13 +298,10 @@ impl SymbolTab {
     }
 
     fn optional_color_picker(ui: &mut Ui, color: &mut Option<Color32>, default: Color32) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            let mut custom = color.is_some();
-            ui.checkbox(&mut custom, "");
-            let mut selected = color.unwrap_or(default);
-            ui.add_enabled_ui(custom, |ui| Self::color_picker(ui, &mut selected));
-            *color = custom.then_some(selected);
-        });
+        let mut selected = color.unwrap_or(default);
+        ui.add_enabled_ui(color.is_some(), |ui| Self::color_picker(ui, &mut selected));
+        if color.is_some() {
+            *color = Some(selected);
+        }
     }
 }
