@@ -8,7 +8,9 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
 use egui::{Pos2, Rect, Sense, Ui, Vec2};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+type PanelContent = Box<dyn FnMut(&mut Ui)>;
 
 /// Section grouping for widget bar icons
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,7 +88,8 @@ impl Default for WidgetBarConfig {
     }
 }
 
-/// A host-supplied widget entry. The host renders its panel after receiving its id.
+/// A host-supplied widget entry. Register a content callback with [`WidgetBar::register_panel`],
+/// or render its panel yourself after receiving its id.
 #[derive(Clone)]
 pub struct WidgetBarWidget {
     /// Stable host id, unique within the bar.
@@ -122,6 +125,7 @@ pub struct WidgetBar {
     pub notification_counts: std::collections::HashMap<RightBarIcon, u32>,
     /// Controls the host hid.
     hidden: HashSet<Control>,
+    panels: HashMap<u64, PanelContent>,
 }
 
 /// The host control that hides `icon`, if any.
@@ -148,6 +152,7 @@ impl Default for WidgetBar {
             active_widget: None,
             notification_counts: std::collections::HashMap::new(),
             hidden: HashSet::new(),
+            panels: HashMap::new(),
         }
     }
 }
@@ -160,6 +165,70 @@ impl WidgetBar {
     pub fn with_config(mut self, config: WidgetBarConfig) -> Self {
         self.config = config;
         self
+    }
+
+    /// Register a host panel, using the widget tooltip as its title and accessible name.
+    ///
+    /// Replacing an existing id preserves its position in the strip and its active state.
+    /// The callback may capture host state and runs only while this panel is open. Call
+    /// [`Self::show_panel`] after [`Self::show`] and before the central chart panel.
+    /// Hosts own the contents, data sources and persistence.
+    ///
+    /// ```no_run
+    /// use egui_charts::icons::icons;
+    /// use egui_charts::ui::widget_bar::{WidgetBar, WidgetBarSection, WidgetBarWidget};
+    /// let mut bar = WidgetBar::new();
+    /// let mut notes = String::new();
+    /// bar.register_panel(WidgetBarWidget {
+    ///     id: 42, icon: icons::WATCHLIST, tooltip: "Session notes".into(),
+    ///     section: WidgetBarSection::Top,
+    /// }, move |ui| { ui.text_edit_multiline(&mut notes); });
+    /// // In each frame: bar.show(rail_ui); bar.show_panel(root_ui); then show the chart.
+    /// ```
+    pub fn register_panel(
+        &mut self,
+        widget: WidgetBarWidget,
+        content: impl FnMut(&mut Ui) + 'static,
+    ) {
+        self.panels.insert(widget.id, Box::new(content));
+        if let Some(existing) = self.widgets.iter_mut().find(|entry| entry.id == widget.id) {
+            *existing = widget;
+        } else {
+            self.widgets.push(widget);
+        }
+    }
+
+    /// Show the active registered panel beside the strip, with a themed title and close button.
+    ///
+    /// Clicking the same strip entry or the close button closes it. Built-in selections clear
+    /// the active host panel. Widget entries without a registered callback remain host-rendered.
+    /// Panel width is resizable and retained by egui under the widget's stable id.
+    pub fn show_panel(&mut self, ui: &mut Ui) {
+        let Some(id) = self.active_widget else {
+            return;
+        };
+        let Some(widget) = self.widgets.iter().find(|widget| widget.id == id) else {
+            self.active_widget = None;
+            return;
+        };
+        let Some(content) = self.panels.get_mut(&id) else {
+            return;
+        };
+        let mut close = false;
+        egui::Panel::right(ui.scope_id().with(("host_widget_panel", id)))
+            .resizable(true)
+            .default_size(DESIGN_TOKENS.sizing.toolbar.right_panel_width)
+            .show(ui, |ui| {
+                crate::ui_kit::PanelHeader::new(&widget.tooltip).show(ui, |ui| {
+                    close = crate::ui_kit::buttons::dialog_close_button(ui).clicked();
+                });
+                if !close {
+                    content(ui);
+                }
+            });
+        if close {
+            self.active_widget = None;
+        }
     }
 
     /// Shows or hides `control`: Alerts (the Alerts icon). The bar ignores the other controls.
@@ -409,6 +478,137 @@ mod tests {
     use super::*;
     use crate::theme::{Theme, apply_to_egui};
     use egui::{Context, Event, PointerButton, RawInput, Shape};
+
+    #[test]
+    fn registered_panels_render_toggle_replace_and_close() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = egui::Context::default();
+            egui_extras::install_image_loaders(&ctx);
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+            let mut bar = WidgetBar::new();
+            let widget = WidgetBarWidget {
+                id: 42,
+                icon: embedded_icons::WATCHLIST,
+                tooltip: "Host notes".into(),
+                section: WidgetBarSection::Top,
+            };
+            let captured = calls.clone();
+            bar.register_panel(widget.clone(), move |ui| {
+                captured.set(captured.get() + 1);
+                ui.label("Host panel content");
+            });
+            let paint = |bar: &mut WidgetBar, events| {
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::Panel::right("rail")
+                            .exact_size(45.0)
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| {
+                                bar.show(ui);
+                            });
+                        bar.show_panel(ui);
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            ui.label("Chart area");
+                        });
+                    },
+                );
+                let text = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let icons = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Rect(rect) if rect.brush.is_some() => Some(rect.rect.center()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                output.drop_without_applying_deltas();
+                (text, icons)
+            };
+            let click = |bar: &mut WidgetBar, pos| {
+                paint(bar, vec![Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    paint(
+                        bar,
+                        vec![Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                }
+            };
+            paint(&mut bar, vec![]);
+            let (_, icons) = paint(&mut bar, vec![]);
+            assert_eq!(calls.get(), 0, "closed callbacks do not run");
+            let host = icons[0];
+            let alerts = icons[1];
+            click(&mut bar, host);
+            let (text, _) = paint(&mut bar, vec![]);
+            assert!(text.iter().any(|label| label == "Host panel content"));
+            assert!(calls.get() > 0);
+            assert_eq!((bar.active_widget, bar.active_icon), (Some(42), None));
+            click(&mut bar, host);
+            let count = calls.get();
+            assert!(
+                !paint(&mut bar, vec![])
+                    .0
+                    .iter()
+                    .any(|label| label == "Host panel content")
+            );
+            assert_eq!(calls.get(), count);
+            click(&mut bar, host);
+            click(&mut bar, alerts);
+            assert_eq!(
+                (bar.active_widget, bar.active_icon),
+                (None, Some(RightBarIcon::Alerts))
+            );
+            let count = calls.get();
+            paint(&mut bar, vec![]);
+            assert_eq!(calls.get(), count);
+            click(&mut bar, host);
+            bar.register_panel(widget, |ui| {
+                ui.label("Replacement content");
+            });
+            assert_eq!(
+                bar.widgets.len(),
+                1,
+                "replacement retains its strip position"
+            );
+            assert_eq!(bar.active_widget, Some(42));
+            let (text, icons) = paint(&mut bar, vec![]);
+            assert!(text.iter().any(|label| label == "Replacement content"));
+            assert!(!text.iter().any(|label| label == "Host panel content"));
+            click(&mut bar, *icons.last().expect("panel close icon"));
+            assert_eq!(bar.active_widget, None);
+            assert!(
+                !paint(&mut bar, vec![])
+                    .0
+                    .iter()
+                    .any(|label| label == "Replacement content")
+            );
+            bar.active_widget = Some(42);
+            bar.widgets.clear();
+            paint(&mut bar, vec![]);
+            assert_eq!(
+                bar.active_widget, None,
+                "removing metadata closes the panel"
+            );
+        }
+    }
 
     /// Host entries share the rail's grid and report their ids, without leaving a built-in
     /// entry selected. Clicks stay with the pressed id, and an active entry toggles closed.

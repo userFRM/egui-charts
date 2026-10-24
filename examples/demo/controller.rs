@@ -293,6 +293,24 @@ impl DemoApp {
                 tooltip: "Data Window".into(),
                 section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
             });
+        let mut notes = String::new();
+        widget_bar.register_panel(
+            egui_charts::ui::widget_bar::WidgetBarWidget {
+                id: 2,
+                icon: egui_charts::icons::icons::TEXT,
+                tooltip: "Session notes".into(),
+                section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
+            },
+            move |ui| {
+                ui.label("Host panel · notes stay in this session");
+                ui.add(
+                    egui::TextEdit::multiline(&mut notes)
+                        .hint_text("Write your research notes…")
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(12),
+                );
+            },
+        );
         if let Some(preferences) = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "interval_preferences"))
@@ -1401,8 +1419,11 @@ impl DemoApp {
             Some(SidePanel::Alerts) => Some(RightBarIcon::Alerts),
             _ => None,
         };
-        self.widget_bar.active_widget =
-            (self.open_panel == Some(SidePanel::DataWindow)).then_some(1);
+        if self.open_panel == Some(SidePanel::DataWindow) {
+            self.widget_bar.active_widget = Some(1);
+        } else if self.open_panel.is_some() || self.widget_bar.active_widget == Some(1) {
+            self.widget_bar.active_widget = None;
+        }
         egui::Panel::right("widget_bar")
             .resizable(false)
             .exact_size(49.0)
@@ -1422,6 +1443,7 @@ impl DemoApp {
                             Some(SidePanel::DataWindow)
                         };
                     }
+                    WidgetBarAction::WidgetClicked(_) => self.open_panel = None,
                     _ => {}
                 }
             });
@@ -1446,6 +1468,7 @@ impl DemoApp {
     }
 
     fn show_side_panel(&mut self, ui: &mut egui::Ui) {
+        self.widget_bar.show_panel(ui);
         let Some(which) = self.open_panel else {
             return;
         };
