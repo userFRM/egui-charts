@@ -12,7 +12,7 @@ use egui::{Context, Id, Pos2};
 /// Distance between the pointer and the menu corner, enough to clear the handle under the
 /// pointer: half the 8 px handle plus 2 px.
 // shortcut: assumes the default handle size, upgrade when the hit result carries the handle rect.
-const DRAWING_MENU_OFFSET: f32 = 6.0;
+pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 
 /// Actions from the drawing context menu
 #[derive(Debug, Clone, PartialEq)]

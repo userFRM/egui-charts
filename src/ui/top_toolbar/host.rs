@@ -28,7 +28,8 @@ pub struct ToolbarEntry {
     pub label: String,
     /// Optional icon using the built-in size and tint.
     pub icon: Option<&'static Icon>,
-    /// Dropdown contents in display order. An empty list makes this entry a button.
+    /// Dropdown choices in display order. Only top-level entries open dropdowns.
+    /// An empty list makes this entry a button.
     pub items: Vec<ToolbarEntry>,
     /// Whether to show this entry. Hidden entries take no space and emit no actions.
     pub visible: bool,
@@ -75,29 +76,21 @@ impl ToolbarEntry {
             } else {
                 egui::Popup::menu(&response).show(|ui| {
                     ui.set_width(crate::tokens::DESIGN_TOKENS.sizing.dialog.submenu_width);
-                    self.show_items(ui, action);
+                    for item in self.items.iter().filter(|item| item.visible) {
+                        ui.push_id(&item.id, |ui| {
+                            let mut content = LabelContent::new(&item.label);
+                            if let Some(icon) = item.icon {
+                                content = content.with_icon(icon);
+                            }
+                            if ListItem::new().show(ui, content).clicked() {
+                                *action = TopToolbarAction::Host(item.id.clone());
+                                ui.close();
+                            }
+                        });
+                    }
                 });
             }
         });
-    }
-
-    fn show_items(&self, ui: &mut Ui, action: &mut TopToolbarAction) {
-        for item in self.items.iter().filter(|item| item.visible) {
-            ui.push_id(&item.id, |ui| {
-                if item.items.is_empty() {
-                    let mut content = LabelContent::new(&item.label);
-                    if let Some(icon) = item.icon {
-                        content = content.with_icon(icon);
-                    }
-                    if ListItem::new().show(ui, content).clicked() {
-                        *action = TopToolbarAction::Host(item.id.clone());
-                        ui.close();
-                    }
-                } else {
-                    ui.menu_button(&item.label, |ui| item.show_items(ui, action));
-                }
-            });
-        }
     }
 }
 
@@ -129,7 +122,7 @@ mod tests {
             }
         }
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for width in [600.0, 1440.0] {
+            for width in [320.0, 600.0, 1440.0] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut toolbar = TopToolbar::new();
@@ -177,9 +170,23 @@ mod tests {
                 let at = |labels: &[(String, Pos2)], name: &str| {
                     labels.iter().find(|(label, _)| label == name).unwrap().1
                 };
+                let interval = at(&labels, "1D");
+                if width == 320.0 {
+                    frame(vec![Event::PointerMoved(Pos2::new(150.0, interval.y))]);
+                    frame(vec![Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: Vec2::new(-2000.0, 0.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Wheel,
+                        modifiers: Default::default(),
+                    }]);
+                    for _ in 0..30 {
+                        frame(vec![]);
+                    }
+                }
+                let (_, labels) = frame(vec![]);
                 let research = at(&labels, "Research");
                 let tools = at(&labels, "Host tools");
-                let interval = at(&labels, "1D");
                 assert!(
                     (research.y - interval.y).abs() <= 1.0,
                     "host buttons share the toolbar centre: {research:?} versus {interval:?}"

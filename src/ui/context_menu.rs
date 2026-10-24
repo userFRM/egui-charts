@@ -12,6 +12,7 @@ use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::{Theme, ThemeExt};
 use crate::ui::Control;
 use crate::ui::app_state::set_control_visible;
+use crate::ui::dialogs::drawing_context_menu::DRAWING_MENU_OFFSET;
 use crate::ui::dialogs::{DrawingContextMenu, SeriesContextMenu};
 use crate::widget::{Chart, RightClickTarget};
 
@@ -867,7 +868,7 @@ impl ChartMenus {
             let (pos, gap) = match context.target {
                 RightClickTarget::Element { pos, .. }
                 | RightClickTarget::Background { pos, .. } => (pos, POINTER_GAP),
-                RightClickTarget::Drawing { pos, .. } => (pos, 6.0),
+                RightClickTarget::Drawing { pos, .. } => (pos, DRAWING_MENU_OFFSET),
             };
             let entries = self.build_menu_items(chart.shortcuts(), context);
             if let Some(picked) = show_menu(
@@ -1028,6 +1029,31 @@ mod tests {
                     let labels = frame(&mut menus, &mut chart);
                     assert_eq!(!labels.is_empty(), visible, "{labels:?}");
                     assert_eq!(menus.chart.is_open() || menus.series.is_open(), visible);
+                    if !visible {
+                        menus
+                            .host_entries
+                            .push(HostMenuEntry::new("host-only", "Host only"));
+                        chart.right_click = Some(RightClickTarget::Background {
+                            pos: Pos2::new(30.0, 30.0),
+                            price: 105.0,
+                        });
+                        frame(&mut menus, &mut chart);
+                        assert!(
+                            frame(&mut menus, &mut chart)
+                                .iter()
+                                .any(|label| label == "Host only")
+                        );
+                        assert!(
+                            matches!(
+                                menus
+                                    .build_menu_items(chart.shortcuts(), menus.context.unwrap())
+                                    .first(),
+                                Some(MenuEntry::Item(_))
+                            ),
+                            "host-only menus have no leading separator"
+                        );
+                        menus.host_entries.clear();
+                    }
                 }
                 menus.set_control_visible(Control::Settings, false);
                 menus.set_control_visible(Control::ObjectTree, false);

@@ -269,6 +269,7 @@ impl TopToolbar {
     /// The menu slot is 48 px wide. Keep host actions compact; their measured width is
     /// reserved before built-in controls compact or move into overflow. The closures
     /// handle their own responses and may open menus or return actions to the host.
+    /// The strip scrolls horizontally when its remaining controls cannot fit.
     pub fn show_with_slots(
         &mut self,
         ui: &mut Ui,
@@ -276,55 +277,63 @@ impl TopToolbar {
         menu: impl FnOnce(&mut Ui),
         actions: impl FnOnce(&mut Ui),
     ) -> TopToolbarAction {
-        ui.horizontal(|ui| {
-            ui.set_height(self.config.height);
-            ui.spacing_mut().item_spacing.x = 0.0;
-            if !self.host_hidden.contains(&Control::Menu) {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(48.0, self.config.height),
-                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                    menu,
-                );
-            }
-            let width_id = ui.scope_id().with("host_actions_width");
-            let actions_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
-            let action = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(
-                        (ui.available_width() - actions_width).max(0.0),
-                        self.config.height,
-                    ),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| self.show_contents_desktop(ui, app_state.active_symbol()),
-                )
-                .inner;
-            ui.add_space((ui.available_width() - actions_width).max(0.0));
-            let mut host_action = TopToolbarAction::None;
-            let width = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), self.config.height),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        for entry in &self.host_entries {
-                            entry.show(ui, &mut host_action);
-                        }
-                        actions(ui);
-                    },
-                )
-                .response
-                .rect
-                .width();
-            if (width - actions_width).abs() > 0.5 {
-                ui.data_mut(|d| d.insert_temp(width_id, width));
-                ui.ctx().request_discard("Host actions changed width");
-            }
-            if host_action != TopToolbarAction::None {
-                host_action
-            } else {
-                action
-            }
-        })
-        .inner
+        let width = ui.available_width();
+        egui::ScrollArea::horizontal()
+            .id_salt("top_toolbar")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.set_width(width);
+                ui.horizontal(|ui| {
+                    ui.set_height(self.config.height);
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if !self.host_hidden.contains(&Control::Menu) {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(48.0, self.config.height),
+                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                            menu,
+                        );
+                    }
+                    let width_id = ui.scope_id().with("host_actions_width");
+                    let actions_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
+                    let action = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(
+                                (ui.available_width() - actions_width).max(0.0),
+                                self.config.height,
+                            ),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| self.show_contents_desktop(ui, app_state.active_symbol()),
+                        )
+                        .inner;
+                    ui.add_space((ui.available_width() - actions_width).max(0.0));
+                    let mut host_action = TopToolbarAction::None;
+                    let width = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), self.config.height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                for entry in &self.host_entries {
+                                    entry.show(ui, &mut host_action);
+                                }
+                                actions(ui);
+                            },
+                        )
+                        .response
+                        .rect
+                        .width();
+                    if (width - actions_width).abs() > 0.5 {
+                        ui.data_mut(|d| d.insert_temp(width_id, width));
+                        ui.ctx().request_discard("Host actions changed width");
+                    }
+                    if host_action != TopToolbarAction::None {
+                        host_action
+                    } else {
+                        action
+                    }
+                })
+                .inner
+            })
+            .inner
     }
 
     fn show_menu(ui: &mut Ui, action: &mut TopToolbarAction, visible: [bool; 2]) {
@@ -836,7 +845,12 @@ mod tests {
                                 text.galley.size().x
                             );
                         }
-                        egui::Shape::Rect(rect) if rect.rect.height() >= 28.0 => {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.height() >= 28.0
+                                && (rect.fill != egui::Color32::TRANSPARENT
+                                    || rect.stroke.width > 0.0
+                                    || rect.brush.is_some()) =>
+                        {
                             assert!(
                                 rect.rect.right() <= host_rect.left() || rect.rect == host_rect,
                                 "control {:?} overlaps host {:?}",

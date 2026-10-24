@@ -490,7 +490,12 @@ mod tests {
 
     #[test]
     fn registered_panels_render_toggle_replace_and_close() {
-        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        for (theme, width) in [
+            (Theme::light(), 320.0),
+            (Theme::light(), 800.0),
+            (Theme::dark(), 320.0),
+            (Theme::dark(), 800.0),
+        ] {
             let ctx = egui::Context::default();
             egui_extras::install_image_loaders(&ctx);
             crate::theme::apply_to_egui(&ctx, &theme);
@@ -510,7 +515,7 @@ mod tests {
             let paint = |bar: &mut WidgetBar, events| {
                 let output = ctx.run_ui(
                     RawInput {
-                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))),
                         events,
                         ..Default::default()
                     },
@@ -601,7 +606,9 @@ mod tests {
             let (text, icons) = paint(&mut bar, vec![]);
             assert!(text.iter().any(|label| label == "Replacement content"));
             assert!(!text.iter().any(|label| label == "Host panel content"));
-            click(&mut bar, *icons.last().expect("panel close icon"));
+            let close = *icons.last().expect("panel close icon");
+            assert!(close.x >= 0.0 && close.x < width, "close stays reachable");
+            click(&mut bar, close);
             assert_eq!(bar.active_widget, None);
             assert!(
                 !paint(&mut bar, vec![])
