@@ -37,7 +37,7 @@ mod market;
 pub(crate) mod merge;
 mod resample;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel};
-pub use market::{NewsQuery, NewsStory};
+pub use market::{CalendarEvent, CalendarKind, CalendarQuery, Importance, NewsQuery, NewsStory};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -139,6 +139,14 @@ pub trait Datafeed: MaybeSend + 'static {
     /// Up to `query.limit` stories, newest first, for the news and highlights panels. Answer
     /// [`FeedError::NotSupported`] (the default) to have the panels say the feed has none.
     fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
+        let _ = query;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// The events of one calendar that pass `query`'s filters, in time order, for the calendar
+    /// panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the feed has
+    /// none.
+    fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));
     }

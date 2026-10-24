@@ -1,8 +1,10 @@
 //! Synthetic answers for the market panels, derived from the symbol catalog so every symbol gets
 //! stable, distinct content. A host answers these from its own data vendors.
 
-use chrono::{DateTime, DurationRound, TimeDelta, Utc};
-use egui_charts::data::{NewsQuery, NewsStory};
+use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, Utc, Weekday};
+use egui_charts::data::{
+    CalendarEvent, CalendarKind, CalendarQuery, Importance, NewsQuery, NewsStory,
+};
 
 use crate::sampledata::DemoSymbol;
 
@@ -90,4 +92,112 @@ pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
     stories.sort_by(|a, b| b.time.cmp(&a.time));
     stories.truncate(query.limit);
     stories
+}
+
+/// The countries the demo calendar knows.
+pub(super) const COUNTRIES: [&str; 4] = ["US", "EU", "GB", "JP"];
+
+/// Economic releases: country, release, importance, UTC hour, and the base value in percent.
+const RELEASES: &[(&str, &str, Importance, u32, f64)] = &[
+    ("US", "CPI (YoY)", Importance::High, 12, 3.1),
+    (
+        "US",
+        "Initial jobless claims (K)",
+        Importance::Medium,
+        12,
+        221.0,
+    ),
+    ("EU", "Manufacturing PMI", Importance::Medium, 8, 47.6),
+    ("GB", "Retail sales (MoM)", Importance::Low, 6, 0.3),
+    (
+        "JP",
+        "Industrial production (YoY)",
+        Importance::Low,
+        23,
+        1.2,
+    ),
+    ("US", "Interest rate decision", Importance::High, 18, 5.25),
+];
+
+/// Companies listing in the demo IPO calendar, with their offer price.
+const OFFERINGS: &[(&str, &str, f64)] = &[
+    ("NWRB", "Northwind Robotics", 18.0),
+    ("CLRW", "Clearwater Energy", 24.5),
+    ("FBLK", "Fieldblock Software", 31.0),
+];
+
+/// The synthetic events of `query`'s calendar on the weekdays of its range, filtered as asked.
+/// Released figures show for events before `now`.
+pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<CalendarEvent> {
+    let mut events = Vec::new();
+    let mut day = query.from.date_naive();
+    while day.and_time(NaiveTime::MIN).and_utc() < query.to {
+        let n = day.num_days_from_ce() as usize;
+        if !matches!(day.weekday(), Weekday::Sat | Weekday::Sun) {
+            let at = |hour: u32| day.and_hms_opt(hour, 30, 0).unwrap().and_utc();
+            let id = |kind: &str, i: usize| format!("{kind}-{day}-{i}");
+            match query.kind {
+                CalendarKind::Economic => {
+                    for i in 0..3 {
+                        let (country, title, importance, hour, base) =
+                            RELEASES[(n + i * 2) % RELEASES.len()];
+                        let mut event =
+                            CalendarEvent::new(id("eco", i), query.kind, at(hour), title);
+                        let drift = ((n * 7 + i) % 5) as f64 / 10.0 - 0.2;
+                        event.country = country.into();
+                        event.importance = Some(importance);
+                        event.forecast = Some(format!("{base:.1}"));
+                        event.prior = Some(format!("{:.1}", base - drift / 2.0));
+                        event.actual = (event.time < now).then(|| format!("{:.1}", base + drift));
+                        events.push(event);
+                    }
+                }
+                CalendarKind::Earnings | CalendarKind::Dividends => {
+                    let stocks: Vec<_> = DemoSymbol::catalog()
+                        .iter()
+                        .filter(|spec| spec.exchange == "NASDAQ")
+                        .collect();
+                    let spec = stocks[n % stocks.len()];
+                    let dividends = query.kind == CalendarKind::Dividends;
+                    let mut event = CalendarEvent::new(
+                        id(if dividends { "div" } else { "eps" }, 0),
+                        query.kind,
+                        at(if dividends { 13 } else { 20 }),
+                        spec.company_name,
+                    );
+                    let eps = spec.start_price / 120.0;
+                    event.country = "US".into();
+                    event.symbol = Some(spec.symbol.into());
+                    if dividends {
+                        event.actual = Some(format!("{:.2}", eps / 4.0));
+                        event.prior = Some(format!("{:.2}", eps / 4.2));
+                    } else {
+                        event.forecast = Some(format!("{eps:.2}"));
+                        event.prior = Some(format!("{:.2}", eps * 0.94));
+                        event.actual = (event.time < now).then(|| format!("{:.2}", eps * 1.03));
+                    }
+                    events.push(event);
+                }
+                CalendarKind::Ipos if n % 2 == 0 => {
+                    let (symbol, name, price) = OFFERINGS[n / 2 % OFFERINGS.len()];
+                    let mut event = CalendarEvent::new(id("ipo", 0), query.kind, at(14), name);
+                    event.country = "US".into();
+                    event.symbol = Some(symbol.into());
+                    event.forecast = Some(format!("{price:.2}"));
+                    events.push(event);
+                }
+                _ => {}
+            }
+        }
+        day = day.succ_opt().unwrap();
+    }
+    events.retain(|event| {
+        (query.countries.is_empty() || query.countries.contains(&event.country))
+            && query
+                .importance
+                .is_none_or(|least| event.importance >= Some(least))
+            && event.time >= query.from
+    });
+    events.sort_by_key(|event| event.time);
+    events
 }

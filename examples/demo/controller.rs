@@ -70,8 +70,8 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
 };
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{
-    NewsAction, NewsPanel, SymbolDetailsPanel, TimeAndSalesPanel, Watchlist, WatchlistAction,
-    WatchlistPanel, WidgetBarSection, WidgetBarWidget,
+    CalendarAction, CalendarPanel, NewsAction, NewsPanel, SymbolDetailsPanel, TimeAndSalesPanel,
+    Watchlist, WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget,
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
@@ -126,16 +126,18 @@ enum SidePanel {
     Watchlist,
     TimeAndSales,
     Highlights,
+    Calendar,
     News,
 }
 
 impl SidePanel {
     /// Panels the demo renders behind a built-in rail entry, with the entry.
-    const BUILT_IN: [(SidePanel, RightBarIcon); 5] = [
+    const BUILT_IN: [(SidePanel, RightBarIcon); 6] = [
         (SidePanel::Watchlist, RightBarIcon::Watchlist),
         (SidePanel::Alerts, RightBarIcon::Alerts),
         (SidePanel::ObjectTree, RightBarIcon::ObjectTree),
         (SidePanel::Highlights, RightBarIcon::Highlights),
+        (SidePanel::Calendar, RightBarIcon::Calendar),
         (SidePanel::News, RightBarIcon::News),
     ];
 
@@ -283,6 +285,7 @@ pub struct DemoApp {
     // Synthetic highlights and headlines from the live feed.
     highlights: NewsPanel,
     news: NewsPanel,
+    calendar: CalendarPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -483,6 +486,7 @@ impl DemoApp {
             symbol_details: SymbolDetailsPanel::new(),
             highlights: NewsPanel::highlights(),
             news: NewsPanel::new(),
+            calendar: CalendarPanel::new(),
             replay: None,
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
@@ -523,6 +527,9 @@ impl DemoApp {
         app.symbol_details.set_feed(app.live.clone());
         app.highlights.set_feed(app.live.clone());
         app.news.set_feed(app.live.clone());
+        app.calendar.set_feed(app.live.clone());
+        app.calendar
+            .set_countries(feeds::COUNTRIES.iter().map(|code| code.to_string()));
         app.symbol_details.set_storage(app.template_storage.clone());
         app.apply_session();
         app.restore_drawings();
@@ -1022,6 +1029,7 @@ impl eframe::App for DemoApp {
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);
+        self.calendar.poll(&ctx);
         self.trading.poll(&ctx, &mut self.toasts);
         // The watchlist opens beside the chart by default, but a compact window starts with the
         // chart alone.
@@ -1613,6 +1621,11 @@ impl DemoApp {
                     let action = self.highlights.show(ui);
                     self.handle_news(ui.ctx(), action);
                 }
+                SidePanel::Calendar => {
+                    if let CalendarAction::SelectSymbol(symbol) = self.calendar.show(ui) {
+                        self.open_catalog_symbol(&symbol);
+                    }
+                }
                 SidePanel::News => {
                     let action = self.news.show(ui);
                     self.handle_news(ui.ctx(), action);
@@ -1782,18 +1795,21 @@ impl DemoApp {
             .unwrap_or_default();
     }
 
+    /// Shows `symbol` on the chart when the demo has data for it.
+    fn open_catalog_symbol(&mut self, symbol: &str) {
+        if DemoSymbol::catalog()
+            .iter()
+            .any(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
+        {
+            self.switch_symbol(symbol);
+        } else {
+            self.notify(format!("{symbol} has no synthetic data in this demo"));
+        }
+    }
+
     fn show_watchlist(&mut self, ui: &mut egui::Ui) {
         match self.watchlist.show(ui) {
-            WatchlistAction::SelectSymbol(symbol) => {
-                if DemoSymbol::catalog()
-                    .iter()
-                    .any(|spec| spec.symbol.eq_ignore_ascii_case(&symbol))
-                {
-                    self.switch_symbol(&symbol);
-                } else {
-                    self.notify(format!("{symbol} has no synthetic data in this demo"));
-                }
-            }
+            WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
             WatchlistAction::Import => self.watchlist_import = Some(String::new()),
             WatchlistAction::Export { text, .. } => {
                 let file = "watchlist.txt";
