@@ -174,6 +174,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The web demo follows the dynamic viewport with a legacy height fallback, hides its right rail below 600 points with panels reachable from the main menu, and shows layout tabs only when there is more than one layout. Narrow legends show close and change instead of four OHLC fields, reserve space for pane actions, and keep title controls clear of values during hover. Study controls appear on pointer hover or a touch row selection and dismiss on an outside tap. ([#806](https://github.com/userFRM/egui-charts/issues/806))
+
 - Starting a feed reload no longer reports `DataLoaded` before history arrives. Successful pages and explicit data replacements still notify the host. ([#201](https://github.com/userFRM/egui-charts/issues/201))
 
 - The basic chart example reserves its click readout above the plot and requests repaint after a host click event, keeping the feedback visible. ([#201](https://github.com/userFRM/egui-charts/issues/201))

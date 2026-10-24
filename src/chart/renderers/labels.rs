@@ -841,7 +841,10 @@ mod tests {
                         text.galley.text()
                     );
                 }
-                for field in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"] {
+                for field in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"]
+                    .into_iter()
+                    .skip(if width < 600.0 { 3 } else { 0 })
+                {
                     assert!(
                         text.iter().any(|text| text.galley.text() == field),
                         "{width}: missing whole field {field}"

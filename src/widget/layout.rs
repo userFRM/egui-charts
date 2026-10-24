@@ -377,7 +377,13 @@ impl ChartLayout {
                     {
                         let button = ui.put(
                             Rect::from_min_size(
-                                rect.min + Vec2::new((rect.width() - 100.0).max(0.0), 2.0),
+                                rect.min
+                                    + Vec2::new(
+                                        (rect.width()
+                                            - if rect.width() < 600.0 { 22.0 } else { 100.0 })
+                                        .max(0.0),
+                                        2.0,
+                                    ),
                                 Vec2::splat(20.0),
                             ),
                             egui::Button::new("…").frame(false),
@@ -672,7 +678,7 @@ mod tests {
             pressed,
             modifiers: Default::default(),
         };
-        let corner = pos2(230.0, 12.0);
+        let corner = pos2(308.0, 12.0);
         frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
         frame(&mut layout, &mut charts, vec![click(corner, true)]);
         frame(&mut layout, &mut charts, vec![click(corner, false)]);
