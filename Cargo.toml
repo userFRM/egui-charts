@@ -103,7 +103,14 @@ serde = []
 # without a Linux backend.  `clipboard` gives text fields copy and paste.
 eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "x11", "wayland"] }
 egui = "0.37.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The examples that draw random sample data run natively only.
 rand = "0.10.0"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# `examples/bare_chart.rs` starts its web runner from the page.
+wasm-bindgen-futures = "0.4.79"
 
 [dependencies]
 # theme::apply_to_egui installs the bundled Roboto face.
