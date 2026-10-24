@@ -143,6 +143,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The widget bar centres Help on the adjacent 38 px bottom row in every preset, keeping the section rule above it. ([#583](https://github.com/userFRM/egui-charts/issues/583))
+
 - Opening a chart, series or drawing context menu suppresses the crosshair, axis tags and data tooltip on the opening frame as well as while the menu stays open. ([#291](https://github.com/userFRM/egui-charts/issues/291))
 
 - Removed the unused `ContextMenuSizingTokens::char_width`: context menus measure their laid-out labels and shortcuts. Migration: remove `char_width` from token struct literals. ([#457](https://github.com/userFRM/egui-charts/issues/457))
