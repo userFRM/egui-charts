@@ -41,6 +41,7 @@ pub enum ExtendedSession {
 /// The latest extended-hours trade of the shown symbol, supplied by the host.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExtendedHoursQuote {
+    /// Whether the trade was before or after the regular session.
     pub session: ExtendedSession,
     /// Last traded price. The change is `last` minus the last price of the regular session, the
     /// one set with [`SymbolDetailsPanel::set_quote`], and the change percent is that difference
@@ -81,12 +82,12 @@ enum Request {
 /// [`set_volume`](Self::set_volume); update times are shown in the time zone set with
 /// [`set_timezone`](Self::set_timezone), UTC by default. The header's layout button shows or
 /// hides sections, the edit button moves to the notes, and a feed that supplies
-/// [`SymbolDetails::url`] gets a link to the instrument beside its name. For each new symbol the panel asks the feed for
-/// [`Datafeed::symbol_details`] and shows the statistics and profile it answers; an empty section,
-/// or a feed that does not support the request, shows nothing. Notes are kept in memory per
-/// symbol, and with a storage service attached they are read from and written to one
-/// [`StoreKind::SymbolNotes`] document per symbol as they are edited, one write per document at a
-/// time. Call [`poll`](Self::poll) each frame, even while the panel is hidden, then
+/// [`SymbolDetails::url`] gets a link to the instrument beside its name. For each new symbol the
+/// panel asks the feed for [`Datafeed::symbol_details`] and shows the statistics and profile it
+/// answers; an empty section, or a feed that does not support the request, shows nothing. Notes
+/// are kept in memory per symbol, and with a storage service attached they are read from and
+/// written to one [`StoreKind::SymbolNotes`] document per symbol as they are edited, one write per
+/// document at a time. Call [`poll`](Self::poll) each frame, even while the panel is hidden, then
 /// [`show`](Self::show) while it is open.
 #[derive(Default)]
 pub struct SymbolDetailsPanel {
