@@ -689,7 +689,9 @@ impl Chart {
                     // Dot mode - default pointer (dot is rendered on chart)
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
-                CrosshairStyle::Arrow | CrosshairStyle::Demonstration => {
+                CrosshairStyle::Arrow
+                | CrosshairStyle::Demonstration
+                | CrosshairStyle::Hidden => {
                     // Arrow mode - default pointer
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
@@ -1798,8 +1800,7 @@ impl Chart {
                     let mut pos = hover_pos;
                     if let Some(index) = index {
                         pos.x = coords.idx_to_x(index);
-                        if self.chart_options.crosshair.mode == crate::config::CrosshairMode::Magnet
-                        {
+                        if self.chart_options.crosshair.mode.snaps() {
                             pos.y = map.price_to_y(self.state.shown()[index].volume);
                         }
                     }
@@ -1926,8 +1927,7 @@ impl Chart {
                 .axis_hover
                 .filter(|(pos, _)| price_rect.contains(*pos) && !volume_rect.contains(*pos))
             {
-                let price = if self.chart_options.crosshair.mode
-                    == crate::config::CrosshairMode::Magnet
+                let price = if self.chart_options.crosshair.mode.snaps()
                     && let Some(index) = coords.local_idx_at_x(pos.x, visible_data.len())
                 {
                     price_map.y_to_price(self.snap_crosshair(pos, &price_map, start_idx + index).y)

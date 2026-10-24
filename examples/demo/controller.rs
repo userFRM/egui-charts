@@ -1340,7 +1340,7 @@ impl DemoApp {
                 current_cursor_type: match self.chart.chart_options().crosshair.style {
                     CrosshairStyle::Full => CursorType::Cross,
                     CrosshairStyle::Dot => CursorType::Dot,
-                    CrosshairStyle::Arrow => CursorType::Arrow,
+                    CrosshairStyle::Arrow | CrosshairStyle::Hidden => CursorType::Arrow,
                     CrosshairStyle::Demonstration => CursorType::Demonstration,
                 },
                 eraser_mode_enabled: dm.eraser_mode,
@@ -3547,7 +3547,11 @@ mod tests {
             }
         );
         assert_eq!(
-            app.chart.chart_options().crosshair.line_style,
+            app.chart.chart_options().crosshair.vert_line_style,
+            CrosshairLineStyle::Solid
+        );
+        assert_eq!(
+            app.chart.chart_options().crosshair.horz_line_style,
             CrosshairLineStyle::Solid
         );
         assert_eq!(app.chart.chart_options().crosshair.horz_line_width, 3.0);
