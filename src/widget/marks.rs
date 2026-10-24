@@ -26,11 +26,14 @@ impl Chart {
         coords: &ChartMapping,
         layer: MarkerZOrder,
     ) {
-        // Normal markers of added series are painted with each series.
-        for item in self.price_series.iter().filter(|item| {
-            item.visible && layer != MarkerZOrder::Normal && item.marker_options.z_order == layer
-        }) {
-            self.paint_series_markers(ctx.painter, ctx.rect, item);
+        // Normal markers of added series, and all markers in other panes, are painted with
+        // each series.
+        for item in self
+            .main_pane_series()
+            .filter(|item| layer != MarkerZOrder::Normal && item.marker_options.z_order == layer)
+        {
+            let map = self.series_map(item, ctx.rect);
+            self.paint_series_markers(ctx.painter, ctx.rect, item, map);
         }
         if !self.main_series_visible {
             return;

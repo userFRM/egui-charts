@@ -281,7 +281,6 @@ impl Chart {
                 .time_scale_events
                 .extend_from_slice(&source.page.events);
         }
-        chart.pane_layout = self.pane_layout.clone();
         chart.desired_visible_bars = self.desired_visible_bars;
         chart.apply_visible_bars_once = self.apply_visible_bars_once;
         chart.start_idx = self.start_idx;
@@ -292,6 +291,9 @@ impl Chart {
         chart.study_inputs = self.study_inputs.clone();
         chart.study_autoscale = self.study_autoscale.clone();
         chart.next_series = self.next_series;
+        // Copied after the studies, replacing the panes that adding them created.
+        chart.pane_layout = self.pane_layout.clone();
+        chart.pane_options = self.pane_options;
         #[cfg(feature = "studies")]
         {
             chart.volume_study = self.volume_study;

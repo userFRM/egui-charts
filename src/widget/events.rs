@@ -12,17 +12,18 @@ use egui::{Modifiers, PointerButton, Pos2, Ui};
 pub struct ChartPointer {
     /// Nearest slot's timestamp, extrapolated into whitespace as in `visible_time_range`.
     pub time: DateTime<Utc>,
-    /// Price on the main pane, or the study/volume value on another pane.
+    /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
-    /// `MAIN`, `VOLUME`, or the study owning the hovered pane.
+    /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. An empty pane
+    /// reports no position.
     pub series: SeriesId,
     /// Nearest slot in the rendered series, counting elements on price-based chart types.
     /// Negative or past the last bar in whitespace.
     pub index: isize,
     /// Pointer position in UI points, the coordinates of the chart's `Response::rect`.
     pub pos: Pos2,
-    /// Pane counted from the top: `0` is the main pane, including its volume band, then each
-    /// study pane in display order.
+    /// Pane counted from the top among the panes drawn, the price pane with its volume band
+    /// included: `0` unless panes sit above the price pane.
     pub pane: usize,
     /// Main series bar, or price-based element, at `index`; `None` in whitespace.
     pub bar: Option<Bar>,
@@ -184,25 +185,32 @@ impl Chart {
                 map.y_to_price(pos.y)
             }
         };
-        let rendered = &self.last_rendered_indicator_panes;
-        let (series, price, pane) = if let Some(at) = rendered
-            .iter()
-            .position(|pane| pane.chart_rect.contains(pos))
-        {
-            let pane = &rendered[at];
-            // Each study in a pane is listed with the pane's rect, so count the rects.
-            let pane_idx = rendered[..=at]
-                .windows(2)
-                .filter(|pair| pair[0].chart_rect != pair[1].chart_rect)
-                .count();
-            let id = *self.study_ids.get(pane.indicator_idx)?;
-            let group = self
-                .pane_layout
-                .panes
-                .iter()
-                .find(|group| group.studies.contains(&id))?;
+        // Panes are counted as drawn, from the top; the price pane may sit below others.
+        let pane_index = |id: super::PaneId| {
+            (self.pane_layout.panes.iter())
+                .filter(|pane| pane.id == super::PaneId::MAIN || self.pane_shown(pane))
+                .position(|pane| pane.id == id)
+                .unwrap_or_default()
+        };
+        let (series, price, pane) = if let Some(group) =
+            self.pane_layout.panes.iter().find(|group| {
+                group.id != super::PaneId::MAIN
+                    && group.rect.contains(pos)
+                    && plot.x_range().contains(pos.x)
+            }) {
+            let owner = *self.pane_series(group.id).first()?;
+            let map = group.scale.map(
+                group.scale.transform(),
+                group.rect.top(),
+                group.rect.bottom(),
+            );
+            let closes = group.members.iter().filter_map(|id| {
+                let item =
+                    (self.price_series.iter()).find(|item| item.id == *id && item.visible)?;
+                bar_at.and_then(|index| self.series_close_at(item, index))
+            });
             let values = group
-                .studies
+                .members
                 .iter()
                 .filter_map(|id| self.study_ids.iter().position(|study| study == id))
                 .map(|index| &self.rendered_studies().indicators()[index])
@@ -222,8 +230,9 @@ impl Chart {
                             bar_at.and_then(|index| study.plot_value(line, index))
                         })
                 })
+                .chain(closes)
                 .collect::<Vec<_>>();
-            (group.id, magnet(pane.mapping.price, values), pane_idx + 1)
+            (owner, magnet(map, values), pane_index(group.id))
         } else if self.last_rendered_volume_rect.contains(pos)
             && let Some(map) = self.host_events.volume_map
         {
@@ -231,12 +240,17 @@ impl Chart {
                 .map(|index| shown[index].volume)
                 .into_iter()
                 .collect();
-            (SeriesId::VOLUME, magnet(map, values), 0)
+            (
+                SeriesId::VOLUME,
+                magnet(map, values),
+                pane_index(super::PaneId::MAIN),
+            )
         } else if plot.contains(pos) {
             let snapped = bar_at.map_or(pos, |index| {
                 self.snap_crosshair(pos, &self.last_price_map, index)
             });
-            (SeriesId::MAIN, self.last_price_map.y_to_price(snapped.y), 0)
+            let price = self.last_price_map.y_to_price(snapped.y);
+            (SeriesId::MAIN, price, pane_index(super::PaneId::MAIN))
         } else {
             return None;
         };
@@ -550,6 +564,14 @@ mod tests {
             frame(&ctx, &mut chart, 1.97, vec![Event::PointerMoved(pos)]);
             let events = chart.drain_events().collect::<Vec<_>>();
             assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == below && point.pane == 2)), "{events:?}");
+            // Panes count from the top as drawn, so the price pane moved to the bottom is third.
+            assert!(chart.move_pane(super::super::PaneId::MAIN, usize::MAX));
+            frame(&ctx, &mut chart, 1.98, vec![Event::PointerGone]);
+            chart.drain_events().for_each(drop);
+            let pos = chart.last_rendered_price_rect.center();
+            frame(&ctx, &mut chart, 1.99, vec![Event::PointerMoved(pos)]);
+            let events = chart.drain_events().collect::<Vec<_>>();
+            assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == SeriesId::MAIN && point.pane == 2)), "{events:?}");
             chart.remove_series(below);
             chart.remove_series(other);
             chart.remove_series(id);

@@ -140,6 +140,7 @@ pub mod layout;
 mod navigation;
 pub(crate) mod pan_zoom;
 mod pane_layout;
+pub use pane_layout::{PaneId, PaneOptions};
 mod panes;
 mod price_series;
 mod readout;
@@ -237,6 +238,7 @@ pub struct Chart {
     pub(crate) keyboard: keyboard::KeyboardState,
     history: history::ChartHistory,
     pane_layout: pane_layout::PaneLayout,
+    pane_options: PaneOptions,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)
