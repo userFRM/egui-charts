@@ -24,16 +24,18 @@ pub struct PriceMark {
     pub weight: u8,
 }
 
-/// Configuration for price mark generation
-#[derive(Debug, Clone)]
+/// Configuration for price mark generation, set per scale through
+/// [`PriceScaleOptions::tick_marks`](super::PriceScaleOptions::tick_marks).
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PriceMarkGeneratorConfig {
-    /// Min spacing between marks in pixels
+    /// Min spacing between marks in pixels, which keeps labels from overlapping at any density
     pub min_spacing: f32,
 
     /// Max number of marks
     pub max_marks: usize,
 
-    /// Target density (marks per 100 pixels)
+    /// Target density (marks per 100 pixels): marks stay at least `100 / target_density`
+    /// pixels apart, and no closer than `min_spacing`
     pub target_density: f32,
 
     /// Min price step (for crypto/forex precision)
@@ -43,8 +45,8 @@ pub struct PriceMarkGeneratorConfig {
 impl Default for PriceMarkGeneratorConfig {
     fn default() -> Self {
         Self {
-            min_spacing: 40.0,
-            max_marks: 20,
+            min_spacing: 20.0,
+            max_marks: 100,
             target_density: 2.5,
             min_price_step: None,
         }
@@ -377,12 +379,16 @@ impl PriceMarkGenerator {
         });
 
         // Keep marks with sufficient spacing
+        let spacing = self
+            .config
+            .min_spacing
+            .max(100.0 / self.config.target_density);
         let mut filtered = vec![marks[0].clone()];
 
         for mark in marks.iter().skip(1) {
             if filtered
                 .iter()
-                .all(|m| (m.y_coord - mark.y_coord).abs() >= self.config.min_spacing)
+                .all(|m| (m.y_coord - mark.y_coord).abs() >= spacing)
             {
                 filtered.push(mark.clone());
             }
@@ -532,6 +538,21 @@ mod tests {
                 .windows(2)
                 .all(|pair| (pair[0].y_coord - pair[1].y_coord).abs() >= 40.0)
         );
+    }
+
+    /// The scale's target density sets the number of labels: on 500 pixels showing 0 to 100,
+    /// 1, 2.5 and 5 marks per 100 pixels give steps of 20, 10 and 4.
+    #[test]
+    fn target_density_sets_the_number_of_marks() {
+        use crate::scales::{PriceScale, PriceScaleOptions, PriceTransform};
+        for (density, count) in [(1.0, 6), (2.5, 11), (5.0, 26)] {
+            let mut options = PriceScaleOptions::default();
+            options.tick_marks.target_density = density;
+            let mut scale = PriceScale::new(options);
+            scale.set_range(0.0, 100.0);
+            let marks = scale.map(PriceTransform::default(), 0.0, 500.0).marks();
+            assert_eq!(marks.len(), count, "{density}: {marks:?}");
+        }
     }
 
     #[test]

@@ -446,6 +446,24 @@ impl Chart {
         self.last_rendered_price_rect
     }
 
+    /// Width in points of the main price axis on `side` at the last frame, 0 when that axis is
+    /// hidden: the configured minimum width, or wider when the labels need more room.
+    pub fn price_axis_width(&self, side: crate::scales::PriceScaleId) -> f32 {
+        let (shown, minimum) = match side {
+            crate::scales::PriceScaleId::Right => {
+                (self.config.show_right_axis, self.config.right_axis_width)
+            }
+            crate::scales::PriceScaleId::Left => {
+                (self.config.show_left_axis, self.config.left_axis_width)
+            }
+        };
+        if shown {
+            minimum.max(self.measured_axis_width)
+        } else {
+            0.0
+        }
+    }
+
     /// Get the volume rect used for actual rendering
     ///
     /// This is the actual screen rect where volume bars are drawn, useful for

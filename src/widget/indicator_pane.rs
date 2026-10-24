@@ -920,7 +920,7 @@ impl IndicatorPane {
         // Draw subtle grid lines
         if self.config.show_grid {
             if let Some(map) = self.price_map {
-                for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
+                for mark in map.marks() {
                     painter.line_segment(
                         [
                             Pos2::new(rect.left(), mark.y_coord),
@@ -1182,7 +1182,7 @@ impl IndicatorPane {
             chart_rect.right() + DESIGN_TOKENS.spacing.sm
         };
 
-        for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
+        for mark in map.marks() {
             let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
                 let label = indicator.format_value(mark.price);

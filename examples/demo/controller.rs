@@ -256,6 +256,8 @@ pub struct DemoApp {
     watchlist: WatchlistPanel,
     // Text pasted for a watchlist import, while its window is open.
     watchlist_import: Option<String>,
+    // Symbol search is open for the watchlist's add button: the pick joins the list.
+    watchlist_search: bool,
     time_and_sales: TimeAndSalesPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
@@ -476,6 +478,7 @@ impl DemoApp {
                     }),
             ),
             watchlist_import: None,
+            watchlist_search: false,
             time_and_sales: TimeAndSalesPanel::default(),
             symbol_details: SymbolDetailsPanel::new(),
             replay: None,
@@ -819,8 +822,13 @@ impl DemoApp {
         self.symbol_search
             .set_recent_symbols(vec![self.state.symbol.clone()]);
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
-            self.switch_symbol(&picked.name);
+            if self.watchlist_search {
+                self.watchlist.add_symbol(&picked.name);
+            } else {
+                self.switch_symbol(&picked.name);
+            }
         }
+        self.watchlist_search &= self.symbol_search.is_open();
 
         // Alert creation.
         match self.alert_dialog.show(ctx) {
@@ -1728,8 +1736,9 @@ impl DemoApp {
     }
 
     /// Feeds the watchlist its synthetic quotes, the chart symbol's from the live feed, the
-    /// details panel the chart symbol, and time and sales the executions of the live feed. The demo
-    /// has no audio: a filter's sound shows as a notification.
+    /// details panel the chart symbol with its regular and extended-hours quotes and volume, and
+    /// time and sales the executions of the live feed. The demo has no audio: a filter's sound
+    /// shows as a notification.
     fn feed_market_panels(&mut self) {
         let now = chrono::Utc::now();
         let chart_symbol = self.chart.symbol().to_owned();
@@ -1759,9 +1768,19 @@ impl DemoApp {
                 .cloned()
                 .unwrap_or_else(|| egui_charts::model::Instrument::new(chart_symbol)),
         );
-        if let Some(quote) = chart_quote {
-            self.symbol_details.set_quote(quote);
+        if let Some(mut quote) = chart_quote {
+            let (mut time, mut extended) = (now, None);
+            if let Some((regular, last, prev_close, after)) = self.live.regular_quote() {
+                (time, quote.last, quote.prev_close, extended) = (regular, last, prev_close, after);
+            }
+            self.symbol_details.set_quote(quote, time);
+            self.symbol_details.set_extended_hours(extended);
         }
+        let (volume, average) = self.live.daily_volume();
+        self.symbol_details.set_volume(volume, average);
+        let timezone = self.timeframe_toolbar.state.timezone.parse();
+        self.symbol_details
+            .set_timezone(timezone.unwrap_or_default());
         let instrument = self.chart.instrument();
         let mut alert = None;
         for trade in self.live.drain_tape() {
@@ -1800,6 +1819,13 @@ impl DemoApp {
                 } else {
                     self.notify(format!("{symbol} has no synthetic data in this demo"));
                 }
+            }
+            WatchlistAction::AddSymbol => {
+                self.watchlist_search = true;
+                self.symbol_search.open();
+            }
+            WatchlistAction::AdvancedView => {
+                self.notify("The advanced watchlist view is not part of this demo")
             }
             WatchlistAction::Import => self.watchlist_import = Some(String::new()),
             WatchlistAction::Export { text, .. } => {
