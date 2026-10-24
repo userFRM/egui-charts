@@ -345,8 +345,10 @@ impl IndicatorRenderer {
                         && let Some(bar) = i.checked_sub(bars_start).and_then(|i| bars.get(i))
                     {
                         let width = coords.bar_spacing * 0.8;
-                        let top = price_scale.price_to_y(bar.open.max(bar.close));
-                        let bottom = price_scale.price_to_y(bar.open.min(bar.close));
+                        let open = price_scale.price_to_y(bar.open);
+                        let close = price_scale.price_to_y(bar.close);
+                        let top = open.min(close);
+                        let bottom = open.max(close);
                         let high = price_scale.price_to_y(bar.high);
                         let low = price_scale.price_to_y(bar.low);
                         if [top, bottom, high, low].iter().all(|y| y.is_finite()) {
@@ -642,6 +644,131 @@ mod tests {
                         matches!(s, Shape::Circle(c) if c.fill == color && c.radius == 2.0)
                     }));
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn displaced_bands_split_crossings_without_bridging_gaps() {
+        use crate::studies::{
+            ConfiguredStudy, CustomIndicator, FillBoundary, IndicatorValue, StudyFill,
+        };
+        let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 51);
+        let red = Color32::from_rgba_unmultiplied(255, 0, 0, 51);
+        for inverted in [false, true] {
+            let mut study = CustomIndicator::new("Band", |_| {
+                vec![
+                    IndicatorValue::Multiple(vec![2.0, 0.0]),
+                    IndicatorValue::Multiple(vec![0.0, 2.0]),
+                    IndicatorValue::None,
+                    IndicatorValue::Multiple(vec![2.0, 0.0]),
+                ]
+            })
+            .with_line_cnt(2)
+            .with_offsets(vec![2, 2])
+            .with_fills(vec![StudyFill {
+                first: FillBoundary::Plot(0),
+                second: FillBoundary::Plot(1),
+                color: blue,
+                inverted_color: Some(red),
+            }]);
+            study.calculate(&[]);
+            let study = ConfiguredStudy::new(Box::new(study));
+            let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(240.0, 120.0));
+            let map = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(0.0, 2.0),
+                0.0,
+                120.0,
+                inverted,
+            );
+            let coords = ChartMapping::new(rect, 30.0, 0, 3, 0.0, map);
+            let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+                IndicatorRenderer::render_study(
+                    &RenderContext::new(ui.painter(), rect),
+                    &study,
+                    &[],
+                    0,
+                    &map,
+                    &coords,
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let bands: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Path(path) if path.fill.a() == 51 => Some(path),
+                    _ => None,
+                })
+                .collect();
+            // Values cross halfway from displayed bar 2 to 3, at price 1.
+            assert_eq!(bands.len(), 2);
+            let crossing = Pos2::new(209.0, 60.0);
+            for band in &bands {
+                assert_eq!(band.points.len(), 3);
+                assert!(band.points.contains(&crossing), "{:?}", band.points);
+                assert!(
+                    band.points
+                        .iter()
+                        .all(|point| (194.0..=224.0).contains(&point.x))
+                );
+            }
+            assert_eq!(bands[0].fill, blue);
+            assert_eq!(bands[1].fill, red);
+        }
+    }
+
+    #[test]
+    fn bar_colours_preserve_bodies_on_inverted_scales() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        let bars: Vec<_> = [(1.0, 2.0), (2.0, 1.0)]
+            .into_iter()
+            .map(|(open, close)| {
+                Bar::new(Utc.timestamp_opt(0, 0).unwrap(), open, 2.5, 0.5, close, 1.0)
+            })
+            .collect();
+        let mut study = CustomIndicator::new("Colour", |_| vec![IndicatorValue::Single(1.0); 2])
+            .with_plot_types(vec![PlotType::BarColor])
+            .with_plot_color(|_, bar, _| {
+                Some(if bar == 0 {
+                    Color32::GREEN
+                } else {
+                    Color32::RED
+                })
+            });
+        study.calculate(&bars);
+        for inverted in [false, true] {
+            let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(240.0, 120.0));
+            let map = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(0.0, 3.0),
+                0.0,
+                120.0,
+                inverted,
+            );
+            let coords = ChartMapping::new(rect, 30.0, 0, 1, 0.0, map);
+            let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+                IndicatorRenderer::render_study(
+                    &RenderContext::new(ui.painter(), rect),
+                    &study,
+                    &bars,
+                    0,
+                    &map,
+                    &coords,
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            for color in [Color32::GREEN, Color32::RED] {
+                let body = shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Rect(body) if body.fill == color => Some(body.rect),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(body.y_range(), egui::emath::Rangef::new(40.0, 80.0));
             }
         }
     }
