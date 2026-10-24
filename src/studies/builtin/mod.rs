@@ -21,7 +21,8 @@
 //! [`DetrendedPriceOscillator`], [`KDJ`], [`PrettyGoodOscillator`],
 //! [`ChandeMomentumOscillator`], [`TrueStrengthIndex`],
 //! [`StochasticMomentumIndex`], [`SchaffTrendCycle`], [`PriceOscillator`],
-//! [`PercentageVolumeOscillator`]
+//! [`PercentageVolumeOscillator`], [`AcceleratorOscillator`], [`AroonOscillator`],
+//! [`BullBearPower`], [`AdvanceDeclineRatioBars`]
 //!
 //! ## Trend
 //! [`ADX`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
@@ -30,13 +31,14 @@
 //! ## Volatility
 //! [`BollingerBands`], [`ATR`], [`KeltnerChannels`], [`DonchianChannels`],
 //! [`StandardDeviation`], [`HistoricalVolatility`], [`ChaikinVolatility`],
-//! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`], [`ParkinsonVol`], [`ZeroTrendVol`]
+//! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`], [`ParkinsonVol`], [`ZeroTrendVol`],
+//! [`AverageDailyRange`], [`BBTrend`], [`UlcerIndex`]
 //!
 //! ## Volume
 //! [`OnBalanceVolume`], [`VolumeWeightedAvgPrice`], [`MoneyFlowIndex`],
 //! [`AccumulationDistribution`], [`ChaikinMoneyFlow`],
 //! [`VolumeRateOfChange`], [`KlingerOscillator`], [`CVD`],
-//! [`VolProfileVisible`], [`VolProfileFixed`]
+//! [`VolProfileVisible`], [`VolProfileFixed`], [`ChaikinOscillator`]
 //!
 //! ## Support / resistance
 //! [`PivotPoints`], [`ZigZag`], [`PriceChannel`]
@@ -215,6 +217,16 @@ mod week52_highlow;
 // Tenth batch - Other indicators
 mod bbw;
 
+// Eleventh batch - Oscillators
+mod accelerator_oscillator;
+mod advance_decline_ratio_bars;
+mod aroon_oscillator;
+mod average_daily_range;
+mod bbtrend;
+mod bull_bear_power;
+mod chaikin_oscillator;
+mod ulcer_index;
+
 // Re-exports - Original indicators
 pub use bollinger_bands::BollingerBands;
 pub use ema::EMA;
@@ -375,6 +387,16 @@ pub use week52_highlow::{Week52HighLow, Week52HighLowLevels};
 
 // Re-exports - Tenth batch (Other)
 pub use bbw::BollingerBandsWidth;
+
+// Re-exports - Eleventh batch (Oscillators)
+pub use accelerator_oscillator::AcceleratorOscillator;
+pub use advance_decline_ratio_bars::AdvanceDeclineRatioBars;
+pub use aroon_oscillator::AroonOscillator;
+pub use average_daily_range::AverageDailyRange;
+pub use bbtrend::BBTrend;
+pub use bull_bear_power::BullBearPower;
+pub use chaikin_oscillator::ChaikinOscillator;
+pub use ulcer_index::UlcerIndex;
 
 /// A float parameter clamped into `min..=max`, NaN to `min`, the way constructors
 /// raise a length of 0 to 1.

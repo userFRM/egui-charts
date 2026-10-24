@@ -11,15 +11,18 @@
 //! Chaikin for the Accumulation/Distribution line and volatility; Bill Williams; Larry Williams for the Ultimate
 //! Oscillator; Elder for Force Index and Elder Ray; Botes and Siepman for the Vortex indicator; Dreiss for the
 //! Choppiness Index; Hutson for TRIX; Dorsey for the Mass Index; Chande for the Chande Momentum Oscillator;
-//! Coppock) on the same fixture, and rounded to 12 significant digits. Volume signs use exact integer comparisons; the
+//! Coppock; Bill Williams for the Accelerator Oscillator; Chande for the Aroon Oscillator; Bollinger
+//! for BBTrend; Chaikin for the Chaikin Oscillator; Elder for Bull Bear Power; Martin 1989 for
+//! the Ulcer Index; the simple average of the bar range for the Average Daily Range; up and down
+//! bars against their open for the Advance/Decline Ratio of bars) on the same fixture, and rounded to 12 significant digits. Volume signs use exact integer comparisons; the
 //! volatility rows use decimal logarithms at 50-digit precision. Calendar-window rows are
 //! hand-calculated over an inclusive 364-day window.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
 //! seed their EMAs with the mean of the first values and their signal with the mean of the first
-//! values of the oscillator, Force Index, Elder Ray, TRIX and the Mass Index seed their EMAs with the mean of
-//! their first values, the Envelopes EMA and the Chaikin volatility EMA seed with their first input, an
+//! values of the oscillator, Force Index, Elder Ray, Bull Bear Power, TRIX and the Mass Index seed their EMAs with the mean of
+//! their first values, the Envelopes EMA and the Chaikin volatility and Chaikin Oscillator EMAs seed with their first input, an
 //! Accumulation/Distribution bar with a high equal to its low adds nothing, and Parabolic SAR reverses when the price
 //! crosses it, not on a touch), otherwise a published one (Wilder's first true range is high minus
 //! low, Keltner's EMA seeds with the SMA of the first closes). Where no published rule settles it,
@@ -28,7 +31,8 @@
 //! on a tie), starts at the first bar's low or high and takes its first extreme point from the
 //! first two bars. The Chaikin volatility starts once its average and its change both have their full
 //! length; the windows of the Choppiness Index, Vortex indicator and Ultimate Oscillator start at the
-//! second bar, the first with a previous close.
+//! second bar, the first with a previous close. A window of the Advance/Decline Ratio of bars without a
+//! down bar has no value, and a bar with its close equal to its open counts as neither up nor down.
 
 use crate::model::Bar;
 use crate::studies::{
@@ -43,7 +47,11 @@ use crate::studies::{
     UltimateOscillator, VWMA, VortexIndicator, WMA, Week52HighLow, Week52HighLowLevels,
     WeightedClose, WilliamsR, ZeroTrendVol,
 };
-use crate::studies::{KnowSureThing, RankCorrelationIndex, RelativeVigorIndex, StochasticRSI};
+use crate::studies::{
+    AcceleratorOscillator, AdvanceDeclineRatioBars, AroonOscillator, AverageDailyRange, BBTrend,
+    BullBearPower, ChaikinOscillator, KnowSureThing, RankCorrelationIndex, RelativeVigorIndex,
+    StochasticRSI, UlcerIndex,
+};
 use chrono::{TimeZone, Utc};
 
 const EXPECTED: &str = include_str!("reference/expected.txt");
@@ -262,6 +270,17 @@ fn staple_studies_match_published_definitions() {
             "Ichimoku(9,26,52,22)",
             Box::new(IchimokuCloud::new(9, 26, 52).with_displacement(22)),
         ),
+        ("AC(5,34,5)", Box::new(AcceleratorOscillator::default())),
+        ("AroonOsc(14)", Box::new(AroonOscillator::default())),
+        ("ADR(14)", Box::new(AverageDailyRange::default())),
+        ("BBTrend(20,50,2)", Box::new(BBTrend::default())),
+        ("ChaikinOsc(3,10)", Box::new(ChaikinOscillator::default())),
+        ("BBP(13)", Box::new(BullBearPower::default())),
+        (
+            "ADRatioBars(9)",
+            Box::new(AdvanceDeclineRatioBars::default()),
+        ),
+        ("Ulcer(14)", Box::new(UlcerIndex::default())),
     ];
     let mut studies: Vec<_> = studies
         .into_iter()

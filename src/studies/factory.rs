@@ -148,6 +148,10 @@ impl IndicatorFactory {
                 VolumeOscillator,
                 BalanceOfPower,
                 EaseOfMovement,
+                AcceleratorOscillator,
+                AroonOscillator,
+                BullBearPower,
+                AdvanceDeclineRatioBars,
             ],
             "Trend" => [
                 ADX,
@@ -181,6 +185,9 @@ impl IndicatorFactory {
                 ParkinsonVol,
                 ZeroTrendVol,
                 CommoditySelectionIndex,
+                AverageDailyRange,
+                BBTrend,
+                UlcerIndex,
             ],
             "Volume" => [
                 Volume,
@@ -201,6 +208,7 @@ impl IndicatorFactory {
                 PositiveVolumeIndex,
                 WilliamsAD,
                 MarketFacilitationIndex,
+                ChaikinOscillator,
             ],
             "Support and resistance" => [
                 PivotPoints,
@@ -547,6 +555,14 @@ mod tests {
             Box::new(OHLC4::new()),
             Box::new(Week52HighLow::new()),
             Box::new(Week52HighLowLevels::new()),
+            Box::new(AcceleratorOscillator::new()),
+            Box::new(AroonOscillator::new(l(0))),
+            Box::new(AverageDailyRange::new(l(0))),
+            Box::new(BBTrend::new(l(0), l(1), x(2.0))),
+            Box::new(ChaikinOscillator::new(l(0), l(1))),
+            Box::new(BullBearPower::new(l(0))),
+            Box::new(AdvanceDeclineRatioBars::new(l(0))),
+            Box::new(UlcerIndex::new(l(0))),
         ]
     }
 
