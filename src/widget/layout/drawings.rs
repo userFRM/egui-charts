@@ -2,7 +2,7 @@
 
 use crate::drawings::{ChartPoint, Drawing};
 use crate::widget::{
-    Chart, SeriesId,
+    Chart,
     sync::{index_at, time_at},
 };
 use std::collections::{HashMap, HashSet};
@@ -139,9 +139,15 @@ fn map_drawing(drawing: &Drawing, source: &Chart, target: &Chart) -> Option<Draw
         .chart_points
         .iter()
         .map(|point| {
-            let time = time_at(source.bars(SeriesId::MAIN), point.bar_idx as f64)?;
-            let index = index_at(target.bars(SeriesId::MAIN), time)?;
-            Some(ChartPoint::new(index as f32, point.price))
+            let time = point
+                .time_anchor
+                .filter(|(_, index)| *index == point.bar_idx)
+                .map(|(time, _)| time)
+                .or_else(|| time_at(source.state.shown(), point.bar_idx as f64))?;
+            let index = index_at(target.state.shown(), time)? as f32;
+            let mut point = ChartPoint::new(index, point.price);
+            point.time_anchor = Some((time, index));
+            Some(point)
         })
         .collect::<Option<_>>()?;
     copy.points.clear();
@@ -153,6 +159,7 @@ mod tests {
     use super::*;
     use crate::drawings::DrawingToolType;
     use crate::model::{Bar, BarData};
+    use crate::widget::SeriesId;
     use chrono::DateTime;
 
     #[test]
@@ -289,5 +296,30 @@ mod tests {
         target.set_data(SeriesId::MAIN, source.bars(SeriesId::MAIN).to_vec());
         pending.sync(&mut [&mut source, &mut target], 2, &groups, false);
         assert_eq!(target.drawings().drawings.len(), 1);
+        // Element coordinates and retained timestamps must not be read as source bar indices.
+        source.state.set_elements(
+            Some(source.bars(SeriesId::MAIN)[..4].to_vec().into()),
+            false,
+        );
+        let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(1.5, 10.0), ChartPoint::new(3.5, 12.0)];
+        source.drawings_mut().add_synced_drawing(drawing);
+        source.anchor_drawing_points();
+        source.state.set_elements(
+            Some(
+                source
+                    .bars(SeriesId::MAIN)
+                    .iter()
+                    .step_by(2)
+                    .cloned()
+                    .collect(),
+            ),
+            false,
+        );
+        source.project_drawing_points();
+        let drawing = source.drawings().drawings.last().unwrap();
+        let mapped = map_drawing(drawing, &source, &target).unwrap();
+        assert_eq!(mapped.chart_points[0].bar_idx, 1.5);
+        assert_eq!(mapped.chart_points[1].bar_idx, 3.5);
     }
 }

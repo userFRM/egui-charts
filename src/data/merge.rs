@@ -26,9 +26,6 @@ pub(crate) struct Merged {
     pub(crate) rejected: u64,
     /// Trades of bars older than the last bar, dropped.
     pub(crate) late_ticks: u64,
-    /// For each bar inserted in front of a stored bar, the former index of that stored bar,
-    /// ascending.
-    pub(crate) inserted_before: Vec<usize>,
 }
 
 /// Merges `incoming`, in any order, into `bars` by the rules of each bar's origin. `bars` are the
@@ -47,7 +44,6 @@ pub(crate) fn merge(
         first_changed: None,
         rejected: (received - incoming.len()) as u64,
         late_ticks: 0,
-        inserted_before: Vec::new(),
     };
     if merged.rejected > 0 {
         log::warn!("dropped {} invalid bars", merged.rejected);
@@ -72,7 +68,7 @@ pub(crate) fn merge(
     };
     let slot = |bar: &Bar| clock.bar_open(bar.time);
     let (first, newest) = (slot(first), slot(newest));
-    let (last, len) = (bars.last().map(slot), bars.len());
+    let last = bars.last().map(slot);
     let lo = bars.partition_point(|bar| slot(bar) < first);
     let hi = bars.partition_point(|bar| slot(bar) <= newest);
     let mut stored = bars[lo..hi].iter().peekable();
@@ -107,10 +103,6 @@ pub(crate) fn merge(
         };
         if old != Some(&new) {
             merged.first_changed.get_or_insert(lo + window.len());
-        }
-        let next = hi - stored.len();
-        if old.is_none() && next < len {
-            merged.inserted_before.push(next);
         }
         window.push(new);
     }

@@ -7,6 +7,7 @@ use super::actions::SeriesSettingsAction;
 use super::config::SeriesSettingsConfig;
 use super::tabs::{CanvasTab, ScalesTab, SeriesSettingsTab, StatusLineTab, SymbolTab};
 use crate::ext::UiExt;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::modal::Modal;
@@ -147,7 +148,19 @@ impl SeriesSettingsDialog {
             egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
         );
         // Footer
-        let (ok, cancel) = DialogFooter::new("Ok").secondary("Cancel").show(ui);
+        let (ok, cancel) = DialogFooter::new("Ok")
+            .secondary("Cancel")
+            .show_with_left(ui, |ui| {
+                if ui.button("Reset to defaults").clicked() {
+                    let theme = ui.active_theme();
+                    self.settings = SeriesSettings {
+                        chart_type: self.settings.chart_type,
+                        bullish_color: theme.chart.candle_up,
+                        bearish_color: theme.chart.candle_down,
+                        ..Default::default()
+                    };
+                }
+            });
         if ok && let Some(id) = self.series_id {
             action = SeriesSettingsAction::Apply(id, Box::new(self.settings.clone()));
             self.is_open = false;
@@ -165,6 +178,89 @@ impl SeriesSettingsDialog {
 mod tests {
     use super::*;
     use crate::model::ChartType;
+
+    #[test]
+    fn accepting_preserves_candle_colours_and_reset_uses_the_active_theme() {
+        for (_, theme) in crate::theme::presets() {
+            for reset in [false, true] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
+                chart.config_mut().bullish_color = egui::Color32::YELLOW;
+                chart.config_mut().bearish_wick_color = Some(egui::Color32::BLUE);
+                let original = chart.series_settings();
+                let mut dialog = SeriesSettingsDialog::new();
+                dialog.open(SeriesId::MAIN, original.clone());
+                let mut frame = |events, label: &str| {
+                    let mut action = SeriesSettingsAction::None;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                Vec2::new(1440.0, 900.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| action = dialog.show(ui.ctx()),
+                    );
+                    let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    });
+                    output.drop_without_applying_deltas();
+                    (action, pos)
+                };
+                let mut click = |label: &str| {
+                    frame(vec![], label);
+                    let pos = frame(vec![], label).1.expect("footer control is visible");
+                    frame(vec![egui::Event::PointerMoved(pos)], label);
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos,
+                        pressed,
+                        button: egui::PointerButton::Primary,
+                        modifiers: Default::default(),
+                    };
+                    frame(vec![button(true)], label);
+                    frame(vec![button(false)], label).0
+                };
+                if reset {
+                    click("Reset to defaults");
+                }
+                let SeriesSettingsAction::Apply(_, settings) = click("Ok") else {
+                    panic!("expected Apply")
+                };
+                chart.apply_series_settings(&settings);
+                let applied = chart.series_settings();
+                assert_eq!(
+                    applied.bullish_color,
+                    if reset {
+                        theme.chart.candle_up
+                    } else {
+                        original.bullish_color
+                    }
+                );
+                assert_eq!(
+                    applied.bearish_color,
+                    if reset {
+                        theme.chart.candle_down
+                    } else {
+                        original.bearish_color
+                    }
+                );
+                for (actual, expected) in [
+                    (applied.bullish_border_color, original.bullish_border_color),
+                    (applied.bearish_border_color, original.bearish_border_color),
+                    (applied.bullish_wick_color, original.bullish_wick_color),
+                    (applied.bearish_wick_color, original.bearish_wick_color),
+                ] {
+                    assert_eq!(actual, if reset { None } else { expected });
+                }
+            }
+        }
+    }
 
     #[test]
     fn type_controls_leave_the_footer_inside_short_and_narrow_windows() {

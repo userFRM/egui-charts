@@ -38,7 +38,7 @@
 //! assert!(history.can_undo());
 //! ```
 
-use crate::drawings::Drawing;
+use crate::drawings::{ChartPoint, Drawing};
 use std::collections::HashSet;
 
 /// Command representing a reversible drawing operation
@@ -114,6 +114,26 @@ pub struct HistoryService {
 }
 
 impl HistoryService {
+    pub(crate) fn visit_chart_points(&mut self, visit: &mut impl FnMut(&mut ChartPoint)) {
+        for command in self.undo_stack.iter_mut().chain(&mut self.redo_stack) {
+            match command {
+                DrawingCommand::Snapshot { drawings, .. } => {
+                    for drawing in drawings {
+                        drawing.chart_points.iter_mut().for_each(&mut *visit);
+                    }
+                }
+                DrawingCommand::Add(drawing)
+                | DrawingCommand::Delete(drawing)
+                | DrawingCommand::Modify {
+                    old_state: drawing, ..
+                } => {
+                    drawing.chart_points.iter_mut().for_each(&mut *visit);
+                }
+                DrawingCommand::Reorder { .. } => {}
+            }
+        }
+    }
+
     /// Create a new history service with default settings
     pub fn new() -> Self {
         Self {

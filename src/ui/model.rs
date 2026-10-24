@@ -132,50 +132,6 @@ impl ReplayProgress {
 // Templates
 // =============================================================================
 
-/// Manages chart settings templates
-#[derive(Debug, Clone, Default)]
-pub struct TemplateManager {
-    templates: Vec<SettingsTemplate>,
-}
-
-impl TemplateManager {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn template_cnt(&self) -> usize {
-        self.templates.len()
-    }
-
-    pub fn save_template(
-        &mut self,
-        name: &str,
-        settings: crate::ui::top_toolbar::components::settings_menu::data::ChartSettingsState,
-    ) {
-        // Remove existing template with same name
-        self.templates.retain(|t| t.name != name);
-        self.templates.push(SettingsTemplate {
-            name: name.to_string(),
-            settings,
-        });
-    }
-
-    pub fn get_template(&self, name: &str) -> Option<&SettingsTemplate> {
-        self.templates.iter().find(|t| t.name == name)
-    }
-
-    pub fn list_templates(&self) -> Vec<&str> {
-        self.templates.iter().map(|t| t.name.as_str()).collect()
-    }
-}
-
-/// A saved chart settings template
-#[derive(Debug, Clone)]
-pub struct SettingsTemplate {
-    pub name: String,
-    pub settings: crate::ui::top_toolbar::components::settings_menu::data::ChartSettingsState,
-}
-
 /// An indicator parameter template
 #[derive(Debug, Clone)]
 pub struct IndicatorTemplate {

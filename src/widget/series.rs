@@ -6,7 +6,6 @@ use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
 use crate::model::{Bar, BarClock, BarData, Marker, PriceLine};
 use crate::studies::Indicator;
-use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 use web_time::Instant;
 
@@ -20,10 +19,9 @@ impl Chart {
     /// value, a high or low on the wrong side of the open and close, negative volume) are dropped
     /// and counted in [`feed_state`](Self::feed_state), the rest sorted by time, and of several
     /// bars with one open time, or in one slot of the timeframe for a chart built with a feed, the
-    /// last is kept. If the new bars still hold the former first bar, the drawings move with it,
-    /// so older history can be loaded in front of the bars. The studies are updated from the
-    /// first bar that changed on the next [`show`](Self::show), and near the live edge the view
-    /// follows a new last bar, as with [`update`](Self::update).
+    /// last is kept. Drawings retain their timestamps across replacements and interval changes.
+    /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
+    /// and near the live edge the view follows a new last bar, as with [`update`](Self::update).
     ///
     /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
@@ -38,12 +36,9 @@ impl Chart {
             .size_methods()
             .map(|method| method != crate::model::BoxSizeMethod::Fixed);
         let before = self.edge();
-        let prepended = before
-            .first
-            .filter(|first| bars.binary_search_by_key(first, |bar| bar.time).is_ok())
-            .map_or(0, |first| bars.partition_point(|bar| bar.time < first));
+        self.anchor_drawing_points();
         let first_changed = self.state.set_data(BarData::from_bars(bars));
-        self.shift_drawing_history(f32::NEG_INFINITY, prepended as f32);
+        self.project_drawing_points();
         self.bars_changed(before, first_changed);
     }
 
@@ -107,6 +102,7 @@ impl Chart {
     pub(super) fn apply_by(&mut self, clock: &BarClock, incoming: Vec<(Bar, Origin)>) -> Merged {
         let before = self.edge();
         let tail = before.tail.as_ref().map(|bar| bar.time);
+        self.anchor_drawing_points();
         let from_ticks = &mut self.from_ticks;
         let mut merged = Merged::default();
         self.state.edit_bars(|bars| {
@@ -114,16 +110,7 @@ impl Chart {
             merged.first_changed
         });
         self.feed.rejected_bars += merged.rejected;
-        // Drawings hold bar indices: a bar inserted in front of a stored bar moves the points from
-        // that bar on, and one in front of the first bar also the points left of it.
-        for run in merged.inserted_before.chunk_by(|a, b| a == b).rev() {
-            let from = if run[0] == 0 {
-                f32::NEG_INFINITY
-            } else {
-                run[0] as f32
-            };
-            self.shift_drawing_history(from, run.len() as f32);
-        }
+        self.project_drawing_points();
         if !self.bars_changed(before, merged.first_changed)
             && !self.state.shows_elements()
             && let Some(tail) = tail
@@ -342,7 +329,6 @@ impl Chart {
     fn edge(&self) -> Edge {
         let bars = &self.state.data().bars;
         Edge {
-            first: bars.first().map(|bar| bar.time),
             // Within ~1.5 bars of the right edge. With fix_right_edge the right offset is clamped
             // to <= 0, so near means no farther than 1.5 bars to the left of the edge.
             near_live: self.state.time_scale().is_near_live_edge(),
@@ -353,6 +339,7 @@ impl Chart {
 
     /// Shows the cached elements before input, keeping the view in the series' slots.
     pub(super) fn show_elements(&mut self) {
+        self.anchor_drawing_points();
         self.chart_type_params
             .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
         let built = crate::chart::rendering::candles::price_based::elements(
@@ -365,6 +352,7 @@ impl Chart {
         let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
         self.state
             .set_elements(built.map(|(elements, _)| elements), follow);
+        self.project_drawing_points();
     }
 
     /// Scrolls to the live edge when the view was near it and a bar was appended, or the last
@@ -402,7 +390,6 @@ const REFRESH_INTERVAL: f64 = 0.25;
 
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
 struct Edge {
-    first: Option<DateTime<Utc>>,
     near_live: bool,
     len: usize,
     tail: Option<Bar>,
@@ -437,7 +424,7 @@ mod tests {
     use super::*;
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use crate::studies::{IndicatorValue, RSI, SMA};
-    use chrono::TimeDelta;
+    use chrono::{DateTime, TimeDelta, Utc};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
@@ -929,17 +916,16 @@ mod tests {
         );
     }
 
-    /// Guards the drawing shift of a merge: a point moves by the number of bars inserted in front
-    /// of its bar or at it, every point does for bars in front of the first bar, and none does
-    /// for an appended bar. Points right of the last bar must not creep on each new bar.
+    /// Merges retain anchor times, interpolating gaps and extrapolating whitespace from the
+    /// nearest pair. The 360 s future anchor becomes 7 + (360 - 240) / 30 = index 11.
     #[test]
-    fn inserted_bars_move_the_drawings_after_them() {
+    fn inserted_bars_preserve_drawing_times_including_future_anchors() {
         let start: Vec<Bar> = (0..5).map(|i| bar(i * 60, (i + 1) as f64)).collect();
         let live = |seconds| (bar(seconds, 1.0), Origin::Live);
         #[rustfmt::skip]
         let cases = [
             ("inserts at two positions", vec![live(90), live(100), live(210)],
-                vec![-1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 6.0], vec![-1.0, 0.0, 1.0, 4.0, 5.0, 7.0, 9.0]),
+                vec![-1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 6.0], vec![-1.0, 0.0, 1.0, 4.0, 5.0, 7.0, 11.0]),
             ("append", vec![live(300)], vec![3.0, 6.0], vec![3.0, 6.0]),
             ("history in front", vec![(bar(-60, 1.0), Origin::History)], vec![-1.0, 0.0], vec![0.0, 1.0]),
         ];

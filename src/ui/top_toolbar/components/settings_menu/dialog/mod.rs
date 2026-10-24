@@ -12,12 +12,13 @@ use super::{
     types::SettingsTab,
 };
 use crate::icons::icons as embedded_icons;
+use crate::services::StoreKind;
 use crate::styles::typography;
 use crate::theme::Theme;
 use crate::theme::components::SettingsDialogStyle;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
-use crate::ui::model::TemplateManager;
+use crate::ui::dialogs::templates::TemplateStore;
 use crate::ui_kit::ColorPickerState;
 use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::modal::Modal;
@@ -41,8 +42,9 @@ pub struct SettingsDialog {
     template_name: String,
     /// Whether the template dropdown menu is open
     template_menu_open: bool,
-    /// Template manager for save/load chart settings templates
-    template_manager: TemplateManager,
+    /// Host-readable chart templates and their optional storage connection.
+    pub templates: TemplateStore<ChartSettingsState>,
+    save_name: Option<String>,
     timezones: Vec<String>,
     /// Dialog styling configuration (width, height overrides)
     config: SettingsDialogConfig,
@@ -112,7 +114,8 @@ impl SettingsDialog {
             settings,
             template_name: String::new(),
             template_menu_open: false,
-            template_manager: TemplateManager::new(),
+            templates: TemplateStore::new(StoreKind::ChartTemplates),
+            save_name: None,
             timezones: vec![
                 "UTC".to_string(),
                 "America/New_York".to_string(),
@@ -141,6 +144,8 @@ impl SettingsDialog {
 
     pub fn open(&mut self, settings: ChartSettingsState) {
         self.is_open = true;
+        self.template_menu_open = false;
+        self.save_name = None;
         self.settings = settings;
         self.active_tab = SettingsTab::Symbol;
         self.update_color_pickers_from_settings();
@@ -183,6 +188,7 @@ impl SettingsDialog {
     }
 
     pub fn show(&mut self, ctx: &Context, theme: &Theme) -> SettingsAction {
+        self.templates.poll(ctx);
         let mut action = SettingsAction::None;
 
         if !self.is_open {
@@ -361,13 +367,18 @@ impl SettingsDialog {
         } else {
             self.template_name.clone()
         };
-        ui.add(
+        ui.add_sized(
+            Vec2::new(
+                DESIGN_TOKENS.sizing.settings_dialog.template_button_width,
+                DESIGN_TOKENS.sizing.settings_dialog.button_height,
+            ),
             egui::Button::new((
                 RichText::new(&template_label)
                     .size(typography::LG)
                     .color(style.val_text),
                 embedded_icons::CHEVRON_DOWN.as_image_tinted(Vec2::splat(12.0), style.val_text),
             ))
+            .truncate()
             .fill(style.dropdown_bg)
             .corner_radius(DESIGN_TOKENS.rounding.md as u8)
             .min_size(Vec2::new(
@@ -375,6 +386,7 @@ impl SettingsDialog {
                 DESIGN_TOKENS.sizing.settings_dialog.button_height,
             )),
         )
+        .on_hover_text(template_label)
     }
 
     fn draw_template_menu(
@@ -405,15 +417,22 @@ impl SettingsDialog {
                     .corner_radius(DESIGN_TOKENS.rounding.md as u8)
                     .stroke(style.dropdown_border)
                     .show(ui, |ui| {
-                        ui.set_min_width(DESIGN_TOKENS.sizing.settings_dialog.template_menu_width);
-                        self.draw_template_menu_items(ui, style, action)
+                        ui.set_width(DESIGN_TOKENS.sizing.settings_dialog.template_menu_width);
+                        egui::ScrollArea::vertical()
+                            .max_height(
+                                DESIGN_TOKENS
+                                    .sizing
+                                    .settings_dialog
+                                    .template_menu_max_height,
+                            )
+                            .show(ui, |ui| self.draw_template_menu_items(ui, style, action))
+                            .inner
                     })
                     .inner
-            })
-            .inner;
+            });
 
-        self.handle_template_menu_close(ui, template_btn, menu_rect);
-        result
+        self.handle_template_menu_close(ui, template_btn, result.response.rect);
+        result.inner
     }
 
     fn draw_template_menu_items(
@@ -432,17 +451,48 @@ impl SettingsDialog {
     }
 
     fn draw_save_as_button(&mut self, ui: &mut Ui, mut action: SettingsAction) -> SettingsAction {
-        if ui
+        if let Some(name) = &mut self.save_name {
+            ui.label("Template name");
+            ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()));
+            let name = name.trim().to_owned();
+            let label = if self.templates.entries().contains_key(&name) {
+                "Replace"
+            } else {
+                "Save"
+            };
+            let save = ui
+                .add_enabled(
+                    self.templates.ready() && !name.is_empty(),
+                    egui::Button::new(label),
+                )
+                .clicked();
+            let cancel = ui.button("Cancel").clicked();
+            if save {
+                self.settings.sync_legacy_fields();
+                match self.templates.save(&name, self.settings.clone()) {
+                    Ok(()) => {
+                        self.template_name = name.clone();
+                        action = SettingsAction::SaveTemplate(name);
+                        self.save_name = None;
+                    }
+                    Err(error) => self.templates.error = Some(error),
+                }
+            } else if cancel {
+                self.save_name = None;
+            }
+        } else if ui
             .button(RichText::new("Save as...").size(typography::MD))
             .clicked()
         {
-            let name = format!("Template {}", self.template_manager.template_cnt() + 1);
-            self.template_manager
-                .save_template(&name, self.settings.clone());
-            self.template_name = name.clone();
-            action = SettingsAction::SaveTemplate(name);
-            self.template_menu_open = false;
+            self.save_name = Some(String::new());
         }
+        if let Some(error) = &self.templates.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+            if !self.templates.ready() && ui.button("Retry loading templates").clicked() {
+                self.templates.reload();
+            }
+        }
+
         action
     }
 
@@ -453,13 +503,20 @@ impl SettingsDialog {
     ) -> SettingsAction {
         if !self.template_name.is_empty()
             && ui
-                .button(RichText::new("Update current").size(typography::MD))
+                .add_enabled(
+                    self.templates.ready(),
+                    egui::Button::new(RichText::new("Update current").size(typography::MD)),
+                )
                 .clicked()
         {
-            self.template_manager
-                .save_template(&self.template_name, self.settings.clone());
-            action = SettingsAction::SaveTemplate(self.template_name.clone());
-            self.template_menu_open = false;
+            self.settings.sync_legacy_fields();
+            match self
+                .templates
+                .save(&self.template_name, self.settings.clone())
+            {
+                Ok(()) => action = SettingsAction::SaveTemplate(self.template_name.clone()),
+                Err(error) => self.templates.error = Some(error),
+            }
         }
         action
     }
@@ -470,12 +527,7 @@ impl SettingsDialog {
         style: &SettingsDialogStyle,
         mut action: SettingsAction,
     ) -> SettingsAction {
-        let templates: Vec<String> = self
-            .template_manager
-            .list_templates()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let templates: Vec<String> = self.templates.entries().keys().cloned().collect();
 
         if templates.is_empty() {
             ui.label(
@@ -507,14 +559,34 @@ impl SettingsDialog {
             RichText::new(&name).size(typography::MD)
         };
 
-        if ui.button(text).clicked() {
-            if let Some(template) = self.template_manager.get_template(&name) {
-                self.settings = template.settings.clone();
+        if ui
+            .add_enabled(self.templates.ready(), egui::Button::new(text).truncate())
+            .on_hover_text(&name)
+            .clicked()
+        {
+            if let Some(template) = self.templates.entries().get(&name) {
+                self.settings = template.clone();
                 self.template_name = name.clone();
                 self.update_color_pickers_from_settings();
-                action = SettingsAction::LoadTemplate(name);
+                action = SettingsAction::LoadTemplate(name.clone());
             }
             self.template_menu_open = false;
+        }
+        if ui
+            .add_enabled(
+                self.templates.ready(),
+                egui::Button::new(format!("Delete {name}")).truncate(),
+            )
+            .clicked()
+        {
+            match self.templates.delete(&name) {
+                Ok(()) => {
+                    if self.template_name == name {
+                        self.template_name.clear();
+                    }
+                }
+                Err(error) => self.templates.error = Some(error),
+            }
         }
         action
     }
@@ -546,6 +618,48 @@ impl SettingsDialog {
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    #[test]
+    fn save_as_prompts_for_a_name_without_saving_automatically() {
+        let ctx = Context::default();
+        let mut dialog = SettingsDialog::new();
+        let mut frame = |events| {
+            let mut action = SettingsAction::None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    action = dialog.draw_save_as_button(ui, SettingsAction::None);
+                },
+            );
+            let save_as = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Save as..." => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            });
+            let prompt = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Template name"));
+            output.drop_without_applying_deltas();
+            assert!(
+                matches!(action, SettingsAction::None),
+                "opening the name form must not save a template"
+            );
+            (save_as, prompt)
+        };
+        let pos = frame(vec![]).0.unwrap();
+        frame(vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(vec![egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: Default::default(),
+            }]);
+        }
+        assert!(frame(vec![]).1);
+    }
 
     #[test]
     fn grid_colour_pickers_follow_the_visible_directions() {
@@ -761,6 +875,7 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut dialog = SettingsDialog::new();
                 dialog.open(ChartSettingsState::default());
+                dialog.template_name = "Long template name ".repeat(20);
                 let mut tops = Vec::new();
                 for tab in SettingsTab::all() {
                     dialog.active_tab = *tab;

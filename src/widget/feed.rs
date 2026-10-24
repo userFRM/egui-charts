@@ -43,20 +43,25 @@ pub(crate) struct FeedLink {
     paused: bool,
     next_key: u64,
     /// Requests not answered yet; an answer under any other key is stale and dropped.
-    pending: Vec<(u64, Request)>,
+    pending: Vec<(u64, Request, u32)>,
+    retries: Vec<(f64, Request, u32)>,
     subscription: Option<SubscriptionId>,
     instrument: Option<Instrument>,
     trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
     order_book: Option<OrderBook>,
-    /// A history or resolve request failed: no automatic request until the next reload.
+    /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
 }
 
+#[derive(Clone)]
 enum Request {
     Resolve,
-    History { scroll_back: bool },
+    History {
+        request: HistoryRequest,
+        scroll_back: bool,
+    },
     Trades,
 }
 
@@ -68,7 +73,7 @@ impl FeedLink {
     /// A reply for `request`, under a new key.
     fn reply<T: Send + 'static>(&mut self, request: Request) -> Reply<T> {
         self.next_key += 1;
-        self.pending.push((self.next_key, request));
+        self.pending.push((self.next_key, request, 0));
         self.inbox.reply(self.next_key)
     }
 
@@ -110,6 +115,7 @@ impl Chart {
             paused: false,
             next_key: 0,
             pending: Vec::new(),
+            retries: Vec::new(),
             subscription: None,
             instrument: None,
             trades: Trades::new(TRADE_CAPACITY),
@@ -141,7 +147,8 @@ impl Chart {
     /// Shows `symbol` from the next [`show`](Self::show). With a feed, a changed symbol clears
     /// the series and its studies, then resolves, loads and subscribes it, in one load per
     /// `show` however many setters ran; an unchanged one does nothing, also after an error.
-    /// Without a feed it only sets the label: replace the bars with
+    /// Drawings and markers are retained separately for each symbol. A changed symbol clears
+    /// chart undo history. Without a feed replace the bars with
     /// [`set_data`](Self::set_data).
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
         let symbol = symbol.into();
@@ -152,6 +159,20 @@ impl Chart {
             link.instrument = None;
         }
         if symbol != self.symbol {
+            self.anchor_drawing_points();
+            self.drawings.cancel_curr_drawing();
+            self.drawings.end_drag_handle();
+            self.drawings.deselect();
+            let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
+            next.0.options = self.drawings.options.clone();
+            next.0.active_tool = self.drawings.active_tool;
+            next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
+            next.0.eraser_mode = self.drawings.eraser_mode;
+            next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
+            std::mem::swap(&mut self.drawings, &mut next.0);
+            std::mem::swap(&mut self.marks, &mut next.1);
+            self.symbol_drawings.insert(self.symbol.clone(), next);
+            self.history = Default::default();
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
@@ -202,6 +223,14 @@ impl Chart {
             if let Some(link) = &mut self.feed_link {
                 link.reload_pending = true;
             }
+        }
+    }
+
+    /// Reloads the current feed key on the next frame, retaining drawings and chart history.
+    /// Use after changing host-side feed settings or to retry a permanent request failure.
+    pub fn reload_feed(&mut self) {
+        if let Some(link) = &mut self.feed_link {
+            link.reload_pending = true;
         }
     }
 
@@ -301,19 +330,25 @@ impl Chart {
             });
         }
 
+        let now = ctx.input(|input| input.time);
         let drained = link.inbox.drain();
         for (key, answer) in drained.answers {
-            let Some(at) = link.pending.iter().position(|(pending, _)| *pending == key) else {
+            let Some(at) = link
+                .pending
+                .iter()
+                .position(|(pending, _, _)| *pending == key)
+            else {
                 continue;
             };
-            match link.pending.swap_remove(at).1 {
+            let (_, request, failures) = link.pending.swap_remove(at);
+            match request.clone() {
                 Request::Resolve => match result::<Instrument>(answer) {
                     Ok(instrument) => self.subscribe(&mut link, instrument),
-                    Err(error) => self.stop(&mut link, error),
+                    Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
-                Request::History { scroll_back } => match result::<HistoryPage>(answer) {
+                Request::History { scroll_back, .. } => match result::<HistoryPage>(answer) {
                     Ok(page) => self.apply_page(&link, page, scroll_back),
-                    Err(error) => self.stop(&mut link, error),
+                    Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
                 Request::Trades => match result::<TradePage>(answer) {
                     Ok(page) => {
@@ -345,6 +380,9 @@ impl Chart {
             }
             let feed = &mut self.feed;
             feed.status = updates.status.or(feed.status);
+            feed.symbol_catalog_revision = feed
+                .symbol_catalog_revision
+                .wrapping_add(u64::from(updates.symbols_changed));
             feed.last_error = updates.error.or(feed.last_error.take());
             feed.late_ticks += updates.late_ticks;
             feed.repeated_ticks += updates.repeated_ticks;
@@ -362,6 +400,37 @@ impl Chart {
             link.feed.request_depth_snapshot(id);
         }
 
+        let mut at = 0;
+        while at < link.retries.len() {
+            if link.retries[at].0 > now {
+                at += 1;
+                continue;
+            }
+            let (_, request, failures) = link.retries.swap_remove(at);
+            let feed = Arc::clone(&link.feed);
+            match request.clone() {
+                Request::Resolve => {
+                    let reply = link.reply(request);
+                    link.pending.last_mut().unwrap().2 = failures;
+                    feed.resolve(&self.symbol, reply);
+                }
+                Request::History {
+                    request: history, ..
+                } => {
+                    self.feed.loading_history = true;
+                    let reply = link.reply(request);
+                    link.pending.last_mut().unwrap().2 = failures;
+                    feed.history(history, reply);
+                }
+                Request::Trades => unreachable!(),
+            }
+        }
+        if let Some(deadline) = link.retries.iter().map(|r| r.0).min_by(f64::total_cmp) {
+            ctx.request_repaint_after(
+                std::time::Duration::try_from_secs_f64((deadline - now).max(0.0))
+                    .unwrap_or(std::time::Duration::MAX),
+            );
+        }
         self.scroll_back(&mut link);
         self.feed_link = Some(link);
     }
@@ -374,6 +443,7 @@ impl Chart {
             link.feed.unsubscribe(id);
         }
         link.pending.clear();
+        link.retries.clear();
         self.legend_instrument = link
             .instrument
             .take()
@@ -386,7 +456,7 @@ impl Chart {
         let timeframe = self.timeframe.unwrap_or_default();
         link.clock = clock;
         link.rebuild_bubbles();
-        // Drawings stay: they belong to the chart, not to the bars of one symbol.
+        // Timestamp anchors survive the empty interval between history requests.
         self.set_data(SeriesId::MAIN, Vec::new());
         self.feed = FeedState::default();
         if self.symbol.is_empty() {
@@ -403,7 +473,10 @@ impl Chart {
             count: link.initial_bars,
             extended_hours: self.extended_hours,
         };
-        let reply = link.reply(Request::History { scroll_back: false });
+        let reply = link.reply(Request::History {
+            request: request.clone(),
+            scroll_back: false,
+        });
         link.feed.history(request, reply);
     }
 
@@ -456,12 +529,37 @@ impl Chart {
         self.feed.history_complete |= page.end_of_history || empty || stale;
     }
 
-    /// Reports `error` and stops automatic requests until the symbol or timeframe changes.
-    fn stop(&mut self, link: &mut FeedLink, error: FeedError) {
+    /// Retries transient failures, retaining the exact page boundary and independent attempts.
+    fn request_failed(
+        &mut self,
+        link: &mut FeedLink,
+        request: Request,
+        failures: u32,
+        error: FeedError,
+        now: f64,
+    ) {
         log::warn!("feed request for {} failed: {error}", self.symbol);
+        if matches!(request, Request::History { .. }) {
+            self.feed.loading_history = false;
+        }
+        if error.is_recoverable() {
+            let backoff = std::time::Duration::from_secs(1 << failures.min(6))
+                .min(std::time::Duration::from_secs(60));
+            let delay = match &error {
+                FeedError::RateLimited {
+                    retry_after: Some(after),
+                } => backoff.max(*after),
+                _ => backoff,
+            };
+            link.retries.push((
+                now + delay.as_secs_f64(),
+                request,
+                failures.saturating_add(1),
+            ));
+        } else {
+            link.paging_stopped = true;
+        }
         self.feed.last_error = Some(error);
-        self.feed.loading_history = false;
-        link.paging_stopped = true;
     }
 
     /// Asks for the page before the oldest bar once the view nears it.
@@ -469,6 +567,10 @@ impl Chart {
         let feed = &self.feed;
         if feed.loading_history
             || feed.history_complete
+            || link
+                .retries
+                .iter()
+                .any(|(_, request, _)| matches!(request, Request::History { .. }))
             || link.paging_stopped
             || !self.older_bars_drawn
         {
@@ -491,7 +593,10 @@ impl Chart {
             extended_hours: self.extended_hours,
         };
         self.feed.loading_history = true;
-        let reply = link.reply(Request::History { scroll_back: true });
+        let reply = link.reply(Request::History {
+            request: request.clone(),
+            scroll_back: true,
+        });
         link.feed.history(request, reply);
     }
 }
@@ -519,7 +624,7 @@ mod tests {
     use chrono::{DateTime, TimeDelta, Utc};
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, Clone, PartialEq)]
     enum Call {
         Resolve(String),
         History(HistoryRequest),
@@ -872,10 +977,99 @@ mod tests {
         }
     }
 
+    #[test]
+    fn transient_requests_back_off_and_keep_the_failed_page_boundary() {
+        for (error, delay) in [
+            (FeedError::Network("offline".into()), 1.0),
+            (FeedError::Unanswered, 1.0),
+            (
+                FeedError::RateLimited {
+                    retry_after: Some(std::time::Duration::from_secs(7)),
+                },
+                7.0,
+            ),
+            (FeedError::RateLimited { retry_after: None }, 1.0),
+        ] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            feed.page().send(page(bars(1000), false));
+            feed.resolve().send(Ok(Instrument::new("A")));
+            frames.run(&mut chart);
+            chart.set_start_idx(0);
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            feed.calls();
+            let expected = history("A", Timeframe::Min1, Some(bars(1)[0].time));
+            feed.page().send(Err(error.clone()));
+            frames.run(&mut chart);
+            let failed_at = frames.time;
+            frames.time = failed_at + delay - 0.1;
+            frames.run(&mut chart);
+            assert!(feed.calls().is_empty(), "early retry: {error}");
+            frames.time = failed_at + delay;
+            frames.run(&mut chart);
+            assert_eq!(
+                feed.calls(),
+                std::slice::from_ref(&expected),
+                "missing retry: {error}"
+            );
+            feed.page()
+                .send(Err(FeedError::Network("still offline".into())));
+            frames.run(&mut chart);
+            let second = frames.time;
+            frames.time = second + 1.5;
+            frames.run(&mut chart);
+            assert!(feed.calls().is_empty(), "backoff did not double");
+            frames.time = second + 2.0;
+            frames.run(&mut chart);
+            assert_eq!(feed.calls(), [expected]);
+            feed.page().send(page(bars(1000), true));
+            frames.run(&mut chart);
+            assert!(chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+        }
+        // A failed resolve retries independently and a changed key cancels its deadline.
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.calls();
+        feed.resolve()
+            .send(Err(FeedError::Network("offline".into())));
+        feed.page().send(page(bars(10), true));
+        frames.run(&mut chart);
+        frames.time += 1.0;
+        frames.run(&mut chart);
+        assert_eq!(feed.calls(), [Call::Resolve("A".into())]);
+        feed.resolve()
+            .send(Err(FeedError::Network("offline".into())));
+        frames.run(&mut chart);
+        chart.set_symbol("B");
+        frames.run(&mut chart);
+        feed.calls();
+        frames.time += 60.0;
+        frames.run(&mut chart);
+        assert!(feed.calls().is_empty(), "old symbol retry survived");
+        // A host can use an arbitrarily long rate limit, including Duration::MAX.
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.calls();
+        feed.page().send(Err(FeedError::RateLimited {
+            retry_after: Some(std::time::Duration::MAX),
+        }));
+        frames.run(&mut chart);
+        frames.time += 3600.0;
+        frames.run(&mut chart);
+        assert!(feed.calls().is_empty(), "long rate limit resumed early");
+    }
+
     /// Guards the feed contract of the chart: nothing blocks or calls the feed outside `show`,
     /// each request is issued once, answers and pushes reach the bars, a push from another thread
     /// wakes the UI once per burst, order flow is asked for and reaches the volume bubbles,
-    /// scroll-back ends on every end signal, an error stops automatic requests until the symbol
+    /// scroll-back ends on every end signal, a permanent error stops requests until the symbol
     /// or timeframe changes, a change releases the old subscription and ignores whatever comes
     /// for it, and a dropped chart unsubscribes without waking itself.
     #[test]
@@ -912,6 +1106,15 @@ mod tests {
         let subscribe = Call::Subscribe(id, "A".into(), Timeframe::Min1, false);
         assert_eq!(feed.calls(), [subscribe, trades], "c");
         assert_eq!(chart.instrument(), Some(&Instrument::new("A")), "c");
+        feed.sink().symbols_changed();
+        feed.sink().symbols_changed();
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert_eq!(
+            chart.feed_state(main).unwrap().symbol_catalog_revision,
+            1,
+            "c: catalog notification coalesces"
+        );
         chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
         let woken = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&woken);
@@ -1036,7 +1239,7 @@ mod tests {
         }
         assert_eq!(feed.calls().len(), 2, "d: end of history");
 
-        // e. A failed page stops scroll-back, also through a setter called every frame with the
+        // e. A permanently failed page stops scroll-back, also through a setter called every frame with the
         // value it has; a live error does not.
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
@@ -1047,9 +1250,10 @@ mod tests {
         frames.run(&mut chart);
         frames.run(&mut chart);
         feed.calls();
-        feed.page().send(Err(FeedError::Network("reset".into())));
+        feed.page()
+            .send(Err(FeedError::InvalidData("reset".into())));
         frames.run(&mut chart);
-        let error = Some(FeedError::Network("reset".into()));
+        let error = Some(FeedError::InvalidData("reset".into()));
         assert_eq!(chart.feed_state(main).unwrap().last_error, error, "e");
         for _ in 0..10 {
             chart.set_timeframe(Timeframe::Min1);
@@ -1066,7 +1270,11 @@ mod tests {
         frames.run(&mut chart);
         feed.sink().report_error(FeedError::Network("reset".into()));
         frames.run(&mut chart);
-        assert_eq!(chart.feed_state(main).unwrap().last_error, error, "e: live");
+        assert_eq!(
+            chart.feed_state(main).unwrap().last_error,
+            Some(FeedError::Network("reset".into())),
+            "e: live"
+        );
         chart.set_start_idx(0);
         frames.run(&mut chart);
         frames.run(&mut chart);

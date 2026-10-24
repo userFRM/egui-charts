@@ -249,6 +249,16 @@ pub enum FeedError {
     Other(String),
 }
 
+impl FeedError {
+    /// Whether retrying the same request can succeed without changing its inputs.
+    pub fn is_recoverable(&self) -> bool {
+        matches!(
+            self,
+            Self::Network(_) | Self::RateLimited { .. } | Self::Unanswered
+        )
+    }
+}
+
 impl fmt::Display for FeedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -274,6 +284,8 @@ impl Error for FeedError {}
 pub struct FeedState {
     /// Last status pushed by the feed. `None` without a live subscription.
     pub status: Option<FeedStatus>,
+    /// Catalog-change notifications received for this subscription, for host search refreshes.
+    pub symbol_catalog_revision: u64,
     pub loading_history: bool,
     pub history_complete: bool,
     pub last_error: Option<FeedError>,

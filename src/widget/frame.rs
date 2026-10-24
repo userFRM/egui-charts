@@ -295,6 +295,7 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
         self.pump(ui.ctx());
@@ -305,15 +306,9 @@ impl Chart {
         self.show_elements();
         let frame = ui.ctx().cumulative_frame_nr();
         let width = ui.available_width();
-        if self
-            .last_layout
-            .is_none_or(|(previous, _)| previous != width)
-        {
-            self.last_layout = Some((width, frame));
-        }
         let resized = self
             .last_layout
-            .is_some_and(|(_, changed)| changed == frame);
+            .is_none_or(|(previous, changed)| previous != width || changed == frame);
         let previous_axis_width = self.measured_axis_width;
         self.last_rendered_indicator_panes.clear();
         self.sync_panes();
@@ -328,6 +323,11 @@ impl Chart {
         } else {
             self.show_internal(ui, None, footprint)
         };
+        if self.last_rendered_price_rect.width() > 1.0
+            && self.last_layout.is_none_or(|(previous, _)| previous != width)
+        {
+            self.last_layout = Some((width, frame));
+        }
         if (self.measured_axis_width - previous_axis_width).abs() > 0.5 {
             let old_width = self.last_rendered_price_rect.width();
             let new_width = self
@@ -1049,9 +1049,12 @@ impl Chart {
             renderers::render_markers(
                 &clipped_price_ctx,
                 &self.marks,
-                visible_data,
+                self.state.shown(),
                 &price_map,
-                &coords,
+                &crate::chart::coords::ChartMapping {
+                    start_idx: 0,
+                    ..coords
+                },
             );
         }
 
@@ -2826,6 +2829,60 @@ mod tests {
             let time = chart.state.shown()[index + 1].time;
             assert_eq!(chart.format_time(time), expected, "host readout: {case:?}");
         }
+    }
+
+    #[test]
+    fn initial_axis_passes_keep_zoom_and_later_measurements_keep_range() {
+        use crate::model::Instrument;
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(2)));
+        let initial_view = chart.get_time_scale_state();
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::ZERO),
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+            },
+        )
+        .drop_without_applying_deltas();
+        let mut passes = 0;
+        ctx.run_ui(input(), |ui| {
+            chart.show(ui);
+            passes += 1;
+            if ui.ctx().current_pass_index() == 0 {
+                // Metadata arriving during startup can widen labels on the discarded pass.
+                chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(6)));
+                ui.ctx().request_discard("instrument metadata arrived");
+            }
+        })
+        .drop_without_applying_deltas();
+        assert!(passes > 1);
+        assert_eq!(chart.get_time_scale_state(), initial_view);
+
+        ctx.run_ui(input(), |ui| {
+            chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        let width = chart.get_rendered_price_rect().width();
+        let spacing = chart.state.time_scale().bar_spacing();
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(10)));
+        ctx.run_ui(input(), |ui| {
+            chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        let new_width = chart.get_rendered_price_rect().width();
+        assert!(new_width < width, "later labels must widen the axis");
+        assert!(
+            (new_width / chart.state.time_scale().bar_spacing() - width / spacing).abs() < 1e-4
+        );
     }
 
     #[test]

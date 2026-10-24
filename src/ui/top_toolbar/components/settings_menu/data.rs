@@ -9,7 +9,7 @@ use egui::Color32;
 // ============================================================================
 
 /// Candle color configuration (body, border, wick for up/down candles)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CandleColorConfig {
     pub body_up: Color32,
     pub body_down: Color32,
@@ -33,7 +33,7 @@ impl Default for CandleColorConfig {
 }
 
 /// Status line display options
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StatusLineOptions {
     pub show_symbol: bool,
     /// Display the description instead of the ticker.
@@ -70,7 +70,7 @@ impl Default for StatusLineOptions {
 }
 
 /// Canvas tab: Chart basic styles settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartBasicStylesSettings {
     pub background_type: BackgroundType,
     /// `Color32::PLACEHOLDER` follows the active chart background until a colour is chosen.
@@ -91,7 +91,7 @@ impl Default for ChartBasicStylesSettings {
 }
 
 /// Canvas tab: Grid lines settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GridLinesSettings {
     pub mode: GridLinesMode,
     pub horizontal_color: Color32,
@@ -109,7 +109,7 @@ impl Default for GridLinesSettings {
 }
 
 /// Canvas tab: Crosshair settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CrosshairSettings {
     pub color: Color32,
     pub line_width: f32,
@@ -127,7 +127,7 @@ impl Default for CrosshairSettings {
 }
 
 /// Line style for crosshair and other elements
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum LineStyle {
     Solid,
     #[default]
@@ -150,7 +150,7 @@ impl LineStyle {
 }
 
 /// Canvas tab: Watermark settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WatermarkSettings {
     pub mode: WatermarkMode,
     pub color: Color32,
@@ -170,7 +170,7 @@ impl Default for WatermarkSettings {
 }
 
 /// Canvas tab: Scales appearance settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScalesAppearanceSettings {
     pub text_color: Color32,
     pub font_size: u8,
@@ -188,7 +188,7 @@ impl Default for ScalesAppearanceSettings {
 }
 
 /// Canvas tab: Buttons visibility settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ButtonsSettings {
     pub navigation: ButtonVisibility,
     pub pane: ButtonVisibility,
@@ -204,7 +204,7 @@ impl Default for ButtonsSettings {
 }
 
 /// Canvas tab: Margins settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MarginsSettings {
     pub top_percent: f32,
     pub bottom_percent: f32,
@@ -222,7 +222,7 @@ impl Default for MarginsSettings {
 }
 
 /// Scales and lines tab settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScalesAndLinesSettings {
     pub auto_scale: bool,
     pub log_scale: bool,
@@ -261,7 +261,7 @@ impl Default for ScalesAndLinesSettings {
 }
 
 /// Trading tab settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TradingSettings {
     pub show_poss: bool,
     pub show_orders: bool,
@@ -281,7 +281,7 @@ impl Default for TradingSettings {
 }
 
 /// Alerts tab settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AlertsSettings {
     pub show_alerts: bool,
     pub show_alert_labels: bool,
@@ -299,7 +299,7 @@ impl Default for AlertsSettings {
 }
 
 /// Events tab settings
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EventsSettings {
     pub show_dividends: bool,
     pub show_splits: bool,
@@ -319,7 +319,7 @@ impl Default for EventsSettings {
 }
 
 /// Comprehensive chart settings state
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartSettingsState {
     // Symbol tab
     pub candle_colors: CandleColorConfig,

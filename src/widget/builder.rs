@@ -82,6 +82,7 @@ impl Chart {
         Self {
             state,
             config: ChartConfig::default(),
+            applied_config_scale_mode: Default::default(),
             start_idx: 0,
             chart_options,
             keyboard: super::keyboard::KeyboardState::default(),
@@ -120,6 +121,7 @@ impl Chart {
             // 0 and 1 are the main and volume series.
             next_series: 2,
             drawings: DrawingManager::new(),
+            symbol_drawings: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane_layout::PaneLayout::default(),
             box_zoom: BoxZoomState::new(),
@@ -183,7 +185,7 @@ impl Chart {
     /// * `config` -- Custom visual configuration (colors, padding, feature flags)
     pub fn with_config(data: BarData, config: ChartConfig) -> Self {
         let mut chart = Self::new(data);
-        chart.config = config;
+        chart.update_config(config);
         chart
     }
 
@@ -256,12 +258,27 @@ impl Chart {
         self.start_idx
     }
 
+    /// Applies a changed configuration mode without overriding direct scale controls.
+    pub(super) fn apply_config_scale_mode(&mut self) {
+        let mode = self.config.right_axis_scale_mode;
+        if self.applied_config_scale_mode != mode {
+            if self.state.price_scale().options().mode != mode {
+                self.state.price_scale_mut().reset();
+                self.state.clear_zoom_history();
+                self.state.price_scale_mut().options_mut().mode = mode;
+            }
+            self.applied_config_scale_mode = mode;
+        }
+    }
+
     /// Replaces the visual configuration on a persistent chart instance.
     ///
     /// Use this when reconfiguring a long-lived chart (e.g., after the user
     /// changes settings). For initial construction prefer [`Chart::with_config`].
     pub fn update_config(&mut self, config: ChartConfig) {
         self.config = config;
+        self.applied_config_scale_mode = self.state.price_scale().options().mode;
+        self.apply_config_scale_mode();
     }
 
     /// Updates the desired number of visible bars on a persistent chart instance.
@@ -748,10 +765,8 @@ impl ChartBuilder {
         // Apply theme to config
         self.config = self.theme.apply_to_config(self.config);
 
-        let right_scale_mode = self.config.right_axis_scale_mode;
         let mut chart =
             Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
-        chart.state.price_scale_mut().options_mut().mode = right_scale_mode;
 
         chart.set_chart_type(self.chart_type);
         chart.set_visible_bars(self.visible_candles);
@@ -780,6 +795,133 @@ mod tests {
     use super::*;
     use crate::model::Bar;
     use chrono::{Duration, TimeZone, Utc};
+
+    #[test]
+    fn drawings_keep_times_through_replacement_streaming_and_symbol_switches() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::SeriesId;
+        let bars = |times: &[i64]| {
+            times
+                .iter()
+                .map(|&t| Bar::new(Utc.timestamp_opt(t, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0))
+                .collect()
+        };
+        let mut chart = Chart::new(BarData::from_bars(bars(&[60, 120, 180])));
+        chart.set_symbol("A");
+        chart.user_action(|chart| {
+            let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+            drawing.chart_points = [-0.5, 0.5, 3.5].map(|i| ChartPoint::new(i, 10.0)).to_vec();
+            chart.drawings_mut().drawings.push(drawing);
+            chart
+                .drawings_mut()
+                .edit_drawing(7, |d| d.color = [1, 2, 3, 255]);
+        });
+        chart.set_markers(
+            SeriesId::MAIN,
+            vec![crate::model::Marker::new(Utc.timestamp_opt(90, 0).unwrap())],
+        );
+        // Anchors are at 30, 90, 270 seconds. New bars include an interior gap and
+        // a new cadence: their projected indices follow piecewise linear interpolation.
+        for (times, expected) in [
+            (vec![0, 60, 120, 180], [0.5, 1.5, 4.5]),
+            (vec![0, 120, 240, 360], [0.25, 0.75, 2.25]),
+            (vec![], [0.25, 0.75, 2.25]),
+            (vec![0, 60, 180, 300], [0.5, 1.25, 2.75]),
+        ] {
+            chart.set_data(SeriesId::MAIN, bars(&times));
+            for (point, want) in chart.drawings().drawings[0]
+                .chart_points
+                .iter()
+                .zip(expected)
+            {
+                assert_eq!(point.bar_idx, want, "times {times:?}");
+            }
+        }
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 1.25);
+        assert!(chart.redo());
+        chart.update(SeriesId::MAIN, bars(&[120]).pop().unwrap());
+        assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 1.5);
+        // An index edited by the host gets a new time before the next mutation.
+        chart.drawings_mut().drawings[0].chart_points[1].bar_idx = 2.5;
+        chart.drawings_mut().stay_in_drawing_mode = true;
+        chart.drawings_mut().eraser_mode = true;
+        chart.drawings_mut().start_drag_body(7, egui::Pos2::ZERO);
+        chart.set_symbol("B");
+        assert!(chart.drawings().drawings.is_empty());
+        assert!(chart.marks.is_empty());
+        assert!(chart.drawings().stay_in_drawing_mode);
+        assert!(chart.drawings().eraser_mode);
+        chart.set_data(SeriesId::MAIN, bars(&[0, 120, 240]));
+        chart.set_symbol("A");
+        assert!(chart.drawings().dragging_handle.is_none());
+        chart.set_data(SeriesId::MAIN, bars(&[0, 60, 120, 180, 240, 300]));
+        assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 2.5);
+        assert_eq!(chart.marks.len(), 1);
+    }
+
+    #[test]
+    fn configured_price_mode_reaches_constructors_and_mutations() {
+        use crate::scales::PriceScaleMode;
+        for entry in 0..4 {
+            let config = ChartConfig {
+                right_axis_scale_mode: PriceScaleMode::Logarithmic,
+                ..Default::default()
+            };
+            let mut chart = match entry {
+                0 => Chart::with_config(BarData::new(), config.clone()),
+                1 => ChartBuilder::new().with_config(config.clone()).build(),
+                _ => Chart::new(BarData::new()),
+            };
+            if entry == 2 {
+                chart.update_config(config);
+            } else if entry == 3 {
+                chart.config_mut().right_axis_scale_mode = PriceScaleMode::Logarithmic;
+            }
+            let ctx = egui::Context::default();
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                chart.state.price_scale().options().mode,
+                PriceScaleMode::Logarithmic,
+                "entry {entry}"
+            );
+            chart.state.price_scale_mut().set_range(1.0, 2.0);
+            chart.update_config(chart.config().clone());
+            assert!(chart.state.price_scale().is_manual());
+            chart.config_mut().right_axis_scale_mode = PriceScaleMode::Normal;
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                chart.state.price_scale().options().mode,
+                PriceScaleMode::Normal
+            );
+            assert!(!chart.state.price_scale().is_manual());
+            chart.state.price_scale_mut().set_range(10.0, 20.0);
+            let range = chart.state.price_scale().range();
+            chart.user_action(|chart| {
+                chart.config_mut().right_axis_scale_mode = PriceScaleMode::Logarithmic;
+            });
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert!(chart.undo());
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert!(
+                chart.state.price_scale().is_manual(),
+                "undo restores the range"
+            );
+            assert_eq!(chart.state.price_scale().range(), range);
+        }
+    }
 
     /// Both entry points fit 50 slots once and leave the same view at the latest bar.
     #[test]

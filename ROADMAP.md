@@ -507,7 +507,7 @@ The ui_kit components are generic building blocks:
 - [x] Bars stay in time order, one per open time; an out-of-order bar is inserted in place
 
 ### Templates
-- [ ] `TemplateManager` keeps templates in memory only (`ui/model.rs`)
+- [x] Named chart, study and drawing templates use host storage (`ui/dialogs/templates`)
 - [ ] No template persistence or serialization
 - [ ] No user-facing template management UI (beyond drawing toolbar placeholder)
 

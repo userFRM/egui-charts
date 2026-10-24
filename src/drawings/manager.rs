@@ -874,6 +874,18 @@ impl DrawingManager {
         self.drawings.iter().map(|d| d.z_order).max().unwrap_or(0)
     }
 
+    pub(crate) fn visit_chart_points(&mut self, visit: &mut impl FnMut(&mut ChartPoint)) {
+        for drawing in self
+            .drawings
+            .iter_mut()
+            .chain(&mut self.curr_drawing)
+            .chain(&mut self.drag_old_state)
+        {
+            drawing.chart_points.iter_mut().for_each(&mut *visit);
+        }
+        self.history.visit_chart_points(visit);
+    }
+
     // === Coordinate updates ===
 
     /// Recomputes screen coordinates for all drawings (completed and in-progress)

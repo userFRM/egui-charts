@@ -50,6 +50,19 @@ struct Study {
 }
 
 impl ChartHistory {
+    pub(super) fn visit_chart_points(
+        &mut self,
+        visit: &mut impl FnMut(&mut crate::drawings::ChartPoint),
+    ) {
+        for action in self.undo.iter_mut().chain(&mut self.redo) {
+            action.drawings.visit_chart_points(visit);
+        }
+        if let Some(pending) = &mut self.pending {
+            pending.standalone_drawings.visit_chart_points(visit);
+            pending.before.drawings.visit_chart_points(visit);
+        }
+    }
+
     fn push(&mut self, action: Action) {
         self.redo.clear();
         if self.undo.len() == 100 {
@@ -141,6 +154,7 @@ impl Chart {
     /// Begin a user action spanning a host handler that also borrows non-chart state.
     /// Pair with [`Self::end_user_action`]; prefer [`Self::user_action`] when possible.
     pub fn begin_user_action(&mut self) {
+        self.apply_config_scale_mode();
         if let Some(pending) = &mut self.history.pending {
             pending.depth += 1;
             return;
@@ -183,6 +197,7 @@ impl Chart {
             self.history.pending = Some(pending);
             return;
         }
+        self.apply_config_scale_mode();
         self.drawings.swap_history(&mut pending.standalone_drawings);
         self.sync_panes();
         let mut action = pending.before;
@@ -434,16 +449,6 @@ impl Chart {
         }
         self.history.changed = true;
         true
-    }
-
-    pub(super) fn shift_drawing_history(&mut self, from: f32, delta: f32) {
-        self.drawings.shift_bar_indices(from, delta);
-        for action in self.history.undo.iter_mut().chain(&mut self.history.redo) {
-            action.drawings.shift_bar_indices(from, delta);
-        }
-        if let Some(pending) = &mut self.history.pending {
-            pending.standalone_drawings.shift_bar_indices(from, delta);
-        }
     }
 }
 
@@ -712,8 +717,18 @@ mod tests {
         host.stored_id = Some("host".into());
         chart.drawings_mut().add_synced_drawing(host);
         chart.drawings.pending_sync.lock().unwrap().clear();
-        // A feed prepend moves commands on both chart stacks, as it does live drawings.
-        chart.shift_drawing_history(f32::NEG_INFINITY, 3.0);
+        // Prepending real bars remaps commands on both stacks, as it does live drawings.
+        let prepend = |chart: &mut Chart, count| {
+            let mut bars = chart.bars(SeriesId::MAIN).to_vec();
+            let first = bars[0].clone();
+            for days in 1..=count {
+                let mut older = first.clone();
+                older.time -= chrono::Duration::days(days);
+                bars.push(older);
+            }
+            chart.set_data(SeriesId::MAIN, bars);
+        };
+        prepend(&mut chart, 3);
         assert!(chart.undo());
         assert_eq!(chart.drawings.drawings.len(), 2);
         assert_eq!(chart.drawings.drawings[0].chart_points[0].bar_idx, 4.0);
@@ -727,7 +742,7 @@ mod tests {
             chart.drawings.drawings[0].stored_id.as_deref(),
             Some("host")
         );
-        chart.shift_drawing_history(f32::NEG_INFINITY, 2.0);
+        prepend(&mut chart, 2);
         assert!(chart.redo());
         assert_eq!(
             chart.drawings.drawings.last().unwrap().chart_points[0].bar_idx,

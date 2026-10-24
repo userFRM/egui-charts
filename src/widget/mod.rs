@@ -120,6 +120,7 @@ pub use indicator_pane::{
 // Re-export from logic layer
 use crate::chart::state;
 
+mod anchors;
 pub mod builder;
 mod crosshair;
 mod feed;
@@ -137,7 +138,7 @@ mod selection;
 mod series;
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
-mod sync;
+pub(crate) mod sync;
 use feed::FeedLink;
 pub use sync::VisibleTimeRange;
 pub(crate) mod tool_interaction;
@@ -210,6 +211,7 @@ pub struct Chart {
     pub(crate) state: ChartState,
     /// Visual configuration controlling colors, padding, grid visibility, and more.
     pub(crate) config: ChartConfig,
+    applied_config_scale_mode: crate::scales::PriceScaleMode,
     /// Whether the main price series and its volume are drawn.
     pub(crate) main_series_visible: bool,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
@@ -274,6 +276,7 @@ pub struct Chart {
     pub(crate) next_series: usize,
     /// The chart's drawings and the active drawing tool.
     pub(crate) drawings: DrawingManager,
+    symbol_drawings: std::collections::HashMap<String, (DrawingManager, Vec<crate::model::Marker>)>,
     /// Right-click box zoom state
     pub(crate) box_zoom: BoxZoomState,
     /// Whether zoom mode is currently active (controlled by zoom toolbar button)
@@ -298,7 +301,7 @@ pub struct Chart {
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,
     pub(crate) measured_axis_width: f32,
-    /// Widget width and the frame it changed, including discarded sizing passes.
+    /// Last usable widget width and its first frame, including discarded sizing passes.
     last_layout: Option<(f32, u64)>,
     last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
