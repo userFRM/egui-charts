@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- Changing the demo interval from either toolbar refreshes the top interval button along with the chart legend and range toolbar. ([#670](https://github.com/userFRM/egui-charts/issues/670))
+
 ### Added
 
 - `Chart::study_values_at` returns each visible plot's title, value, precision and colour, retaining gaps as missing values. `DataWindowInfo::from_chart` populates OHLCV, previous-close change, chart-formatted time and visible study rows from the hovered rendered bar, with latest-bar fallback. The demo uses this library population, and floating and tracking tooltips include the same study rows within their plot bounds. Price-based charts omit source-indexed studies. Migration: `DataWindowInfo` literals include `studies` or use `Default`. ([#119](https://github.com/userFRM/egui-charts/issues/119))
