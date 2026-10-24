@@ -52,59 +52,7 @@ impl StudyTemplate {
     }
 }
 
-/// Drawing properties without anchors or record identity. Apply to an existing drawing of the
-/// same type; its coordinates, name, notes, layer and persistence identity stay intact.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct DrawingTemplate {
-    /// Tool and reusable properties. Serialization omits anchors and record identity.
-    pub settings: crate::drawings::Drawing,
-}
-
-impl DrawingTemplate {
-    /// Capture the properties of a selected drawing.
-    pub fn from_drawing(drawing: &crate::drawings::Drawing) -> Self {
-        let mut settings = drawing.clone();
-        settings.id = 0;
-        settings.stored_id = None;
-        settings.created_at = None;
-        settings.notes = None;
-        settings.label = None;
-        settings.points.clear();
-        settings.chart_points.clear();
-        settings.level_ys.clear();
-        settings.completed = false;
-        Self { settings }
-    }
-
-    /// Apply properties without moving or replacing the selected drawing. Hosts wrap this edit
-    /// in their drawing manager's `edit_drawing` to retain undo and persistence notifications.
-    pub fn apply_to(&self, drawing: &mut crate::drawings::Drawing) -> Result<(), &'static str> {
-        if self.settings.tool_type != drawing.tool_type {
-            return Err("Select a drawing of the template's type");
-        }
-        if !self.settings.stroke_width.is_finite()
-            || self.settings.stroke_width <= 0.0
-            || !self.settings.font_size.is_finite()
-            || self.settings.font_size <= 0.0
-        {
-            return Err("Invalid drawing template dimensions");
-        }
-        *drawing = crate::drawings::Drawing {
-            id: drawing.id,
-            stored_id: drawing.stored_id.clone(),
-            created_at: drawing.created_at,
-            notes: drawing.notes.clone(),
-            label: drawing.label.clone(),
-            points: drawing.points.clone(),
-            chart_points: drawing.chart_points.clone(),
-            level_ys: drawing.level_ys.clone(),
-            completed: drawing.completed,
-            z_order: drawing.z_order,
-            ..self.settings.clone()
-        };
-        Ok(())
-    }
-}
+pub use crate::drawings::DrawingTemplate;
 
 #[cfg(test)]
 mod tests {
@@ -142,11 +90,13 @@ mod tests {
         drawing.stored_id = Some("host-id".into());
         drawing.notes = Some("note".into());
         drawing.label = Some("name".into());
+        drawing.screen_anchor = Some([0.25, 0.75]);
         let mut template = DrawingTemplate::from_drawing(&drawing);
         template.settings.stroke_width = 4.0;
         let template: DrawingTemplate =
             serde_json::from_str(&serde_json::to_string(&template).unwrap()).unwrap();
         assert!(template.settings.chart_points.is_empty());
+        assert!(template.settings.screen_anchor.is_none());
         template.apply_to(&mut drawing).unwrap();
         assert_eq!(drawing.stroke_width, 4.0);
         assert_eq!(drawing.id, 17);
@@ -154,6 +104,7 @@ mod tests {
         assert_eq!(drawing.notes.as_deref(), Some("note"));
         assert_eq!(drawing.label.as_deref(), Some("name"));
         assert_eq!(drawing.chart_points.len(), 2);
+        assert_eq!(drawing.screen_anchor, Some([0.25, 0.75]));
         assert_eq!(drawing.chart_points[0].bar_idx, 3.0);
         assert!(drawing.completed);
     }

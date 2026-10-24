@@ -1,11 +1,12 @@
 //! Drawing properties tabs.
 
 mod coordinates;
+mod inputs;
 mod style;
 mod text;
 mod visibility;
 
-pub use coordinates::{CoordinatesState, CoordinatesTab};
+pub use coordinates::{CoordinatePoint, CoordinatesState, CoordinatesTab};
 pub use style::StyleTab;
 pub use text::TextTab;
 pub use visibility::VisibilityTab;
@@ -18,6 +19,8 @@ pub enum PropertiesTab {
     #[default]
     Style,
     Coordinates,
+    /// Tool-specific levels, sizing and calculation settings.
+    Inputs,
     Visibility,
     Text,
 }
@@ -27,13 +30,20 @@ impl PropertiesTab {
         match self {
             Self::Style => "Style",
             Self::Coordinates => "Coordinates",
+            Self::Inputs => "Inputs",
             Self::Visibility => "Visibility",
             Self::Text => "Text",
         }
     }
 
-    pub fn all() -> [Self; 4] {
-        [Self::Style, Self::Coordinates, Self::Visibility, Self::Text]
+    pub fn all() -> [Self; 5] {
+        [
+            Self::Style,
+            Self::Inputs,
+            Self::Coordinates,
+            Self::Visibility,
+            Self::Text,
+        ]
     }
 }
 
@@ -42,3 +52,5 @@ impl TabLabel for PropertiesTab {
         self.label()
     }
 }
+
+pub(super) use inputs::InputsTab;

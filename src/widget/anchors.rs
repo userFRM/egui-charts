@@ -10,6 +10,32 @@ use crate::drawings::persistence::{
 use crate::drawings::{ChartPoint, Drawing, DrawingManager};
 
 impl Chart {
+    /// UTC time behind a drawing anchor, retaining fractional and repeated-time positions.
+    /// Uses the current rendered bars when its index was edited.
+    pub fn drawing_point_time(&self, point: &ChartPoint) -> Option<chrono::DateTime<chrono::Utc>> {
+        point
+            .time_anchor
+            .filter(|(_, index)| *index == point.bar_idx)
+            .map(|(time, _)| time)
+            .or_else(|| time_at(self.state.shown(), point.bar_idx as f64))
+    }
+
+    /// Map a UTC time and price into drawing coordinates, including times outside loaded bars.
+    /// Returns `None` without displayed bars or for a non-finite price or projected index.
+    pub fn drawing_point_at(
+        &self,
+        time: chrono::DateTime<chrono::Utc>,
+        price: f64,
+    ) -> Option<ChartPoint> {
+        let index = index_at(self.state.shown(), time)? as f32;
+        if !index.is_finite() || !price.is_finite() {
+            return None;
+        }
+        let mut point = ChartPoint::new(index, price);
+        point.time_anchor = Some((time, index));
+        Some(point)
+    }
+
     /// Captures edited indices before the bars or the rendered element sequence change.
     pub(super) fn anchor_drawing_points(&mut self) {
         let bars = self.state.shown();
@@ -102,6 +128,7 @@ impl Chart {
         }
         let mut manager = DrawingManager::new();
         manager.options = self.drawings.options.clone();
+        manager.tool_defaults = self.drawings.tool_defaults.clone();
         manager.active_tool = self.drawings.active_tool;
         manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
         manager.eraser_mode = self.drawings.eraser_mode;
