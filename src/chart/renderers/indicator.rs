@@ -18,6 +18,9 @@ pub(crate) fn paint_study_plot(
     plot: PlotStyle,
     baseline: f32,
 ) {
+    if !painter.clip_rect().is_positive() {
+        return;
+    }
     let baseline = if baseline.is_finite() {
         baseline.clamp(painter.clip_rect().top(), painter.clip_rect().bottom())
     } else {
@@ -288,9 +291,10 @@ impl IndicatorRenderer {
             if matches!(
                 plot.plot_type,
                 PlotType::Columns | PlotType::BackgroundColor
-            ) {
+            ) || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
+            {
                 plot.width = coords.bar_spacing
-                    * if plot.plot_type == PlotType::Columns {
+                    * if plot.plot_type != PlotType::BackgroundColor {
                         0.8
                     } else {
                         1.0

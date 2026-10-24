@@ -122,6 +122,7 @@ use crate::chart::state;
 
 mod anchors;
 pub mod builder;
+mod clipboard;
 mod crosshair;
 mod feed;
 mod frame;
@@ -131,6 +132,7 @@ pub mod keyboard;
 pub mod layout;
 mod navigation;
 pub(crate) mod pan_zoom;
+mod pane_layout;
 mod panes;
 mod readout;
 mod selection;
@@ -217,6 +219,7 @@ pub struct Chart {
     pub(crate) chart_options: ChartOptions,
     pub(crate) keyboard: keyboard::KeyboardState,
     history: history::ChartHistory,
+    pane_layout: pane_layout::PaneLayout,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)
@@ -299,8 +302,8 @@ pub struct Chart {
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,
     pub(crate) measured_axis_width: f32,
-    /// The first usable layout includes all discarded passes in that frame.
-    first_layout_frame: Option<u64>,
+    /// Last usable widget width and its first frame, including discarded sizing passes.
+    last_layout: Option<(f32, u64)>,
     last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
@@ -420,6 +423,8 @@ pub struct RenderedIndicatorPane {
     pub y_max: f64,
     /// Coordinate parameters for x-axis calculation
     pub coords: IndicatorCoordParams,
+    /// Full mapping, including manual ranges, scale modes and inversion.
+    pub mapping: crate::chart::coords::ChartMapping,
 }
 
 /// Pre-computed layout rectangles for the chart's sub-regions.

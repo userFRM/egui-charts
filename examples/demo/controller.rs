@@ -194,7 +194,7 @@ pub struct DemoApp {
     keyboard_shortcuts: KeyboardShortcutsDialog,
     interval_entry: Option<String>,
     interval_focus: bool,
-    copied_drawing: Option<(String, egui_charts::drawings::Drawing)>,
+    copied_drawing: Option<String>,
     export_dialog: ExportDialog,
     date_picker: DatePicker,
 
@@ -900,13 +900,17 @@ impl DemoApp {
     }
 
     fn apply_drawing_props_edit(&mut self, id: DrawingId, props: DrawingProps) {
-        self.chart.drawings_mut().edit_drawing(id.0, |drawing| {
+        let manager = self.chart.drawings_mut();
+        if !manager.is_selected(id.0) {
+            manager.select(id.0);
+        }
+        manager.edit_selected(|drawing| {
             drawing.color = props.color.to_srgba_unmultiplied();
             drawing.stroke_width = props.line_width;
             drawing.line_style = line_style_from_dialog(props.line_style);
             drawing.extend_left = props.extend_left;
             drawing.extend_right = props.extend_right;
-            drawing.text = (!props.label.is_empty()).then_some(props.label);
+            drawing.text = (!props.label.is_empty()).then_some(props.label.clone());
             drawing.fill_color = props
                 .fill_color
                 .filter(|_| props.fill_enabled)
@@ -914,14 +918,26 @@ impl DemoApp {
             drawing.font_size = props.font_size;
             drawing.timeframe_visibility = egui_charts::drawings::TimeframeVisibility {
                 show_on_all: props.visible_all_timeframes,
-                visible_timeframes: props.visible_timeframes.into_iter().collect(),
+                visible_timeframes: props.visible_timeframes.iter().cloned().collect(),
             };
         });
     }
 
     fn clone_drawing(&mut self, id: usize) {
-        self.chart
-            .user_action(|chart| chart.drawings_mut().duplicate_drawing(id));
+        self.chart.user_action(|chart| {
+            if chart.drawings().is_selected(id) {
+                let copies: Vec<_> = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .filter(|d| chart.drawings().is_selected(d.id))
+                    .cloned()
+                    .collect();
+                chart.drawings_mut().paste_drawings(&copies);
+            } else {
+                chart.drawings_mut().duplicate_drawing(id);
+            }
+        });
     }
 
     fn set_date_range(&mut self, start: chrono::NaiveDate, end: chrono::NaiveDate) {
@@ -1905,7 +1921,7 @@ impl DemoApp {
         };
         let dm = self.chart.drawings_mut();
         match action {
-            DrawingContextMenuAction::Delete => dm.delete_drawing(id),
+            DrawingContextMenuAction::Delete => dm.delete_selected(),
             DrawingContextMenuAction::Edit => self.open_drawing_props_for(id),
             DrawingContextMenuAction::Clone => self.clone_drawing(id),
             DrawingContextMenuAction::Lock => dm.edit_drawing(id, |d| d.locked = !d.locked),
@@ -1992,13 +2008,7 @@ impl DemoApp {
         for request in self.chart.take_shortcut_requests() {
             match request {
                 ShortcutRequest::PasteDrawing(text) => {
-                    if self
-                        .copied_drawing
-                        .as_ref()
-                        .is_some_and(|(copied, _)| *copied == text)
-                    {
-                        self.paste_drawing();
-                    }
+                    self.paste_drawing_text(&text);
                 }
                 ShortcutRequest::SymbolSearch(text) => {
                     self.symbol_search.open_with_query(text);
@@ -2040,25 +2050,17 @@ impl DemoApp {
                     A::MaximizeChart => {
                         self.handle_top_toolbar(ctx, TopToolbarAction::ToggleFullscreen)
                     }
-                    A::CopyDrawing => {
-                        self.copied_drawing = self
-                            .chart
-                            .drawings()
-                            .sel_drawing()
-                            .and_then(|id| {
-                                self.chart
-                                    .drawings()
-                                    .drawings
-                                    .iter()
-                                    .find(|drawing| drawing.id == id)
-                                    .cloned()
-                            })
-                            .map(|drawing| {
-                                let text = format!("Drawing clipboard\n{drawing:#?}");
-                                ctx.copy_text(text.clone());
-                                (text, drawing)
-                            });
-                    }
+                    A::CopyDrawing => match self.chart.copy_selected_drawings() {
+                        Ok(Some(text)) => {
+                            ctx.copy_text(text.clone());
+                            self.copied_drawing = Some(text);
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            self.toasts
+                                .error(format!("Could not copy drawings: {error}"));
+                        }
+                    },
                     A::PasteDrawing => self.paste_drawing(),
                     A::CycleChartFocus | A::CycleChartFocusBack => {
                         let count = self
@@ -2080,19 +2082,22 @@ impl DemoApp {
         }
     }
 
-    // The demo keeps a session clipboard; hosts can decode their persistent drawing format instead.
     fn paste_drawing(&mut self) {
-        self.user_action(|app| app.paste_drawing_edit());
+        if let Some(text) = self.copied_drawing.clone() {
+            self.paste_drawing_text(&text);
+        }
     }
 
-    fn paste_drawing_edit(&mut self) {
-        if let Some((_, mut drawing)) = self.copied_drawing.clone() {
-            drawing.stored_id = None;
-            drawing.created_at = None;
-            for point in &mut drawing.chart_points {
-                point.bar_idx += 3.0;
+    fn paste_drawing_text(&mut self, text: &str) {
+        if !text.starts_with("egui-charts-drawings\n") {
+            return;
+        }
+        match self.chart.paste_drawings(text) {
+            Ok(()) => {}
+            Err(error) => {
+                self.toasts
+                    .error(format!("Could not paste drawings: {error}"));
             }
-            self.chart.drawings_mut().add_synced_drawing(drawing);
         }
     }
 
@@ -2410,8 +2415,8 @@ mod tests {
         );
     }
 
-    /// Native integrations send clipboard events instead of key events. Only our session
-    /// clipboard pastes a drawing, and the pasted copy is an ordinary undoable addition.
+    /// Native clipboard events paste the selected drawings without a session cache,
+    /// and the pasted group is one undoable addition.
     #[test]
     fn native_drawing_clipboard_pastes_once_and_undoes_the_copy() {
         use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
@@ -2421,8 +2426,14 @@ mod tests {
         let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
         drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 120.0)];
         drawing.completed = true;
+        app.chart.drawings_mut().drawings.push(drawing.clone());
+        drawing.id = 8;
+        drawing
+            .chart_points
+            .iter_mut()
+            .for_each(|p| p.price += 10.0);
         app.chart.drawings_mut().drawings.push(drawing);
-        app.chart.drawings_mut().select(7);
+        app.chart.drawings_mut().select_drawings([7, 8]);
         let output = ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Copy],
@@ -2439,9 +2450,11 @@ mod tests {
         });
         output.drop_without_applying_deltas();
         let text = text.expect("copy must provide system clipboard text");
+        // A native clipboard must remain usable after the session cache is gone.
+        app.copied_drawing = None;
         for (event, count) in [
-            (egui::Event::Paste("unrelated clipboard text".into()), 1),
-            (egui::Event::Paste(text), 2),
+            (egui::Event::Paste("unrelated clipboard text".into()), 2),
+            (egui::Event::Paste(text), 4),
             (
                 egui::Event::Key {
                     key: egui::Key::Z,
@@ -2450,7 +2463,7 @@ mod tests {
                     repeat: false,
                     modifiers: egui::Modifiers::COMMAND,
                 },
-                1,
+                2,
             ),
         ] {
             ctx.run_ui(
@@ -3105,6 +3118,24 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
+        // A one-shot alert must stay active until the drag, regardless of the simulation clock.
+        app.chart.set_feed_paused(true);
+        let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        app.chart.set_data(
+            SeriesId::MAIN,
+            (0..2)
+                .map(|i| {
+                    Bar::new(
+                        start + chrono::TimeDelta::minutes(i),
+                        100.0,
+                        110.0,
+                        90.0,
+                        105.0,
+                        1000.0,
+                    )
+                })
+                .collect(),
+        );
         let frame = |app: &mut DemoApp, events: Vec<egui::Event>, covered: bool| {
             ctx.run_ui(
                 egui::RawInput {
@@ -3167,6 +3198,10 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             }],
             false,
+        );
+        assert_eq!(
+            app.alerts.alerts()[0].status,
+            egui_charts::model::AlertStatus::Active
         );
         let target = point + egui::vec2(0.0, 45.0);
         let button = |pos, pressed| egui::Event::PointerButton {
@@ -3330,7 +3365,28 @@ mod tests {
                 ctx.set_pixels_per_point(scale);
                 let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
                 app.live.set_paused(true);
+                // Keep label widths independent of the simulation's wall-clock start.
+                app.chart.set_feed_paused(true);
+                let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+                app.chart.set_data(
+                    SeriesId::MAIN,
+                    (0..200)
+                        .map(|i| {
+                            Bar::new(
+                                start + chrono::TimeDelta::minutes(i),
+                                100.0,
+                                110.0,
+                                90.0,
+                                105.0,
+                                1000.0,
+                            )
+                        })
+                        .collect(),
+                );
                 *app.chart.config_mut() = theme.apply_to_config(app.chart.config().clone());
+                app.chart.set_instrument(Some(
+                    egui_charts::model::Instrument::new("SAMPLE").with_price_decimals(2),
+                ));
                 for width in [140.0, 0.0, 80.0, 320.0, 1440.0] {
                     ctx.run_ui(
                         egui::RawInput {
@@ -3342,6 +3398,13 @@ mod tests {
                         },
                         |ui| {
                             app.chart.show(ui);
+                            if width == 140.0 && ui.ctx().current_pass_index() == 0 {
+                                app.chart.set_instrument(Some(
+                                    egui_charts::model::Instrument::new("SAMPLE")
+                                        .with_price_decimals(6),
+                                ));
+                                ui.ctx().request_discard("initial axis precision changed");
+                            }
                         },
                     )
                     .drop_without_applying_deltas();
@@ -3401,6 +3464,10 @@ mod tests {
             .drawings_mut()
             .edit_drawing(7, |d| d.locked = false);
         app.apply_drawing_props(DrawingId(7), props);
+        let mut second = app.chart.drawings().drawings[0].clone();
+        second.id = 8;
+        app.chart.drawings_mut().drawings.push(second);
+        app.chart.drawings_mut().select_drawings([7, 8]);
         let changed = DrawingProps {
             visible_all_timeframes: false,
             visible_timeframes: vec!["4h".into()],
@@ -3414,6 +3481,17 @@ mod tests {
         assert!(!saved.timeframe_visibility.is_visible_on("1h"));
         assert_eq!(saved.fill_color, None);
         assert_eq!(saved.font_size, 28.0);
+        assert_eq!(app.chart.drawings().drawings[1].font_size, 28.0);
+        assert!(app.chart.undo());
+        assert!(
+            app.chart
+                .drawings()
+                .drawings
+                .iter()
+                .all(|d| d.font_size == 24.0)
+        );
+        assert!(app.chart.redo());
+        app.chart.drawings_mut().drawings.retain(|d| d.id == 7);
         app.handle_object_tree(
             ObjectTreeAction::ChangeColor(
                 7,

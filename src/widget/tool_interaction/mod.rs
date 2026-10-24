@@ -13,6 +13,7 @@
 mod effects;
 mod interaction;
 mod selection;
+mod text;
 
 use crate::chart::cursor_modes::CursorModeState;
 use crate::drawings::DrawingInteractionMode;
@@ -75,6 +76,7 @@ impl Chart {
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
         drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);
+        drawing_manager.update_pane_anchors(price_rect);
 
         // Only gather bars within the pointer's screen-space tolerance. Rebuild after pan/zoom.
         drawing_manager.snap_targets.clear();
@@ -135,7 +137,10 @@ impl Chart {
         // Handle drawing interaction
         // Select converter based on tool type: freeform tools (ContinuousDraw) use precise,
         // all other tools snap to candle centers
-        if let Some(active_tool) = drawing_manager.active_tool {
+        let count_before = drawing_manager.drawings.len();
+        if drawing_manager.text_editor.is_some() {
+            // The editor owns this frame's pointer input, including its outside commit click.
+        } else if let Some(active_tool) = drawing_manager.active_tool {
             let uses_precise =
                 active_tool.interaction_mode() == DrawingInteractionMode::ContinuousDraw;
             if uses_precise {
@@ -171,7 +176,23 @@ impl Chart {
             );
         }
 
+        let edit_id = if drawing_manager.text_editor.is_some() {
+            None
+        } else if drawing_manager.drawings.len() > count_before {
+            drawing_manager.drawings.last().map(|d| d.id)
+        } else if response.double_clicked() || response.triple_clicked() {
+            response
+                .interact_pointer_pos()
+                .and_then(|pos| drawing_manager.hit_test(pos))
+        } else {
+            None
+        };
+        if let Some(id) = edit_id {
+            text::begin_edit(drawing_manager, id);
+        }
+
         drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);
+        drawing_manager.update_pane_anchors(price_rect);
 
         // Render existing drawings against the chart's bars
         let view = ChartView {
@@ -182,6 +203,7 @@ impl Chart {
             price_to_y: &price_to_y,
         };
         drawing_manager.render_all(painter, price_rect, &view);
+        text::show_editor(ui, drawing_manager, response.id, price_rect);
     }
 
     /// Render eraser highlight for hovered drawing

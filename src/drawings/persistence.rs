@@ -119,6 +119,11 @@ impl StoredDrawing {
         if bad(d.stroke_width.into()) {
             return Some("stroke_width".into());
         }
+        if d.screen_anchor
+            .is_some_and(|anchor| anchor.into_iter().any(|value| !value.is_finite()))
+        {
+            return Some("screen_anchor".into());
+        }
         if bad(d.font_size.into()) {
             return Some("font_size".into());
         }
@@ -790,6 +795,12 @@ mod tests {
             fork.show_background = false;
             drawing.pitchfork = Some(fork);
             drawing.channel_midline = true;
+            if matches!(
+                tool,
+                DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote
+            ) {
+                drawing.screen_anchor = Some([0.25, 0.75]);
+            }
 
             let mut storage = DrawingStorage::new("AAPL");
             storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
@@ -1066,7 +1077,11 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 12] = [
+        let cases: [(Spoil, &str); 13] = [
+            (
+                |s| first(s).drawing.screen_anchor = Some([f32::NAN, 0.5]),
+                "non-finite screen_anchor",
+            ),
             (
                 |s| first(s).points[0].ts_ms = i64::MAX,
                 "anchor 0 has no time mapping",

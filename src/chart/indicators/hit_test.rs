@@ -151,8 +151,6 @@ pub fn hit_test_pane_indicator(
     indicator_idx: usize,
     visible_range: std::ops::Range<usize>,
     chart_rect: Rect,
-    y_min: f64,
-    y_max: f64,
     coords: &ChartMapping,
 ) -> Option<IndicatorHitResult> {
     // Only test non-overlay indicators
@@ -167,15 +165,7 @@ pub fn hit_test_pane_indicator(
 
     let line_cnt = indicator.line_cnt();
 
-    // Create value to y converter
-    let value_to_y = |value: f64| -> f32 {
-        let y_range = y_max - y_min;
-        if y_range.abs() < f64::EPSILON {
-            return chart_rect.center().y;
-        }
-        let normalized = (value - y_min) / y_range;
-        chart_rect.max.y - (normalized as f32 * chart_rect.height())
-    };
+    let value_to_y = |value| coords.price_to_y(value);
 
     // Test each line of the indicator
     for line_idx in 0..line_cnt {
@@ -237,7 +227,7 @@ mod tests {
                 let found = if overlay {
                     hit_test_indicator(point, &study, 3, 0..2, &coords, |v| 100.0 - v as f32)
                 } else {
-                    hit_test_pane_indicator(point, &study, 3, 0..2, rect, 0.0, 100.0, &coords)
+                    hit_test_pane_indicator(point, &study, 3, 0..2, rect, &coords)
                 };
                 assert_eq!(
                     found.is_some(),

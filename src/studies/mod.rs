@@ -83,6 +83,7 @@ pub use custom::CustomIndicator;
 pub use factory::IndicatorFactory;
 pub use indicator_trait::{
     CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,
+    StudyPane,
 };
 
 use crate::model::Bar;

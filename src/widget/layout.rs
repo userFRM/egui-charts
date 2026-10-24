@@ -368,7 +368,12 @@ impl ChartLayout {
                     if focus {
                         response.request_focus();
                     }
-                    if index == self.active {
+                    if index == self.active
+                        && charts[index]
+                            .pane_layout
+                            .maximized
+                            .is_none_or(|pane| pane == super::SeriesId::MAIN)
+                    {
                         let button = ui.put(
                             Rect::from_min_size(
                                 rect.min + Vec2::new((rect.width() - 100.0).max(0.0), 2.0),

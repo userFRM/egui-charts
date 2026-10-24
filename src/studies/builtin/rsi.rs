@@ -187,6 +187,18 @@ impl Indicator for RSI {
         }
     }
 
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: Some(138.0),
+            range: Some((0.0, 100.0)),
+            levels: vec![
+                (70.0, Color32::from_gray(128), "Overbought"),
+                (30.0, Color32::from_gray(128), "Oversold"),
+            ],
+            fill_between_levels: true,
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false // RSI is drawn in separate pane
     }

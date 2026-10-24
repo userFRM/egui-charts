@@ -66,7 +66,7 @@ impl Drawing {
         );
     }
 
-    /// Renders anchored text that stays fixed to chart coordinates.
+    /// Renders anchored text at its pane-relative screen position.
     pub(crate) fn render_anchored_text(&self, painter: &egui::Painter) {
         if self.points.is_empty() {
             return;

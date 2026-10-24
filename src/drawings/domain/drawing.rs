@@ -65,6 +65,10 @@ pub struct Drawing {
     /// (empty for other tools); rebuilt with `points` by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
+    /// Position as fractions of the pane width and height for anchored text and notes.
+    /// `None` adopts the first displayed position, including for older saved drawings.
+    #[serde(default)]
+    pub screen_anchor: Option<[f32; 2]>,
     /// Drawing color as RGBA
     pub color: [u8; 4],
     /// Stroke width in pixels
@@ -137,6 +141,7 @@ impl Drawing {
             points: Vec::new(),
             chart_points: Vec::new(),
             level_ys: Vec::new(),
+            screen_anchor: None,
             color: [242, 54, 69, 255], // Default red (#F23645)
             stroke_width: 2.0,
             completed: false,
@@ -206,6 +211,30 @@ impl Drawing {
             .fib_levels()
             .map(|(_, prices)| prices.into_iter().map(price_to_y).collect())
             .unwrap_or_default();
+    }
+
+    /// Rebuilds anchored text and note coordinates relative to the pane. Call after
+    /// `update_screen_coords`; other tools retain their chart coordinates. Older drawings
+    /// adopt their first displayed position. Resizing preserves the width and height fractions.
+    pub fn update_pane_coords(&mut self, pane: egui::Rect) {
+        if !matches!(
+            self.tool_type,
+            DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote
+        ) || !pane.is_finite()
+            || pane.width() <= 0.0
+            || pane.height() <= 0.0
+        {
+            return;
+        }
+        if let Some(pos) = self.points.first_mut() {
+            let anchor = self.screen_anchor.get_or_insert_with(|| {
+                [
+                    (pos.x - pane.left()) / pane.width(),
+                    (pos.y - pane.top()) / pane.height(),
+                ]
+            });
+            *pos = pane.min + egui::vec2(anchor[0] * pane.width(), anchor[1] * pane.height());
+        }
     }
 
     /// The Fibonacci config in use and the price of each of its visible levels, for a retracement

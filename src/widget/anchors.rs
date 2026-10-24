@@ -7,7 +7,7 @@ use super::{
 use crate::drawings::persistence::{
     DrawingStorage, SaveError, SkippedDrawing, drawing_to_stored, stored_to_drawing,
 };
-use crate::drawings::{ChartPoint, DrawingManager};
+use crate::drawings::{ChartPoint, Drawing, DrawingManager};
 
 impl Chart {
     /// Captures edited indices before the bars or the rendered element sequence change.
@@ -49,11 +49,18 @@ impl Chart {
     /// (one second per index for a single bar). Empty charts can export retained time anchors;
     /// an index with no loaded mapping returns an error rather than clamping or inventing time.
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
+        self.store_drawings(&self.drawings.drawings)
+    }
+
+    pub(super) fn store_drawings<'a>(
+        &self,
+        drawings: impl IntoIterator<Item = &'a Drawing>,
+    ) -> Result<DrawingStorage, SaveError> {
         let mut storage = DrawingStorage::new(self.symbol());
         storage.timeframe = self
             .timeframe()
             .map(|timeframe| timeframe.as_str().into_owned());
-        for drawing in &self.drawings.drawings {
+        for drawing in drawings {
             for (at, point) in drawing.chart_points.iter().enumerate() {
                 if point
                     .time_anchor
@@ -150,6 +157,18 @@ mod tests {
         drawing.completed = true;
         chart.drawings_mut().drawings.push(drawing);
         let saved = chart.save_drawings().unwrap();
+        chart.drawings_mut().select(7);
+        let mut unrelated = chart.drawings().drawings[0].clone();
+        unrelated.id = 8;
+        unrelated.font_size = f32::NAN;
+        chart.drawings_mut().drawings.push(unrelated);
+        assert!(chart.save_drawings().is_err());
+        let copied = chart.copy_selected_drawings().unwrap().unwrap();
+        chart.drawings_mut().drawings.pop();
+        chart.paste_drawings(&copied).unwrap();
+        assert_eq!(chart.drawings().drawings.len(), 2);
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings.len(), 1);
         // -0.5 * 60 = -30 s; 60 + 0.5 * 120 = 120 s; 180 + 1.5 * 120 = 360 s.
         assert_eq!(
             saved.drawings[0]
