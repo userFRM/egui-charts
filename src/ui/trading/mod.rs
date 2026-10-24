@@ -13,7 +13,7 @@ use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
     Account, Capabilities, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType,
-    Position, TradingRules,
+    Position, Quote, TradingRules,
 };
 use crate::services::{AccountEvent, Broker, Listener};
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
@@ -62,6 +62,8 @@ pub struct Trading {
     pending: Option<TradingLineAction>,
     /// Decimals of the chart's prices, for notifications.
     decimals: usize,
+    /// The latest quote of a symbol, from [`set_quote`](Self::set_quote).
+    quote: Option<(String, Quote)>,
     /// The quantity the ticket opens with, and that one-click orders and the chart menu's
     /// orders use. Positive, in the symbol's trading units.
     pub quantity: f64,
@@ -88,6 +90,7 @@ impl Default for Trading {
             ticket: OrderTicket::default(),
             pending: None,
             decimals: 2,
+            quote: None,
             quantity: 1.0,
             one_click: false,
             presets: Vec::new(),
@@ -96,6 +99,13 @@ impl Default for Trading {
 }
 
 impl Trading {
+    /// Sets the latest quote of `symbol`, such as the one `WatchlistPanel::quote` holds for the
+    /// chart's symbol. While the chart shows `symbol`, the ticket enters a market buy at the
+    /// quote's ask and a market sell at its bid; without them, at the last price.
+    pub fn set_quote(&mut self, symbol: &str, quote: Quote) {
+        self.quote = Some((symbol.to_owned(), quote));
+    }
+
     /// Connects to `service`, dropping the previous account's state.
     pub fn set_service(&mut self, service: Arc<dyn Broker>) {
         self.listener = None;
@@ -379,8 +389,13 @@ impl Trading {
         if !self.ticket.open {
             return;
         }
+        let quote = (self.quote.as_ref())
+            .filter(|(quoted, _)| *quoted == symbol && self.ticket.symbol == symbol)
+            .map(|(_, quote)| quote);
         let market = Market {
             last: (self.ticket.symbol == symbol).then_some(last).flatten(),
+            bid: quote.and_then(|quote| quote.bid),
+            ask: quote.and_then(|quote| quote.ask),
             tick,
             decimals,
             currency,

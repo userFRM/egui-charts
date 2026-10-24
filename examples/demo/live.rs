@@ -6,15 +6,16 @@ use egui_charts::data::{
     SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
 use egui_charts::model::{
-    Bar, BarClock, DataStatus, Instrument, Level1Quote, Tick, Timeframe, TradeSide,
+    Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote,
+    Tick, Timeframe, TradeSide,
 };
+use egui_charts::services::{Events, Quotes};
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::market::Market;
 use crate::sampledata::{DemoSymbol, sample_session, session_bars};
 use egui_charts::ui::timeframe_toolbar::SessionType;
-use egui_charts::ui::widget_bar::{ExtendedHoursQuote, ExtendedSession, WatchlistQuote};
 
 const RETAINED_TRADES: usize = 100_000;
 
@@ -292,6 +293,25 @@ impl LiveFeed {
         Some((time, last, prev_close, extended))
     }
 
+    /// The quote of the chart's symbol: the last displayed trade and the previous session close,
+    /// or for SAMPLE its regular-hours price and the extended-hours trade after it, with the
+    /// session volume and the book's best bid and ask.
+    pub(super) fn quote(&self, now: DateTime<Utc>) -> Option<Quote> {
+        let mut quote = watchlist_quote(&self.state().symbol, now)?;
+        if let Some((last, prev_close)) = self.day_change() {
+            (quote.last, quote.prev_close) = (last, prev_close);
+        }
+        if let Some((time, last, prev_close, extended)) = self.regular_quote() {
+            (quote.time, quote.last, quote.prev_close) = (time, last, prev_close);
+            quote.extended = extended;
+        }
+        quote.volume = Some(self.daily_volume().0);
+        if let Some(book) = self.state().quote(now) {
+            quote = quote.with_bid_ask(book.bid, book.ask);
+        }
+        Some(quote)
+    }
+
     /// The volume traded since midnight UTC and the average volume of the earlier whole days.
     /// The synthetic history spans a week, which stands in for the 30 days of the average.
     pub(super) fn daily_volume(&self) -> (f64, f64) {
@@ -361,25 +381,83 @@ impl LiveFeed {
     }
 }
 
+/// The catalog entry of `symbol`, in any case.
+fn catalog(symbol: &str) -> Option<&'static DemoSymbol> {
+    DemoSymbol::catalog()
+        .iter()
+        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
+}
+
+/// Decimals of the prices of a catalog symbol.
+pub(super) fn price_decimals(symbol: &str) -> Option<u8> {
+    Some(if catalog(symbol)?.start_price < 10.0 {
+        4
+    } else {
+        2
+    })
+}
+
 /// A synthetic watchlist quote: a slow deterministic swing around the catalog price of `symbol`,
 /// which stands for the previous close. `None` for symbols outside the catalog.
-pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<WatchlistQuote> {
-    let spec = DemoSymbol::catalog()
-        .iter()
-        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))?;
-    let (tick_size, price_decimals) = if spec.start_price < 10.0 {
-        (0.0001, 4)
+fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
+    let spec = catalog(symbol)?;
+    let tick_size = if spec.start_price < 10.0 {
+        0.0001
     } else {
-        (0.01, 2)
+        0.01
     };
     let t = now.timestamp_millis() as f64 / 1000.0;
     let phase = spec.seed as f64;
     let swing = 0.02 * (t / 900.0 + phase).sin() + 0.002 * (t / 7.0 + 2.0 * phase).sin();
-    Some(WatchlistQuote {
-        last: (spec.start_price * (1.0 + swing) / tick_size).round() * tick_size,
-        prev_close: spec.start_price,
-        price_decimals: Some(price_decimals),
-    })
+    let last = (spec.start_price * (1.0 + swing) / tick_size).round() * tick_size;
+    Some(Quote::new(last, spec.start_price, now))
+}
+
+/// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
+/// and extended-hours prices, session volume and best bid and ask, and a synthetic swing for the
+/// other catalog symbols. The demo has no background worker, so the controller publishes once
+/// per frame.
+pub(super) struct DemoQuotes {
+    live: Arc<LiveFeed>,
+    stream: Mutex<Option<(Vec<String>, Events<(String, Quote)>)>>,
+}
+
+impl DemoQuotes {
+    pub(super) fn new(live: Arc<LiveFeed>) -> Self {
+        Self {
+            live,
+            stream: Mutex::default(),
+        }
+    }
+
+    /// Pushes the current quote of every subscribed symbol.
+    pub(super) fn publish(&self, now: DateTime<Utc>) {
+        let stream = self.stream.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((symbols, events)) = stream.as_ref().filter(|(_, e)| e.is_active()) {
+            self.push(symbols, events, now);
+        }
+    }
+
+    fn push(&self, symbols: &[String], events: &Events<(String, Quote)>, now: DateTime<Utc>) {
+        let chart = self.live.state().symbol.clone();
+        for symbol in symbols {
+            let quote = if symbol.eq_ignore_ascii_case(&chart) {
+                self.live.quote(now)
+            } else {
+                watchlist_quote(symbol, now)
+            };
+            if let Some(quote) = quote {
+                events.push((symbol.clone(), quote));
+            }
+        }
+    }
+}
+
+impl Quotes for DemoQuotes {
+    fn subscribe(&self, symbols: &[String], events: Events<(String, Quote)>) {
+        self.push(symbols, &events, chrono::Utc::now());
+        *self.stream.lock().unwrap_or_else(|e| e.into_inner()) = Some((symbols.to_vec(), events));
+    }
 }
 
 impl Simulation {
