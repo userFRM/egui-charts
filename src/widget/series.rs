@@ -35,6 +35,11 @@ impl Chart {
         if !self.main_series_present || !holds_bars(series, "set_data") {
             return;
         }
+        self.replace_main_data(bars);
+        self.data_loaded(series);
+    }
+
+    pub(super) fn replace_main_data(&mut self, bars: Vec<Bar>) {
         let (bars, rejected) = clean(bars, &self.clock());
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();
@@ -47,7 +52,6 @@ impl Chart {
         let first_changed = self.state.set_data(BarData::from_bars(bars));
         self.project_drawing_points();
         self.bars_changed(before, first_changed);
-        self.data_loaded(series);
     }
 
     /// Merges `bar` into the bars of `series` as [`Sink::push_bar`](crate::data::Sink::push_bar)

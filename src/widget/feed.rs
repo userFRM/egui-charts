@@ -464,7 +464,7 @@ impl Chart {
         link.clock = clock;
         link.rebuild_bubbles();
         // Timestamp anchors survive the empty interval between history requests.
-        self.set_data(SeriesId::MAIN, Vec::new());
+        self.replace_main_data(Vec::new());
         self.feed = FeedState::default();
         if self.symbol.is_empty() {
             return;
@@ -1094,7 +1094,12 @@ mod tests {
         let first_page = history("A", Timeframe::Min1, None);
         assert_eq!(feed.calls(), [Call::Resolve("A".into()), first_page], "a");
 
-        chart.drain_events().for_each(drop);
+        assert!(
+            !chart
+                .drain_events()
+                .any(|event| matches!(event, super::super::ChartEvent::DataLoaded { .. })),
+            "starting history must not report a completed load"
+        );
         // b. The page reaches the bars and notifies the host once.
         feed.page().send(page(bars(1000), false));
         frames.run(&mut chart);

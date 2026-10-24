@@ -169,6 +169,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Starting a feed reload no longer reports `DataLoaded` before history arrives. Successful pages and explicit data replacements still notify the host. ([#201](https://github.com/userFRM/egui-charts/issues/201))
+
 - The basic chart example reserves its click readout above the plot and requests repaint after a host click event, keeping the feedback visible. ([#201](https://github.com/userFRM/egui-charts/issues/201))
 
 - Switching between a local chart theme and the host theme retains the chart's widget ids, keyboard focus and retained UI state. ([#202](https://github.com/userFRM/egui-charts/issues/202))
