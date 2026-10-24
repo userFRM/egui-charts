@@ -107,6 +107,10 @@ impl Chart {
             },
             from_ticks: BTreeSet::new(),
             studies: IndicatorRegistry::new(),
+            #[cfg(feature = "studies")]
+            volume_setting: false,
+            #[cfg(feature = "studies")]
+            volume_study: None,
             main_series_visible: true,
             study_ids: Vec::new(),
             study_inputs: Vec::new(),

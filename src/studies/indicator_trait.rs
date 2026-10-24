@@ -295,6 +295,12 @@ pub trait Indicator: Send {
         true
     }
 
+    /// Volume plots use an independent zero-based scale: up columns, down columns and MA.
+    /// Renderers size columns to 80% of the bar pitch and format values as volume.
+    fn is_volume(&self) -> bool {
+        false
+    }
+
     /// The number of output columns this indicator plots. Renderers draw lines
     /// `0..line_cnt()`.
     ///

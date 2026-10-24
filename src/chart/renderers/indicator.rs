@@ -82,7 +82,7 @@ impl IndicatorRenderer {
             }
 
             // Only render overlay indicators
-            if !indicator.is_overlay() {
+            if !indicator.is_overlay() || indicator.is_volume() {
                 continue;
             }
 

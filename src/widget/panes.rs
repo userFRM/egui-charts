@@ -77,7 +77,21 @@ impl Chart {
         } else {
             0.0
         };
-        let main_height = (remaining - pane_height * expanded_count as f32).max(0.0);
+        let desired: Vec<_> = panes
+            .iter()
+            .map(|(idx, _, collapsed)| {
+                if *collapsed {
+                    0.0
+                } else if self.studies.indicators()[*idx].name() == "RSI" {
+                    IndicatorPaneConfig::rsi().height
+                } else {
+                    pane_height
+                }
+            })
+            .collect();
+        let desired_total: f32 = desired.iter().sum();
+        let scale = ((remaining - 40.0).max(0.0) / desired_total.max(1.0)).min(1.0);
+        let main_height = (remaining - desired_total * scale).max(0.0);
         let main_rect =
             Rect::from_min_size(available.min, egui::vec2(available.width(), main_height));
         let plot = self.pane_layout_rects(main_rect, false).price_rect;
@@ -116,7 +130,7 @@ impl Chart {
         let mut pending_indicator_action = None;
         let current_selection = self.selection.selected_id();
 
-        for (_, id, collapsed) in panes {
+        for ((_, id, collapsed), height) in panes.into_iter().zip(desired) {
             let Some(idx) = self.study_ids.iter().position(|study| *study == id) else {
                 continue;
             };
@@ -137,9 +151,20 @@ impl Chart {
             } else {
                 String::new()
             };
+            if self.config.show_indicator_inputs
+                && indicator.is_volume()
+                && indicator.plot_style(2).visible
+                && config.inputs.is_empty()
+            {
+                config.inputs = indicator.line_names().get(2).cloned().unwrap_or_default();
+            }
             config.show_legend =
                 config.show_name || config.show_values || !config.inputs.is_empty();
-            config.height = if collapsed { row_height } else { pane_height };
+            config.height = if collapsed {
+                row_height
+            } else {
+                height * scale
+            };
             let mut panel = IndicatorPane::with_config(config);
             panel.bar_index = self.last_hover_bar_idx.and_then(|index| {
                 let index = index.round() as usize;
@@ -418,11 +443,8 @@ mod tests {
                     "{size:?}: {last:?} in {bounds:?}"
                 );
                 if size.1 > 200.0 {
-                    assert!(
-                        (price.height() - 3.0 * panes[0].panel_rect.height()).abs() < 1.0,
-                        "{size:?}"
-                    );
-                    assert!((panes[0].panel_rect.height() - last.height()).abs() < 1.0);
+                    assert_eq!(panes[0].panel_rect.height(), 138.0, "{size:?}");
+                    assert!(price.height() >= 40.0, "{size:?}");
                 } else {
                     assert_eq!(last.height(), 24.0);
                 }
@@ -610,7 +632,14 @@ mod tests {
                     );
                 }
                 for expected in ["Readout 27.00", "Other 37.00", "Open"] {
-                    assert!(text.contains(&expected), "{expected}: {text:?}");
+                    assert!(
+                        text.iter().any(|text| text
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            == expected),
+                        "{expected}: {text:?}"
+                    );
                 }
                 assert!(
                     painted.iter().any(
@@ -647,7 +676,7 @@ mod tests {
             }
             chart.set_synced_crosshair_bar_idx(None);
             let painted = shapes(&ctx, &mut chart, 10.0, vec![Event::PointerGone]);
-            assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Readout 29.90")));
+            assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text().split_whitespace().collect::<Vec<_>>().join(" ") == "Readout 29.90")));
             chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;
             // With OHLC at 100 and 110, 107.25 can only come from the overlay.
             // Each pane contains 20 or 30 plus i/10, so bar 70 reads 27 or 37.

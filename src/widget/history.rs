@@ -164,6 +164,13 @@ impl Chart {
 
     /// Finish the matching [`Self::begin_user_action`], recording only changed components.
     pub fn end_user_action(&mut self) {
+        #[cfg(feature = "studies")]
+        if !self.config.show_volume
+            && let Some(id) = self.volume_study
+        {
+            // Capture the removed study before the volume setting's action closes.
+            self.remove_series(id);
+        }
         let Some(mut pending) = self.history.pending.take() else {
             return;
         };
@@ -348,6 +355,7 @@ impl Chart {
             .iter()
             .map(|change| Study::capture(self, change.id))
             .collect();
+        let show_volume = self.config.show_volume;
         for change in &action.studies {
             self.remove_series(change.id);
         }
@@ -373,6 +381,8 @@ impl Chart {
             self.pending_from.insert(at, None);
             self.next_refresh.insert(at, f64::NEG_INFINITY);
         }
+        // Replacing a study during history replay is not a volume-switch edit.
+        self.config.show_volume = show_volume;
         for (change, before) in action.studies.iter_mut().zip(current) {
             change.before = before;
         }

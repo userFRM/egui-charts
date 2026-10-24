@@ -183,6 +183,7 @@ impl IndicatorFactory {
                 CommoditySelectionIndex,
             ],
             "Volume" => [
+                Volume,
                 OnBalanceVolume,
                 VolumeWeightedAvgPrice,
                 AnchoredVWAP,
@@ -506,6 +507,7 @@ mod tests {
                     .with_margin(x(1.0))
                     .with_commission(x(1.0)),
             ),
+            Box::new(Volume::new(l(0))),
             Box::new(OnBalanceVolume::new()),
             Box::new(VolumeWeightedAvgPrice::new().with_std_dev_bands([x(1.0), x(2.0)])),
             Box::new(AnchoredVWAP::new(0)),
