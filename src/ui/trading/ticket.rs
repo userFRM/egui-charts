@@ -518,7 +518,7 @@ impl OrderTicket {
                         OrderSide::Buy => "Buy",
                         OrderSide::Sell => "Sell",
                     },
-                    request.quantity.to_string(),
+                    request.quantity,
                     request.symbol,
                     match request.order_type {
                         OrderType::Market => "MKT".to_owned(),

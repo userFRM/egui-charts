@@ -238,7 +238,7 @@ impl Label<'_> {
         line: &PriceLine,
         tags: &mut Vec<(f64, Color32)>,
     ) -> (Option<f64>, Option<Button>) {
-        let key = ui.scope_id().with(&self.id);
+        let key = ui.scope_id().with(self.id);
         let staged = ui
             .ctx()
             .data(|data| data.get_temp::<f64>(key))

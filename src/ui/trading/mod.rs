@@ -814,8 +814,11 @@ mod tests {
             ] {
                 trading.apply(event, &mut toasts);
                 assert_eq!(trading.account, Some(account.clone()));
-                assert_eq!(trading.orders, [order.clone()]);
-                assert_eq!(trading.positions, [position.clone()]);
+                assert_eq!(trading.orders.as_slice(), std::slice::from_ref(&order));
+                assert_eq!(
+                    trading.positions.as_slice(),
+                    std::slice::from_ref(&position)
+                );
             }
         }
     }
