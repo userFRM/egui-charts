@@ -118,15 +118,18 @@ impl Indicator for Volume24h {
                     .time
                     .checked_sub_signed(TimeDelta::days(1))
                     .unwrap_or(DateTime::<Utc>::MIN_UTC);
+                let mut largest = 0.0_f64;
                 while let Some(&(time, volume)) = state.window.front()
                     && time <= start
                 {
                     state.window.pop_front();
                     state.sum -= volume;
+                    largest = largest.max(volume.abs());
                 }
-                if state.window.is_empty() {
-                    // Restart exactly, so rounding left by removed volumes does not linger.
-                    state.sum = 0.0;
+                if largest > state.sum.abs() {
+                    // A removed volume that dominated the sum leaves its rounding behind:
+                    // add the window again so the error does not linger.
+                    state.sum = state.window.iter().map(|&(_, volume)| volume).sum();
                 }
                 state.window.push_back((bar.time, bar.volume));
                 state.sum += bar.volume;
@@ -183,5 +186,29 @@ impl Indicator for Volume24h {
 
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    /// Each value is the sum of its own window, even after a volume too large for the others to
+    /// register in a running sum has left it.
+    #[test]
+    fn a_dominant_volume_leaves_no_residue() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let bars: Vec<Bar> = (0..60)
+            .map(|h| {
+                let volume = if h == 0 { 1e17 } else { 1.0 };
+                Bar::new(start + TimeDelta::hours(h), 1.0, 1.0, 1.0, 1.0, volume)
+            })
+            .collect();
+        let mut study = Volume24h::new();
+        study.calculate(&bars);
+        for bar in 24..60 {
+            assert_eq!(study.values().value(0, bar), Some(24.0), "bar {bar}");
+        }
     }
 }

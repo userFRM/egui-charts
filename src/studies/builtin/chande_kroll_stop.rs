@@ -11,7 +11,7 @@
 //! - stop long = lowest(first low stop, q)
 //!
 //! ATR is Wilder's average true range. The defaults are p = 10, x = 1 and q = 9, so the
-//! first stops appear on bar p + q - 1. The short stop is drawn red, the long stop green.
+//! first stops appear on bar p + q - 2, counting from 0. The short stop is drawn red, the long stop green.
 //!
 //! # Example
 //! ```

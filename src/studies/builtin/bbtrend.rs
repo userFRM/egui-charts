@@ -111,7 +111,8 @@ impl Indicator for BBTrend {
 
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
         let value = self.values.value(0, bar)?;
-        let previous = bar.checked_sub(1).and_then(|bar| self.values.value(0, bar));
+        // Bars without a value, skipped as non-finite, do not count as the previous one.
+        let previous = (0..bar).rev().find_map(|bar| self.values.value(0, bar));
         Some(if value > 0.0 {
             self.colors[usize::from(!previous.is_some_and(|p| value > p))]
         } else {

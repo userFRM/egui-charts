@@ -85,7 +85,8 @@ impl Indicator for AcceleratorOscillator {
 
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
         let value = self.values.value(0, bar)?;
-        let previous = bar.checked_sub(1).and_then(|bar| self.values.value(0, bar));
+        // Bars without a value, skipped as non-finite, do not count as the previous one.
+        let previous = (0..bar).rev().find_map(|bar| self.values.value(0, bar));
         Some(if previous.is_some_and(|previous| value <= previous) {
             self.falling_color
         } else {
@@ -159,18 +160,20 @@ impl Indicator for AcceleratorOscillator {
 mod tests {
     use super::*;
 
-    /// A column is red when AC falls or holds, green when it rises or has no previous value.
+    /// A column is red when AC falls or holds, green when it rises or has no previous value;
+    /// a bar without a value is passed over.
     #[test]
     fn an_unchanged_value_is_coloured_as_falling() {
         let mut study = AcceleratorOscillator::new();
-        study.values = [1.0, 1.0, 2.0, 1.0]
+        study.values = [1.0, 1.0, 2.0, 1.0, f64::NAN, 0.5]
             .into_iter()
             .map(IndicatorValue::Single)
             .collect();
         let (up, down) = (study.rising_color, study.falling_color);
-        let colors: Vec<_> = (0..4)
-            .map(|bar| study.plot_color(0, bar).unwrap())
-            .collect();
-        assert_eq!(colors, [up, down, up, down]);
+        let colors: Vec<_> = (0..6).map(|bar| study.plot_color(0, bar)).collect();
+        assert_eq!(
+            colors,
+            [Some(up), Some(down), Some(up), Some(down), None, Some(down)]
+        );
     }
 }

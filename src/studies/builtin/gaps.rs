@@ -162,7 +162,8 @@ impl Gaps {
                 near: gap.1,
                 far: gap.2,
                 left: i - 1,
-                open: true,
+                // A trail of one bar ends on the bar that opens the gap.
+                open: !self.limit_trail || self.trail_length > 1,
                 span: vec![(i - 1, gap.1), (i, gap.1)],
             });
         }

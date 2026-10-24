@@ -11,7 +11,8 @@
 //! Signal = EMA(PMO, signal length)
 //! ```
 //!
-//! The custom smoothing uses the factor `2 / n` instead of the usual `2 / (n + 1)`. Each smoothing,
+//! The custom smoothing uses the factor `2 / n` instead of the usual `2 / (n + 1)`, so its lengths
+//! are at least 2: at 1 the factor of 2 overshoots and the error grows. Each smoothing,
 //! the signal EMA included, starts at the mean of its first `n` inputs. The rate of change starts on
 //! bar 1, so the PMO starts on bar `length 1 + length 2 - 1` and the signal `signal length - 1` bars
 //! later. A bar following a zero close has no rate of change, and the smoothing carries over it.
@@ -79,8 +80,8 @@ impl PriceMomentumOscillator {
     /// Create a PMO with the two smoothing lengths and the signal length (35, 20 and 10 by convention).
     pub fn new(first_length: usize, second_length: usize, signal_length: usize) -> Self {
         Self {
-            first_length: first_length.max(1),
-            second_length: second_length.max(1),
+            first_length: first_length.max(2),
+            second_length: second_length.max(2),
             signal_length: signal_length.max(1),
             values: IndicatorValues::new(),
             colors: vec![
@@ -125,8 +126,8 @@ impl Default for PriceMomentumOscillator {
 
 impl Indicator for PriceMomentumOscillator {
     crate::studies::inputs::study_inputs!(self;
-        first_length: length("Length 1", 1, usize::MAX),
-        second_length: length("Length 2", 1, usize::MAX),
+        first_length: length("Length 1", 2, usize::MAX),
+        second_length: length("Length 2", 2, usize::MAX),
         signal_length: length("Signal length", 1, usize::MAX)
     ; {});
 
