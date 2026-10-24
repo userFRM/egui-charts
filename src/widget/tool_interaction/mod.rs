@@ -15,6 +15,8 @@ mod interaction;
 mod selection;
 mod text;
 
+pub(super) use selection::render_eraser_highlight as render_pane_eraser_highlight;
+
 use crate::chart::cursor_modes::CursorModeState;
 use crate::drawings::DrawingInteractionMode;
 use crate::drawings::DrawingManager;
@@ -45,6 +47,50 @@ impl Chart {
         painter: &Painter,
         timescale: &crate::model::TimeScale,
     ) {
+        self.handle_pane_drawings(
+            ui,
+            drawing_manager,
+            cursor_modes,
+            response,
+            price_rect,
+            price_map,
+            painter,
+            timescale,
+            None,
+        );
+    }
+
+    pub(super) fn handle_pane_drawings(
+        &self,
+        ui: &mut Ui,
+        drawing_manager: &mut DrawingManager,
+        cursor_modes: &mut CursorModeState,
+        response: &Response,
+        price_rect: Rect,
+        price_map: &PriceMap,
+        painter: &Painter,
+        timescale: &crate::model::TimeScale,
+        pane: Option<super::SeriesId>,
+    ) {
+        let members: Vec<_> = if let Some(pane) = pane {
+            self.pane_layout
+                .panes
+                .iter()
+                .find(|p| p.id == pane)
+                .map(|p| p.studies.iter().map(|id| Some(id.0)).collect())
+                .unwrap_or_default()
+        } else {
+            std::iter::once(None)
+                .chain(
+                    self.study_ids
+                        .iter()
+                        .zip(self.studies.indicators())
+                        .filter(|(_, study)| study.is_overlay())
+                        .map(|(id, _)| Some(id.0)),
+                )
+                .collect()
+        };
+        drawing_manager.set_pane(pane.map(|id| id.0), members.clone(), price_rect);
         let rect_min_x = price_rect.min.x;
 
         let rect_width = price_rect.width();
@@ -75,8 +121,7 @@ impl Chart {
         };
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
-        drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);
-        drawing_manager.update_pane_anchors(price_rect);
+        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
 
         // Only gather bars within the pointer's screen-space tolerance. Rebuild after pan/zoom.
         drawing_manager.snap_targets.clear();
@@ -115,15 +160,27 @@ impl Chart {
                         }
                     }
                 };
-                for price in [bar.open, bar.high, bar.low, bar.close] {
-                    add_price(price);
+                if pane.is_none() {
+                    for price in [bar.open, bar.high, bar.low, bar.close] {
+                        add_price(price);
+                    }
                 }
-                for study in self.studies.indicators().iter().filter(|s| {
-                    !strong
-                        && s.is_visible()
-                        && s.is_overlay()
-                        && s.scale() == crate::studies::StudyScale::Main
-                }) {
+                for study in self
+                    .study_ids
+                    .iter()
+                    .zip(self.studies.indicators())
+                    .filter(|(id, s)| {
+                        s.is_visible()
+                            && if pane.is_some() {
+                                members.contains(&Some(id.0))
+                            } else {
+                                !strong
+                                    && s.is_overlay()
+                                    && s.scale() == crate::studies::StudyScale::Main
+                            }
+                    })
+                    .map(|(_, study)| study)
+                {
                     for line in (0..study.line_cnt()).filter(|line| {
                         let plot = study.plot_style(*line);
                         plot.visible
@@ -145,7 +202,17 @@ impl Chart {
         // Select converter based on tool type: freeform tools (ContinuousDraw) use precise,
         // all other tools snap to candle centers
         let count_before = drawing_manager.drawings.len();
-        if drawing_manager.text_editor.is_some() {
+        let owns_gesture = drawing_manager
+            .curr_drawing
+            .as_ref()
+            .filter(|d| !d.chart_points.is_empty())
+            .or_else(|| {
+                drawing_manager
+                    .dragging_handle
+                    .and_then(|(id, _)| drawing_manager.drawings.iter().find(|d| d.id == id))
+            })
+            .is_none_or(|d| drawing_manager.owns_pane(d));
+        if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
         } else if let Some(active_tool) = drawing_manager.active_tool {
             let uses_precise =
@@ -198,8 +265,7 @@ impl Chart {
             text::begin_edit(drawing_manager, id);
         }
 
-        drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);
-        drawing_manager.update_pane_anchors(price_rect);
+        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
 
         // Render existing drawings against the chart's bars
         let view = ChartView {
@@ -210,7 +276,14 @@ impl Chart {
             price_to_y: &price_to_y,
         };
         drawing_manager.render_all(painter, price_rect, &view);
-        text::show_editor(ui, drawing_manager, response.id, price_rect);
+        if drawing_manager.text_editor.as_ref().is_some_and(|editor| {
+            drawing_manager
+                .drawings
+                .iter()
+                .any(|d| d.id == editor.id && drawing_manager.owns_pane(d))
+        }) {
+            text::show_editor(ui, drawing_manager, response.id, price_rect);
+        }
     }
 
     /// Render eraser highlight for hovered drawing
@@ -263,6 +336,8 @@ mod tests {
             ((true, false, 15.0, true, false, 3.0, false), "none"),
             ((true, false, 15.0, true, false, 3.0, false), "background"),
             ((true, false, 15.0, true, true, 3.0, false), "displaced"),
+            ((true, false, 15.0, true, true, 3.0, false), "pane"),
+            ((true, true, 15.0, true, true, 30.0, false), "pane"),
         ]) {
             let ctx = Context::default();
             let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
@@ -279,6 +354,7 @@ mod tests {
                     .collect()
             })
             .with_line_cnt(2)
+            .with_overlay(kind != "pane")
             .with_offsets(vec![if kind == "displaced" { 1 } else { 0 }; 2])
             .with_plot_types(vec![
                 if kind == "background" {
@@ -313,7 +389,11 @@ mod tests {
                 }
                 time += 0.1;
                 frame(&ctx, &mut chart, time, vec![]);
-                let map = chart.get_chart_mapping();
+                let map = if kind == "pane" {
+                    chart.get_rendered_indicator_panes()[0].mapping
+                } else {
+                    chart.get_chart_mapping()
+                };
                 let (first, last) = chart.state.visible_range();
                 let middle = (first + last) / 2;
                 let bar = middle + (4 - middle % 3) % 3;
@@ -321,7 +401,15 @@ mod tests {
                 let near = if off_scale {
                     Pos2::new(target.x + 2.0, map.price_to_y(17.0))
                 } else {
-                    target + vec2(2.0, if price == 10.0 { -offset } else { offset })
+                    target
+                        + vec2(
+                            2.0,
+                            if price == 10.0 || kind == "pane" {
+                                -offset
+                            } else {
+                                offset
+                            },
+                        )
                 };
                 let expected_price = if snaps { price } else { map.y_to_price(near.y) };
                 let button = |pos, pressed| Event::PointerButton {
@@ -337,7 +425,13 @@ mod tests {
                 chart
                     .drawings_mut()
                     .set_active_tool(Some(DrawingToolType::TrendLine));
-                for pos in [near, Pos2::new(map.idx_to_x(bar + 8), map.price_to_y(13.0))] {
+                for pos in [
+                    near,
+                    Pos2::new(
+                        map.idx_to_x(bar + 8),
+                        map.price_to_y(if kind == "pane" { 15.0 } else { 13.0 }),
+                    ),
+                ] {
                     step(&mut chart, vec![Event::PointerMoved(pos)]);
                     step(&mut chart, vec![button(pos, true)]);
                     step(&mut chart, vec![button(pos, false)]);

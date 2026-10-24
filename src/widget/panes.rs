@@ -247,6 +247,7 @@ impl Chart {
                 transform.to_scale(shared_range.1),
             );
             let map = pane_scale.map(transform, panel_rect.top(), panel_rect.bottom());
+            let mut drawing_response = None;
             let mut member_row = 0;
             let mut axis_tags = Vec::new();
             for id in members {
@@ -387,9 +388,16 @@ impl Chart {
                         settings_response,
                     } = interaction;
 
+                    let pane_response = pane_response.interact(Sense::click_and_drag());
+
                     // A click on the legend's close "x" removes this study.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
-                    if pane_response.double_clicked() {
+                    if pane_response.double_clicked()
+                        && self
+                            .drawings
+                            .hit_test(pane_response.interact_pointer_pos().unwrap_or_default())
+                            .is_none()
+                    {
                         self.indicator_settings_request = Some(id);
                     }
                     if close_clicked {
@@ -443,6 +451,8 @@ impl Chart {
                         && !toggle.clicked()
                         && !control_clicked
                         && pane_response.clicked()
+                        && self.drawings.active_tool.is_none()
+                        && !self.drawings.eraser_mode
                         && let Some(click_pos) = pane_response.interact_pointer_pos()
                     {
                         let hit = self.pane_layout.panes[pane_idx]
@@ -487,6 +497,7 @@ impl Chart {
                         }
                     }
 
+                    drawing_response = Some((pane_response, chart_rect));
                     // Store the pane info for hit testing by platform
                     self.last_rendered_indicator_panes
                         .push(RenderedIndicatorPane {
@@ -499,6 +510,51 @@ impl Chart {
                             mapping: pane_coords,
                         });
                 }
+            }
+            if !collapsed && let Some((pane_response, chart_rect)) = drawing_response {
+                let history = self.history.start_drawing_action(&mut self.drawings);
+                let mut drawings = std::mem::take(&mut self.drawings);
+                let mut cursors = std::mem::take(&mut self.cursor_modes);
+                let timescale = self.state.time_scale().clone();
+                let painter = ui.painter().clone();
+                self.handle_pane_drawings(
+                    ui,
+                    &mut drawings,
+                    &mut cursors,
+                    &pane_response,
+                    chart_rect,
+                    &map,
+                    &painter,
+                    &timescale,
+                    Some(pane_id),
+                );
+                super::tool_interaction::render_pane_eraser_highlight(
+                    &ui.painter().with_clip_rect(chart_rect),
+                    &drawings,
+                    &cursors,
+                );
+                if pane_response.secondary_clicked()
+                    && let Some(pos) = pane_response.interact_pointer_pos()
+                {
+                    self.right_click = Some(if let Some(id) = drawings.hit_test(pos) {
+                        if !drawings.is_selected(id) {
+                            drawings.select(id);
+                        }
+                        super::RightClickTarget::Drawing {
+                            drawing_id: id,
+                            pos,
+                        }
+                    } else {
+                        super::RightClickTarget::Background {
+                            pos,
+                            price: map.y_to_price(pos.y),
+                        }
+                    });
+                }
+                self.drawings = drawings;
+                self.cursor_modes = cursors;
+                self.history
+                    .finish_drawing_action(&mut self.drawings, history);
             }
             ui.allocate_space(panel_rect.size());
             pane_rects.push((pane_idx, pane_id, panel_rect, collapsed));
@@ -576,6 +632,79 @@ mod tests {
         pointer(ctx, chart, to, None);
         pointer(ctx, chart, to, Some(false));
         pointer(ctx, chart, to, None);
+    }
+
+    /// Pane drawings retain study units through editing, layout changes and storage.
+    #[test]
+    fn drawings_use_the_owning_study_pane_scale() {
+        use crate::drawings::DrawingToolType;
+        use crate::scales::PriceScaleMode;
+        for (mode, inverted, low, high, middle) in [
+            (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0),
+            (PriceScaleMode::Normal, true, 0.0, 100.0, 50.0),
+            (PriceScaleMode::Logarithmic, false, 10.0, 1000.0, 100.0),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[1000.0], &[1100.0]);
+            let study = chart.add_indicator(Box::new(RSI::new(14)));
+            chart.sync_panes();
+            let scale = &mut chart.pane_layout.panes[0].scale;
+            scale.options_mut().mode = mode;
+            scale.options_mut().invert_scale = inverted;
+            let transform = crate::scales::PriceTransform { mode, base: 1.0 };
+            scale.rebase(transform);
+            scale.set_range(transform.to_scale(low), transform.to_scale(high));
+            crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+            let pane = chart.get_rendered_indicator_panes()[0].clone();
+            // Halfway between 0 and 100 is 50; halfway between ln(10) and ln(1000) is ln(100).
+            let first = Pos2::new(pane.mapping.idx_to_x(30), pane.chart_rect.center().y);
+            let second = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
+            chart
+                .drawings_mut()
+                .set_active_tool(Some(DrawingToolType::TrendLine));
+            click(&ctx, &mut chart, first);
+            click(&ctx, &mut chart, second);
+            assert_eq!(
+                chart.drawings().drawings.len(),
+                1,
+                "drawing on a study pane"
+            );
+            let id = chart.drawings().drawings[0].id;
+            for point in &chart.drawings().drawings[0].chart_points {
+                assert!((point.price - middle).abs() < 1e-3);
+            }
+            assert_eq!(chart.drawings().hit_test(first.lerp(second, 0.5)), Some(id));
+            assert_eq!(
+                chart
+                    .drawings()
+                    .hit_test(chart.get_rendered_price_rect().center()),
+                None
+            );
+            chart.drawings_mut().select(id);
+            let to = first + egui::vec2(0.0, 15.0);
+            drag(&ctx, &mut chart, first, to);
+            let moved = chart.drawings().drawings[0].chart_points[0].price;
+            assert!((moved - pane.mapping.y_to_price(to.y)).abs() < 1e-3);
+            assert!(chart.undo());
+            assert!((chart.drawings().drawings[0].chart_points[0].price - middle).abs() < 1e-3);
+            assert!(chart.redo());
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            chart.load_drawings(&saved).unwrap();
+            chart.pane_layout.maximized = Some(study);
+            pointer(&ctx, &mut chart, Pos2::ZERO, None);
+            let drawing = &chart.drawings().drawings[0];
+            let pane = &chart.get_rendered_indicator_panes()[0];
+            assert!((drawing.points[0].y - pane.mapping.price_to_y(moved)).abs() < 0.01);
+            let on_line = drawing.points[0].lerp(drawing.points[1], 0.5);
+            assert_eq!(chart.drawings().hit_test(on_line), Some(drawing.id));
+            chart.set_indicator_visible(study, false);
+            pointer(&ctx, &mut chart, Pos2::ZERO, None);
+            assert_eq!(
+                chart.drawings().hit_test(on_line),
+                None,
+                "hidden panes have no drawing hits"
+            );
+        }
     }
 
     #[test]

@@ -53,6 +53,10 @@ pub struct Drawing {
     /// Optional object-tree name, saved with the drawing.
     #[serde(default)]
     pub label: Option<String>,
+    /// Owning study id, or `None` for the main price pane. Follows that study when panes move
+    /// or merge; hosts restoring studies must retain or remap their ids. Older files use main.
+    #[serde(default)]
+    pub pane: Option<usize>,
     /// Type of drawing tool
     pub tool_type: DrawingToolType,
     /// Screen coordinates (updated each frame from chart_points)
@@ -142,6 +146,7 @@ impl Drawing {
             chart_points: Vec::new(),
             level_ys: Vec::new(),
             screen_anchor: None,
+            pane: None,
             color: [242, 54, 69, 255], // Default red (#F23645)
             stroke_width: 2.0,
             completed: false,
