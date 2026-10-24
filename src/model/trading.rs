@@ -71,10 +71,18 @@ pub struct OrderRequest {
     pub quantity: f64,
     /// How the order executes, with its prices.
     pub order_type: OrderType,
+    /// The price at which a take-profit order closes the filled quantity, for an account that
+    /// accepts [brackets](Capabilities::brackets): above the entry for a buy, below for a sell.
+    pub take_profit: Option<f64>,
+    /// The price at which a stop-loss order closes the filled quantity, for an account that
+    /// accepts [brackets](Capabilities::brackets): below the entry for a buy, above for a sell.
+    pub stop_loss: Option<f64>,
+    /// How long the order stays working.
+    pub time_in_force: TimeInForce,
 }
 
 impl OrderRequest {
-    /// An order for `quantity` of `symbol`.
+    /// An order for `quantity` of `symbol`, without brackets, working for the day.
     pub fn new(
         symbol: impl Into<String>,
         side: OrderSide,
@@ -86,6 +94,36 @@ impl OrderRequest {
             side,
             quantity,
             order_type,
+            take_profit: None,
+            stop_loss: None,
+            time_in_force: TimeInForce::Day,
+        }
+    }
+}
+
+/// How long an order stays working.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TimeInForce {
+    /// Until the end of the trading day.
+    #[default]
+    Day,
+    /// Until it fills or is cancelled.
+    GoodTillCancelled,
+    /// Fills what it can at once and cancels the rest.
+    ImmediateOrCancel,
+    /// Fills in full at once, or not at all.
+    FillOrKill,
+}
+
+impl TimeInForce {
+    /// The short name a ticket shows, such as "GTC".
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Day => "DAY",
+            Self::GoodTillCancelled => "GTC",
+            Self::ImmediateOrCancel => "IOC",
+            Self::FillOrKill => "FOK",
         }
     }
 }
@@ -243,6 +281,8 @@ pub struct Capabilities {
     pub stop: bool,
     /// Accepts stop-limit orders.
     pub stop_limit: bool,
+    /// Accepts a take-profit and a stop-loss with an order.
+    pub brackets: bool,
 }
 
 impl Capabilities {
@@ -254,5 +294,51 @@ impl Capabilities {
             OrderType::Stop(_) => self.stop,
             OrderType::StopLimit { .. } => self.stop_limit,
         }
+    }
+}
+
+/// How a symbol trades at the broker. The order ticket sizes orders by these rules.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TradingRules {
+    /// The symbol as the feed knows it.
+    pub symbol: String,
+    /// Positive: quantities are whole multiples of it.
+    pub quantity_step: f64,
+    /// The smallest quantity, positive.
+    pub min_quantity: f64,
+    /// The largest quantity, if the broker limits it.
+    pub max_quantity: Option<f64>,
+    /// The profit or loss in the account's currency of one unit moving by one price unit: 1 for
+    /// a share, the contract multiplier for a future.
+    pub point_value: f64,
+    /// The times in force the broker accepts for the symbol, the default first. Never empty.
+    pub time_in_force: Vec<TimeInForce>,
+}
+
+impl TradingRules {
+    /// Whole units from 1 without a maximum, a point value of 1 and day orders: the rules the
+    /// ticket assumes when the broker reports none.
+    pub fn new(symbol: impl Into<String>) -> Self {
+        Self {
+            symbol: symbol.into(),
+            quantity_step: 1.0,
+            min_quantity: 1.0,
+            max_quantity: None,
+            point_value: 1.0,
+            time_in_force: vec![TimeInForce::Day],
+        }
+    }
+
+    /// Whether every number is positive and finite and a time in force is offered.
+    pub(crate) fn is_valid(&self) -> bool {
+        let positive = |value: f64| value.is_finite() && value > 0.0;
+        positive(self.quantity_step)
+            && positive(self.min_quantity)
+            && positive(self.point_value)
+            && self
+                .max_quantity
+                .is_none_or(|max| positive(max) && max >= self.min_quantity)
+            && !self.time_in_force.is_empty()
     }
 }

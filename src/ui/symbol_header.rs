@@ -7,6 +7,7 @@ use crate::model::percent_change;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::widget::QuoteSide;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
 /// Symbol information for display
@@ -181,6 +182,12 @@ impl SymbolHeader {
 
     /// Show the symbol header
     pub fn show(&self, ui: &mut Ui) -> Response {
+        self.show_with_quote_action(ui).0
+    }
+
+    /// Show the symbol header and return the Sell or Buy box the user clicked, for
+    /// [`Trading::trade`](crate::ui::trading::Trading::trade).
+    pub fn show_with_quote_action(&self, ui: &mut Ui) -> (Response, Option<QuoteSide>) {
         let config = &self.config.resolved(ui);
         let (response, painter) = ui.allocate_painter(
             Vec2::new(ui.available_width(), config.height),
@@ -281,9 +288,10 @@ impl SymbolHeader {
         x += DESIGN_TOKENS.spacing.md;
 
         // Bid/Ask boxes
+        let mut quote_action = None;
         if config.show_bid_ask && self.quote.bid > 0.0 {
             // SELL box (red background)
-            x = self.draw_quote_box(
+            let sell = self.draw_quote_box(
                 &painter,
                 x,
                 center_y,
@@ -291,9 +299,9 @@ impl SymbolHeader {
                 "SELL",
                 config.bearish_color,
             );
-            x += DESIGN_TOKENS.spacing.xs;
+            x = sell.right() + DESIGN_TOKENS.spacing.xs;
             // BUY box (green background)
-            x = self.draw_quote_box(
+            let buy = self.draw_quote_box(
                 &painter,
                 x,
                 center_y,
@@ -301,7 +309,13 @@ impl SymbolHeader {
                 "BUY",
                 config.bullish_color,
             );
-            x += DESIGN_TOKENS.spacing.md;
+            x = buy.right() + DESIGN_TOKENS.spacing.md;
+            for (rect, side) in [(sell, QuoteSide::Sell), (buy, QuoteSide::Buy)] {
+                let id = response.id.with(side == QuoteSide::Buy);
+                if ui.interact(rect, id, Sense::click()).clicked() {
+                    quote_action = Some(side);
+                }
+            }
 
             // Separator
             self.draw_separator(
@@ -329,7 +343,7 @@ impl SymbolHeader {
             );
         }
 
-        response
+        (response, quote_action)
     }
 
     fn draw_separator(
@@ -354,7 +368,7 @@ impl SymbolHeader {
         price: f64,
         label: &str,
         bg_color: Color32,
-    ) -> f32 {
+    ) -> Rect {
         let text = format!("{price:.2} {label}");
         let galley = painter.layout_no_wrap(
             text,
@@ -377,7 +391,7 @@ impl SymbolHeader {
             Color32::TRANSPARENT,
         );
 
-        x + box_width
+        box_rect
     }
 
     fn format_volume(&self, vol: f64) -> String {

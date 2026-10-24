@@ -1,8 +1,8 @@
 //! Placing orders with the host's broker.
 
 use super::Events;
-use crate::data::{FeedStatus, MaybeSend, Reply};
-use crate::model::{Account, Execution, Order, OrderId, OrderRequest, Position};
+use crate::data::{FeedError, FeedStatus, MaybeSend, Reply};
+use crate::model::{Account, Execution, Order, OrderId, OrderRequest, Position, TradingRules};
 
 /// One trading account at the host's broker, real or simulated. The library holds no balances or
 /// positions: it shows what the broker pushes and places the orders the user confirms. Paper
@@ -106,6 +106,14 @@ pub trait Broker: MaybeSend + 'static {
     /// [`OrderStatus::Cancelled`](crate::model::OrderStatus::Cancelled) update may arrive before
     /// or after that answer.
     fn cancel(&self, id: OrderId, reply: Reply<()>);
+
+    /// Answers how `symbol` trades: its quantity step, minimum and maximum quantity, point value
+    /// and times in force. By default the answer is [`FeedError::NotSupported`], and the order
+    /// ticket assumes [`TradingRules::new`].
+    fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
+        let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
 }
 
 /// A change to the account a [`Broker`] reports.
