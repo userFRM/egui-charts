@@ -1,4 +1,5 @@
-//! The example host keeps template documents in application storage. Remote storage is host-owned.
+//! The example host keeps template and symbol notes documents in application storage. Remote
+//! storage is host-owned.
 
 use super::DemoApp;
 use egui_charts::data::Reply;

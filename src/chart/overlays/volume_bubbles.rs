@@ -7,8 +7,9 @@
 use crate::model::{Bar, BarClock, Tick, TradeSide};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
-use egui::{Color32, Painter, Pos2};
+use egui::{Color32, Mesh, Painter, Pos2, Shape, Vec2};
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 /// Configuration for volume bubbles overlay
 #[derive(Debug, Clone)]
@@ -134,6 +135,8 @@ pub(crate) struct VolumeBubbles {
     step: Option<f64>,
     /// By bar open time, then price level, so the bubbles of a run of bars are one range.
     bubbles: BTreeMap<(DateTime<Utc>, i64), Bubble>,
+    /// The mesh of the last frame, refilled in place once the tessellator has let go of it.
+    mesh: Mutex<Arc<Mesh>>,
 }
 
 impl VolumeBubbles {
@@ -151,6 +154,7 @@ impl VolumeBubbles {
             clock,
             step,
             bubbles: BTreeMap::new(),
+            mesh: Mutex::default(),
         };
         for trade in trades {
             bubbles.fold(trade, true);
@@ -230,15 +234,28 @@ impl VolumeBubbles {
         }
         shown.retain(|(_, _, bubble)| bubble.volume >= min_size);
         let scale = Scale::new(&self.config, shown.iter().map(|(_, _, b)| b.volume));
-        let border = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, self.config.border_color);
+        let border = self.config.show_border.then_some(self.config.border_color);
+        // One mesh for every bubble: the tessellator takes far longer over a circle shape per
+        // bubble than over copying these vertices, and a fresh mesh of this size every frame
+        // costs about as much again in page faults.
+        let mut last = self.mesh.lock().unwrap_or_else(|e| e.into_inner());
+        let mut mesh = Arc::try_unwrap(std::mem::take(&mut *last)).unwrap_or_default();
+        mesh.clear();
         for (i, y, bubble) in &shown {
             let center = Pos2::new(x(*i), *y);
             let radius = scale.diameter(bubble.volume) / 2.0;
-            painter.circle_filled(center, radius, self.color(bubble));
-            if self.config.show_border {
-                painter.circle_stroke(center, radius, border);
-            }
+            let color = self.color(bubble);
+            add_disc(
+                &mut mesh,
+                center,
+                radius,
+                color,
+                border,
+                painter.pixels_per_point(),
+            );
         }
+        *last = Arc::new(mesh);
+        painter.add(Shape::Mesh(Arc::clone(&last)));
     }
 
     fn color(&self, bubble: &Bubble) -> Color32 {
@@ -255,6 +272,63 @@ impl VolumeBubbles {
             }
         };
         Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), config.opacity)
+    }
+}
+
+/// Appends a disc of `fill` to `mesh`, ringed outside by a hairline of `border`, with edges
+/// faded over one physical pixel as the tessellator fades them. The polygon has the fewest sides
+/// that keep it within a quarter of a physical pixel of the circle at `pixels_per_point`.
+fn add_disc(
+    mesh: &mut Mesh,
+    center: Pos2,
+    radius: f32,
+    fill: Color32,
+    border: Option<Color32>,
+    pixels_per_point: f32,
+) {
+    let half = 0.5 / pixels_per_point;
+    let inner = (radius - half).max(0.0);
+    let width = DESIGN_TOKENS.stroke.hairline;
+    // Ring radii and colours from the centre out; a hairline no wider than the fade peaks once.
+    let rings: &[(f32, Color32)] = match border {
+        None => &[(inner, fill), (radius + half, Color32::TRANSPARENT)],
+        Some(border) if width <= 2.0 * half => &[
+            (inner, fill),
+            (radius + half, border),
+            (radius + width + half, Color32::TRANSPARENT),
+        ],
+        Some(border) => &[
+            (inner, fill),
+            (radius + half, border),
+            (radius + width - half, border),
+            (radius + width + half, Color32::TRANSPARENT),
+        ],
+    };
+    let outer = rings[rings.len() - 1].0 * pixels_per_point;
+    let max_step = (1.0 - 0.25 / outer).clamp(-1.0, 1.0).acos();
+    let sides = ((std::f32::consts::PI / max_step).ceil() as u32).clamp(8, 256);
+    let (sin, cos) = (std::f32::consts::TAU / sides as f32).sin_cos();
+    let per_side = rings.len() as u32;
+    let first = mesh.vertices.len() as u32;
+    mesh.reserve_vertices(1 + (sides * per_side) as usize);
+    mesh.reserve_triangles((sides * (2 * per_side - 1)) as usize);
+    mesh.colored_vertex(center, fill);
+    let mut direction = Vec2::X;
+    for side in 0..sides {
+        for &(r, color) in rings {
+            mesh.colored_vertex(center + r * direction, color);
+        }
+        direction = Vec2::new(
+            direction.x * cos - direction.y * sin,
+            direction.x * sin + direction.y * cos,
+        );
+        let a = first + 1 + side * per_side;
+        let b = first + 1 + (side + 1) % sides * per_side;
+        mesh.add_triangle(first, a, b);
+        for ring in 0..per_side - 1 {
+            mesh.add_triangle(a + ring, b + ring, a + ring + 1);
+            mesh.add_triangle(b + ring, b + ring + 1, a + ring + 1);
+        }
     }
 }
 
@@ -362,6 +436,67 @@ mod tests {
                 )
             }));
             assert_eq!(got, expected, "{name}");
+        }
+    }
+
+    /// Guards the shape of a bubble at 1x and 2x: every side stays within a quarter of a physical
+    /// pixel of the circle, the fill ends half a pixel inside the radius, and the edge fades to
+    /// nothing half a pixel past the radius, or past the hairline outside it with a border. Too
+    /// few sides, a rotation that drifts or a ring at the wrong radius fails it.
+    #[test]
+    fn bubbles_stay_round_and_fade_over_one_pixel() {
+        let (fill, border) = (Color32::RED, Color32::WHITE);
+        for (radius, ppp, with_border) in [
+            (2.0, 1.0, false),
+            (2.0, 2.0, true),
+            (12.0, 1.0, true),
+            (20.0, 1.0, false),
+            (20.0, 2.0, true),
+        ] {
+            let half = 0.5 / ppp;
+            let rings = match (with_border, ppp) {
+                (false, _) => vec![(radius - half, fill), (radius + half, Color32::TRANSPARENT)],
+                (true, 1.0) => vec![
+                    (radius - half, fill),
+                    (radius + half, border),
+                    (radius + 1.0 + half, Color32::TRANSPARENT),
+                ],
+                (true, _) => vec![
+                    (radius - half, fill),
+                    (radius + half, border),
+                    (radius + 1.0 - half, border),
+                    (radius + 1.0 + half, Color32::TRANSPARENT),
+                ],
+            };
+            let center = Pos2::new(100.0, 50.0);
+            let mut mesh = Mesh::default();
+            add_disc(
+                &mut mesh,
+                center,
+                radius,
+                fill,
+                with_border.then_some(border),
+                ppp,
+            );
+            let case = format!("radius {radius} at {ppp}x, border {with_border}");
+            assert!(mesh.is_valid(), "{case}");
+            let sides = (mesh.vertices.len() - 1) / rings.len();
+            assert_eq!(
+                mesh.indices.len(),
+                3 * sides * (2 * rings.len() - 1),
+                "{case}"
+            );
+            for (ring, (r, color)) in rings.iter().enumerate() {
+                let at = |side: usize| mesh.vertices[1 + side % sides * rings.len() + ring];
+                for side in 0..sides {
+                    let (a, b) = (at(side), at(side + 1));
+                    assert!(((a.pos - center).length() - r).abs() < 1e-3, "{case}");
+                    assert_eq!(a.color, *color, "{case}");
+                    let middle = (a.pos + b.pos.to_vec2()) / 2.0;
+                    let error = (r - (middle - center).length()) * ppp;
+                    assert!((0.0..=0.25).contains(&error), "{case}: {error} px");
+                }
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
-use crate::config::PriceAxisOptions;
+use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
 use crate::scales::{
     PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkGenerator, TickMarkGeneratorConfig,
@@ -11,8 +11,8 @@ use chrono::Duration;
 use egui::layers::ShapeIdx;
 use egui::{Color32, FontId, Pos2, Rect, Shape};
 
-/// Length of the tick marks on the price axis, from the plot edge.
-const PRICE_TICK_LENGTH: f32 = 3.0;
+/// Length of the tick marks on the price and time axes, from the plot edge.
+const AXIS_TICK_LENGTH: f32 = 3.0;
 
 /// Paints the price labels on the right side into `slot`, using smart tick mark generation and
 /// leaving out the labels the `tags` (the price line, last price and crosshair tags) would cut
@@ -137,7 +137,7 @@ pub fn render_price_labels_at_pos(
             shapes.push(Shape::line_segment(
                 [
                     Pos2::new(edge, mark.y_coord),
-                    Pos2::new(edge + side * PRICE_TICK_LENGTH, mark.y_coord),
+                    Pos2::new(edge + side * AXIS_TICK_LENGTH, mark.y_coord),
                 ],
                 egui::Stroke::new(1.0, colors.text),
             ));
@@ -167,11 +167,20 @@ pub(crate) fn tick_decimals(price_scale: &PriceMap, y: f32) -> usize {
         })
 }
 
+/// The minimum distance between time labels: 80 points for labels of up to 8 characters.
+fn min_time_label_spacing(options: &TimeScaleOptions) -> f32 {
+    match options.tick_mark_max_character_length {
+        0 => 80.0,
+        chars => 10.0 * chars as f32,
+    }
+}
+
 fn generate_time_marks(
     context: &RenderContext,
     visible_data: &[Bar],
     coords: &ChartMapping,
     formatter: &dyn TimeFormatter,
+    options: &TimeScaleOptions,
 ) -> (Vec<TickMark>, Vec<(chrono::DateTime<chrono::Utc>, usize)>) {
     if visible_data.is_empty() {
         return (Vec::new(), Vec::new());
@@ -193,7 +202,7 @@ fn generate_time_marks(
     };
 
     let zoom_factor = (coords.bar_spacing / 8.0).clamp(0.5, 2.5);
-    let min_spacing = 80.0;
+    let min_spacing = min_time_label_spacing(options);
     let max_marks = ((context.rect.width() / min_spacing).ceil() as usize + 2).clamp(6, 24);
 
     let config = TickMarkGeneratorConfig {
@@ -204,7 +213,8 @@ fn generate_time_marks(
         target_density: (1.0 * zoom_factor).clamp(0.6, 2.5),
     };
 
-    let generator = TickMarkGenerator::with_formatter(config, formatter.clone_box());
+    let generator = TickMarkGenerator::with_formatter(config, formatter.clone_box())
+        .with_uniform_distribution(options.uniform_distribution);
 
     let bar_duration_ms = bar_duration_ms.max(1);
     // Safe: guarded by is_empty() check above
@@ -299,9 +309,10 @@ pub(crate) fn render_time_grid(
     visible_data: &[Bar],
     coords: &ChartMapping,
     formatter: &dyn TimeFormatter,
+    options: &TimeScaleOptions,
     color: Color32,
 ) {
-    let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter);
+    let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter, options);
     for mark in marks {
         let index = time_to_idx(mark.time, &bars);
         let delta = coords.base_idx as f32 + coords.right_offset - index;
@@ -317,8 +328,8 @@ pub(crate) fn render_time_grid(
     }
 }
 
-/// Renders time labels on the bottom using tick marks
-/// Labels are spaced to prevent overlap
+/// Paints the time labels below `context.rect` into `slot`, spaced to prevent overlap, with the
+/// label spacing, tick marks, bold labels and border of the time scale `options`.
 pub fn render_time_labels(
     context: &RenderContext,
     visible_data: &[Bar],
@@ -326,10 +337,10 @@ pub fn render_time_labels(
     colors: &StyleColors,
     formatter: &dyn TimeFormatter,
     tags: &[Option<Rect>],
-    ticks_visible: bool,
+    options: &TimeScaleOptions,
     slot: ShapeIdx,
 ) {
-    let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter);
+    let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter, options);
     let font = axis_font(context.painter.ctx());
     let theme = context.painter.ctx().active_theme();
     let text_color = if colors.text == theme.chart.axis_text {
@@ -339,9 +350,17 @@ pub fn render_time_labels(
     };
 
     // Track last rendered label position to prevent overlap
-    let min_label_spacing = 80.0; // Min pixels between label centers
+    let min_label_spacing = min_time_label_spacing(options); // Min pixels between label centers
     let mut last_label_x: Option<f32> = None;
     let mut labels = Vec::new();
+    if options.border_visible {
+        let y = context.painter.round_to_pixel_center(context.rect.bottom());
+        labels.push(Shape::hline(
+            context.rect.x_range(),
+            y,
+            egui::Stroke::new(1.0, options.border_color.unwrap_or(theme.ui.border)),
+        ));
+    }
 
     for mark in marks {
         // Use fractional index for smooth label movement during pan
@@ -364,10 +383,11 @@ pub fn render_time_labels(
         }
 
         let y = context.rect.max.y + TIME_LABEL_GAP;
-        let galley = if matches!(
-            mark.mark_type,
-            TickMarkType::DayOfMonth | TickMarkType::Month | TickMarkType::Year
-        ) {
+        let galley = if options.allow_bold_labels
+            && matches!(
+                mark.mark_type,
+                TickMarkType::DayOfMonth | TickMarkType::Month | TickMarkType::Year
+            ) {
             context
                 .painter
                 .layout_job(egui::text::LayoutJob::single_section(
@@ -385,11 +405,11 @@ pub fn render_time_labels(
             && context.painter.clip_rect().contains_rect(rect)
             && !under_tag(tags, rect)
         {
-            if ticks_visible {
+            if options.ticks_visible {
                 labels.push(Shape::line_segment(
                     [
                         Pos2::new(x, context.rect.bottom()),
-                        Pos2::new(x, context.rect.bottom() + 3.0),
+                        Pos2::new(x, context.rect.bottom() + AXIS_TICK_LENGTH),
                     ],
                     egui::Stroke::new(1.0, text_color),
                 ));
@@ -927,7 +947,7 @@ mod tests {
         use egui::Vec2;
 
         for (_, theme) in crate::theme::presets() {
-            for width in [160.0, 300.0, 400.0, 599.0, 600.0, 1200.0, 1440.0] {
+            for width in [160.0, 300.0, 387.0, 400.0, 599.0, 600.0, 1200.0, 1440.0] {
                 let ctx = Context::default();
                 #[cfg(feature = "icons")]
                 egui_extras::install_image_loaders(&ctx);
@@ -943,6 +963,8 @@ mod tests {
                     color: theme.ui.text,
                     background: theme.ui.panel_bg_secondary,
                 }];
+                let instrument = crate::model::Instrument::new("Sample equity fund")
+                    .with_data_status(crate::model::DataStatus::Delayed);
                 let bar = Bar::new(
                     Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
                     749.37,
@@ -964,6 +986,7 @@ mod tests {
                                 (badge.id(), Vec2::splat(18.0)).into(),
                             ));
                             legend.statuses = &statuses;
+                            legend.instrument = Some(&instrument);
                             legend.show_volume = false;
                             legend.show(ui, plot);
                         },
@@ -1003,6 +1026,20 @@ mod tests {
                         field.galley.text()
                     );
                 }
+                for shape in &output.shapes {
+                    if let Shape::Rect(rect) = &shape.shape
+                        && rect.fill == theme.chart.bg
+                        && rect.rect.height() >= 22.0
+                    {
+                        assert!(
+                            text.iter().any(|field| rect
+                                .rect
+                                .intersects(Rect::from_min_size(field.pos, field.galley.size()))),
+                            "{width}: empty legend row at {:?}",
+                            rect.rect
+                        );
+                    }
+                }
                 for (index, field) in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"]
                     .into_iter()
                     .enumerate()
@@ -1017,13 +1054,15 @@ mod tests {
                     text.iter()
                         .any(|text| text.galley.text() == "+1.32 (+0.18%)")
                 );
+                assert!(text.iter().any(|text| text.galley.text() == "D"
+                    && text.galley.job.sections[0].format.color == theme.ui.warning));
                 let centres: Vec<_> = text
                     .iter()
                     .map(|text| text.pos.y + text.galley.size().y / 2.0)
                     .collect();
                 if width >= 1200.0 {
                     assert!(centres.iter().all(|y| (*y - centres[0]).abs() < 0.1));
-                } else if width <= 400.0 {
+                } else if width <= 300.0 {
                     assert!(centres.iter().any(|y| *y > centres[0]));
                 }
                 for field in text

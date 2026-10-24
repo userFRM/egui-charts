@@ -141,6 +141,9 @@ impl Indicator for ConfiguredStudy {
     fn candles(&self) -> &[super::StudyCandle] {
         self.study.candles()
     }
+    fn tpo(&self) -> Option<&crate::model::TPOConfig> {
+        self.study.tpo()
+    }
     fn values(&self) -> &IndicatorValues {
         self.study.values()
     }
@@ -177,6 +180,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
         self.study.plot_color(line, bar)
+    }
+    fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
+        self.study.plot_text(line, bar)
     }
     fn fills(&self) -> Vec<super::StudyFill> {
         self.study.fills()

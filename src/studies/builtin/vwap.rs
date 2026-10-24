@@ -77,7 +77,7 @@ impl VwapAnchor {
 
 /// The trading day of `time`: its date in `zone`, or the next date from the open of a
 /// window that spans midnight, since a window is named by the day on which it closes.
-fn trading_day(time: DateTime<Utc>, zone: Tz, windows: &[SessionWindow]) -> NaiveDate {
+pub(super) fn trading_day(time: DateTime<Utc>, zone: Tz, windows: &[SessionWindow]) -> NaiveDate {
     let utc = time.naive_utc();
     // Near the ends of the representable range the local time may not exist; keep UTC there.
     let local = utc
