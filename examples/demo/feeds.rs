@@ -2,10 +2,14 @@
 //! stable, distinct content. A host answers these from its own data vendors.
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, Utc, Weekday};
+use std::sync::Mutex;
+
 use egui_charts::data::{
-    CalendarEvent, CalendarKind, CalendarQuery, FeedError, Importance, NewsQuery, NewsStory,
-    ScreenerColumn, ScreenerColumnSet, ScreenerOp, ScreenerQuery, ScreenerRow,
+    CalendarEvent, CalendarKind, CalendarQuery, FeedError, HotlistEntry, HotlistQuery, Importance,
+    NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp, ScreenerQuery,
+    ScreenerRow,
 };
+use egui_charts::services::{ChatEvent, ChatMessage, Chats, Events, Notification, Notifications};
 
 use crate::sampledata::DemoSymbol;
 
@@ -296,4 +300,119 @@ fn compact(value: f64) -> String {
             || format!("{value:.0}"),
             |(scale, suffix)| format!("{:.2}{suffix}", value / scale),
         )
+}
+
+/// The demo's hotlists.
+pub(super) const HOTLISTS: [&str; 3] = ["Top gainers", "Top losers", "Most volatile"];
+
+/// The catalog symbols ranked for `query.list` on their synthetic quotes at `now`.
+pub(super) fn hotlist(query: &HotlistQuery, now: DateTime<Utc>) -> Vec<HotlistEntry> {
+    let mut entries: Vec<HotlistEntry> = DemoSymbol::catalog()
+        .iter()
+        .filter_map(|spec| {
+            let quote = super::live::watchlist_quote(spec.symbol, now)?;
+            let change = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
+            let mut entry = HotlistEntry::new(spec.symbol, quote.last, change);
+            entry.price_decimals = quote.price_decimals;
+            Some(entry)
+        })
+        .collect();
+    match query.list.as_str() {
+        "Top gainers" => {
+            entries.retain(|entry| entry.change_percent > 0.0);
+            entries.sort_by(|a, b| b.change_percent.total_cmp(&a.change_percent));
+        }
+        "Top losers" => {
+            entries.retain(|entry| entry.change_percent < 0.0);
+            entries.sort_by(|a, b| a.change_percent.total_cmp(&b.change_percent));
+        }
+        _ => entries.sort_by(|a, b| b.change_percent.abs().total_cmp(&a.change_percent.abs())),
+    }
+    entries.truncate(query.limit);
+    entries
+}
+
+/// The demo's event log: what it reported to the user, newest last, kept for a new stream.
+#[derive(Default)]
+pub(super) struct DemoNotifications(Mutex<(Vec<Notification>, Option<Events<Notification>>)>);
+
+impl DemoNotifications {
+    /// Logs `title` about `symbol`, if any, and pushes it to the panel.
+    pub(super) fn notify(&self, title: impl Into<String>, symbol: Option<&str>) {
+        let mut entry = Notification::new(Utc::now(), title);
+        entry.symbol = symbol.map(str::to_owned);
+        let mut state = self.0.lock().unwrap();
+        if let Some(events) = &state.1 {
+            events.push(entry.clone());
+        }
+        state.0.push(entry);
+        let extra = state.0.len().saturating_sub(100);
+        state.0.drain(..extra);
+    }
+}
+
+impl Notifications for DemoNotifications {
+    fn watch(&self, events: Events<Notification>) {
+        let mut state = self.0.lock().unwrap();
+        for entry in &state.0 {
+            events.push(entry.clone());
+        }
+        state.1 = Some(events);
+    }
+}
+
+/// Two rooms with a few synthetic messages, echoing what the user posts.
+pub(super) struct DemoChats(Mutex<(Vec<ChatMessage>, Option<Events<ChatEvent>>)>);
+
+impl DemoChats {
+    pub(super) fn new(now: DateTime<Utc>) -> Self {
+        let message = |room, author, minutes, text| {
+            ChatMessage::new(room, author, now - TimeDelta::minutes(minutes), text)
+        };
+        Self(Mutex::new((
+            vec![
+                message("General", "Ana", 42, "Morning. Anyone watching the open?"),
+                message(
+                    "General",
+                    "Ravi",
+                    37,
+                    "SPX holding above yesterday's close so far.",
+                ),
+                message(
+                    "General",
+                    "Ana",
+                    12,
+                    "Volume looks light ahead of the CPI release.",
+                ),
+                message("Crypto", "Lee", 25, "BTCUSD testing the range high again."),
+                message(
+                    "Crypto",
+                    "Mia",
+                    9,
+                    "Watching for a close above it on the hourly.",
+                ),
+            ],
+            None,
+        )))
+    }
+}
+
+impl Chats for DemoChats {
+    fn watch(&self, events: Events<ChatEvent>) {
+        let mut state = self.0.lock().unwrap();
+        for message in &state.0 {
+            events.push(ChatEvent::Message(message.clone()));
+        }
+        state.1 = Some(events);
+    }
+
+    fn send(&self, room: String, text: String, reply: Reply<()>) {
+        let message = ChatMessage::new(room, "You", Utc::now(), text);
+        let mut state = self.0.lock().unwrap();
+        if let Some(events) = &state.1 {
+            events.push(ChatEvent::Message(message.clone()));
+        }
+        state.0.push(message);
+        reply.send(Ok(()));
+    }
 }

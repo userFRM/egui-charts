@@ -1,5 +1,5 @@
 //! What a feed answers for the market panels beside the chart: news, highlights, the event
-//! calendars and the screener.
+//! calendars, the screener and the hotlists.
 
 use chrono::{DateTime, Utc};
 
@@ -223,6 +223,41 @@ impl ScreenerRow {
         Self {
             symbol: symbol.into(),
             values,
+        }
+    }
+}
+
+/// The symbols of one hotlist that a hotlists panel asks
+/// [`Datafeed::hotlist`](super::Datafeed::hotlist) for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HotlistQuery {
+    /// The list, one of the names the host gave the panel, such as `"Top gainers"`.
+    pub list: String,
+    /// Symbols wanted at most.
+    pub limit: usize,
+}
+
+/// One symbol of a hotlist, with its last price and its change since the previous close.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HotlistEntry {
+    pub symbol: String,
+    pub last: f64,
+    /// The change since the previous close in percent, such as `2.5` for 2.5 %.
+    pub change_percent: f64,
+    /// Decimals of the price, or a default from its magnitude when `None`.
+    pub price_decimals: Option<u8>,
+}
+
+impl HotlistEntry {
+    /// `symbol` last at `last`, `change_percent` from the previous close.
+    pub fn new(symbol: impl Into<String>, last: f64, change_percent: f64) -> Self {
+        Self {
+            symbol: symbol.into(),
+            last,
+            change_percent,
+            price_decimals: None,
         }
     }
 }

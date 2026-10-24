@@ -70,9 +70,10 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
 };
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{
-    CalendarAction, CalendarPanel, NewsAction, NewsPanel, ScreenerAction, ScreenerPanel,
-    SymbolDetailsPanel, TimeAndSalesPanel, Watchlist, WatchlistAction, WatchlistPanel,
-    WidgetBarSection, WidgetBarWidget,
+    CalendarAction, CalendarPanel, ChatsPanel, HotlistsAction, HotlistsPanel, NewsAction,
+    NewsPanel, NotificationsAction, NotificationsPanel, Product, ProductsAction, ProductsPanel,
+    ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, Watchlist,
+    WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget,
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
@@ -128,20 +129,28 @@ enum SidePanel {
     TimeAndSales,
     Highlights,
     Screener,
+    Hotlists,
     Calendar,
     News,
+    Notifications,
+    Chats,
+    Products,
 }
 
 impl SidePanel {
     /// Panels the demo renders behind a built-in rail entry, with the entry.
-    const BUILT_IN: [(SidePanel, RightBarIcon); 7] = [
+    const BUILT_IN: [(SidePanel, RightBarIcon); 11] = [
         (SidePanel::Watchlist, RightBarIcon::Watchlist),
         (SidePanel::Alerts, RightBarIcon::Alerts),
         (SidePanel::ObjectTree, RightBarIcon::ObjectTree),
         (SidePanel::Highlights, RightBarIcon::Highlights),
         (SidePanel::Screener, RightBarIcon::Screener),
+        (SidePanel::Hotlists, RightBarIcon::Hotlists),
         (SidePanel::Calendar, RightBarIcon::Calendar),
         (SidePanel::News, RightBarIcon::News),
+        (SidePanel::Notifications, RightBarIcon::Notifications),
+        (SidePanel::Chats, RightBarIcon::Chats),
+        (SidePanel::Products, RightBarIcon::Products),
     ];
 
     /// Panels the demo renders behind a host rail entry, with the entry's id.
@@ -173,6 +182,16 @@ impl SidePanel {
             .iter()
             .find(|(_, widget)| *widget == id)
             .map(|(panel, _)| *panel)
+    }
+}
+
+/// A products launcher entry.
+fn product(id: &str, icon: egui_charts::icons::Icon, title: &str, description: &str) -> Product {
+    Product {
+        id: id.into(),
+        icon,
+        title: title.into(),
+        description: description.into(),
     }
 }
 
@@ -290,6 +309,12 @@ pub struct DemoApp {
     news: NewsPanel,
     calendar: CalendarPanel,
     screener: ScreenerPanel,
+    hotlists: HotlistsPanel,
+    // The demo's event log: its messages and alert triggers.
+    notifications: NotificationsPanel,
+    notification_host: Arc<feeds::DemoNotifications>,
+    chats: ChatsPanel,
+    products: ProductsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -492,6 +517,36 @@ impl DemoApp {
             news: NewsPanel::new(),
             calendar: CalendarPanel::new(),
             screener: ScreenerPanel::new(feeds::screener_sets()),
+            hotlists: HotlistsPanel::new(feeds::HOTLISTS.map(String::from).to_vec()),
+            notifications: NotificationsPanel::new(),
+            notification_host: Arc::default(),
+            chats: ChatsPanel::new(),
+            products: ProductsPanel::new(vec![
+                product(
+                    "screener",
+                    egui_charts::icons::icons::WIDGET_BAR_SCREENER,
+                    "Screener",
+                    "Filter the catalog symbols",
+                ),
+                product(
+                    "calendar",
+                    egui_charts::icons::icons::WIDGET_BAR_CALENDAR,
+                    "Calendars",
+                    "Economic and corporate events",
+                ),
+                product(
+                    "news",
+                    egui_charts::icons::icons::WIDGET_BAR_NEWS,
+                    "News",
+                    "Headlines for the chart's symbol",
+                ),
+                product(
+                    "shortcuts",
+                    egui_charts::icons::icons::WIDGET_BAR_HELP,
+                    "Keyboard shortcuts",
+                    "Every key the chart understands",
+                ),
+            ]),
             replay: None,
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
@@ -534,6 +589,12 @@ impl DemoApp {
         app.news.set_feed(app.live.clone());
         app.calendar.set_feed(app.live.clone());
         app.screener.set_feed(app.live.clone());
+        app.hotlists.set_feed(app.live.clone());
+        app.notification_host
+            .notify("Connected to the synthetic feed", None);
+        app.notifications.set_service(app.notification_host.clone());
+        app.chats
+            .set_service(Arc::new(feeds::DemoChats::new(chrono::Utc::now())));
         app.calendar
             .set_countries(feeds::COUNTRIES.iter().map(|code| code.to_string()));
         app.symbol_details.set_storage(app.template_storage.clone());
@@ -584,6 +645,8 @@ impl DemoApp {
 
     /// Surface a short-lived, honest status message in the UI.
     fn notify(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        self.notification_host.notify(msg.clone(), None);
         self.toasts.info(msg);
     }
 
@@ -1031,12 +1094,29 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
+        let logged = self.alerts.log().len();
         self.alerts.poll(&ctx, &mut self.toasts);
+        // shortcut: a log already holding its 10,000 triggers forwards no new ones; count the
+        // triggers in the alert service if a session can reach that.
+        let new = self.alerts.log().len().saturating_sub(logged);
+        for trigger in self.alerts.log().iter().rev().take(new).rev() {
+            self.notification_host.notify(
+                format!("Alert triggered: {}", trigger.symbol),
+                Some(&trigger.symbol),
+            );
+        }
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
         self.news.poll(&ctx);
         self.calendar.poll(&ctx);
         self.screener.poll(&ctx);
+        self.hotlists.poll(&ctx);
+        self.notifications.poll(&ctx);
+        self.chats.poll(&ctx);
+        self.widget_bar.set_notification_cnt(
+            RightBarIcon::Notifications,
+            self.notifications.unread() as u32,
+        );
         self.trading.poll(&ctx, &mut self.toasts);
         // The watchlist opens beside the chart by default, but a compact window starts with the
         // chart alone.
@@ -1599,6 +1679,12 @@ impl DemoApp {
             } else {
                 Some(target)
             };
+            // Quotes move: list current figures each time a ranking opens.
+            match self.open_panel {
+                Some(SidePanel::Hotlists) => self.hotlists.refresh(),
+                Some(SidePanel::Screener) => self.screener.refresh(),
+                _ => {}
+            }
         }
     }
 
@@ -1637,6 +1723,27 @@ impl DemoApp {
                     }
                     _ => {}
                 },
+                SidePanel::Hotlists => {
+                    if let HotlistsAction::SelectSymbol(symbol) = self.hotlists.show(ui) {
+                        self.open_catalog_symbol(&symbol);
+                    }
+                }
+                SidePanel::Notifications => {
+                    if let NotificationsAction::SelectSymbol(symbol) = self.notifications.show(ui) {
+                        self.open_catalog_symbol(&symbol);
+                    }
+                }
+                SidePanel::Chats => self.chats.show(ui),
+                SidePanel::Products => {
+                    if let ProductsAction::Open(id) = self.products.show(ui) {
+                        match id.as_str() {
+                            "screener" => self.open_panel = Some(SidePanel::Screener),
+                            "calendar" => self.open_panel = Some(SidePanel::Calendar),
+                            "news" => self.open_panel = Some(SidePanel::News),
+                            _ => self.keyboard_shortcuts.toggle(),
+                        }
+                    }
+                }
                 SidePanel::Calendar => {
                     if let CalendarAction::SelectSymbol(symbol) = self.calendar.show(ui) {
                         self.open_catalog_symbol(&symbol);

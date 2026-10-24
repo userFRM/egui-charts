@@ -38,8 +38,9 @@ pub(crate) mod merge;
 mod resample;
 pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 pub use market::{
-    CalendarEvent, CalendarKind, CalendarQuery, Importance, NewsQuery, NewsStory, ScreenerColumn,
-    ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery, ScreenerRow,
+    CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
+    NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
+    ScreenerRow,
 };
 #[cfg_attr(
     not(any(test, feature = "widget")),
@@ -159,6 +160,14 @@ pub trait Datafeed: MaybeSend + 'static {
     /// [`FeedError::InvalidData`] for a filter it cannot apply, and [`FeedError::NotSupported`]
     /// (the default) to have the panel say the feed has none.
     fn screen(&self, query: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
+        let _ = query;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Up to `query.limit` symbols of the hotlist `query.list`, in the list's order, for the
+    /// hotlists panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the
+    /// feed has none.
+    fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
         let _ = query;
         reply.send(Err(FeedError::NotSupported));
     }

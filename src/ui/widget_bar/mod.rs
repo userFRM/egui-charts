@@ -1,6 +1,8 @@
 //! Widget bar
 //!
-//! Contains alerts, object tree, watchlist, symbol details, time and sales, and other panels.
+//! The right edge bar and its panels: watchlist and symbol details, alerts, object tree,
+//! highlights and news, screener, hotlists, calendars, notifications, chats, products, and time
+//! and sales.
 
 pub mod actions;
 pub mod panels;

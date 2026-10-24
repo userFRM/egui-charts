@@ -3,8 +3,8 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
     CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
-    NewsQuery, NewsStory, Reply, ScreenerQuery, ScreenerRow, Subscription, SubscriptionId,
-    SymbolDetails, aggregate_trades, resample,
+    HotlistEntry, HotlistQuery, NewsQuery, NewsStory, Reply, ScreenerQuery, ScreenerRow,
+    Subscription, SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
 use egui_charts::model::{Bar, BarClock, Instrument, Level1Quote, Tick, Timeframe, TradeSide};
 use std::collections::VecDeque;
@@ -506,6 +506,11 @@ impl Datafeed for LiveFeed {
         if sim.subscription.as_ref().is_some_and(|sub| sub.id == id) {
             sim.subscription = None;
         }
+    }
+
+    /// The catalog symbols ranked on their synthetic quotes.
+    fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
+        reply.send(Ok(super::feeds::hotlist(&query, Utc::now())));
     }
 
     /// The catalog symbols screened on their synthetic quotes.
