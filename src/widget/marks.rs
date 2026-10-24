@@ -172,6 +172,14 @@ mod tests {
                 "missing {label}"
             );
         }
+        chart.set_visible_bars(50);
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
+        assert!(
+            !shapes
+                .iter()
+                .any(|s| matches!(s, Shape::Text(t) if t.galley.text() == "Source bar")),
+            "a layout change must invalidate source marks before painting"
+        );
         chart.reload_marks();
         chart.pump_marks(&ctx);
         source

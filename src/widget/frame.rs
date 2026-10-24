@@ -321,7 +321,6 @@ impl Chart {
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
         self.pump(ui.ctx());
-        self.pump_marks(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
@@ -350,7 +349,6 @@ impl Chart {
         } else {
             self.show_internal(ui, None, footprint)
         };
-        self.pump_marks(ui.ctx());
         if !self.chart_type.is_time_independent() {
             let source_marks = self.mark_source.as_ref().map(|source| &source.page);
             let mut coords = self.get_chart_mapping();
@@ -713,6 +711,7 @@ impl Chart {
         self.draw_watermark(&painter, chart_rect);
 
         if self.state.data().is_empty() {
+            self.pump_marks(ui.ctx());
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -791,6 +790,8 @@ impl Chart {
         self.last_price_map = price_map;
         self.last_rendered_price_rect = price_rect;
         self.last_rendered_volume_rect = volume_rect;
+
+        self.pump_marks(ui.ctx());
 
         // Get visible data
         let visible_data = self.state.visible_data();
