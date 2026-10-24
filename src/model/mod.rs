@@ -43,6 +43,7 @@ mod price_source;
 pub mod quote;
 pub mod range_bar;
 pub mod renko;
+mod series_scale;
 pub mod session;
 mod signal;
 mod strategy;
@@ -85,6 +86,7 @@ pub use range_bar::{
     to_range_bars_from_ticks,
 };
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
+pub use series_scale::SeriesScale;
 pub use session::{
     CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
     MonthlySessionProvider, SessionBreak, SessionBreakType, SessionProvider, WeeklySessionProvider,

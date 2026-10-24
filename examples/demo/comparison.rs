@@ -1,126 +1,106 @@
-//! Host-fed comparison lines aligned to the main series by bar time.
+//! Host-owned feeds attached as native comparison series.
 
-use super::live::LiveFeed;
-use egui::Color32;
-use egui_charts::model::{Bar, BarClock, Timeframe};
-use egui_charts::studies::{Indicator, IndicatorValue, IndicatorValues};
+use super::{DemoApp, DemoSymbol, LiveFeed};
+use egui_charts::model::{BarClock, Timeframe};
+use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbol};
+use egui_charts::widget::{Chart, SeriesId};
 use std::sync::Arc;
 
-#[derive(Clone)]
-pub(super) struct Comparison {
-    symbol: String,
-    feed: Arc<LiveFeed>,
-    color: Color32,
-    timeframe: Timeframe,
-    values: IndicatorValues,
-    visible: bool,
+pub(super) fn refresh(chart: &mut Chart, id: SeriesId, feed: &LiveFeed) {
+    let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
+    let bars = feed.snapshot(timeframe, BarClock::new(timeframe), chart.extended_hours());
+    chart.set_data(id, bars);
 }
 
-impl Comparison {
-    pub fn new(symbol: String, feed: Arc<LiveFeed>, color: Color32) -> Self {
-        Self {
-            symbol,
-            feed,
-            color,
-            timeframe: Timeframe::Hour1,
-            values: IndicatorValues::new(),
-            visible: true,
+pub(super) fn copy(
+    chart: &mut Chart,
+    source: &Chart,
+    comparisons: &[(String, SeriesId, Arc<LiveFeed>)],
+) -> Vec<(String, SeriesId, Arc<LiveFeed>)> {
+    let mut copied = Vec::new();
+    for (symbol, id, feed) in comparisons {
+        let Some((_, options)) = source.series().find(|(current, _)| *current == *id) else {
+            continue;
+        };
+        let feed = Arc::new(feed.fork());
+        let next = chart.add_series(options.clone());
+        chart.set_data(next, source.bars(*id).to_vec());
+        chart.set_series_visible(next, source.is_series_visible(*id));
+        *chart.series_price_scale_mut(next).expect("copied series") = source
+            .series_price_scale(*id)
+            .expect("source series")
+            .clone();
+        copied.push((symbol.clone(), next, feed));
+    }
+    copied
+}
+
+impl DemoApp {
+    pub(super) fn sync_comparisons(&mut self) {
+        self.comparisons
+            .retain(|(_, id, _)| self.chart.series().any(|(current, _)| current == *id));
+        for (_, id, feed) in &self.comparisons {
+            refresh(&mut self.chart, *id, feed);
         }
-    }
-}
-
-impl Indicator for Comparison {
-    fn name(&self) -> &str {
-        &self.symbol
-    }
-
-    fn set_timeframe(&mut self, timeframe: Timeframe) {
-        self.timeframe = timeframe;
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        let bars = self
-            .feed
-            .snapshot(self.timeframe, BarClock::new(self.timeframe), true);
-        let mut index = 0;
-        self.values = data
+        self.compare_dialog.compared_symbols = self
+            .comparisons
             .iter()
-            .map(|bar| {
-                while index < bars.len() && bars[index].time < bar.time {
-                    index += 1;
-                }
-                if let Some(other) = bars.get(index).filter(|other| other.time == bar.time) {
-                    IndicatorValue::Single(other.close)
-                } else {
-                    IndicatorValue::None
-                }
+            .filter_map(|(symbol, id, _)| {
+                let (_, series) = self.chart.series().find(|(current, _)| current == id)?;
+                let spec = DemoSymbol::find(symbol);
+                let mut entry =
+                    CompareSymbol::new(symbol, spec.company_name, spec.exchange, series.color);
+                entry.visible = self.chart.is_series_visible(*id);
+                Some(entry)
             })
-            .collect::<Vec<_>>()
-            .into();
+            .collect();
     }
 
-    fn values(&self) -> &IndicatorValues {
-        &self.values
-    }
-
-    fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
-    }
-
-    fn set_colors(&mut self, colors: Vec<Color32>) {
-        if let Some(color) = colors.first() {
-            self.color = *color;
+    pub(super) fn handle_comparison(&mut self, action: CompareAction) {
+        match action {
+            CompareAction::AddSymbol(symbol) => {
+                if self
+                    .comparisons
+                    .iter()
+                    .any(|(current, _, _)| *current == symbol)
+                    || !DemoSymbol::catalog()
+                        .iter()
+                        .any(|spec| spec.symbol == symbol)
+                {
+                    return;
+                }
+                let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
+                let colors = [
+                    self.theme.ui.info,
+                    self.theme.ui.warning,
+                    self.theme.ui.success,
+                ];
+                let color = colors[self.comparisons.len() % colors.len()];
+                let id = self.chart.add_comparison(symbol.clone(), color);
+                refresh(&mut self.chart, id, &feed);
+                self.comparisons.push((symbol, id, feed));
+            }
+            CompareAction::RemoveSymbol(symbol) => {
+                if let Some((_, id, _)) = self
+                    .comparisons
+                    .iter()
+                    .find(|(current, _, _)| *current == symbol)
+                {
+                    self.chart.remove_series(*id);
+                }
+            }
+            CompareAction::ToggleVisibility(symbol) => {
+                if let Some((_, id, _)) = self
+                    .comparisons
+                    .iter()
+                    .find(|(current, _, _)| *current == symbol)
+                {
+                    let visible = self.chart.is_series_visible(*id);
+                    self.chart.set_series_visible(*id, !visible);
+                }
+            }
+            CompareAction::None | CompareAction::Close => {}
         }
-    }
-
-    fn is_overlay(&self) -> bool {
-        true
-    }
-
-    fn is_visible(&self) -> bool {
-        self.visible
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        self.visible = visible;
-    }
-
-    fn clone_box(&self) -> Box<dyn Indicator> {
-        Box::new(self.clone())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn comparison_aligns_history_and_live_prices_by_time() {
-        let now = "2026-10-23T15:00:30Z".parse().unwrap();
-        let feed = Arc::new(LiveFeed::new("AAPL", now));
-        let mut study = Comparison::new("AAPL".into(), feed.clone(), Color32::BLUE);
-        for timeframe in [Timeframe::Min1, Timeframe::Hour1] {
-            study.set_timeframe(timeframe);
-            let clock = BarClock::new(timeframe);
-            let source = feed.snapshot(timeframe, clock.clone(), true);
-            let mut missing = source[0].clone();
-            missing.time -= chrono::TimeDelta::days(1);
-            let mut main = vec![
-                missing,
-                source[source.len() - 3].clone(),
-                source.last().unwrap().clone(),
-            ];
-            study.calculate(&main);
-            assert_eq!(study.values().value(0, 0), None);
-            assert_eq!(study.values().value(0, 1), Some(main[1].close));
-            assert_eq!(study.values().value(0, 2), Some(main[2].close));
-
-            feed.advance(now + chrono::TimeDelta::milliseconds(timeframe.duration_ms()));
-            let live = feed.snapshot(timeframe, clock, true).pop().unwrap();
-            assert!(live.time > main.last().unwrap().time);
-            main.push(live.clone());
-            study.calculate(&main);
-            assert_eq!(study.values().value(0, 3), Some(live.close));
-        }
+        self.sync_comparisons();
     }
 }

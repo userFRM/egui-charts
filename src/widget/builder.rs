@@ -114,6 +114,10 @@ impl Chart {
             #[cfg(feature = "studies")]
             volume_study: None,
             main_series_visible: true,
+            main_series_present: true,
+            main_series_scale: Default::default(),
+            price_series: Vec::new(),
+            series_scales: Default::default(),
             study_ids: Vec::new(),
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),

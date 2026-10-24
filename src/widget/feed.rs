@@ -128,7 +128,9 @@ impl Chart {
     /// Suspends feed requests and unsubscribes while the host supplies replay bars by hand.
     /// Resuming reloads the current symbol and interval, including any trades retained by the
     /// host. Bars supplied while paused are matched by exact opening time.
+    /// A removed main series stays paused.
     pub fn set_feed_paused(&mut self, paused: bool) {
+        let paused = paused || !self.main_series_present;
         if let Some(link) = &mut self.feed_link
             && link.paused != paused
         {
@@ -1402,5 +1404,23 @@ mod tests {
             let older = history("A", Timeframe::Min1, Some(bars(1)[0].time));
             assert_eq!(feed.calls().contains(&older), asks, "k: brick {size}");
         }
+        // Removing the main series keeps its reference history even when playback resumes.
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        frames.run(&mut chart);
+        feed.page().send(page(bars(1000), true));
+        feed.resolve().send(Ok(Instrument::new("A")));
+        frames.run(&mut chart);
+        let id = feed.sink().id;
+        feed.calls();
+        assert!(chart.remove_series(main));
+        assert_eq!(feed.calls(), [Call::Unsubscribe(id)]);
+        chart.set_feed_paused(false);
+        frames.run(&mut chart);
+        assert!(
+            feed.calls().is_empty(),
+            "removed main cannot restart its feed"
+        );
+        assert_eq!(chart.state.data().bars, bars(1000));
     }
 }

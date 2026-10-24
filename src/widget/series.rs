@@ -23,9 +23,15 @@ impl Chart {
     /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
     /// and near the live edge the view follows a new last bar, as with [`update`](Self::update).
     ///
-    /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
+    /// Bar series accept data; unknown ids and study ids are ignored with a warning.
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
-        if !holds_bars(series, "set_data") {
+        if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
+            let (bars, rejected) = clean(bars, &self.clock());
+            self.price_series[at].bars = bars;
+            self.price_series[at].feed.rejected_bars += rejected;
+            return;
+        }
+        if !self.main_series_present || !holds_bars(series, "set_data") {
             return;
         }
         let (bars, rejected) = clean(bars, &self.clock());
@@ -49,46 +55,71 @@ impl Chart {
     /// [`feed_state`](Self::feed_state). Drawings move with their bars, studies follow them on the
     /// next [`show`](Self::show), and near the live edge the view follows a new last bar.
     ///
-    /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
+    /// Bar series accept data; unknown ids and study ids are ignored with a warning.
     pub fn update(&mut self, series: SeriesId, bar: Bar) {
-        if holds_bars(series, "update") {
+        if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
+            let clock = self.clock();
+            let item = &mut self.price_series[at];
+            let merged = merge(
+                &mut item.bars,
+                &mut BTreeSet::new(),
+                &clock,
+                vec![(bar, Origin::Live)],
+            );
+            item.feed.rejected_bars += merged.rejected;
+            return;
+        }
+        if self.main_series_present && holds_bars(series, "update") {
             self.apply(vec![(bar, Origin::Live)]);
         }
     }
 
-    /// The bars of `series`, oldest first. Empty for any id but [`SeriesId::MAIN`]: volume and
-    /// studies hold no bars.
+    /// The bars of `series`, oldest first. Removed series, volume and studies hold no bars.
     pub fn bars(&self, series: SeriesId) -> &[Bar] {
-        if series == SeriesId::MAIN {
+        if series == SeriesId::MAIN && self.main_series_present {
             &self.state.data().bars
         } else {
-            &[]
+            self.price_series
+                .iter()
+                .find(|item| item.id == series)
+                .map_or(&[], |item| item.bars.as_slice())
         }
     }
 
     /// Replaces the markers drawn on the bars of `series` (trade signals, events).
     ///
-    /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
+    /// Bar series accept data; unknown ids and study ids are ignored with a warning.
     pub fn set_markers(&mut self, series: SeriesId, markers: Vec<Marker>) {
-        if holds_bars(series, "set_markers") {
+        if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
+            item.markers = markers;
+        } else if self.main_series_present && holds_bars(series, "set_markers") {
             self.marks = markers;
         }
     }
 
     /// Replaces the price lines drawn on the scale of `series`.
     ///
-    /// Only [`SeriesId::MAIN`] has price lines; another id is ignored with a warning. The price
+    /// Every bar series accepts price lines. The price
     /// scale does not fit to them: a line whose price is off the scale or not finite is not drawn.
     pub fn set_price_lines(&mut self, series: SeriesId, lines: Vec<PriceLine>) {
-        if holds_bars(series, "set_price_lines") {
+        if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
+            item.lines = lines;
+        } else if self.main_series_present && holds_bars(series, "set_price_lines") {
             self.price_lines = lines;
         }
     }
 
     /// What the chart knows about the feed of `series`, such as the bars dropped as invalid.
-    /// `Some` for [`SeriesId::MAIN`].
+    /// `Some` for every present bar series.
     pub fn feed_state(&self, series: SeriesId) -> Option<&FeedState> {
-        (series == SeriesId::MAIN).then_some(&self.feed)
+        if series == SeriesId::MAIN && self.main_series_present {
+            Some(&self.feed)
+        } else {
+            self.price_series
+                .iter()
+                .find(|item| item.id == series)
+                .map(|item| &item.feed)
+        }
     }
 
     /// Merges `incoming` into the main bars by the rules of each bar's origin and counts the
@@ -170,9 +201,29 @@ impl Chart {
             .map(|index| self.study_inputs[index].as_str())
     }
 
-    /// Removes the study `id` and clears the selection if it is that study. Returns `false` for
-    /// [`SeriesId::MAIN`] and any id that is not a study of the chart.
+    /// Removes a bar series or study and clears its selection. Removing the main series pauses
+    /// its feed and retains the time axis for the remaining series and drawings. Returns
+    /// `false` for an unknown or already removed id.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
+        if id == SeriesId::MAIN {
+            if !self.main_series_present {
+                return false;
+            }
+            self.set_main_series_visible(false);
+            self.main_series_present = false;
+            self.set_feed_paused(true);
+            self.marks.clear();
+            self.price_lines.clear();
+            return true;
+        }
+        if let Some(at) = self.price_series.iter().position(|item| item.id == id) {
+            self.price_series.remove(at);
+            if self.selection.selected_id() == Some(ChartElementId::Series(id)) {
+                self.selection.deselect();
+            }
+            self.prune_series_scales();
+            return true;
+        }
         let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
             return false;
         };
@@ -209,7 +260,7 @@ impl Chart {
     /// Show or hide the main price series, its volume and its legend without unloading its bars.
     /// Studies and drawings remain visible and continue to receive data.
     pub fn set_main_series_visible(&mut self, visible: bool) {
-        self.main_series_visible = visible;
+        self.main_series_visible = visible && self.main_series_present;
         if !visible
             && matches!(
                 self.selection.selected_id(),
@@ -456,11 +507,10 @@ pub(super) fn clean(bars: Vec<Bar>, clock: &BarClock) -> (Vec<Bar>, u64) {
     (clean, merged.rejected)
 }
 
-/// Whether `series` holds bars, warning about a call that names another. Until compare series
-/// exist only [`SeriesId::MAIN`] does.
+/// Warn about an id that was not handled as a secondary bar series.
 fn holds_bars(series: SeriesId, call: &str) -> bool {
     if series != SeriesId::MAIN {
-        log::warn!("Chart::{call} ignored: {series:?} holds no bars, only SeriesId::MAIN does");
+        log::warn!("Chart::{call} ignored: {series:?} is not a present bar series");
     }
     series == SeriesId::MAIN
 }
@@ -511,6 +561,7 @@ mod tests {
                 "independent",
                 "no_scale",
                 "displaced_future",
+                "main_hidden",
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
@@ -595,8 +646,12 @@ mod tests {
                 }
                 chart.set_indicator_visible(id, case != "hidden");
                 assert!(chart.set_indicator_autoscale(id, case != "excluded"));
+                chart.set_main_series_visible(case != "main_hidden");
                 frame(&ctx, &mut chart, 0.04, Vec::new());
-                let expected = if matches!(case, "single" | "multiple" | "displaced_future") {
+                let expected = if case == "main_hidden" {
+                    let value = crate::scales::PriceTransform { mode, base: 110.0 }.to_scale(120.0);
+                    (value - value.abs() * 0.001, value + value.abs() * 0.001)
+                } else if matches!(case, "single" | "multiple" | "displaced_future") {
                     fitted
                 } else {
                     bars_only
