@@ -241,6 +241,10 @@ impl WidgetBar {
                             .filter(|i| i.section() == section)
                             .filter(|&&i| control(i).is_none_or(|c| !self.hidden.contains(&c)))
                         {
+                            if *icon == RightBarIcon::Help {
+                                // Centre Help on the adjacent 38 px bottom row.
+                                y = y.max(rect.bottom() - 19.0 - self.config.btn_size / 2.0);
+                            }
                             let id = ui.scope_id().with(("built_in", icon));
                             let response = self.render_icon_button(
                                 ui,
@@ -476,6 +480,7 @@ mod tests {
                     );
                     assert!(icon.top() >= 0.0 && icon.bottom() <= height);
                 }
+                assert_eq!(icons.last().unwrap().center().y, height - origin.y - 19.0);
                 assert_eq!(icons[0].center().y, origin.y + 26.0);
                 assert_eq!(icons[1].center().y - icons[0].center().y, 46.0);
                 bar.active_icon = Some(RightBarIcon::Alerts);

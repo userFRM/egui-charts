@@ -216,7 +216,7 @@ pub(crate) fn show_menu<A: Clone>(
         ctx.fonts_mut(|f| f.layout_job(job))
     };
     // Each item's label and its shortcut.
-    let rows: Vec<_> = entries
+    let mut rows: Vec<_> = entries
         .iter()
         .map(|entry| match entry {
             MenuEntry::Item(item) => Some((
@@ -252,6 +252,12 @@ pub(crate) fn show_menu<A: Clone>(
     let bounds = ctx.content_rect().shrink(theme.spacing.lg);
     let size = (Vec2::new(row_width, height) + chrome).min(bounds.size());
     let row_width = (size.x - chrome.x).max(0.0);
+    let label_width = (row_width - 2.0 * pad - t.icon_width - trailing_column).max(0.0);
+    for (label, _) in rows.iter_mut().flatten() {
+        if label.size().x > label_width {
+            *label = layout(label.text().to_owned(), t.font_size, label_width);
+        }
+    }
     let pos = place(anchor, gap, size, bounds);
 
     let mut picked = None;
@@ -916,6 +922,147 @@ mod tests {
                         chart.state().price_scale().options().mode,
                         PriceScaleMode::Percentage
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn opening_a_menu_suppresses_hover_paint_in_the_same_frame() {
+        use egui::{Event, PointerButton, RawInput, Shape};
+        fn uses_ink(shape: &Shape, ink: Color32) -> bool {
+            match shape {
+                Shape::Vec(shapes) => shapes.iter().any(|shape| uses_ink(shape, ink)),
+                Shape::LineSegment { stroke, .. } => stroke.color == ink,
+                Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(ink),
+                Shape::Rect(rect) => rect.fill == ink,
+                _ => false,
+            }
+        }
+        for (theme, pane) in [
+            (Theme::light(), false),
+            (Theme::dark(), false),
+            (Theme::light(), true),
+            (Theme::dark(), true),
+        ] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+            if pane {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            }
+            let ink = Color32::from_rgb(17, 41, 83);
+            let options = &mut chart.chart_options;
+            options.crosshair.vert_line_color = ink;
+            options.crosshair.horz_line_color = ink;
+            options.crosshair.label_background_color = ink;
+            options.tooltip.enabled = true;
+            options.tooltip.on_long_press = false;
+            options.tooltip.background_color = ink;
+            let mut menus = ChartMenus::default();
+            let mut frame = |events| {
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                        menus.show(ui.ctx(), &mut chart);
+                    },
+                );
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                shapes.iter().any(|shape| uses_ink(&shape.shape, ink))
+            };
+            frame(vec![]);
+            let pos = Pos2::new(400.0, 200.0);
+            assert!(
+                frame(vec![Event::PointerMoved(pos)]),
+                "hover must paint before opening"
+            );
+            let click = |button| {
+                vec![
+                    Event::PointerButton {
+                        pos,
+                        button,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    Event::PointerButton {
+                        pos,
+                        button,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ]
+            };
+            assert!(
+                !frame(click(PointerButton::Secondary)),
+                "opening frame still paints hover"
+            );
+            assert!(!frame(vec![]), "open menu still paints hover");
+            frame(vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }]);
+            assert!(frame(vec![]), "closing must restore hover");
+        }
+    }
+
+    #[test]
+    fn narrow_menus_keep_labels_out_of_the_shortcut_column() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.set_os(egui::os::OperatingSystem::Nix);
+            let entries = [MenuEntry::Item(
+                MenuItem::new("Add alert on VERY_LONG_SYMBOL at 123,456.78…", ())
+                    .with_shortcut(KeyboardAction::ResetChart.shortcut()),
+            )];
+            for width in [800.0, 320.0] {
+                for pass in 0..2 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(width, 300.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            show_menu(
+                                ui.ctx(),
+                                Id::unique("narrow_menu"),
+                                &theme,
+                                Pos2::new(20.0, 20.0),
+                                POINTER_GAP,
+                                &entries,
+                                true,
+                            );
+                        },
+                    );
+                    let text: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape {
+                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if pass == 1 {
+                        assert_eq!(text.len(), 2);
+                        assert!(text[0].right() + COLUMN_GAP <= text[1].left() + 0.5);
+                        assert!(text[1].right() <= width - theme.spacing.lg);
+                    }
+                    output.drop_without_applying_deltas();
                 }
             }
         }

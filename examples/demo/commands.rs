@@ -72,7 +72,10 @@ impl DemoApp {
             "symbols" => TopToolbarAction::OpenSymbolSearch,
             "indicators" => TopToolbarAction::OpenIndicators,
             "settings" => TopToolbarAction::OpenSettings,
-            "export" => TopToolbarAction::Save,
+            "export" => {
+                self.export_dialog.open();
+                return;
+            }
             "replay" => TopToolbarAction::ToggleReplay,
             "help" => {
                 self.keyboard_shortcuts.open();

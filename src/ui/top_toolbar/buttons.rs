@@ -13,6 +13,9 @@ use crate::ext::UiExt;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 
+/// Menu glyph with three 18 px bars spanning 14 px on the toolbar's 24 px icon grid.
+pub const MENU_ICON: Icon = Icon::new("top-toolbar-menu.svg", include_bytes!("menu.svg"));
+
 /// Small icon-only button (config-driven size)
 ///
 /// Used for: undo, redo, settings, theme, fullscreen, screenshot, save, etc.
@@ -36,7 +39,12 @@ impl<'a> ToolbarIconButton<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
-        let icon_size = self.config.small_icon_size;
+        // Match glyph ink bounds while preserving the host's configured icon scale.
+        let icon_size = match self.icon.name() {
+            "ui/settings.svg" => Vec2::new(24.0, 22.0),
+            "ui/camera.svg" | "ui/compare-add.svg" => Vec2::splat(23.0),
+            _ => Vec2::splat(24.0),
+        } * (self.config.small_icon_size / 24.0);
         let btn_size = self.config.btn_size;
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(btn_size), Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response, self.config.rounding);
@@ -58,8 +66,8 @@ impl<'a> ToolbarIconButton<'a> {
         let is_active = response.is_pointer_button_down_on();
 
         // Render icon at exact position (with visibility check)
-        let icon_pos = rect.center() - Vec2::splat(icon_size / 2.0);
-        let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
+        let icon_pos = rect.center() - icon_size / 2.0;
+        let icon_rect = Rect::from_min_size(icon_pos, icon_size);
         if ui.is_rect_visible(icon_rect) {
             let icon_color = if is_active || is_hovered {
                 ui.visuals().widgets.hovered.fg_stroke.color
@@ -67,7 +75,7 @@ impl<'a> ToolbarIconButton<'a> {
                 ui.visuals().text_color()
             };
             self.icon
-                .as_image_tinted(Vec2::splat(icon_size), icon_color)
+                .as_image_tinted(icon_size, icon_color)
                 .paint_at(ui, icon_rect);
         }
 
@@ -170,21 +178,7 @@ impl<'a> IconTextButton<'a> {
             } else {
                 self.label
             },
-            match self.label {
-                "Indicators" => Some(crate::config::KeyboardAction::OpenIndicatorSearch),
-                "Alert" => Some(crate::config::KeyboardAction::CreateAlert),
-                _ => None,
-            }
-            .and_then(|action| {
-                ui.ctx()
-                    .data(|data| {
-                        data.get_temp::<crate::widget::ShortcutMap>(
-                            egui::Id::NULL.with("chart_shortcuts"),
-                        )
-                    })
-                    .unwrap_or_default()
-                    .shortcut(action)
-            }),
+            None,
         )
     }
 }
@@ -365,7 +359,7 @@ pub(crate) struct Trigger<'a> {
     pub name: String,
     /// The trigger is at least this wide.
     pub min_width: f32,
-    /// Filled symbol pill with a semibold label and a trailing icon.
+    /// Filled symbol pill with a semibold label and a leading icon.
     pub filled: bool,
 }
 
@@ -463,19 +457,15 @@ impl Trigger<'_> {
                     0.0
                 };
             let x = if self.filled {
-                rect.min.x + theme.spacing.lg + theme.spacing.sm
+                rect.min.x + theme.spacing.lg
             } else {
                 rect.center().x - content_width / 2.0
             };
-            let label_pos = Pos2::new(x, rect.center().y - galley.size().y / 2.0);
+            let label_x = x + self.icon.map_or(0.0, |_| icon_sizes::LG + theme.spacing.sm);
+            let label_pos = Pos2::new(label_x, rect.center().y - galley.size().y / 2.0);
             ui.painter().galley(label_pos, galley, theme.ui.text);
             if let Some(icon) = self.icon {
-                let icon_x = if self.filled {
-                    rect.max.x - theme.spacing.sm - icon_sizes::LG
-                } else {
-                    x
-                };
-                paint_icon(icon, icon_x, icon_sizes::LG);
+                paint_icon(icon, x, icon_sizes::LG);
             }
         }
 
@@ -492,6 +482,21 @@ pub fn toolbar_tooltip(
     text: &str,
     shortcut: Option<egui::KeyboardShortcut>,
 ) -> Response {
+    let shortcut = shortcut.or_else(|| {
+        let action = match text {
+            "Quick Search" | "Quick search" => crate::config::KeyboardAction::OpenQuickSearch,
+            "Indicators" => crate::config::KeyboardAction::OpenIndicatorSearch,
+            "Create alert" => crate::config::KeyboardAction::CreateAlert,
+            _ => return None,
+        };
+        response
+            .ctx
+            .data(|data| {
+                data.get_temp::<crate::widget::ShortcutMap>(egui::Id::NULL.with("chart_shortcuts"))
+            })
+            .unwrap_or_default()
+            .shortcut(action)
+    });
     let fill = Color32::from_gray(28);
     egui::Popup::from_response(&response)
         .id(response.id.with("toolbar_tooltip"))

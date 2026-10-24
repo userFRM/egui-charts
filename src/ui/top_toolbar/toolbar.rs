@@ -1,9 +1,8 @@
 //! Top Toolbar Widget
 //!
-//! The symbol search pill, interval and chart type dropdowns, indicators, alert, replay,
-//! undo and redo on the left; layouts, save, settings, fullscreen and screenshot
-//! on the right. When the strip is too narrow, Indicators, Alert and Replay
-//! lose their labels, then the least important controls move into an overflow menu at the right.
+//! Symbol search, interval, chart type, indicators, undo and redo on the left;
+//! save, quick search, settings, fullscreen and screenshot on the right. Layouts,
+//! alerts and replay live in the overflow menu, alongside controls that leave a narrow strip.
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::ThemeExt;
@@ -66,25 +65,22 @@ const LEFT: &[&[Slot]] = &[
 /// Right-aligned part of the strip, in groups divided by separators.
 const RIGHT: &[&[Slot]] = &[
     &[S::LayoutName, S::Save],
-    &[S::Settings, S::Fullscreen, S::Screenshot],
+    &[S::QuickSearch, S::Settings, S::Fullscreen, S::Screenshot],
 ];
 
 /// Controls that move into the overflow menu when the strip is too narrow, the first to go
 /// first.
-const OVERFLOW_ORDER: [Slot; 13] = [
+const OVERFLOW_ORDER: [Slot; 10] = [
+    S::QuickSearch,
     S::Compare,
     S::Templates,
     S::Save,
-    S::LayoutName,
-    S::Layouts,
     S::Screenshot,
     S::Fullscreen,
-    S::Alert,
     S::Indicators,
     S::Settings,
     S::Redo,
     S::Undo,
-    S::Replay,
 ];
 
 /// Space between the controls of a group.
@@ -103,7 +99,7 @@ fn show_separator(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 22.0), egui::Sense::hover());
     let theme = ui.active_theme();
     let color = if theme.dark {
-        theme.ui.border
+        theme.ui.border.lerp_to_gamma(theme.ui.text, 0.18)
     } else {
         theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.085)
     };
@@ -153,11 +149,6 @@ impl Slot {
             S::Screenshot => (&embedded_icons::CAMERA, "Snapshot", A::TakeScreenshot),
             S::Interval | S::ChartType => return None,
         })
-    }
-
-    /// Whether the control loses its label in a narrow strip.
-    fn compacts(self) -> bool {
-        matches!(self, S::Indicators | S::Alert | S::Replay)
     }
 
     /// The host control that hides this slot, if any.
@@ -303,7 +294,7 @@ impl TopToolbar {
     }
 
     fn show_menu(ui: &mut Ui, action: &mut TopToolbarAction) {
-        let response = IconButton::new(&embedded_icons::MENU)
+        let response = IconButton::new(&super::buttons::MENU_ICON)
             .icon_scale(24.0 / 28.0)
             .tooltip("Menu")
             .show(ui);
@@ -333,22 +324,23 @@ impl TopToolbar {
 
         // The widest arrangement that fits: full, then icon-only labels, then overflow.
         let available = ui.available_width();
-        let fits =
-            |compact, hidden: &[Slot]| self.strip_width(ui, symbol, compact, hidden) <= available;
-        // Host-hidden slots never reach the overflow menu.
-        let order: Vec<Slot> = OVERFLOW_ORDER
+        let mut hidden: Vec<_> = [S::Alert, S::Replay, S::Layouts, S::LayoutName]
             .into_iter()
             .filter(|&c| self.is_shown(c))
             .collect();
-        let (compact, hidden) = if fits(false, &[]) {
-            (false, &order[..0])
-        } else {
-            let n = (0..order.len())
-                .find(|&n| fits(true, &order[..n]))
-                .unwrap_or(order.len());
-            (true, &order[..n])
-        };
-
+        let compact = self.strip_width(ui, symbol, false, &hidden) > available;
+        if compact {
+            for control in OVERFLOW_ORDER {
+                if self.strip_width(ui, symbol, true, &hidden) <= available {
+                    break;
+                }
+                // Host-hidden slots never reach the overflow menu.
+                if self.is_shown(control) && !hidden.contains(&control) {
+                    hidden.push(control);
+                }
+            }
+        }
+        let hidden = hidden.as_slice();
         ui.add_space(DESIGN_TOKENS.spacing.lg);
         self.show_groups(ui, LEFT, compact, hidden, symbol, &mut action);
         let right = self.groups_width(ui, RIGHT, compact, hidden, symbol)
@@ -371,10 +363,9 @@ impl TopToolbar {
             S::Symbol => Self::symbol_trigger(symbol).width(ui),
             S::Interval => self.timeframe_selector.trigger().width(ui),
             S::ChartType => self.chart_type_selector.trigger().width(ui),
-            S::Compare | S::Templates | S::Layouts => self.config.btn_size,
+            S::Compare | S::Templates => self.config.btn_size,
             S::Save => Self::save_button(&self.config).width(ui),
-            S::LayoutName => self.layout_menu.width(ui),
-            c if c.compacts() && !compact => c.entry().map_or(icon_button, |(_, label, _)| {
+            S::Indicators if !compact => control.entry().map_or(icon_button, |(_, label, _)| {
                 IconTextButton::new(&embedded_icons::INDICATORS, label, &self.config).width(ui)
             }),
             _ => icon_button,
@@ -467,19 +458,6 @@ impl TopToolbar {
         action: &mut TopToolbarAction,
     ) {
         match control {
-            S::Layouts => {
-                if let Some(mode) = self.chart_grid_selector.show(ui) {
-                    *action = TopToolbarAction::Layout(LayoutAction::SelectGrid(mode));
-                }
-                return;
-            }
-            S::LayoutName => {
-                let layout_action = self.layout_menu.show(ui);
-                if layout_action != LayoutAction::None {
-                    *action = TopToolbarAction::Layout(layout_action);
-                }
-                return;
-            }
             S::Interval => {
                 if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui)
                     && let Some(tf) = tf.to_model()
@@ -523,19 +501,14 @@ impl TopToolbar {
                 );
                 crate::styles::focus::draw_focus_ring(ui, &arrow, self.config.rounding);
                 egui::Popup::menu(&arrow)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .align(egui::RectAlign::BOTTOM_START)
                     .align_alternatives(&[])
                     .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
                     .show(|ui| {
-                        ui.set_width(200.0);
-                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
-                        if ListItem::new()
-                            .height(32.0)
-                            .show_with_icon(ui, "Export chart…", &embedded_icons::IMAGE)
-                            .clicked()
-                        {
-                            *action = TopToolbarAction::Save;
-                            ui.close();
+                        let layout_action = self.layout_menu.show_menu(ui);
+                        if layout_action != LayoutAction::None {
+                            *action = TopToolbarAction::Layout(layout_action);
                         }
                     });
                 if arrow.clicked() {
@@ -584,15 +557,10 @@ impl TopToolbar {
                     "Nothing to redo"
                 })
             }
-            c if c.compacts() && !compact => {
-                IconTextButton::new(icon, label, &self.config).show(ui)
-            }
+            S::Indicators if !compact => IconTextButton::new(icon, label, &self.config).show(ui),
             _ => ToolbarIconButton::new(icon, label, &self.config).show(ui),
         };
         if response.clicked() {
-            if control == S::Replay {
-                self.state.toggle_replay();
-            }
             *action = clicked_action;
         }
     }
@@ -663,10 +631,25 @@ impl TopToolbar {
                     ui.menu_button("Indicator templates", |ui| {
                         self.show_indicator_templates(ui, action)
                     });
-                } else if let Some((icon, label, clicked_action)) = control.entry()
-                    && ListItem::new().show_with_icon(ui, label, icon).clicked()
-                {
-                    *action = clicked_action;
+                } else if let Some((icon, label, clicked_action)) = control.entry() {
+                    let enabled = match control {
+                        S::Undo => self.state.can_undo,
+                        S::Redo => self.state.can_redo,
+                        _ => true,
+                    };
+                    if ui
+                        .add_enabled(enabled, |ui: &mut Ui| {
+                            ListItem::new()
+                                .selected(*control == S::Replay && self.state.replay_active)
+                                .show_with_icon(ui, label, icon)
+                        })
+                        .clicked()
+                    {
+                        if *control == S::Replay {
+                            self.state.toggle_replay();
+                        }
+                        *action = clicked_action;
+                    }
                 }
             }
         });
@@ -674,7 +657,7 @@ impl TopToolbar {
 
     fn symbol_trigger(symbol: &str) -> Trigger<'static> {
         Trigger {
-            icon: Some(&embedded_icons::CHART_CANDLES),
+            icon: Some(&embedded_icons::QUICK_SEARCH),
             label: symbol.to_owned(),
             name: "Symbol search".to_owned(),
             min_width: 128.0,
@@ -883,7 +866,11 @@ mod tests {
                         "Download image",
                         TopToolbarAction::TakeScreenshot,
                     ),
-                    (S::Save, "Export chart…", TopToolbarAction::Save),
+                    (
+                        S::Save,
+                        "Save layout",
+                        TopToolbarAction::Layout(LayoutAction::Save),
+                    ),
                     (
                         S::Layouts,
                         "2x2 Grid",
@@ -919,11 +906,21 @@ mod tests {
                         "My studies",
                         TopToolbarAction::ApplyIndicatorTemplate("custom-id".into()),
                     ),
+                    (S::Undo, "Undo", TopToolbarAction::Undo),
+                    (S::Undo, "Undo", TopToolbarAction::None),
+                    (S::Redo, "Redo", TopToolbarAction::Redo),
+                    (S::Redo, "Redo", TopToolbarAction::None),
+                    (S::Replay, "Replay", TopToolbarAction::ToggleReplay),
                 ] {
-                    if overflow && !matches!(slot, S::Layouts | S::LayoutName) {
+                    let direct = matches!(slot, S::Undo | S::Redo | S::Replay);
+                    if (!overflow && (direct || matches!(slot, S::Layouts | S::LayoutName)))
+                        || (overflow && !direct && !matches!(slot, S::Layouts | S::LayoutName))
+                    {
                         continue;
                     }
                     let mut toolbar = TopToolbar::new();
+                    toolbar.state.can_undo = expected != TopToolbarAction::None;
+                    toolbar.state.can_redo = expected != TopToolbarAction::None;
                     toolbar
                         .indicator_templates
                         .push(("custom-id".into(), "My studies".into()));
@@ -997,7 +994,7 @@ mod tests {
                         "opening the menu must not capture an image"
                     );
                     frame(vec![]);
-                    if overflow {
+                    if overflow && !direct {
                         let submenu = if slot == S::Layouts {
                             "Chart layout"
                         } else {
@@ -1046,6 +1043,9 @@ mod tests {
                         action = frame(vec![key(egui::Key::Enter, egui::Modifiers::NONE)]).0;
                     }
                     assert_eq!(action, expected, "overflow {overflow}");
+                    if slot == S::Replay {
+                        assert!(toolbar.state.replay_active);
+                    }
                 }
             }
         }
@@ -1054,20 +1054,12 @@ mod tests {
     #[test]
     fn controls_that_are_off_emit_nothing() {
         type Off = fn(&mut TopToolbar);
-        let rows: [(Off, &[TopToolbarAction]); 6] = [
+        let rows: [(Off, &[TopToolbarAction]); 4] = [
             (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
             (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
             (
                 |t| t.set_control_visible(Control::Compare, false),
                 &[TopToolbarAction::OpenCompare],
-            ),
-            (
-                |t| t.set_control_visible(Control::Alerts, false),
-                &[TopToolbarAction::CreateAlert],
-            ),
-            (
-                |t| t.set_control_visible(Control::Replay, false),
-                &[TopToolbarAction::ToggleReplay],
             ),
             (
                 |t| t.set_control_visible(Control::Layouts, false),

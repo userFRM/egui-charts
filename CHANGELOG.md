@@ -151,6 +151,14 @@ All notable changes to this project are documented in this file. The format is b
 
 - Pane legends identify each visible output with its plot colour. Values below 4.5:1 contrast use a coloured swatch and normal text, retaining the study name and legend controls. ([#580](https://github.com/userFRM/egui-charts/issues/580))
 - RSI defaults to a two-pixel blue line, a 20% fill between its two grey 4/4 dashed guides and a 138 px pane when space permits. Other pane presets retain their zone fills. Migration: `IndicatorPaneConfig` literals add `fill_between_zones` or use `..Default::default()`. ([#726](https://github.com/userFRM/egui-charts/issues/726))
+- The top toolbar uses a 38 px strip followed by a 4 px gap, measured menu, settings and screenshot glyphs and a leading symbol-search icon. Its dark strip and separators use #0f0f0f and #4a4a4a. Save, quick search, settings, fullscreen and screenshot form the right group; alerts, replay and layouts remain reachable through overflow. Overflow preserves disabled Undo and Redo and the selected Replay state, including when playback stops outside the menu. The demo feed toggle moves into its menu and unsupported Publish and Trade buttons are hidden. ([#287](https://github.com/userFRM/egui-charts/issues/287))
+- Save and the layout menu create independent session layout copies; export remains an explicit command. Drawing templates and account-dependent orders and positions controls are hidden until the host supplies them. Persistent layouts and trading accounts remain host-owned. ([#118](https://github.com/userFRM/egui-charts/issues/118))
+
+- The widget bar centres Help on the adjacent 38 px bottom row in every preset, keeping the section rule above it. ([#583](https://github.com/userFRM/egui-charts/issues/583))
+
+- Opening a chart, series or drawing context menu suppresses the crosshair, axis tags and data tooltip on the opening frame as well as while the menu stays open. ([#291](https://github.com/userFRM/egui-charts/issues/291))
+
+- Removed the unused `ContextMenuSizingTokens::char_width`: context menus measure their laid-out labels and shortcuts, and elide labels to keep the shortcut column clear when a narrow window reduces their width. Migration: remove `char_width` from token struct literals. ([#457](https://github.com/userFRM/egui-charts/issues/457))
 
 - Replay transport keys reach the visible replay bar before chart navigation, while dialogs retain keyboard priority. Hosts can call `FloatingReplayControl::shortcut` before dispatching chart input. The demo checks quick search through full application frames, including text arriving with its opening command. ([#113](https://github.com/userFRM/egui-charts/issues/113), [#523](https://github.com/userFRM/egui-charts/issues/523))
 
@@ -164,7 +172,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - Keyboard defaults now pan one bar, use Ctrl/Cmd+Left/Right for a page and Ctrl/Cmd+Up/Down for zoom, dispatch drawing undo/redo, quick search, study search, drawing tools and scale toggles, and route date, snapshot, clipboard and chart focus commands to the host. Typing opens symbol search or interval entry instead of selecting fixed intervals; 15 enters fifteen minutes. Help shows the supplied map's bound actions. Migration: exhaustive `KeyboardAction` matches need the new command and `DrawingTool` arms, and labels/descriptions borrow the action. Reset is Alt+R, date entry Alt+G, snapshot Alt+S, inversion Alt+I, logarithmic Alt+L, percentage Alt+P and help Ctrl/Cmd+/. Unmodified F now starts symbol entry; bind `FitContent` explicitly to retain the former F shortcut. Drawing rectangle, text and pitchfork shortcuts no longer overlap these commands; assign custom bindings through the map. ([#113](https://github.com/userFRM/egui-charts/issues/113))
 
-- The demo drawing toolbar zoom controls arm box zoom and restore its previous view through `Chart::zoom_back`, without consuming drawing undo or redo.
+- The demo drawing toolbar zoom controls arm box zoom and restore its previous view through `Chart::zoom_back`, without consuming drawing undo or redo or editing drawing geometry. ([#118](https://github.com/userFRM/egui-charts/issues/118))
 
 - Drawing bulk removal, hide/show and lock-all are single undo steps. Ordering changes and new cloned drawings also enter the existing drawing history, and bulk undo restores every drawing and its list order while queuing host synchronization for the affected records. Property edits were already recorded. Migration: exhaustive `DrawingCommand` matches need the `Snapshot` arm. ([#108](https://github.com/userFRM/egui-charts/issues/108))
 

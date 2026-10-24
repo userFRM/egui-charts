@@ -3,8 +3,8 @@
 //!
 //! The chart engine is pure: widgets return `Action` enums and never touch the
 //! chart themselves. This controller is the host half that consumes those
-//! actions. Indicator templates live in host memory. Controls that need a trading
-//! account show a notice, and the context menu entries it does not model do nothing.
+//! actions. Layouts and indicator templates live in host memory. Controls that need
+//! a trading account or drawing-template storage are hidden.
 
 #[path = "commands.rs"]
 mod commands;
@@ -324,6 +324,14 @@ impl DemoApp {
             screenshots: mpsc::channel(),
             toasts: Toasts::new(),
         };
+        for control in [
+            egui_charts::ui::Control::Trading,
+            egui_charts::ui::Control::Templates,
+        ] {
+            app.drawing_toolbar.set_control_visible(control, false);
+        }
+        app.menus
+            .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.alerts.set_service(app.alert_host.clone());
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.apply_session();
@@ -1056,32 +1064,44 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        self.top_toolbar.sync_from_app_state(&self.state);
         self.top_toolbar.state.can_undo = self.chart.can_undo();
         self.top_toolbar.state.can_redo = self.chart.can_redo();
+        let bg = if self.theme.dark {
+            bg.lerp_to_gamma(self.theme.ui.text, 0.07)
+        } else {
+            bg
+        };
         egui::Panel::top("toolbar")
-            .exact_size(44.0)
+            .exact_size(self.top_toolbar.config.height + 4.0)
             .show_separator_line(false)
             .frame(panel_frame(bg).outer_margin(egui::Margin {
                 bottom: 4,
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| {
-                use egui_charts::icons::icons;
                 use egui_charts::ui_kit::buttons::IconButton;
                 let mut menu_action = TopToolbarAction::None;
-                let mut search = false;
-                let mut trade = false;
-                let mut publish = false;
                 let mut footprint_enabled = self.footprint.is_some();
                 let mut paused = self.live.paused();
                 let action = self.top_toolbar.show_with_slots(
                     ui,
                     &self.state,
                     |ui| {
-                        let response = IconButton::new(&icons::MENU).tooltip("Menu").show(ui);
+                        let response =
+                            IconButton::new(&egui_charts::ui::top_toolbar::buttons::MENU_ICON)
+                                .icon_scale(24.0 / 28.0)
+                                .tooltip("Menu")
+                                .show(ui);
                         egui::Popup::menu(&response).show(|ui| {
                             ui.checkbox(&mut footprint_enabled, "Footprint (synthetic)")
                                 .on_hover_text("Pause the feed to inspect the footprint sample");
+                            ui.add_enabled(
+                                self.replay.is_none() && self.footprint.is_none(),
+                                |ui: &mut egui::Ui| {
+                                    ui.checkbox(&mut paused, "Pause synthetic feed")
+                                },
+                            );
                             for (label, action) in [
                                 ("Quick search", TopToolbarAction::OpenQuickSearch),
                                 ("Switch theme", TopToolbarAction::ThemeToggle),
@@ -1093,61 +1113,7 @@ impl DemoApp {
                             }
                         });
                     },
-                    |ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.add_space(8.0);
-                        if egui_charts::ui_kit::buttons::Button::new(if paused {
-                            "Resume feed"
-                        } else {
-                            "Pause feed"
-                        })
-                        .small()
-                        .ghost()
-                        .enabled(self.replay.is_none() && self.footprint.is_none())
-                        .tooltip("Synthetic executions")
-                        .show(ui)
-                        .clicked()
-                        {
-                            paused = !paused;
-                        }
-                        publish = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
-                            ui.add(
-                                egui::Button::new(
-                                    egui::RichText::new("Publish")
-                                        .size(14.0)
-                                        .color(self.theme.ui.panel_bg),
-                                )
-                                .fill(self.theme.ui.text)
-                                .min_size(egui::vec2(72.0, 28.0))
-                                .corner_radius(16),
-                            ),
-                            "Export chart",
-                            None,
-                        )
-                        .clicked();
-                        trade = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
-                            ui.add(
-                                egui::Button::new(egui::RichText::new("Trade").size(14.0))
-                                    .fill(bg)
-                                    .stroke(egui::Stroke::new(1.0, self.theme.ui.border))
-                                    .min_size(egui::vec2(60.0, 28.0))
-                                    .corner_radius(16),
-                            ),
-                            "Trading account",
-                            None,
-                        )
-                        .clicked();
-                        search = egui_charts::ui::top_toolbar::buttons::toolbar_tooltip(
-                            IconButton::new(&icons::QUICK_SEARCH)
-                                .icon_scale(24.0 / 28.0)
-                                .show(ui),
-                            "Quick search",
-                            self.chart
-                                .shortcuts()
-                                .shortcut(egui_charts::config::KeyboardAction::OpenQuickSearch),
-                        )
-                        .clicked();
-                    },
+                    |_| {},
                 );
                 self.live.set_paused(paused);
                 if footprint_enabled != self.footprint.is_some() {
@@ -1170,22 +1136,15 @@ impl DemoApp {
                 }
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
-                if search {
-                    self.quick_search.open();
-                }
-                if trade {
-                    self.notify(
-                        "Connect a trading account to place orders; the demo uses synthetic data",
-                    );
-                }
-                if publish {
-                    self.export_dialog.open();
-                }
             });
     }
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
+            TopToolbarAction::Save => {
+                self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Save);
+                return;
+            }
             TopToolbarAction::Layout(action) => {
                 self.handle_layout_action(action);
                 return;
@@ -1277,12 +1236,9 @@ impl DemoApp {
                     }
                 }
             }
-            // Save routes through the export dialog (PNG / CSV of the view).
-            TopToolbarAction::Save => self.export_dialog.open(),
             // Light/dark toggle is a real, cheap visual change.
             TopToolbarAction::ThemeToggle => self.toggle_theme(ctx),
-            TopToolbarAction::Layout(action) => self.handle_layout_action(action),
-            TopToolbarAction::None => {}
+            TopToolbarAction::Layout(_) | TopToolbarAction::Save | TopToolbarAction::None => {}
         }
     }
 
@@ -1379,17 +1335,6 @@ impl DemoApp {
                 }
                 return;
             }
-            DrawingToolbarAction::SaveTemplate { .. }
-            | DrawingToolbarAction::LoadTemplate { .. } => {
-                self.notify("Drawing templates are not persisted in this demo");
-                return;
-            }
-            DrawingToolbarAction::HideAllPoss | DrawingToolbarAction::HideAllOrders => {
-                self.notify(
-                    "Positions and orders need a trading account, which the demo does not have",
-                );
-                return;
-            }
             _ => {}
         }
 
@@ -1456,10 +1401,19 @@ impl DemoApp {
             DrawingToolbarAction::InsertEmoji { icon_name } => {
                 dm.start_icon_insertion(icon_name.to_string())
             }
-            // The rest (the values tooltip toggle and
-            // OpenTemplateMenu) mutate only the toolbar's own popup state, which
-            // it manages internally; there is nothing for the host to do.
-            _ => {}
+            DrawingToolbarAction::None
+            | DrawingToolbarAction::OpenTemplateMenu
+            | DrawingToolbarAction::SaveTemplate { .. }
+            | DrawingToolbarAction::LoadTemplate { .. }
+            | DrawingToolbarAction::HideAllPoss
+            | DrawingToolbarAction::HideAllOrders
+            | DrawingToolbarAction::RemoveAllIndicators
+            | DrawingToolbarAction::RemoveAllStudies
+            | DrawingToolbarAction::HideAllIndicators
+            | DrawingToolbarAction::SetCursorType(_)
+            | DrawingToolbarAction::ToggleValuesTooltip
+            | DrawingToolbarAction::ZoomIn
+            | DrawingToolbarAction::ZoomOut => {}
         }
     }
 
@@ -2649,6 +2603,84 @@ mod tests {
     }
 
     #[test]
+    fn save_keeps_a_session_layout_copy_instead_of_exporting() {
+        use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.chart.config_mut().candle_width = 0.42;
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        assert!(!app.export_dialog.is_open());
+        assert_eq!(app.layout_tabs.len(), 2);
+        app.chart.config_mut().candle_width = 0.8;
+        app.handle_layout_action(LayoutAction::Open("Unnamed".into()));
+        assert_eq!(app.chart.config().candle_width, 0.42);
+        let original_type = app.chart.chart_type();
+        app.handle_top_toolbar(
+            &ctx,
+            TopToolbarAction::ChartStyleSelected(egui_charts::model::ChartType::Line),
+        );
+        assert!(app.chart.can_undo());
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
+        assert_eq!(app.chart.chart_type(), original_type);
+        app.execute_search_command(&ctx, "export");
+        assert!(app.export_dialog.is_open());
+        assert_eq!(app.layout_tabs.len(), 2);
+    }
+
+    #[test]
+    fn drawing_zoom_changes_the_view_without_editing_drawings() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.chart.begin_user_action();
+        let dm = app.chart.drawings_mut();
+        dm.start_drawing_with_coords(
+            egui_charts::drawings::DrawingToolType::TrendLine,
+            egui::pos2(1.0, 2.0),
+            |x| x,
+            f64::from,
+        );
+        dm.add_point_with_coords(egui::pos2(3.0, 4.0), |x| x, f64::from);
+        let drawings: Vec<_> = dm
+            .drawings
+            .iter()
+            .map(|drawing| (drawing.id, drawing.chart_points.clone()))
+            .collect();
+        app.chart.end_user_action();
+        app.drawing_toolbar.state.zoom_mode_active = true;
+        app.handle_drawing_toolbar(DrawingToolbarAction::ZoomIn);
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        let before = app.chart.get_time_scale_state();
+        let rect = app.chart.get_rendered_price_rect();
+        assert!(app.chart.execute_box_zoom(
+            rect.min + rect.size() * 0.2,
+            rect.max - rect.size() * 0.2,
+            rect,
+            rect.width()
+        ));
+        for restore in [false, true] {
+            if restore {
+                app.handle_drawing_toolbar(DrawingToolbarAction::ZoomOut);
+                assert_eq!(app.chart.get_time_scale_state(), before);
+            } else {
+                assert!(app.chart.get_time_scale_state().0 > before.0);
+            }
+            assert_eq!(
+                app.chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|drawing| (drawing.id, drawing.chart_points.clone()))
+                    .collect::<Vec<_>>(),
+                drawings
+            );
+            assert!(app.chart.can_undo());
+        }
+    }
+
+    #[test]
     fn comparison_dialog_adds_hides_and_removes_chart_series() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -2980,9 +3012,9 @@ mod tests {
         }
     }
 
-    /// External chart modes and completed drawings are reflected before the toolbar is painted.
+    /// External chart modes and completed drawings are reflected before the toolbars are painted.
     #[test]
-    fn drawing_toolbar_follows_chart_modes_and_completed_tools() {
+    fn toolbars_follow_chart_modes_and_completed_tools() {
         use egui_charts::config::CrosshairStyle;
         use egui_charts::drawings::DrawingToolType;
         use egui_charts::ui::drawing_toolbar::{MagnetType, categories::cursors::CursorType};
@@ -2990,6 +3022,7 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         let frame = |app: &mut DemoApp| {
             ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.show_top_toolbar(ui, egui::Color32::BLACK);
                 app.show_drawing_toolbar(ui, egui::Color32::BLACK);
             })
             .drop_without_applying_deltas();
@@ -3041,6 +3074,12 @@ mod tests {
             assert!(!app.drawing_toolbar.state.eraser_mode_enabled);
             assert!(!app.drawing_toolbar.state.magnet_mode);
         }
+        app.start_replay();
+        frame(&mut app);
+        assert!(app.top_toolbar.state.replay_active);
+        app.stop_replay();
+        frame(&mut app);
+        assert!(!app.top_toolbar.state.replay_active);
     }
 
     /// A narrow first layout and later resizes retain the configured zoom and live edge.
