@@ -64,7 +64,7 @@ pub(crate) use bar::SpanCache;
 pub(crate) use bar::percent_change;
 pub use bar::{Bar, BarData};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
-pub use chart_style::{AreaStyle, BaselineStyle, ChartTypeStyles, LinePlotStyle};
+pub use chart_style::{AreaStyle, BarsStyle, BaselineStyle, ChartTypeStyles, LinePlotStyle};
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
 pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;

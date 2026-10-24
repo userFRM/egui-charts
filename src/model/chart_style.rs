@@ -83,7 +83,27 @@ impl Default for BaselineStyle {
     }
 }
 
-/// Styles of the line, step, marker, area and baseline chart types.
+/// The Bars chart's OHLC ticks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BarsStyle {
+    /// Draw the open tick on the left of each bar.
+    pub open_visible: bool,
+    /// Draw bars with the chart's wick width at every zoom level instead of a stroke that
+    /// widens with the bar spacing.
+    pub thin_bars: bool,
+}
+
+impl Default for BarsStyle {
+    fn default() -> Self {
+        Self {
+            open_visible: true,
+            thin_bars: true,
+        }
+    }
+}
+
+/// Styles of the bars, line, step, marker, area and baseline chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -100,6 +120,8 @@ pub struct ChartTypeStyles {
     pub area: AreaStyle,
     /// Baseline chart.
     pub baseline: BaselineStyle,
+    /// Bars chart.
+    pub bars: BarsStyle,
 }
 
 impl Default for ChartTypeStyles {
@@ -111,6 +133,7 @@ impl Default for ChartTypeStyles {
             marker_radius: 3.0,
             area: AreaStyle::default(),
             baseline: BaselineStyle::default(),
+            bars: BarsStyle::default(),
         }
     }
 }

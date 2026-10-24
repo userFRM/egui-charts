@@ -8,7 +8,7 @@ use super::helpers::{
 };
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{self, BarRenderParams, RenderContext, StyleColors};
-use crate::model::Bar;
+use crate::model::{Bar, BarsStyle};
 use crate::scales::PriceMap;
 use egui::{Color32, Pos2, Rect};
 
@@ -52,11 +52,12 @@ pub(super) fn render_ohlc_bars(
     max_volume: f64,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
+    style: &BarsStyle,
 ) {
     for (i, bar) in visible_data.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
         let params = BarRenderParams::new(x, bar_width, wick_width);
-        renderers::render_ohlc_bar(price_ctx, bar, price_scale, colors, &params);
+        renderers::render_ohlc_bar(price_ctx, bar, price_scale, colors, &params, style);
 
         if show_volume {
             let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();

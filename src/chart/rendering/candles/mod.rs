@@ -110,6 +110,7 @@ pub fn render_chart_type(
                 params.max_volume(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
+                &params.type_params.styles.bars,
             );
         }
         ChartType::HollowCandles => {
