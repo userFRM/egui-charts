@@ -177,6 +177,8 @@ pub struct ChartConfig {
     pub background_style: BackgroundStyle,
     /// Grid line color
     pub grid_color: Color32,
+    /// Vertical grid colour; `None` follows `grid_color`.
+    pub vertical_grid_color: Option<Color32>,
     /// Text color for labels
     pub text_color: Color32,
     /// Width of candlestick/bar bodies as a fraction of available space (0.0 to 1.0)
@@ -185,7 +187,7 @@ pub struct ChartConfig {
     pub wick_width: f32,
     /// Stroke width for candle borders (0 = no border)
     pub candle_border_width: f32,
-    /// Whether to show the price grid (horizontal lines)
+    /// Master visibility switch for horizontal and vertical grid lines
     pub show_grid: bool,
     /// Whether to show horizontal grid lines
     pub show_horizontal_grid: bool,
@@ -345,6 +347,7 @@ impl Default for ChartConfig {
             background_style: BackgroundStyle::Solid,
             // Grid colour from the default theme
             grid_color: chart.grid_line,
+            vertical_grid_color: None,
             // Text color
             text_color: chart.axis_text,
             // Candle bodies leave room for the wider volume bars

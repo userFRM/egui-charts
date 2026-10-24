@@ -704,7 +704,7 @@ impl Chart {
             .unwrap_or(1.0);
 
         // Draw grid
-        if self.config.show_horizontal_grid {
+        if self.config.show_grid && self.config.show_horizontal_grid {
             rendering::render_grid(&painter, price_rect, &price_map, self.config.grid_color);
         }
 
@@ -734,21 +734,25 @@ impl Chart {
         let timezone = self.display_timezone();
         let formatter = self.build_time_formatter();
 
-        if self.config.show_vertical_grid {
+        if self.config.show_grid && self.config.show_vertical_grid {
             if time_based {
                 renderers::render_time_grid(
                     &RenderContext::new(&painter, chart_rect),
                     visible_data,
                     &coords,
                     formatter.as_ref(),
-                    self.config.grid_color,
+                    self.config
+                        .vertical_grid_color
+                        .unwrap_or(self.config.grid_color),
                 );
             } else {
                 rendering::render_vertical_grid(
                     &painter,
                     chart_rect,
                     &coords,
-                    self.config.grid_color,
+                    self.config
+                        .vertical_grid_color
+                        .unwrap_or(self.config.grid_color),
                 );
             }
         }

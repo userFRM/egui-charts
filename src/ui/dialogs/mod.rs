@@ -14,7 +14,7 @@ pub mod keyboard_shortcuts;
 pub mod series_context_menu;
 pub mod series_settings;
 
-pub use alert_dialog::{AlertData, AlertDialog, AlertDialogAction, AlertDialogConfig, AlertTab};
+pub use alert_dialog::{AlertDialog, AlertDialogAction, AlertDialogConfig};
 pub use drawing_context_menu::{DrawingContextMenu, DrawingContextMenuAction};
 pub use drawing_properties::{
     DrawingId, DrawingLineStyle, DrawingPropertiesAction, DrawingPropertiesConfig,

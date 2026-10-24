@@ -47,7 +47,7 @@ impl SettingsMenu {
 
     /// Apply current settings to a ChartConfig
     pub fn apply_to_config(&self, mut config: ChartConfig) -> ChartConfig {
-        config.show_grid = self.settings.show_horizontal_grid;
+        config.show_grid = self.settings.show_horizontal_grid || self.settings.show_vertical_grid;
         config.show_horizontal_grid = self.settings.show_horizontal_grid;
         config.show_vertical_grid = self.settings.show_vertical_grid;
         config.show_right_axis = self.settings.show_right_axis;
