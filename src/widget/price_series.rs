@@ -128,6 +128,12 @@ impl Chart {
                 .remove(&scale)
                 .expect("scale was inserted");
             let old = std::mem::replace(self.state.price_scale_mut(), next);
+            // Joining a scale preserves its bounds in scale units, even with a new reference.
+            if self.state.price_scale().is_manual() {
+                let range = self.state.price_scale().range();
+                self.state.fit_price_scale(std::iter::empty());
+                self.state.price_scale_mut().set_range(range.min, range.max);
+            }
             self.series_scales.insert(self.main_series_scale, old);
             self.main_series_scale = scale;
             self.config.show_left_axis = scale == SeriesScale::Left;
@@ -232,6 +238,9 @@ impl Chart {
             for bar in &item.bars[range] {
                 let value = transform.to_scale(bar.close);
                 if value.is_finite() {
+                    if !entry.1.is_finite() {
+                        entry.0 = transform;
+                    }
                     entry.1 = entry.1.min(value);
                     entry.2 = entry.2.max(value);
                 }
@@ -239,10 +248,19 @@ impl Chart {
         }
         let mut main = Vec::new();
         for (key, (transform, min, max)) in values {
+            if !min.is_finite() {
+                continue;
+            }
             if key == self.main_series_scale {
                 main.extend([min, max]);
             } else if let Some(scale) = self.series_scales.get_mut(&key) {
+                // Membership and scrolling change references, not a manual range's scale units.
+                let manual = (scale.is_manual() && scale.transform().mode == transform.mode)
+                    .then(|| scale.range());
                 scale.rebase(transform);
+                if let Some(range) = manual {
+                    scale.set_range(range.min, range.max);
+                }
                 scale.autoscale(min, max);
             }
         }
@@ -428,7 +446,7 @@ impl Chart {
                             ""
                         }
                     ),
-                    egui::FontId::proportional(13.0),
+                    egui::FontId::proportional(crate::styles::typography::MD),
                     item.options.color,
                 );
             }
@@ -441,11 +459,6 @@ impl Chart {
             .iter()
             .filter(|key| **key != SeriesScale::Right)
             .count();
-        let axis_width = self
-            .config
-            .left_axis_width
-            .max(self.config.right_axis_width)
-            .max(self.measured_axis_width);
         let primary_left = if self.config.show_left_axis {
             self.config.left_axis_width.max(self.measured_axis_width)
         } else {
@@ -456,36 +469,34 @@ impl Chart {
         } else {
             0.0
         };
-        let right_width = if keys.contains(&SeriesScale::Right) {
-            axis_width
-        } else {
-            0.0
-        };
-        let left_budget = (widget.width()
-            - self.config.padding * 2.0
-            - primary_left
-            - primary_right
-            - right_width)
-            .max(0.0)
-            * 0.5;
         let study_count = self
             .studies
             .indicators()
             .iter()
             .filter(|study| {
-                study.is_visible()
+                (self.config.show_left_axis || self.config.show_right_axis)
+                    && study.is_visible()
                     && study.is_overlay()
                     && !study.is_volume()
                     && study.scale() == crate::studies::StudyScale::Independent
             })
             .count();
-        let slot_width = axis_width.min(left_budget / (left_count + study_count).max(1) as f32);
-        let mut left = rect.left() - primary_left;
+        let padding = self
+            .config
+            .padding
+            .max(0.0)
+            .min(widget.width().min(widget.height()).max(0.0) / 2.0);
+        let mut left = (rect.left() - primary_left).max(widget.left() + padding);
+        let slot_width =
+            (left - widget.left() - padding).max(0.0) / (left_count + study_count).max(1) as f32;
         keys.into_iter()
             .map(|key| {
                 let axis = if key == SeriesScale::Right {
                     Rect::from_min_max(
-                        Pos2::new(rect.right() + primary_right, rect.top()),
+                        Pos2::new(
+                            (rect.right() + primary_right).min(widget.right()),
+                            rect.top(),
+                        ),
                         Pos2::new(widget.right(), rect.bottom()),
                     )
                 } else {
@@ -663,6 +674,59 @@ mod tests {
             let map = chart.series_map(&chart.price_series[0], rect);
             assert!(!map.price_to_y(invalid).is_finite());
         }
+        for change in ["hide", "remove", "empty", "join_main"] {
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0])));
+            let first = chart.add_comparison("First", Color32::BLUE);
+            let second = chart.add_comparison("Second", Color32::GREEN);
+            for (id, prices) in [(first, [200.0, 220.0]), (second, [400.0, 440.0])] {
+                chart.set_series_scale(id, SeriesScale::Left);
+                chart.set_data(id, bars(&prices));
+            }
+            chart
+                .series_price_scale_mut(first)
+                .unwrap()
+                .options_mut()
+                .mode = PriceScaleMode::Percentage;
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            chart
+                .series_price_scale_mut(first)
+                .unwrap()
+                .set_range(-5.0, 25.0);
+            match change {
+                "hide" => {
+                    chart.set_series_visible(first, false);
+                }
+                "remove" => {
+                    chart.remove_series(first);
+                }
+                "join_main" => {
+                    chart.set_series_scale(SeriesId::MAIN, SeriesScale::Left);
+                }
+                _ => chart.set_data(first, Vec::new()),
+            }
+            frame(&ctx, &mut chart, 0.3, vec![]);
+            let range = chart.series_price_scale(second).unwrap().range();
+            assert_eq!((range.min, range.max), (-5.0, 25.0), "{change}");
+            if change == "join_main" {
+                chart.set_series_scale(SeriesId::MAIN, SeriesScale::Right);
+                frame(&ctx, &mut chart, 0.4, vec![]);
+                let range = chart.series_price_scale(second).unwrap().range();
+                assert_eq!((range.min, range.max), (-5.0, 25.0), "main leaves scale");
+            }
+            chart
+                .series_price_scale_mut(second)
+                .unwrap()
+                .options_mut()
+                .mode = PriceScaleMode::Normal;
+            frame(&ctx, &mut chart, 0.5, vec![]);
+            let range = chart.series_price_scale(second).unwrap().range();
+            let expected = if change == "join_main" {
+                (190.0, 250.0)
+            } else {
+                (380.0, 500.0)
+            };
+            assert_eq!((range.min, range.max), expected, "mode change: {change}");
+        }
     }
 
     /// Secondary history and corrections use the main merge rules, and visibility/removal
@@ -762,6 +826,54 @@ mod tests {
             assert!(chart.series_axis_keys().is_empty());
             let range = chart.state.price_scale().range();
             assert!((range.min - 99.0).abs() < 1e-10 && (range.max - 111.0).abs() < 1e-10);
+            // Secondary bars can occupy whitespace beyond the main history.
+            let future = bars(&[200.0, 220.0])
+                .into_iter()
+                .map(|mut bar| {
+                    bar.time += TimeDelta::minutes(10);
+                    bar
+                })
+                .collect();
+            chart.set_data(id, future);
+            chart.series_price_scale_mut(id).unwrap().options_mut().mode =
+                PriceScaleMode::Percentage;
+            chart.set_series_visible(id, true);
+            chart.state.time_scale_mut().set_bar_spacing(100.0);
+            chart.state.time_scale_mut().set_right_offset(12.0);
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
+            assert!(chart.state.visible_data().is_empty());
+            if key == SeriesScale::Right {
+                assert_eq!(
+                    chart.last_price_map.transform().mode,
+                    PriceScaleMode::Percentage
+                );
+            }
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::LineSegment { stroke, .. } if stroke.color == Color32::MAGENTA
+                )),
+                "secondary line in main whitespace: {key:?}"
+            );
+        }
+        // Hidden study axes do not consume a secondary scale's reserved gutter.
+        for width in [45.0, 240.0, 800.0] {
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0])));
+            chart.set_series_scale(SeriesId::MAIN, SeriesScale::Overlay(0));
+            chart.config.padding = 8.0;
+            chart.add_series(SeriesOptions {
+                scale: SeriesScale::Left,
+                ..Default::default()
+            });
+            chart.add_indicator(Box::new(
+                crate::studies::CustomIndicator::new("Independent", |_| Vec::new())
+                    .with_scale(crate::studies::StudyScale::Independent),
+            ));
+            let widget = Rect::from_min_size(Pos2::new(7.0, 11.0), egui::vec2(width, 400.0));
+            let plot = chart.calculate_layout_rects(widget).price_rect;
+            let axes = chart.secondary_axes(widget, plot);
+            assert_eq!(axes.len(), 1);
+            assert_eq!(axes[0].1.left(), widget.left() + 8.0, "{width}");
+            assert_eq!(axes[0].1.right(), plot.left(), "{width}");
         }
     }
 }

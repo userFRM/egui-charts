@@ -731,7 +731,12 @@ impl Chart {
         // Get visible data
         let visible_data = self.state.visible_data();
 
-        if visible_data.is_empty() {
+        if visible_data.is_empty()
+            && !self
+                .price_series
+                .iter()
+                .any(|item| item.visible && !item.bars.is_empty())
+        {
             if let Some((nav, buttons)) = navigation {
                 self.paint_navigation(ui, nav, buttons);
             }

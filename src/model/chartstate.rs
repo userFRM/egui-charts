@@ -343,7 +343,11 @@ impl ChartState {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
         let visible = &self.shown()[start..end];
-        let base = visible.first().map_or(f64::NAN, |bar| bar.close);
+        // In whitespace retain the nearest reference bar so relative axis units stay valid.
+        let base = self
+            .shown()
+            .get(start.min(self.shown().len().saturating_sub(1)))
+            .map_or(f64::NAN, |bar| bar.close);
         let relative = matches!(
             mode,
             PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
