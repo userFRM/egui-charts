@@ -236,12 +236,24 @@ impl Trading {
         let finite = |value: Option<f64>| value.is_none_or(f64::is_finite);
         let positive = |value: f64| value.is_finite() && value > 0.0;
         let valid = match &event {
-            AccountEvent::Account(account) => account.balance.is_finite() && finite(account.equity),
+            AccountEvent::Account(account) => {
+                account.balance.is_finite()
+                    && [
+                        account.equity,
+                        account.realized_pnl,
+                        account.margin,
+                        account.orders_margin,
+                        account.available_funds,
+                    ]
+                    .into_iter()
+                    .all(finite)
+            }
             AccountEvent::Order(order) => {
                 let request = &order.request;
                 positive(request.quantity)
                     && order.filled.is_finite()
                     && (0.0..=request.quantity).contains(&order.filled)
+                    && finite(order.fill_price)
                     && finite(request.take_profit)
                     && finite(request.stop_loss)
                     && match request.order_type {
@@ -255,9 +267,21 @@ impl Trading {
             AccountEvent::Position(position) => {
                 position.quantity.is_finite()
                     && position.average_price.is_finite()
-                    && finite(position.unrealized_pnl)
+                    && [
+                        position.unrealized_pnl,
+                        position.last_price,
+                        position.trade_value,
+                        position.market_value,
+                        position.leverage,
+                        position.margin,
+                    ]
+                    .into_iter()
+                    .all(finite)
             }
             AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
+            AccountEvent::Balance(change) => {
+                change.balance.is_finite() && change.amount.is_finite()
+            }
             _ => true,
         };
         if !valid {

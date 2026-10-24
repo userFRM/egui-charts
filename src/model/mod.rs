@@ -109,8 +109,8 @@ pub use tpo::{
     derive_tick_size, to_tpo_profiles,
 };
 pub use trading::{
-    Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
-    OrderType, Position, TimeInForce, TradingRules,
+    Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
+    OrderSide, OrderStatus, OrderType, Position, TimeInForce, TradingRules,
 };
 
 #[cfg(test)]

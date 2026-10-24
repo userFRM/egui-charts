@@ -29,8 +29,6 @@ use egui_charts::services::StoreKind;
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate, TemplateDialog};
 #[path = "live.rs"]
 mod live;
-#[path = "paper.rs"]
-mod paper;
 
 use eframe::egui;
 use egui_charts::Chart;
@@ -251,7 +249,7 @@ pub struct DemoApp {
 
     // Session-only paper account, traded through the library's order ticket.
     trading: egui_charts::ui::trading::Trading,
-    paper: Arc<paper::PaperAccount>,
+    paper: Arc<egui_charts::services::PaperAccount>,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
     // Text pasted for a watchlist import, while its window is open.
@@ -467,7 +465,9 @@ impl DemoApp {
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
             trading: Default::default(),
-            paper: Arc::default(),
+            paper: Arc::new(
+                egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
+            ),
             watchlist: WatchlistPanel::new(
                 cc.storage
                     .and_then(|storage| eframe::get_value(storage, "watchlists"))
