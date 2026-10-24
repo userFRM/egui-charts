@@ -102,6 +102,7 @@ impl DefaultTimeFormatter {
             use_24_hour: self.use_24_hour,
             show_seconds: self.show_seconds,
             date_format: self.date_format.as_deref(),
+            #[cfg(feature = "locales")]
             locale: None,
         }
     }
@@ -126,6 +127,8 @@ struct Style<'a> {
     use_24_hour: bool,
     show_seconds: bool,
     date_format: Option<&'a str>,
+    /// Language of the names; `None` writes English ones.
+    #[cfg(feature = "locales")]
     locale: Option<chrono::Locale>,
 }
 
@@ -134,17 +137,14 @@ impl Style<'_> {
     fn write(&self, time: DateTime<Utc>, pattern: &str) -> Option<String> {
         use std::fmt::Write;
         let mut text = String::new();
-        match self.locale {
-            Some(locale) => {
-                write!(text, "{}", time.format_localized(pattern, locale)).ok()?;
-                // Some locales pad their names, as in Japanese " 5月".
-                Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
-            }
-            None => {
-                write!(text, "{}", time.format(pattern)).ok()?;
-                Some(text)
-            }
+        #[cfg(feature = "locales")]
+        if let Some(locale) = self.locale {
+            write!(text, "{}", time.format_localized(pattern, locale)).ok()?;
+            // Some locales pad their names, as in Japanese " 5月".
+            return Some(text.split_whitespace().collect::<Vec<_>>().join(" "));
         }
+        write!(text, "{}", time.format(pattern)).ok()?;
+        Some(text)
     }
 
     fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String {
@@ -192,6 +192,9 @@ impl Style<'_> {
 
 /// Locale-aware time formatter: month and weekday names and the AM/PM marker
 /// in the locale's language, laid out as [`DefaultTimeFormatter`] does.
+///
+/// The names need the `locales` cargo feature, on by default; without it they
+/// are English, as with an unknown locale.
 #[derive(Debug, Clone)]
 pub struct LocaleTimeFormatter {
     /// Locale identifier: language and region, such as `"en-US"`, `"ja-JP"` or
@@ -233,6 +236,7 @@ impl LocaleTimeFormatter {
             use_24_hour: self.use_24_hour,
             show_seconds: self.show_seconds,
             date_format: self.date_format.as_deref(),
+            #[cfg(feature = "locales")]
             locale: Some(
                 chrono::Locale::try_from(self.locale.replace('-', "_").as_str())
                     .unwrap_or(chrono::Locale::POSIX),
@@ -608,11 +612,28 @@ mod tests {
     fn locale_and_date_format_shape_labels() {
         // Wednesday 13 March 2024, 14:30:45 UTC.
         let time = Utc.with_ymd_and_hms(2024, 3, 13, 14, 30, 45).unwrap();
+        // Without the `locales` feature every locale writes English names.
+        let localized = |name, english| {
+            if cfg!(feature = "locales") {
+                name
+            } else {
+                english
+            }
+        };
         let german = LocaleTimeFormatter::new("de-DE");
-        assert_eq!(german.format(time, TickMarkType::Month), "Mär");
-        assert_eq!(german.format_crosshair(time, 60), "Mi 13 Mär '24 14:30");
+        assert_eq!(
+            german.format(time, TickMarkType::Month),
+            localized("Mär", "Mar")
+        );
+        assert_eq!(
+            german.format_crosshair(time, 60),
+            localized("Mi 13 Mär '24 14:30", "Wed 13 Mar '24 14:30")
+        );
         let japanese = LocaleTimeFormatter::new("ja_JP");
-        assert_eq!(japanese.format(time, TickMarkType::Month), "3月");
+        assert_eq!(
+            japanese.format(time, TickMarkType::Month),
+            localized("3月", "Mar")
+        );
         assert_eq!(
             LocaleTimeFormatter::new("xx-YY").format(time, TickMarkType::Month),
             "Mar"

@@ -326,6 +326,12 @@ pub struct Chart {
     locale: Option<String>,
     date_format: Option<String>,
     time_formatter: Option<std::sync::Arc<dyn crate::scales::TimeFormatter>>,
+    /// Formatter of the time labels, built from the three fields above and kept with the time
+    /// scale options it was built for: seconds and time visibility and the display time zone.
+    frame_time_formatter: Option<(
+        (bool, bool, crate::scales::TimezoneMode),
+        std::sync::Arc<dyn crate::scales::TimeFormatter>,
+    )>,
     price_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     percentage_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,

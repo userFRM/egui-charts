@@ -152,6 +152,7 @@ impl Chart {
             locale: None,
             date_format: None,
             time_formatter: None,
+            frame_time_formatter: None,
             price_formatter: None,
             percentage_formatter: None,
             extended_hours: false,
