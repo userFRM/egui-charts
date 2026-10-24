@@ -43,6 +43,25 @@ where
 
     let line_cnt = indicator.line_cnt();
 
+    if !indicator.candles().is_empty() {
+        return indicator.candles().iter().find_map(|candle| {
+            let style = indicator.plot_style(candle.plot);
+            if !style.visible {
+                return None;
+            }
+            let (body, wick) = candle.geometry(coords, &price_to_y)?;
+            (body.expand(HIT_TOLERANCE).contains(click_pos)
+                || point_to_segment_distance(click_pos, wick[0], wick[1])
+                    <= HIT_TOLERANCE + style.width * 0.5)
+                .then_some(IndicatorHitResult {
+                    indicator_idx,
+                    bar_idx: coords
+                        .x_to_idx(click_pos.x)
+                        .clamp(candle.bars.start, candle.bars.end - 1),
+                })
+        });
+    }
+
     // Test each line of the indicator
     for line_idx in 0..line_cnt {
         if !indicator.plot_style(line_idx).visible {

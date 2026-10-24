@@ -310,6 +310,12 @@ pub trait Indicator: Send {
         IndicatorLineStyle::default()
     }
 
+    /// Candle bodies and wicks, rendered in place of line plots when nonempty.
+    /// Source ranges and OHLCV remain available to hosts for per-bar readouts.
+    fn candles(&self) -> &[super::StudyCandle] {
+        &[]
+    }
+
     /// Shapes attached to study values, empty by default.
     fn markers(&self) -> &[IndicatorMarker] {
         &[]

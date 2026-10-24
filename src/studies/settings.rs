@@ -135,6 +135,9 @@ impl Indicator for ConfiguredStudy {
         self.timeframe = Some(timeframe);
         self.study.set_timeframe(timeframe);
     }
+    fn candles(&self) -> &[super::StudyCandle] {
+        self.study.candles()
+    }
     fn values(&self) -> &IndicatorValues {
         self.study.values()
     }

@@ -397,6 +397,17 @@ impl ChartState {
                                 )
                             }))
                     })
+                    .chain(
+                        study
+                            .candles()
+                            .iter()
+                            .filter(|candle| {
+                                candle.bars.end > study_start.max(start)
+                                    && candle.bars.start < study_end.max(end)
+                                    && study.plot_style(candle.plot).visible
+                            })
+                            .flat_map(|candle| [candle.bar.low, candle.bar.high]),
+                    )
             });
         let (min, max) = visible
             .iter()

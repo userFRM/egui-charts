@@ -43,6 +43,8 @@ pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink, aggregate_trades};
+#[cfg(feature = "studies")]
+pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
 
 /// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.
