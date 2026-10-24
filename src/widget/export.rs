@@ -58,7 +58,9 @@ impl Chart {
     /// Recalculates copies of the studies so streaming updates and pending refreshes are included
     /// without altering the live chart. Price-based charts export source-bar calculations, aligned
     /// by source index and plot displacement, rather than mixing element values with source bars.
-    /// Times include the chart's UTC offset, including DST changes and subsecond timestamps.
+    /// Times include the chart's UTC offset, including DST changes and subsecond timestamps; on a
+    /// [horizontal scale](Self::set_horizontal_scale) other than time, keys read as the crosshair
+    /// label does.
     /// Prices inherit instrument precision (two decimals without metadata); study overrides and
     /// non-price units retain their precision. Missing/non-finite values are empty cells.
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error>> {
@@ -109,7 +111,11 @@ impl Chart {
         let mut writer = csv::Writer::from_writer(Vec::new());
         writer.write_record(header)?;
         for (index, bar) in bars.iter().enumerate() {
-            let mut row = vec![self.export_time(bar.time)];
+            let mut row = vec![if self.horizontal_scale.is_some() {
+                self.format_time(bar.time)
+            } else {
+                self.export_time(bar.time)
+            }];
             row.extend(
                 [bar.open, bar.high, bar.low, bar.close]
                     .map(|value| number(value, price_precision)),

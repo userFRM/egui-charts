@@ -46,7 +46,7 @@
 //! # ) {
 //! let drawing = Drawing::new(1, DrawingToolType::TrendLine);
 //! // After setting up points and calling update_screen_coords:
-//! let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
+//! let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y, time_axis: true };
 //! drawing.render(painter, price_rect, &view);
 //! # }
 //! ```
@@ -96,6 +96,9 @@ pub struct ChartView<'a> {
     pub bar_to_x: &'a dyn Fn(f32) -> f32,
     /// Screen y of a price.
     pub price_to_y: &'a dyn Fn(f64) -> f32,
+    /// Whether the bar times are times, so measurements show the time between anchors; `false`
+    /// on a [horizontal scale](crate::scales::HorizontalScale) other than time.
+    pub time_axis: bool,
 }
 
 /// Index of the first bar and the bars from anchor `a` to anchor `b`
@@ -771,6 +774,7 @@ mod tests {
                         revision: 0,
                         bar_to_x: &|b| b * 40.0,
                         price_to_y: &|p| 500.0 - p as f32,
+                        time_axis: true,
                     };
                     drawing.render(ui.painter(), pane, &view);
                 });
@@ -1037,6 +1041,7 @@ mod tests {
                 revision: 0,
                 bar_to_x: &|b| b * 10.0,
                 price_to_y: &|p| 500.0 - p as f32,
+                time_axis: true,
             };
             drawing.render(
                 ui.painter(),
@@ -1078,6 +1083,7 @@ mod tests {
                 revision: 0,
                 bar_to_x: &|x| x,
                 price_to_y: &|p| p as f32,
+                time_axis: true,
             };
             manager.render_all(&ui.painter().with_clip_rect(parent), pane, &view);
         });

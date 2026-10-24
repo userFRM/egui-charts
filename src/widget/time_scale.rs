@@ -352,7 +352,7 @@ mod tests {
 
     /// Strikes 4400 to 4600 in steps of 25 across the plot are about 80 points apart, so the
     /// axis labels every other one, the multiples of 50, by the scale's weights; the crosshair
-    /// on 4475 reads it, and no time is formatted anywhere.
+    /// on 4475 reads it, the CSV export writes strikes, and no time is formatted anywhere.
     #[test]
     fn a_horizontal_scale_labels_the_axis_and_the_crosshair_by_key() {
         let bars = (0..=8)
@@ -388,5 +388,13 @@ mod tests {
             vec![egui::Event::PointerMoved(hover)],
         ));
         assert!(hovered.contains(&"4475".to_owned()), "{hovered:?}");
+        let csv = chart.export_csv().unwrap();
+        assert_eq!(
+            csv.lines()
+                .nth(1)
+                .and_then(|row| row.split_once(','))
+                .map(|(key, _)| key),
+            Some("4400")
+        );
     }
 }
