@@ -169,6 +169,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The basic chart example reserves its click readout above the plot and requests repaint after a host click event, keeping the feedback visible. ([#201](https://github.com/userFRM/egui-charts/issues/201))
+
 - Switching between a local chart theme and the host theme retains the chart's widget ids, keyboard focus and retained UI state. ([#202](https://github.com/userFRM/egui-charts/issues/202))
 
 - Host pointer events use every visible magnet target in a merged study pane and retain the volume overlay mapping when a secondary click opens a menu. Volume magnet events report the bar volume rather than the raw pointer value. ([#201](https://github.com/userFRM/egui-charts/issues/201))

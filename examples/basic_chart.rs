@@ -73,15 +73,17 @@ impl eframe::App for BasicChartApp {
         ui.set_style(ui.ctx().global_style());
 
         egui::CentralPanel::default().show(ui, |ui| {
+            ui.label(self.last_click.map_or_else(
+                || "Click the plot to inspect time and price".to_owned(),
+                |(time, price)| format!("Clicked {time}: {price:.2}"),
+            ));
             // Render the chart -- it handles pan, zoom, and crosshair automatically
             self.chart.show(ui);
             for event in self.chart.drain_events() {
                 if let ChartEvent::Click { position, .. } = event {
                     self.last_click = Some((position.time, position.price));
+                    ui.ctx().request_repaint();
                 }
-            }
-            if let Some((time, price)) = self.last_click {
-                ui.label(format!("Clicked {time}: {price:.2}"));
             }
         });
     }
