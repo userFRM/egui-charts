@@ -35,7 +35,9 @@ impl ChartGridSelector {
 
     /// Shows the trigger and returns a changed grid or tab preset.
     pub fn show(&mut self, ui: &mut Ui) -> Option<ChartLayoutMode> {
+        // The toolbar's 24 px icon size, so the cells read at the size of the glyphs beside them.
         let button = IconButton::new(layout_icon(self.current))
+            .icon_scale(24.0 / 28.0)
             .tooltip("Chart layout")
             .show(ui);
         let mut selected = None;
