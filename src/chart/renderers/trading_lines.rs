@@ -239,14 +239,16 @@ impl Label<'_> {
         tags: &mut Vec<(f64, Color32)>,
     ) -> (Option<f64>, Option<Button>) {
         let key = ui.scope_id().with(self.id);
-        let staged = ui
-            .ctx()
-            .data(|data| data.get_temp::<f64>(key))
-            .unwrap_or(line.price);
-        let y = mapping.price_to_y(staged);
-        if !y.is_finite() || !mapping.is_y_visible(y) {
+        if !self.draggable {
+            ui.ctx().data_mut(|data| data.remove::<f64>(key));
+        }
+        let staged = ui.ctx().data(|data| data.get_temp::<f64>(key));
+        let y = mapping.price_to_y(staged.unwrap_or(line.price));
+        if !y.is_finite() || (staged.is_none() && !mapping.is_y_visible(y)) {
             return (None, None);
         }
+        // A tick can snap beyond the pane; keep its drag target reachable until release.
+        let y = y.clamp(mapping.rect.top(), mapping.rect.bottom());
         let font = FontId::proportional(11.0);
         let painter = ui.painter().clone();
         let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
@@ -260,7 +262,7 @@ impl Label<'_> {
         let rect = Rect::from_min_size(pos2(x, y - HEIGHT / 2.0), vec2(total, HEIGHT));
 
         let mut dragged = None;
-        let mut value = staged;
+        let mut value = staged.unwrap_or(line.price);
         let grab = ui.interact(
             Rect::from_min_max(
                 pos2(mapping.rect.left(), rect.top()),
@@ -311,7 +313,9 @@ impl Label<'_> {
         );
         tags.push((value, line.color));
 
-        let y = mapping.price_to_y(value);
+        let y = mapping
+            .price_to_y(value)
+            .clamp(mapping.rect.top(), mapping.rect.bottom());
         let rect = rect.translate(vec2(0.0, y - rect.center().y));
         let stroke = Stroke::new(1.0, line.color);
         clipped.rect_filled(rect, 2.0, ui.active_theme().ui.panel_bg);

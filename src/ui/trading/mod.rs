@@ -630,11 +630,12 @@ mod tests {
         use crate::theme::{Theme, apply_to_egui};
         for theme in [Theme::light(), Theme::dark()] {
             for width in [800.0, 320.0] {
-                for operation in [
-                    "Cancel order",
-                    "Modify order",
-                    "Close position",
-                    "Reverse position",
+                for (operation, edge) in [
+                    ("Cancel order", false),
+                    ("Modify order", false),
+                    ("Modify order", true),
+                    ("Close position", false),
+                    ("Reverse position", false),
                 ] {
                     let mut request =
                         OrderRequest::new("SYM", OrderSide::Sell, 1.0, OrderType::Limit(105.0));
@@ -653,6 +654,11 @@ mod tests {
                     trading.set_service(broker.clone());
                     let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
                     chart.symbol = "SYM".into();
+                    if edge {
+                        let mut instrument = crate::model::Instrument::new("SYM");
+                        instrument.tick_size = Some(64.0);
+                        chart.set_instrument(Some(instrument));
+                    }
                     let ctx = egui::Context::default();
                     apply_to_egui(
                         &ctx,
@@ -724,7 +730,9 @@ mod tests {
                         vec![egui::Event::PointerMoved(start)],
                     );
                     frame(&mut trading, &mut chart, vec![click(start, true)]);
-                    let end = if operation == "Modify order" {
+                    let end = if edge {
+                        egui::pos2(x, mapping.rect.top())
+                    } else if operation == "Modify order" {
                         egui::pos2(x, mapping.price_to_y(103.0))
                     } else {
                         start
@@ -760,9 +768,10 @@ mod tests {
                             let changed = broker.modified.lock().unwrap();
                             assert_eq!(changed.len(), 1);
                             assert_eq!(changed[0].0, order.id);
-                            assert_eq!(changed[0].1.order_type, OrderType::Limit(103.0));
-                            assert_eq!(changed[0].1.take_profit, Some(100.0));
-                            assert_eq!(changed[0].1.stop_loss, Some(106.0));
+                            let price = if edge { 128.0 } else { 103.0 };
+                            assert_eq!(changed[0].1.order_type, OrderType::Limit(price));
+                            assert_eq!(changed[0].1.take_profit, Some(price - 3.0));
+                            assert_eq!(changed[0].1.stop_loss, Some(price + 3.0));
                         }
                         _ => {
                             let quantity = if operation == "Close position" {
