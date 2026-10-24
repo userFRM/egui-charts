@@ -198,7 +198,7 @@ impl HistoryService {
     }
 
     /// Push a command to the undo stack
-    fn push_command(&mut self, command: DrawingCommand) {
+    pub(crate) fn push_command(&mut self, command: DrawingCommand) {
         // Clear redo stack on new action
         self.redo_stack.clear();
 

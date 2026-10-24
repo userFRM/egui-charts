@@ -81,26 +81,27 @@ pub fn handle_selection<F1, F2>(
         }
         cursor_modes.eraser.set_hover(None);
 
-        if let Some(sel_id) = drawing_manager.sel_drawing() {
-            if response.drag_started() {
-                let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
-                if let Some(handle) = drawing_manager.hit_test_handle_by_id(origin, sel_id) {
-                    drawing_manager.start_drag_handle(sel_id, handle);
-                } else if drawing_manager.hit_test(origin) == Some(sel_id) {
-                    drawing_manager.start_drag_body(sel_id, origin);
-                }
-                drawing_manager.update_drag_handle_with_coords(pos, x_to_bar, y_to_price);
-            } else if response.clicked() {
-                if drawing_manager.hit_test(pos) == Some(sel_id) {
-                    if drawing_manager.hit_test_handle_by_id(pos, sel_id).is_none() {
-                        drawing_manager.deselect();
-                    }
-                } else {
-                    drawing_manager.select_at(pos);
-                }
+        if response.drag_started() {
+            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+            let selected: Vec<_> = drawing_manager.selected_ids().collect();
+            if selected.len() == 1
+                && let Some(handle) = drawing_manager.hit_test_handle_by_id(origin, selected[0])
+            {
+                drawing_manager.start_drag_handle(selected[0], handle);
+            } else if let Some(id) = drawing_manager.hit_test(origin)
+                && drawing_manager.is_selected(id)
+            {
+                drawing_manager.start_drag_body(id, origin);
             }
+            drawing_manager.update_drag_handle_with_coords(pos, x_to_bar, y_to_price);
         } else if response.clicked() {
-            drawing_manager.select_at(pos);
+            if ui.input(|i| i.modifiers.shift) {
+                if let Some(id) = drawing_manager.hit_test(pos) {
+                    drawing_manager.toggle_selection(id);
+                }
+            } else {
+                drawing_manager.select_at(pos);
+            }
         }
     } else {
         cursor_modes.eraser.set_hover(None);
@@ -237,6 +238,93 @@ mod tests {
         }
     }
 
+    /// Shift-click keeps both drawings selected; dragging either body moves the group
+    /// without panning, and Delete removes the whole selection in one undo step.
+    #[test]
+    fn shift_selection_moves_and_deletes_as_one_action() {
+        use crate::widget::test_frames::{chart, frame};
+        use egui::{Key, Modifiers, vec2};
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        for (id, price) in [(7, 14.0), (8, 17.0)] {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            drawing.completed = true;
+            drawing.chart_points = vec![ChartPoint::new(30.0, price), ChartPoint::new(70.0, price)];
+            chart.drawings_mut().drawings.push(drawing);
+        }
+        let mut time = 0.0;
+        frame(&ctx, &mut chart, time, vec![]);
+        let first = chart.drawings().drawings[0].points[0]
+            .lerp(chart.drawings().drawings[0].points[1], 0.5);
+        let second = chart.drawings().drawings[1].points[0]
+            .lerp(chart.drawings().drawings[1].points[1], 0.5);
+        let button = |pos, pressed, modifiers| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers,
+        };
+        let mut step = |chart: &mut crate::widget::Chart, events| {
+            time += 0.5;
+            frame(&ctx, chart, time, events);
+        };
+        for (pos, modifiers) in [(first, Modifiers::NONE), (second, Modifiers::SHIFT)] {
+            step(
+                &mut chart,
+                vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(pos)],
+            );
+            step(&mut chart, vec![button(pos, true, modifiers)]);
+            step(&mut chart, vec![button(pos, false, modifiers)]);
+        }
+        let view = chart.get_time_scale_state();
+        let before: Vec<_> = chart
+            .drawings()
+            .drawings
+            .iter()
+            .map(|d| d.chart_points.clone())
+            .collect();
+        let to = first + vec2(40.0, 20.0);
+        for events in [
+            vec![
+                Event::ModifiersChanged(Modifiers::NONE),
+                Event::PointerMoved(first),
+            ],
+            vec![button(first, true, Modifiers::NONE)],
+            vec![Event::PointerMoved(to)],
+            vec![button(to, false, Modifiers::NONE)],
+        ] {
+            step(&mut chart, events);
+        }
+        assert_eq!(
+            chart.get_time_scale_state(),
+            view,
+            "a selected body must own the drag"
+        );
+        let delta = chart.drawings().drawings[0].chart_points[0].bar_idx - before[0][0].bar_idx;
+        assert!(delta > 0.0);
+        for (drawing, old) in chart.drawings().drawings.iter().zip(&before) {
+            assert_eq!(drawing.chart_points[0].bar_idx - old[0].bar_idx, delta);
+        }
+        assert!(chart.undo());
+        for (drawing, old) in chart.drawings().drawings.iter().zip(&before) {
+            assert_eq!(&drawing.chart_points, old);
+        }
+        step(
+            &mut chart,
+            vec![Event::Key {
+                key: Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert!(chart.drawings().drawings.is_empty());
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings.len(), 2);
+        assert!(!chart.can_undo());
+    }
+
     /// A body grab keeps its offset from the anchors, translates every price and bar by
     /// the pointer's data delta, and produces one history step and one host update.
     #[test]
@@ -246,7 +334,7 @@ mod tests {
             DrawingToolType::Rect,
             DrawingToolType::FibonacciChannel,
         ] {
-            for locked in [false, true] {
+            for (locked, multi) in [(false, false), (true, false), (false, true)] {
                 let ctx = Context::default();
                 let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0));
                 let mut manager = DrawingManager::new();
@@ -268,8 +356,24 @@ mod tests {
                 drawing.update_screen_coords(|b| b * 10.0, |p| (-100.0 * (p / 1000.0).ln()) as f32);
                 drawing.locked = locked;
                 let before = drawing.chart_points.clone();
-                manager.drawings.push(drawing);
+                manager.drawings.push(drawing.clone());
                 manager.select(7);
+                if multi {
+                    drawing.id = 8;
+                    drawing.points.iter_mut().for_each(|p| p.y += 20.0);
+                    drawing.chart_points = drawing
+                        .points
+                        .iter()
+                        .map(|p| ChartPoint::new(p.x / 10.0, price(p.y)))
+                        .collect();
+                    manager.drawings.push(drawing);
+                    manager.select_drawings([8, 7]);
+                }
+                let before_group: Vec<_> = manager
+                    .drawings
+                    .iter()
+                    .map(|d| d.chart_points.clone())
+                    .collect();
                 let from = Pos2::new(100.0, 100.0);
                 let to = Pos2::new(140.0, 130.0);
                 let button = |pos, pressed| Event::PointerButton {
@@ -322,14 +426,40 @@ mod tests {
                         "{tool:?}, locked {locked}: {moved:?}"
                     );
                 }
+                for (drawing, original) in manager.drawings.iter().zip(&before_group) {
+                    for (old, moved) in original.iter().zip(&drawing.chart_points) {
+                        assert!(
+                            (moved.bar_idx - old.bar_idx - if locked { 0.0 } else { 4.0 }).abs()
+                                < 1e-5,
+                            "group member {}",
+                            drawing.id
+                        );
+                    }
+                }
                 let updates = manager.pending_sync.lock().unwrap();
-                assert_eq!(updates.len(), usize::from(!locked), "{tool:?}");
+                assert_eq!(
+                    updates.len(),
+                    usize::from(!locked) * if multi { 2 } else { 1 },
+                    "{tool:?}"
+                );
                 if !locked {
-                    assert!(matches!(updates[0], DrawingSyncAction::UpdateDrawing(7)));
+                    assert!(
+                        updates
+                            .iter()
+                            .any(|update| matches!(update, DrawingSyncAction::UpdateDrawing(7)))
+                    );
                 }
                 drop(updates);
                 assert_eq!(manager.undo(), !locked, "{tool:?}");
                 assert_eq!(manager.drawings[0].chart_points, before);
+                assert_eq!(
+                    manager
+                        .drawings
+                        .iter()
+                        .map(|d| d.chart_points.clone())
+                        .collect::<Vec<_>>(),
+                    before_group
+                );
                 assert!(!manager.undo());
             }
         }

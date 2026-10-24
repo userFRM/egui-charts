@@ -535,13 +535,17 @@ impl Chart {
             && (self.drawings.active_tool.is_some()
                 || self.drawings.dragging_handle.is_some()
                 || self.drawings.curr_drawing.is_some()
-                || self.drawings.sel_drawing().is_some_and(|id| {
-                    ui.input(|i| i.pointer.press_origin())
-                        .is_some_and(|origin| {
-                            self.drawings.hit_test_handle_by_id(origin, id).is_some()
-                                || self.drawings.hit_test(origin) == Some(id)
-                        })
-                }));
+                || ui
+                    .input(|i| i.pointer.press_origin())
+                    .is_some_and(|origin| {
+                        self.drawings
+                            .selected_ids()
+                            .any(|id| self.drawings.hit_test_handle_by_id(origin, id).is_some())
+                            || self
+                                .drawings
+                                .hit_test(origin)
+                                .is_some_and(|id| self.drawings.is_selected(id))
+                    }));
         let pending_price_zoom = self.handle_mouse_wheel(
             ui,
             &response,
@@ -975,7 +979,9 @@ impl Chart {
                 // clears any series/indicator selection so handles don't show
                 // on two objects at once.
                 self.selection.deselect();
-                self.drawings.select(drawing_id);
+                if !self.drawings.is_selected(drawing_id) {
+                    self.drawings.select(drawing_id);
+                }
                 RightClickTarget::Drawing {
                     drawing_id,
                     pos: click_pos,

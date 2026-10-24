@@ -183,6 +183,8 @@ pub struct DrawingManager {
     drag_old_state: Option<Drawing>,
     /// Pointer origin of a body or centre-handle translation.
     drag_origin: Option<Pos2>,
+    /// Other selected drawings before a body translation.
+    drag_group: Vec<Drawing>,
 
     /// Whether to stay in drawing mode after completing a drawing.
     pub stay_in_drawing_mode: bool,
@@ -226,6 +228,7 @@ impl DrawingManager {
             dragging_handle: None,
             drag_old_state: None,
             drag_origin: None,
+            drag_group: Vec::new(),
             stay_in_drawing_mode: false,
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
@@ -274,6 +277,51 @@ impl DrawingManager {
             ids.into_iter()
                 .filter(|id| self.drawings.iter().any(|d| d.id == *id)),
         );
+    }
+
+    /// Selected live drawing ids, in drawing-list order.
+    pub fn selected_ids(&self) -> impl Iterator<Item = usize> + '_ {
+        self.drawings
+            .iter()
+            .filter(|d| self.selection.is_selected(d.id))
+            .map(|d| d.id)
+    }
+
+    /// Whether a drawing belongs to the current selection.
+    pub fn is_selected(&self, id: usize) -> bool {
+        self.selection.is_selected(id)
+    }
+
+    /// Toggle a live drawing in the selection, retaining the other selected drawings.
+    pub fn toggle_selection(&mut self, id: usize) {
+        if self.drawings.iter().any(|d| d.id == id) {
+            self.selection.toggle(id);
+        }
+    }
+
+    /// Apply a style edit to every unlocked selected drawing as one undo step.
+    pub fn edit_selected(&mut self, mut edit: impl FnMut(&mut Drawing)) {
+        let before: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|d| self.selection.is_selected(d.id) && !d.locked)
+            .cloned()
+            .collect();
+        if before.is_empty() {
+            return;
+        }
+        let snapshot = self.drawings.clone();
+        for old in &before {
+            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == old.id) {
+                edit(drawing);
+            }
+            self.queue_update(old.id);
+        }
+        self.painted
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| !before.iter().any(|d| d.id == p.id));
+        self.history.push_snapshot(snapshot);
     }
 
     /// Deselects all drawings.
@@ -336,6 +384,8 @@ impl DrawingManager {
                 (None, false) => {}
             }
         }
+        self.selection
+            .prune(&self.drawings.iter().map(|d| d.id).collect());
         true
     }
 
@@ -444,6 +494,17 @@ impl DrawingManager {
         self.start_drag_handle(drawing_id, HandlePos::Middle);
         if self.dragging_handle == Some((drawing_id, HandlePos::Middle)) {
             self.drag_origin = Some(origin);
+            self.drag_group = self
+                .drawings
+                .iter()
+                .filter(|d| {
+                    d.id != drawing_id
+                        && self.selection.is_selected(d.id)
+                        && !d.locked
+                        && d.is_visible_on_timeframe(&self.curr_timeframe)
+                })
+                .cloned()
+                .collect();
         }
     }
 
@@ -457,6 +518,26 @@ impl DrawingManager {
         if let Some((id, handle)) = self.dragging_handle {
             // Compute snapped position before mutable borrow
             let snapped = self.snap_point(new_pos, &self.drawings);
+            if let Some(origin) = self.drag_origin {
+                let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
+                let price = y_to_price(snapped.y) - y_to_price(origin.y);
+                for old in &self.drag_group {
+                    if let Some(drawing) = self
+                        .drawings
+                        .iter_mut()
+                        .find(|d| d.id == old.id && !d.locked)
+                    {
+                        for (point, before) in
+                            drawing.chart_points.iter_mut().zip(&old.chart_points)
+                        {
+                            *point = ChartPoint::new(before.bar_idx + bars, before.price + price);
+                        }
+                        for (point, before) in drawing.points.iter_mut().zip(&old.points) {
+                            *point = *before + (snapped - origin);
+                        }
+                    }
+                }
+            }
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
@@ -479,8 +560,28 @@ impl DrawingManager {
     pub fn end_drag_handle(&mut self) {
         if let Some(old_state) = self.drag_old_state.take() {
             let drawing_id = old_state.id;
-            self.history.push_modify(old_state.id, old_state);
             self.queue(DrawingSyncAction::UpdateDrawing(drawing_id));
+            if self.drag_group.is_empty() {
+                self.history.push_modify(old_state.id, old_state);
+            } else {
+                let mut before = std::mem::take(&mut self.drag_group);
+                for drawing in &before {
+                    self.queue_update(drawing.id);
+                }
+                before.push(old_state);
+                let snapshot = self
+                    .drawings
+                    .iter()
+                    .map(|drawing| {
+                        before
+                            .iter()
+                            .find(|old| old.id == drawing.id)
+                            .unwrap_or(drawing)
+                            .clone()
+                    })
+                    .collect();
+                self.history.push_snapshot(snapshot);
+            }
         }
         self.dragging_handle = None;
         self.drag_origin = None;
@@ -717,10 +818,24 @@ impl DrawingManager {
 
     /// Deletes the selected drawings, keeping any locked ones.
     pub fn delete_selected(&mut self) {
-        let ids: Vec<_> = self.selection.selected_ids().collect();
-        for id in ids {
-            self.delete_drawing(id);
+        let before: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|d| self.selection.is_selected(d.id) && !d.locked)
+            .cloned()
+            .collect();
+        if before.is_empty() {
+            return;
         }
+        let snapshot = self.drawings.clone();
+        for drawing in &before {
+            self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
+        }
+        self.drawings
+            .retain(|d| !before.iter().any(|old| old.id == d.id));
+        self.selection
+            .prune(&self.drawings.iter().map(|d| d.id).collect());
+        self.history.push_snapshot(snapshot);
     }
 
     /// Removes every drawing that is not locked and clears the current drawing and selection.
@@ -791,6 +906,35 @@ impl DrawingManager {
             point.bar_idx += 3.0;
         }
         self.add_synced_drawing(copy);
+    }
+
+    /// Paste copies three bars to the right with fresh identities, selecting them as one undoable addition.
+    /// The caller maps clipboard anchors into this manager's chart coordinates first.
+    pub fn paste_drawings(&mut self, drawings: &[Drawing]) {
+        if drawings.is_empty() {
+            return;
+        }
+        let mut ids = Vec::new();
+        for drawing in drawings {
+            let mut copy = drawing.clone();
+            copy.id = self.take_id();
+            copy.stored_id = None;
+            copy.created_at = None;
+            copy.points.clear();
+            copy.level_ys.clear();
+            for point in &mut copy.chart_points {
+                *point = point.with_shifted_bar_idx(3.0);
+            }
+            ids.push(copy.id);
+            self.queue(DrawingSyncAction::SaveDrawing(copy.id));
+            self.drawings.push(copy);
+        }
+        self.select_drawings(ids.iter().copied());
+        self.history
+            .push_command(crate::drawings::services::DrawingCommand::Snapshot {
+                drawings: Vec::new(),
+                ids,
+            });
     }
 
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
@@ -880,6 +1024,7 @@ impl DrawingManager {
             .iter_mut()
             .chain(&mut self.curr_drawing)
             .chain(&mut self.drag_old_state)
+            .chain(&mut self.drag_group)
         {
             drawing.chart_points.iter_mut().for_each(&mut *visit);
         }
@@ -924,6 +1069,9 @@ impl DrawingManager {
         }
         if let Some(old) = &mut self.drag_old_state {
             old.shift_bar_indices(from, shift);
+        }
+        for drawing in &mut self.drag_group {
+            drawing.shift_bar_indices(from, shift);
         }
         self.history.shift_bar_indices(from, shift);
     }
