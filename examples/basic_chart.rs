@@ -52,6 +52,10 @@ impl BasicChartApp {
         chart.set_symbol("SYNTH");
         chart.set_timeframe(Timeframe::Hour1);
         chart.set_price_lines(SeriesId::MAIN, vec![entry]);
+        // Local axis sizing and palette, independent of the surrounding application's theme.
+        let mut style = Theme::dark();
+        style.text.label = 14.0;
+        chart.set_theme_override(Some(style));
 
         Self {
             chart,

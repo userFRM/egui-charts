@@ -50,6 +50,34 @@ pub(crate) fn set_active_theme(ctx: &Context, theme: Theme) {
     ctx.data_mut(|d| d.insert_temp(active_theme_id(), theme));
 }
 
+/// Restores the active palette after painting one chart, including during unwinding.
+pub(crate) struct ThemeScope {
+    ctx: Context,
+    previous: Option<Theme>,
+}
+
+impl ThemeScope {
+    pub(crate) fn new(ctx: &Context, theme: &Theme) -> Self {
+        let previous = applied_theme(ctx);
+        set_active_theme(ctx, theme.clone());
+        Self {
+            ctx: ctx.clone(),
+            previous,
+        }
+    }
+}
+
+impl Drop for ThemeScope {
+    fn drop(&mut self) {
+        if let Some(theme) = self.previous.take() {
+            set_active_theme(&self.ctx, theme);
+        } else {
+            self.ctx
+                .data_mut(|data| data.remove::<Theme>(active_theme_id()));
+        }
+    }
+}
+
 /// A component config derived from a theme, whose fields can follow a new theme one by one.
 #[cfg(feature = "ui")]
 pub(crate) trait ThemeDerived {

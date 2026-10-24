@@ -295,6 +295,23 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        if let Some(theme) = self.theme_override.clone() {
+            let _theme_scope = crate::theme::ThemeScope::new(ui.ctx(), &theme);
+            return ui
+                .scope(|ui| {
+                    crate::theme::apply_to_style(ui.style_mut(), &theme);
+                    self.show_themed_content(ui, footprint)
+                })
+                .inner;
+        }
+        self.show_themed_content(ui, footprint)
+    }
+
+    fn show_themed_content(
+        &mut self,
+        ui: &mut Ui,
+        footprint: Option<(&Footprint, &FootprintConfig)>,
+    ) -> Response {
         self.host_events.volume_map = None;
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]

@@ -316,6 +316,7 @@ pub struct Chart {
     last_ratio_lock: bool,
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
+    theme_override: Option<crate::theme::Theme>,
     host_events: events::HostEvents,
     events: Vec<crate::model::Marker>,
     event_click: Option<String>,
@@ -787,8 +788,21 @@ impl Chart {
     /// Other charts sharing the context keep their configured series colours until updated.
     pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
         self.config = theme.apply_to_config(self.config.clone());
+        self.theme_override = None;
         crate::theme::apply_to_egui(ctx, theme);
         ctx.request_repaint();
+    }
+
+    /// Overrides this chart's palette and text sizes without changing sibling charts or egui.
+    ///
+    /// `Some(theme)` also applies its series colours to the chart configuration. Explicit
+    /// configuration edits made afterwards are kept. `None` follows the host's palette again,
+    /// retaining configured series colours. `set_theme` clears this override and themes egui.
+    pub fn set_theme_override(&mut self, theme: Option<crate::theme::Theme>) {
+        if let Some(theme) = &theme {
+            self.config = theme.apply_to_config(self.config.clone());
+        }
+        self.theme_override = theme;
     }
 
     /// The chart's visual configuration.

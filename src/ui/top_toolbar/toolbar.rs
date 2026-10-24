@@ -151,15 +151,25 @@ impl Slot {
         })
     }
 
-    /// The host control that hides this slot, if any.
-    fn host_control(self) -> Option<Control> {
+    /// The host control that hides this slot.
+    fn host_control(self) -> Control {
         match self {
-            S::Compare => Some(Control::Compare),
-            S::Templates => Some(Control::Templates),
-            S::Alert => Some(Control::Alerts),
-            S::Replay => Some(Control::Replay),
-            S::Save | S::Layouts | S::LayoutName => Some(Control::Layouts),
-            _ => None,
+            S::Compare => Control::Compare,
+            S::Templates => Control::Templates,
+            S::Alert => Control::Alerts,
+            S::Replay => Control::Replay,
+            S::Save | S::Layouts | S::LayoutName => Control::Layouts,
+            S::Symbol => Control::SymbolSearch,
+            S::Interval => Control::Interval,
+            S::ChartType => Control::ChartType,
+            S::Indicators => Control::Indicators,
+            S::Undo => Control::Undo,
+            S::Redo => Control::Redo,
+            S::Theme => Control::Theme,
+            S::QuickSearch => Control::QuickSearch,
+            S::Settings => Control::Settings,
+            S::Fullscreen => Control::Fullscreen,
+            S::Screenshot => Control::Snapshot,
         }
     }
 }
@@ -209,16 +219,16 @@ impl TopToolbar {
         self
     }
 
-    /// Shows or hides the buttons of `control`: Compare, Templates, Alerts, Replay, and
-    /// Layouts (the Save and Layout setup buttons). The toolbar ignores the other controls.
+    /// Shows or hides the named top-toolbar control, including its overflow entry and popup.
+    /// Controls for other components are ignored. This controls UI visibility; configure chart
+    /// behavior and shortcut bindings separately through `ChartOptions` and `ShortcutMap`.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         crate::ui::app_state::set_control_visible(&mut self.host_hidden, control, visible);
     }
 
     /// Whether the host left `slot` visible.
     fn is_shown(&self, slot: Slot) -> bool {
-        slot.host_control()
-            .is_none_or(|control| !self.host_hidden.contains(&control))
+        !self.host_hidden.contains(&slot.host_control())
     }
 
     /// Show the full toolbar, reading the active symbol from app state.
@@ -228,10 +238,11 @@ impl TopToolbar {
         app_state: &dyn crate::ui::app_state::ChartAppState,
     ) -> TopToolbarAction {
         let mut menu_action = TopToolbarAction::None;
+        let menu_visible = [S::QuickSearch, S::Theme].map(|slot| self.is_shown(slot));
         let action = self.show_with_slots(
             ui,
             app_state,
-            |ui| Self::show_menu(ui, &mut menu_action),
+            |ui| Self::show_menu(ui, &mut menu_action, menu_visible),
             |_| {},
         );
         if menu_action != TopToolbarAction::None {
@@ -265,11 +276,13 @@ impl TopToolbar {
         ui.horizontal(|ui| {
             ui.set_height(self.config.height);
             ui.spacing_mut().item_spacing.x = 0.0;
-            ui.allocate_ui_with_layout(
-                egui::vec2(48.0, self.config.height),
-                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                menu,
-            );
+            if !self.host_hidden.contains(&Control::Menu) {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(48.0, self.config.height),
+                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                    menu,
+                );
+            }
             let width_id = ui.scope_id().with("host_actions_width");
             let actions_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
             let action = ui
@@ -293,14 +306,20 @@ impl TopToolbar {
         .inner
     }
 
-    fn show_menu(ui: &mut Ui, action: &mut TopToolbarAction) {
+    fn show_menu(ui: &mut Ui, action: &mut TopToolbarAction, visible: [bool; 2]) {
+        if !visible.into_iter().any(|shown| shown) {
+            return;
+        }
         let response = IconButton::new(&super::buttons::MENU_ICON)
             .icon_scale(24.0 / 28.0)
             .tooltip("Menu")
             .show(ui);
         egui::Popup::menu(&response).show(|ui| {
             ui.set_width(DESIGN_TOKENS.sizing.dialog.submenu_width);
-            for control in [S::QuickSearch, S::Theme] {
+            for (control, visible) in [S::QuickSearch, S::Theme].into_iter().zip(visible) {
+                if !visible {
+                    continue;
+                }
                 if let Some((icon, label, clicked_action)) = control.entry()
                     && ListItem::new().show_with_icon(ui, label, icon).clicked()
                 {
@@ -682,6 +701,25 @@ mod tests {
     use super::*;
     use egui::{Event, PointerButton, Pos2, RawInput, Rect, pos2, vec2};
 
+    struct State;
+    impl crate::ui::app_state::ChartAppState for State {
+        fn active_symbol(&self) -> &str {
+            "SYNTH:LONG_SYMBOL"
+        }
+        fn active_timeframe(&self) -> &crate::model::Timeframe {
+            &crate::model::Timeframe::Hour1
+        }
+        fn chart_type(&self) -> ChartType {
+            ChartType::Candles
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+        fn is_replay_active(&self) -> bool {
+            false
+        }
+    }
+
     /// Actions from clicking the strip every 4 px along its middle, one click at a time.
     fn click_along(ctx: &egui::Context, toolbar: &mut TopToolbar) -> Vec<TopToolbarAction> {
         let mut actions = Vec::new();
@@ -719,24 +757,6 @@ mod tests {
 
     #[test]
     fn menu_triggers_fit_without_input_outlines_or_chart_type_text() {
-        struct State;
-        impl crate::ui::app_state::ChartAppState for State {
-            fn active_symbol(&self) -> &str {
-                "SYNTH:LONG_SYMBOL"
-            }
-            fn active_timeframe(&self) -> &crate::model::Timeframe {
-                &crate::model::Timeframe::Hour1
-            }
-            fn chart_type(&self) -> ChartType {
-                ChartType::Candles
-            }
-            fn is_connected(&self) -> bool {
-                true
-            }
-            fn is_replay_active(&self) -> bool {
-                false
-            }
-        }
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for (width, host_label) in [
                 (640.0, "Host action"),
@@ -1054,9 +1074,37 @@ mod tests {
     #[test]
     fn controls_that_are_off_emit_nothing() {
         type Off = fn(&mut TopToolbar);
-        let rows: [(Off, &[TopToolbarAction]); 4] = [
+        let rows: &[(Off, &[TopToolbarAction])] = &[
             (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
             (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
+            (
+                |t| t.set_control_visible(Control::SymbolSearch, false),
+                &[TopToolbarAction::OpenSymbolSearch],
+            ),
+            (
+                |t| t.set_control_visible(Control::Indicators, false),
+                &[TopToolbarAction::OpenIndicators],
+            ),
+            (
+                |t| t.set_control_visible(Control::Undo, false),
+                &[TopToolbarAction::Undo],
+            ),
+            (
+                |t| t.set_control_visible(Control::Redo, false),
+                &[TopToolbarAction::Redo],
+            ),
+            (
+                |t| t.set_control_visible(Control::QuickSearch, false),
+                &[TopToolbarAction::OpenQuickSearch],
+            ),
+            (
+                |t| t.set_control_visible(Control::Settings, false),
+                &[TopToolbarAction::OpenSettings],
+            ),
+            (
+                |t| t.set_control_visible(Control::Fullscreen, false),
+                &[TopToolbarAction::ToggleFullscreen],
+            ),
             (
                 |t| t.set_control_visible(Control::Compare, false),
                 &[TopToolbarAction::OpenCompare],
@@ -1069,16 +1117,78 @@ mod tests {
         let ctx = egui::Context::default();
         let on = click_along(&ctx, &mut TopToolbar::default());
         for (turn_off, gone) in rows {
-            for action in gone {
+            for action in *gone {
                 assert!(on.contains(action), "{action:?} missing while on");
             }
             let mut toolbar = TopToolbar::default();
             turn_off(&mut toolbar);
             let off = click_along(&ctx, &mut toolbar);
-            for action in gone {
+            for action in *gone {
                 assert!(!off.contains(action), "{action:?} emitted while off");
             }
-            assert!(off.contains(&TopToolbarAction::OpenIndicators));
+            if !gone.contains(&TopToolbarAction::OpenIndicators) {
+                assert!(off.contains(&TopToolbarAction::OpenIndicators));
+            }
+        }
+        // The same flags apply to the default menu, independently of the strip.
+        for (control, hidden, retained) in [
+            (Control::QuickSearch, "Quick Search", "Toggle Theme"),
+            (Control::Theme, "Toggle Theme", "Quick Search"),
+        ] {
+            let ctx = egui::Context::default();
+            let mut toolbar = TopToolbar::new();
+            toolbar.set_control_visible(control, false);
+            let frame = |toolbar: &mut TopToolbar, events| {
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        toolbar.show_with_state(ui, &State);
+                    },
+                );
+                let labels = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                output.textures_delta.clear();
+                output.drop_without_applying_deltas();
+                labels
+            };
+            frame(&mut toolbar, vec![]);
+            let pos = pos2(32.0, 27.0);
+            for pressed in [true, false] {
+                frame(
+                    &mut toolbar,
+                    vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            let labels = frame(&mut toolbar, vec![]);
+            assert!(
+                !labels.iter().any(|label| label == hidden),
+                "hidden menu row: {labels:?}"
+            );
+            assert!(
+                labels.iter().any(|label| label == retained),
+                "missing retained menu row: {labels:?}"
+            );
+            toolbar.set_control_visible(control, true);
+            let labels = frame(&mut toolbar, vec![]);
+            assert!(labels.iter().any(|label| label == hidden));
         }
     }
 }

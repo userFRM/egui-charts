@@ -124,11 +124,12 @@ pub struct WidgetBar {
     hidden: HashSet<Control>,
 }
 
-/// The host control that hides `icon`, if any.
-fn control(icon: RightBarIcon) -> Option<Control> {
+/// The host control that hides `icon`.
+fn control(icon: RightBarIcon) -> Control {
     match icon {
-        RightBarIcon::Alerts => Some(Control::Alerts),
-        RightBarIcon::ObjectTree | RightBarIcon::Help => None,
+        RightBarIcon::Alerts => Control::Alerts,
+        RightBarIcon::ObjectTree => Control::ObjectTree,
+        RightBarIcon::Help => Control::Help,
     }
 }
 
@@ -162,10 +163,11 @@ impl WidgetBar {
         self
     }
 
-    /// Shows or hides `control`: Alerts (the Alerts icon). The bar ignores the other controls.
+    /// Shows or hides Alerts, ObjectTree or Help and clears a hidden active entry.
+    /// Other controls are ignored. Hosts close any corresponding panel they render.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
-        if !visible && self.active_icon.and_then(self::control) == Some(control) {
+        if !visible && self.active_icon.map(self::control) == Some(control) {
             self.active_icon = None;
         }
     }
@@ -187,7 +189,7 @@ impl WidgetBar {
                     let count = self
                         .icons
                         .iter()
-                        .filter(|&&i| control(i).is_none_or(|c| !self.hidden.contains(&c)))
+                        .filter(|&&i| !self.hidden.contains(&control(i)))
                         .count()
                         + self.widgets.len();
                     let pitch = self.config.btn_size + self.config.btn_spacing;
@@ -205,9 +207,16 @@ impl WidgetBar {
                     let mut y = rect.top() + self.config.top_padding;
                     for section in [WidgetBarSection::Top, WidgetBarSection::Bottom] {
                         if section == WidgetBarSection::Bottom {
-                            let count =
-                                self.icons.iter().filter(|i| i.section() == section).count()
-                                    + self.widgets.iter().filter(|w| w.section == section).count();
+                            let count = self
+                                .icons
+                                .iter()
+                                .filter(|i| i.section() == section)
+                                .filter(|&&i| !self.hidden.contains(&control(i)))
+                                .count()
+                                + self.widgets.iter().filter(|w| w.section == section).count();
+                            if count == 0 {
+                                continue;
+                            }
                             y = y.max(
                                 rect.bottom() - count as f32 * pitch - DESIGN_TOKENS.spacing.md,
                             );
@@ -239,7 +248,7 @@ impl WidgetBar {
                             .icons
                             .iter()
                             .filter(|i| i.section() == section)
-                            .filter(|&&i| control(i).is_none_or(|c| !self.hidden.contains(&c)))
+                            .filter(|&&i| !self.hidden.contains(&control(i)))
                         {
                             if *icon == RightBarIcon::Help {
                                 // Centre Help on the adjacent 38 px bottom row.
@@ -539,6 +548,26 @@ mod tests {
                     "a replacement is not the pressed entry"
                 );
 
+                // Hidden built-ins leave no painted button and clear their active panel id.
+                bar.widgets.clear();
+                for (icon, control) in [
+                    (RightBarIcon::Alerts, Control::Alerts),
+                    (RightBarIcon::ObjectTree, Control::ObjectTree),
+                    (RightBarIcon::Help, Control::Help),
+                ] {
+                    bar.active_icon = Some(icon);
+                    bar.set_control_visible(control, false);
+                    assert_eq!(bar.active_icon, None);
+                }
+                let (_, shapes, _) = frame(&mut bar, vec![]);
+                assert!(
+                    !shapes
+                        .iter()
+                        .any(|s| matches!(&s.shape, Shape::Rect(r) if r.brush.is_some()))
+                );
+                for control in [Control::Alerts, Control::ObjectTree, Control::Help] {
+                    bar.set_control_visible(control, true);
+                }
                 bar.widgets.extend((100..120).map(|id| WidgetBarWidget {
                     id,
                     icon: embedded_icons::WATCHLIST,
