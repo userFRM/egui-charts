@@ -208,6 +208,7 @@ impl BarClock {
         }
     }
 
+    #[cfg(feature = "studies")]
     pub(crate) fn for_timeframe(&self, timeframe: Timeframe) -> Self {
         Self {
             timeframe: Some(timeframe),
