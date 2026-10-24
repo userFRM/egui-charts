@@ -501,9 +501,16 @@ mod tests {
                 .count();
             let has_bottom = output.shapes.iter().any(|s| matches!(&s.shape,
                 Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color == settings.chart_type_params.styles.area.bottom_fill)));
-            let baseline_fills = output.shapes.iter().filter(|s| matches!(&s.shape,
-                Shape::Path(path) if path.fill == settings.chart_type_params.styles.baseline.above_fill
-                    || path.fill == settings.chart_type_params.styles.baseline.below_fill)).count();
+            let baseline = &settings.chart_type_params.styles.baseline;
+            let baseline_fills = [baseline.above_fill, baseline.below_fill]
+                .into_iter()
+                .filter(|fill| {
+                    output.shapes.iter().any(|s| {
+                        matches!(&s.shape,
+                        Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color == *fill))
+                    })
+                })
+                .count();
             output.drop_without_applying_deltas();
             if kind != ChartType::Candles {
                 assert!(has_line, "{kind:?} ignored its line style");
@@ -515,7 +522,7 @@ mod tests {
                 assert!(has_bottom, "custom bottom fill was lost");
             }
             if kind == ChartType::Baseline {
-                assert!(baseline_fills >= 2, "baseline fills were lost");
+                assert_eq!(baseline_fills, 2, "baseline fills were lost");
             }
         }
         // Subpixel segments still carry a continuous 8-on, 4-off pattern: 22 points of ink
