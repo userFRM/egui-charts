@@ -171,7 +171,7 @@ mod tests {
                     labels.iter().find(|(label, _)| label == name).unwrap().1
                 };
                 let interval = at(&labels, "1D");
-                if width == 320.0 {
+                if width < 1440.0 {
                     frame(vec![Event::PointerMoved(Pos2::new(150.0, interval.y))]);
                     frame(vec![Event::MouseWheel {
                         unit: egui::MouseWheelUnit::Point,
