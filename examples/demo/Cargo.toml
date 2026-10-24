@@ -31,3 +31,11 @@ wasm-bindgen-futures = "0.4.58"
 web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "Url"] }
 console_error_panic_hook = "0.1.7"
 getrandom = { version = "0.2", features = ["js"] }
+
+# `index.html` builds the web release with this profile; native builds keep `release`.
+# The same as the library's `wasm-release`, which explains the settings.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1

@@ -95,15 +95,37 @@ ui = ["icons", "studies", "dep:thiserror"]
 ## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
 serde = []
 
+# The web builds: `trunk build --release` of `examples/demo`, whose own profile matches this one,
+# and of the bare chart in `scripts/web-size.sh`. Whole-program optimisation for size: at `s` the
+# frame of `benches/bare_chart.rs` costs 30% more instructions than at `release`, at `z` 60% more
+# for a download only 1.5% smaller. `panic` and `strip` stay as they are: wasm32-unknown-unknown
+# aborts on panic anyway, and the web build keeps no symbols.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+
 [dev-dependencies]
 # The bundled examples are standalone `eframe` apps; they need a windowing
 # backend to run natively.  `glow` keeps the default-feature build buildable on
 # CI without a Vulkan/Metal toolchain, and the `x11`/`wayland` platform features
 # are required because `default-features = false` otherwise leaves `winit`
 # without a Linux backend.  `clipboard` gives text fields copy and paste.
-eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "glow", "x11", "wayland"] }
 egui = "0.37.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The tests measure text in egui's fonts, and the examples fall back to them for
+# the characters Roboto lacks.  The web build of the bare chart carries only the
+# Roboto that `theme::apply_to_egui` installs.
+egui = { version = "0.37.0", features = ["default_fonts"] }
+# The examples that draw random sample data run natively only.
 rand = "0.10.0"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# `examples/bare_chart.rs` starts its web runner from the page.
+wasm-bindgen-futures = "0.4.79"
 
 [dependencies]
 # theme::apply_to_egui installs the bundled Roboto face.
