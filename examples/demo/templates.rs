@@ -65,30 +65,7 @@ impl DemoApp {
             Ok(studies) => self.user_action(|app| {
                 app.remove_all_indicators();
                 for study in studies {
-                    let inputs = study
-                        .inputs()
-                        .iter()
-                        .map(|input| match (&input.value, &input.kind) {
-                            (egui_charts::studies::InputValue::Length(value), _) => {
-                                value.to_string()
-                            }
-                            (egui_charts::studies::InputValue::Integer(value), _) => {
-                                value.to_string()
-                            }
-                            (egui_charts::studies::InputValue::Number(value), _) => {
-                                value.to_string()
-                            }
-                            (egui_charts::studies::InputValue::Toggle(value), _) => {
-                                value.to_string()
-                            }
-                            (
-                                egui_charts::studies::InputValue::Choice(value),
-                                egui_charts::studies::InputKind::Choice(choices),
-                            ) => choices.get(*value).cloned().unwrap_or_default(),
-                            _ => String::new(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ");
+                    let inputs = super::study_input_summary(study.as_ref());
                     let id = app.chart.add_indicator(study);
                     app.chart.set_indicator_inputs(id, inputs);
                 }

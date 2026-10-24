@@ -367,13 +367,18 @@ impl SettingsDialog {
         } else {
             self.template_name.clone()
         };
-        ui.add(
+        ui.add_sized(
+            Vec2::new(
+                DESIGN_TOKENS.sizing.settings_dialog.template_button_width,
+                DESIGN_TOKENS.sizing.settings_dialog.button_height,
+            ),
             egui::Button::new((
                 RichText::new(&template_label)
                     .size(typography::LG)
                     .color(style.val_text),
                 embedded_icons::CHEVRON_DOWN.as_image_tinted(Vec2::splat(12.0), style.val_text),
             ))
+            .truncate()
             .fill(style.dropdown_bg)
             .corner_radius(DESIGN_TOKENS.rounding.md as u8)
             .min_size(Vec2::new(
@@ -381,6 +386,7 @@ impl SettingsDialog {
                 DESIGN_TOKENS.sizing.settings_dialog.button_height,
             )),
         )
+        .on_hover_text(template_label)
     }
 
     fn draw_template_menu(
@@ -411,7 +417,7 @@ impl SettingsDialog {
                     .corner_radius(DESIGN_TOKENS.rounding.md as u8)
                     .stroke(style.dropdown_border)
                     .show(ui, |ui| {
-                        ui.set_min_width(DESIGN_TOKENS.sizing.settings_dialog.template_menu_width);
+                        ui.set_width(DESIGN_TOKENS.sizing.settings_dialog.template_menu_width);
                         egui::ScrollArea::vertical()
                             .max_height(
                                 DESIGN_TOKENS
@@ -447,7 +453,7 @@ impl SettingsDialog {
     fn draw_save_as_button(&mut self, ui: &mut Ui, mut action: SettingsAction) -> SettingsAction {
         if let Some(name) = &mut self.save_name {
             ui.label("Template name");
-            ui.text_edit_singleline(name);
+            ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()));
             let name = name.trim().to_owned();
             let label = if self.templates.entries().contains_key(&name) {
                 "Replace"
@@ -554,7 +560,8 @@ impl SettingsDialog {
         };
 
         if ui
-            .add_enabled(self.templates.ready(), egui::Button::new(text))
+            .add_enabled(self.templates.ready(), egui::Button::new(text).truncate())
+            .on_hover_text(&name)
             .clicked()
         {
             if let Some(template) = self.templates.entries().get(&name) {
@@ -568,7 +575,7 @@ impl SettingsDialog {
         if ui
             .add_enabled(
                 self.templates.ready(),
-                egui::Button::new(format!("Delete {name}")),
+                egui::Button::new(format!("Delete {name}")).truncate(),
             )
             .clicked()
         {
@@ -868,6 +875,7 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut dialog = SettingsDialog::new();
                 dialog.open(ChartSettingsState::default());
+                dialog.template_name = "Long template name ".repeat(20);
                 let mut tops = Vec::new();
                 for tab in SettingsTab::all() {
                     dialog.active_tab = *tab;

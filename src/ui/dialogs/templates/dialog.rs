@@ -53,38 +53,42 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
         Modal::new(title, title)
             .width(440.0)
             .show(ctx, &mut open, |ui| {
-                let ready = self.templates.ready();
-                if self.current.is_some() {
-                    ui.label("Template name");
-                    ui.text_edit_singleline(&mut self.name);
-                    let label = if self.templates.entries().contains_key(self.name.trim()) {
-                        "Replace"
-                    } else {
-                        "Save"
-                    };
-                    if ui
-                        .add_enabled(
-                            ready && !self.name.trim().is_empty(),
-                            egui::Button::new(label),
-                        )
-                        .clicked()
-                        && let Some(current) = &self.current
-                        && let Err(error) = self.templates.save(&self.name, current.clone())
-                    {
-                        self.templates.error = Some(error);
-                    }
-                }
-                ui.separator();
-                let names: Vec<_> = self.templates.entries().keys().cloned().collect();
-                if names.is_empty() && ready {
-                    ui.label("No saved templates");
-                }
                 egui::ScrollArea::vertical()
-                    .max_height(300.0)
+                    .max_height(ui.available_height())
                     .show(ui, |ui| {
+                        let ready = self.templates.ready();
+                        if self.current.is_some() {
+                            ui.label("Template name");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.name)
+                                    .desired_width(ui.available_width()),
+                            );
+                            let label = if self.templates.entries().contains_key(self.name.trim()) {
+                                "Replace"
+                            } else {
+                                "Save"
+                            };
+                            if ui
+                                .add_enabled(
+                                    ready && !self.name.trim().is_empty(),
+                                    egui::Button::new(label),
+                                )
+                                .clicked()
+                                && let Some(current) = &self.current
+                                && let Err(error) = self.templates.save(&self.name, current.clone())
+                            {
+                                self.templates.error = Some(error);
+                            }
+                        }
+                        ui.separator();
+                        let names: Vec<_> = self.templates.entries().keys().cloned().collect();
+                        if names.is_empty() && ready {
+                            ui.label("No saved templates");
+                        }
                         for name in names {
+                            ui.add(egui::Label::new(&name).truncate())
+                                .on_hover_text(&name);
                             ui.horizontal(|ui| {
-                                ui.label(&name);
                                 if ui.add_enabled(ready, egui::Button::new("Load")).clicked() {
                                     loaded = self.templates.entries().get(&name).cloned();
                                 }
@@ -95,17 +99,83 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
                                 }
                             });
                         }
+                        if let Some(error) = &self.templates.error {
+                            ui.colored_label(ui.visuals().error_fg_color, error);
+                            if !self.templates.ready()
+                                && ui.button("Retry loading templates").clicked()
+                            {
+                                self.templates.reload();
+                            }
+                        } else if !ready {
+                            ui.label("Loading templates…");
+                        }
                     });
-                if let Some(error) = &self.templates.error {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                    if !self.templates.ready() && ui.button("Retry loading templates").clicked() {
-                        self.templates.reload();
-                    }
-                } else if !ready {
-                    ui.label("Loading templates…");
-                }
             });
         self.is_open = open && loaded.is_none();
         loaded
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_actions_remain_visible_with_long_names_in_short_and_narrow_windows() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for size in [egui::vec2(1440.0, 900.0), egui::vec2(420.0, 360.0)] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                let mut dialog = TemplateDialog::new(StoreKind::StudyTemplates);
+                for index in 0..20 {
+                    dialog
+                        .templates
+                        .save(&format!("{index:02} {}", "Long name ".repeat(20)), index)
+                        .unwrap();
+                }
+                dialog.open(42);
+                for frame in 0..3 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            dialog.show(ui.ctx(), "Study templates");
+                        },
+                    );
+                    let shapes = output.shapes.clone();
+                    output.drop_without_applying_deltas();
+                    if frame > 0 {
+                        let area = ctx
+                            .memory(|memory| memory.area_rect(egui::Id::unique("Study templates")))
+                            .unwrap();
+                        assert!(
+                            screen.shrink(23.0).contains_rect(area),
+                            "{size:?}: {area:?}"
+                        );
+                        for label in ["Save", "Load", "Delete"] {
+                            let (clip, rect) = shapes
+                                .iter()
+                                .find_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text) if text.galley.text() == label => {
+                                        Some((
+                                            shape.clip_rect,
+                                            egui::Rect::from_min_size(text.pos, text.galley.size()),
+                                        ))
+                                    }
+                                    _ => None,
+                                })
+                                .expect("catalog action is painted");
+                            assert!(
+                                screen.contains_rect(rect) && clip.contains_rect(rect),
+                                "{label}: {rect:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

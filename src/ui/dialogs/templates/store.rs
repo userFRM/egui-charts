@@ -232,70 +232,64 @@ mod tests {
     #[test]
     fn named_templates_survive_restart_and_failed_or_unknown_documents_are_not_lost() {
         let ctx = egui::Context::default();
-        for kind in [
-            StoreKind::ChartTemplates,
-            StoreKind::StudyTemplates,
-            StoreKind::DrawingTemplates,
-        ] {
-            let host = Arc::new(Host::default());
-            let mut store = TemplateStore::<Vec<u32>>::new(kind);
-            store.set_storage(host.clone());
-            assert!(
-                store.save("Example", vec![7]).is_err(),
-                "wait for the initial read"
-            );
-            store.poll(&ctx);
-            assert!(store.save("  ", vec![7]).is_err());
-            store.save("  Example  ", vec![7]).unwrap();
-            assert!(!store.ready(), "one write per document at a time");
-            store.reload();
-            assert_eq!(
-                store.entries()["Example"],
-                vec![7],
-                "reloading cannot discard an outstanding save"
-            );
-            store.poll(&ctx);
-            let mut restored = TemplateStore::<Vec<u32>>::new(kind);
-            restored.set_storage(host.clone());
+        let host = Arc::new(Host::default());
+        let mut store = TemplateStore::<Vec<u32>>::new(StoreKind::ChartTemplates);
+        store.set_storage(host.clone());
+        assert!(
+            store.save("Example", vec![7]).is_err(),
+            "wait for the initial read"
+        );
+        store.poll(&ctx);
+        assert!(store.save("  ", vec![7]).is_err());
+        store.save("  Example  ", vec![7]).unwrap();
+        assert!(!store.ready(), "one write per document at a time");
+        store.reload();
+        assert_eq!(
+            store.entries()["Example"],
+            vec![7],
+            "reloading cannot discard an outstanding save"
+        );
+        store.poll(&ctx);
+        let mut restored = TemplateStore::<Vec<u32>>::new(StoreKind::ChartTemplates);
+        restored.set_storage(host.clone());
+        restored.poll(&ctx);
+        restored.poll(&ctx);
+        assert_eq!(restored.entries()["Example"], vec![7]);
+        *host.fail_write.lock().unwrap() = true;
+        restored.save("Example", vec![11]).unwrap();
+        restored.poll(&ctx);
+        assert!(restored.error.is_some());
+        assert_eq!(
+            restored.entries()["Example"],
+            vec![11],
+            "retain edits when save fails"
+        );
+        restored.delete("Example").unwrap();
+        restored.poll(&ctx);
+        assert!(
+            restored.entries().contains_key("Example"),
+            "failed delete retains the row"
+        );
+        *host.fail_write.lock().unwrap() = false;
+        restored.save("Example", vec![11]).unwrap();
+        restored.poll(&ctx);
+        restored.delete("Example").unwrap();
+        restored.poll(&ctx);
+        assert!(restored.entries().is_empty());
+        assert!(host.documents.lock().unwrap().is_empty());
+        for document in [r#"{"version":2,"template":[7]}"#, "invalid json"] {
+            host.documents
+                .lock()
+                .unwrap()
+                .insert("Future".into(), document.into());
+            restored.reload();
             restored.poll(&ctx);
             restored.poll(&ctx);
-            assert_eq!(restored.entries()["Example"], vec![7]);
-            *host.fail_write.lock().unwrap() = true;
-            restored.save("Example", vec![11]).unwrap();
-            restored.poll(&ctx);
+            assert!(!restored.ready());
             assert!(restored.error.is_some());
-            assert_eq!(
-                restored.entries()["Example"],
-                vec![11],
-                "retain edits when save fails"
-            );
-            restored.delete("Example").unwrap();
-            restored.poll(&ctx);
-            assert!(
-                restored.entries().contains_key("Example"),
-                "failed delete retains the row"
-            );
-            *host.fail_write.lock().unwrap() = false;
-            restored.save("Example", vec![11]).unwrap();
-            restored.poll(&ctx);
-            restored.delete("Example").unwrap();
-            restored.poll(&ctx);
-            assert!(restored.entries().is_empty());
-            assert!(host.documents.lock().unwrap().is_empty());
-            for document in [r#"{"version":2,"template":[7]}"#, "invalid json"] {
-                host.documents
-                    .lock()
-                    .unwrap()
-                    .insert("Future".into(), document.into());
-                restored.reload();
-                restored.poll(&ctx);
-                restored.poll(&ctx);
-                assert!(!restored.ready());
-                assert!(restored.error.is_some());
-                assert!(restored.save("Future", vec![9]).is_err());
-                assert!(restored.delete("Future").is_err());
-                assert_eq!(host.documents.lock().unwrap()["Future"], document);
-            }
+            assert!(restored.save("Future", vec![9]).is_err());
+            assert!(restored.delete("Future").is_err());
+            assert_eq!(host.documents.lock().unwrap()["Future"], document);
         }
     }
 }

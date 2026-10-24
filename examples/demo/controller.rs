@@ -64,6 +64,25 @@ use std::sync::{Arc, mpsc};
 
 use crate::sampledata::{DemoSymbol, visible_bars_for_range};
 
+fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
+    study
+        .inputs()
+        .iter()
+        .map(|input| match (&input.kind, &input.value) {
+            (
+                egui_charts::studies::InputKind::Choice(choices),
+                egui_charts::studies::InputValue::Choice(index),
+            ) => choices.get(*index).cloned().unwrap_or_default(),
+            (_, egui_charts::studies::InputValue::Length(value)) => value.to_string(),
+            (_, egui_charts::studies::InputValue::Integer(value)) => value.to_string(),
+            (_, egui_charts::studies::InputValue::Number(value)) => value.to_string(),
+            (_, egui_charts::studies::InputValue::Toggle(value)) => value.to_string(),
+            _ => String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Object-tree ids for indicators are offset into a high range so a single
 /// `usize` id space cleanly distinguishes indicators from drawings (which use
 /// small monotonic ids from the drawing manager). The main series reserves the last id.
@@ -739,30 +758,7 @@ impl DemoApp {
                 .ok_or("Study was removed")
                 .and_then(|study| {
                     study.apply_settings(&edit.inputs, edit.settings)?;
-                    Ok(study
-                        .inputs()
-                        .iter()
-                        .map(|input| match (&input.kind, &input.value) {
-                            (
-                                egui_charts::studies::InputKind::Choice(choices),
-                                egui_charts::studies::InputValue::Choice(index),
-                            ) => choices.get(*index).cloned().unwrap_or_default(),
-                            (_, egui_charts::studies::InputValue::Length(value)) => {
-                                value.to_string()
-                            }
-                            (_, egui_charts::studies::InputValue::Integer(value)) => {
-                                value.to_string()
-                            }
-                            (_, egui_charts::studies::InputValue::Number(value)) => {
-                                value.to_string()
-                            }
-                            (_, egui_charts::studies::InputValue::Toggle(value)) => {
-                                value.to_string()
-                            }
-                            _ => String::new(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" "))
+                    Ok(study_input_summary(study))
                 });
             match result {
                 Ok(inputs) => {
@@ -1315,18 +1311,12 @@ impl DemoApp {
                 }
                 return;
             }
-            DrawingToolbarAction::OpenTemplateMenu => {
-                if let Some(template) = self.current_drawing_template() {
-                    self.drawing_templates.open(template);
-                } else {
-                    self.notify("Select a drawing first");
-                }
-                return;
-            }
             DrawingToolbarAction::SaveTemplate { name } => {
-                if let Some(template) = self.current_drawing_template()
-                    && let Err(error) = self.drawing_templates.templates.save(&name, template)
-                {
+                let Some(template) = self.current_drawing_template() else {
+                    self.notify("Select a drawing first");
+                    return;
+                };
+                if let Err(error) = self.drawing_templates.templates.save(&name, template) {
                     self.notify(error);
                 }
                 return;
@@ -2264,6 +2254,14 @@ mod tests {
         use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.handle_drawing_toolbar(DrawingToolbarAction::SaveTemplate {
+            name: "Missing".into(),
+        });
+        assert_eq!(
+            app.toasts.toasts().last().unwrap().message,
+            "Select a drawing first"
+        );
+        assert!(app.drawing_templates.templates.entries().is_empty());
         app.chart
             .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
         let mut drawing = Drawing::new(17, DrawingToolType::TrendLine);
