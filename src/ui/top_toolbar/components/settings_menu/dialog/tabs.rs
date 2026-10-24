@@ -593,6 +593,20 @@ impl SettingsDialog {
         });
     }
 
+    pub(super) fn draw_events_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
+        self.draw_section_header(ui, "EVENT VISIBILITY", style);
+        let events = &mut self.settings.events;
+        for (value, label) in [
+            (&mut events.show_dividends, "Dividends"),
+            (&mut events.show_splits, "Splits"),
+            (&mut events.show_earnings, "Earnings"),
+            (&mut events.show_economic_events, "Economic events"),
+            (&mut events.show_news, "News"),
+        ] {
+            styled_checkbox(ui, value, label, style.val_text);
+        }
+    }
+
     pub(super) fn draw_alerts_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
             ui.add_space(0.0);

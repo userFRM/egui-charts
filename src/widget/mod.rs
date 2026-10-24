@@ -126,7 +126,9 @@ mod clipboard;
 mod crosshair;
 mod events;
 mod feed;
+mod marks;
 pub use events::{ChartEvent, ChartPointer};
+pub mod export;
 mod frame;
 mod history;
 pub(crate) mod interaction;
@@ -321,6 +323,9 @@ pub struct Chart {
     theme_override: Option<crate::theme::Theme>,
     host_events: events::HostEvents,
     events: Vec<crate::model::Marker>,
+    time_scale_events: Vec<crate::model::TimeScaleEvent>,
+    event_visibility: crate::model::EventVisibility,
+    mark_source: Option<marks::MarkSource>,
     event_click: Option<String>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
     pub(crate) timeframe: Option<Timeframe>,

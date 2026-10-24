@@ -17,6 +17,10 @@ use layouts::{DemoChart, LayoutTab};
 
 #[path = "comparison.rs"]
 mod comparison;
+#[path = "export.rs"]
+mod export;
+#[path = "marks.rs"]
+mod marks;
 #[path = "replay.rs"]
 mod replay;
 #[path = "templates.rs"]
@@ -120,14 +124,14 @@ const EXPORT_FORMATS: &[ExportFormat] = &[
     ExportFormat::Clipboard,
 ];
 
-/// Where an export screenshot goes once egui delivers it.
+/// Where a rendered chart image is delivered.
 enum ScreenshotTarget {
     File(Option<std::path::PathBuf>),
     Clipboard,
 }
 
 /// A captured screenshot and where it goes.
-type Screenshot = (Arc<egui::ColorImage>, ScreenshotTarget);
+type Screenshot = (Result<Arc<egui::ColorImage>, String>, ScreenshotTarget, u64);
 
 /// App state surfaced to the toolbars via `ChartAppState`.
 pub struct DemoAppState {
@@ -222,9 +226,17 @@ pub struct DemoApp {
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
 
-    // A pending screenshot request the egui backend fulfils next frame.
-    screenshot_requested: Option<ScreenshotTarget>,
-    // egui's capture callback sends each screenshot here; the next frame delivers it.
+    // Pending offscreen image options and delivery destination.
+    screenshot_requested: Option<(
+        ScreenshotTarget,
+        egui_charts::widget::export::ImageExportOptions,
+        u64,
+    )>,
+    // Reopening the dialog must not adopt an earlier readback result.
+    export_generation: u64,
+    export_renderer: Option<eframe::egui_wgpu::RenderState>,
+    image_jobs: usize,
+    // GPU readback sends each image here for delivery on the next frame.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
     saved_drawings: std::collections::HashMap<String, String>,
@@ -399,6 +411,9 @@ impl DemoApp {
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
+            export_generation: 0,
+            export_renderer: cc.wgpu_render_state.clone(),
+            image_jobs: 0,
             screenshots: mpsc::channel(),
             saved_drawings: cc
                 .storage
@@ -579,6 +594,8 @@ impl DemoApp {
             }]);
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
+        self.chart
+            .set_mark_source(Some(Arc::new(marks::DemoMarks(self.bars.clone()))));
     }
 
     // --- alerts ------------------------------------------------------------
@@ -825,34 +842,27 @@ impl DemoApp {
         config: egui_charts::ui::export::ExportConfig,
         save_path: Option<std::path::PathBuf>,
     ) {
-        // Image exports go through egui's screenshot request, which hands the
-        // captured image to `target`.
         let target = match config.format {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
         };
-        // Capture the next frame after the dialog and any previous notice are gone.
-        self.export_dialog.close();
-        self.toasts.clear();
-        self.screenshot_requested = Some(target);
+        self.screenshot_requested = Some((target, config.image, self.export_generation));
         ctx.request_repaint();
     }
 
     fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
         let from_dialog = save_path.is_some();
-        let mut out = String::from("time,open,high,low,close,volume\n");
-        for b in &self.bars {
-            out.push_str(&format!(
-                "{},{},{},{},{},{}\n",
-                b.time.to_rfc3339(),
-                b.open,
-                b.high,
-                b.low,
-                b.close,
-                b.volume
-            ));
-        }
+        let out = match self.chart.export_csv() {
+            Ok(csv) => csv,
+            Err(error) => {
+                if from_dialog {
+                    self.export_dialog.mark_error(error.to_string());
+                }
+                self.notify(format!("Export failed: {error}"));
+                return;
+            }
+        };
         let path = save_path.unwrap_or_else(|| {
             let filename = format!("{}_export.csv", self.state.symbol);
             #[cfg(not(target_arch = "wasm32"))]
@@ -1181,7 +1191,11 @@ impl DemoApp {
             TopToolbarAction::TakeScreenshot => {
                 self.export_dialog.close();
                 self.toasts.clear();
-                self.screenshot_requested = Some(ScreenshotTarget::File(None));
+                self.screenshot_requested = Some((
+                    ScreenshotTarget::File(None),
+                    Default::default(),
+                    self.export_generation,
+                ));
                 ctx.request_repaint();
             }
             TopToolbarAction::ToggleFullscreen => {
@@ -2070,31 +2084,55 @@ impl DemoApp {
         }
     }
 
-    fn request_screenshot(&self, ctx: &egui::Context, target: ScreenshotTarget) {
-        let (sender, repaint) = (self.screenshots.0.clone(), ctx.clone());
-        ctx.request_screenshot(move |image| {
-            // The receiver lives as long as the app, so this fails only during shutdown.
-            let _ = sender.send((image, target));
-            // egui does not repaint when the capture arrives.
-            repaint.request_repaint();
-        });
-    }
-
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
-        if let Some(target) = self.screenshot_requested.take() {
-            self.toasts.clear();
-            self.request_screenshot(ctx, target);
+        if let Some((target, options, generation)) = self.screenshot_requested.take() {
+            let result = self
+                .export_renderer
+                .as_ref()
+                .ok_or_else(|| "Image export requires the GPU renderer".to_owned())
+                .and_then(|renderer| {
+                    let frame = self.chart.export_image(ctx, &options)?;
+                    export::render_image(
+                        renderer,
+                        frame,
+                        target,
+                        generation,
+                        self.screenshots.0.clone(),
+                        ctx.clone(),
+                    )
+                });
+            match result {
+                Ok(()) => self.image_jobs += 1,
+                Err(error) => {
+                    if generation == self.export_generation && self.export_dialog.is_open() {
+                        self.export_dialog.mark_error(error.clone());
+                    }
+                    self.notify(format!("Export failed: {error}"));
+                }
+            }
         }
-
-        // Deliver the screenshots captured since the last frame.
-        while let Ok((image, target)) = self.screenshots.1.try_recv() {
-            match target {
+        if self.image_jobs > 0 {
+            if let Some(renderer) = &self.export_renderer {
+                let _ = renderer.device.poll(eframe::wgpu::PollType::Poll);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        while let Ok((image, target, generation)) = self.screenshots.1.try_recv() {
+            self.image_jobs = self.image_jobs.saturating_sub(1);
+            let result = image.and_then(|image| match target {
                 ScreenshotTarget::Clipboard => {
                     ctx.copy_image((*image).clone());
-                    self.notify("Image sent to clipboard");
+                    Ok("Image sent to clipboard".to_owned())
                 }
                 ScreenshotTarget::File(path) => self.save_screenshot(&image, path),
+            });
+            if generation == self.export_generation && self.export_dialog.is_open() {
+                match &result {
+                    Ok(_) => self.export_dialog.mark_success(),
+                    Err(error) => self.export_dialog.mark_error(error.clone()),
+                }
             }
+            self.notify(result.unwrap_or_else(|error| format!("Export failed: {error}")));
         }
     }
 
@@ -2104,7 +2142,11 @@ impl DemoApp {
             .show_with_toasts(ctx, &mut self.toasts);
     }
 
-    fn save_screenshot(&mut self, image: &egui::ColorImage, path: Option<std::path::PathBuf>) {
+    fn save_screenshot(
+        &self,
+        image: &egui::ColorImage,
+        path: Option<std::path::PathBuf>,
+    ) -> Result<String, String> {
         let path = path.unwrap_or_else(|| {
             let filename = format!("{}_chart.png", self.state.symbol);
             #[cfg(not(target_arch = "wasm32"))]
@@ -2115,7 +2157,7 @@ impl DemoApp {
         let (w, h) = (image.size[0] as u32, image.size[1] as u32);
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for px in &image.pixels {
-            rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
+            rgba.extend_from_slice(&px.to_srgba_unmultiplied());
         }
         let result = image::RgbaImage::from_raw(w, h, rgba)
             .ok_or_else(|| "Screenshot buffer size mismatch".to_string())
@@ -2132,14 +2174,7 @@ impl DemoApp {
                     browser_download(png.get_ref(), &path)
                 }
             });
-        match result {
-            Ok(()) => {
-                self.notify(format!("Export successful: {}", path.display()));
-            }
-            Err(error) => {
-                self.notify(format!("Export failed: {error}"));
-            }
-        }
+        result.map(|()| format!("Export successful: {}", path.display()))
     }
 }
 
@@ -3018,6 +3053,54 @@ mod tests {
             assert_eq!(app.replay_control.is_visible(), replay);
             if let Some(before) = before {
                 assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, before + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn image_results_only_update_the_requesting_dialog() {
+        use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
+        for reopen in [false, true] {
+            for fail in [false, true] {
+                let ctx = egui::Context::default();
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.handle_layout_action(LayoutAction::DownloadImage);
+                let generation = app.export_generation;
+                if reopen {
+                    app.export_dialog.close();
+                    app.execute_search_command(&ctx, "export");
+                }
+                let image = if fail {
+                    Err("Readback failed".to_owned())
+                } else {
+                    Ok(Arc::new(egui::ColorImage::filled(
+                        [1, 1],
+                        egui::Color32::WHITE,
+                    )))
+                };
+                assert!(
+                    app.screenshots
+                        .0
+                        .send((image, ScreenshotTarget::Clipboard, generation))
+                        .is_ok()
+                );
+                app.handle_screenshot(&ctx);
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        let _ = app.export_dialog.show(ui.ctx());
+                    })
+                    .drop_without_applying_deltas();
+                }
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    let _ = app.export_dialog.show(ui.ctx());
+                });
+                let has_status = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text().starts_with("Export successful") || text.galley.text().contains("Readback failed"))
+                });
+                output.drop_without_applying_deltas();
+                assert_eq!(has_status, !reopen, "reopen={reopen}, fail={fail}");
+                assert_eq!(app.toasts.toasts().len(), 1);
             }
         }
     }
