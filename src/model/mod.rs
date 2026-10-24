@@ -27,6 +27,8 @@ pub(crate) trait PriceBuilder {
 mod alert;
 mod annotations;
 pub mod bar;
+mod box_size;
+mod chart_style;
 mod chart_type;
 mod chartstate;
 mod clock;
@@ -50,12 +52,17 @@ mod timescale;
 pub mod tpo;
 mod trading;
 
-pub use alert::{Alert, AlertCondition, AlertFrequency, AlertId, AlertStatus};
+pub use alert::{
+    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
+    AlertStatus,
+};
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
 pub(crate) use bar::percent_change;
 pub use bar::{Bar, BarData};
+pub use box_size::{BoxSizeMethod, PriceBasedSource};
+pub use chart_style::{AreaStyle, BaselineStyle, ChartTypeStyles, LinePlotStyle};
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
 pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;

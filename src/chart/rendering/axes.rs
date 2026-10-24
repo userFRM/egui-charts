@@ -13,7 +13,7 @@ pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
 pub(crate) const TIME_LABEL_GAP: f32 = 5.0;
 
 /// Padding between an axis tag's text and its edge.
-const TAG_PADDING: Vec2 = Vec2::new(8.0, 1.5);
+const TAG_PADDING: Vec2 = Vec2::new(8.0, 0.5);
 
 /// The font of every axis label and tag: the theme's label text.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
@@ -33,6 +33,11 @@ pub(crate) fn paint_axis_tag(
     text_color: Color32,
     fill: Color32,
 ) -> Rect {
+    let max_x = if align == Align2::LEFT_CENTER {
+        max_x - 8.0
+    } else {
+        max_x
+    };
     let theme = painter.ctx().active_theme();
     let font = axis_font(painter.ctx());
     let galley = painter.layout_no_wrap(text, font, text_color);
@@ -71,6 +76,94 @@ fn price_tag_anchor(plot: Rect, axis_right: f32, y: f32) -> (Pos2, Align2) {
             Pos2::new(plot.right() + 5.0 + TAG_PADDING.x, y),
             Align2::LEFT_CENTER,
         )
+    }
+}
+
+/// Paints a later value beside the nearest free vertical slot, preserving earlier tags.
+/// Tags that cannot fit inside the pane are omitted.
+pub(crate) fn render_axis_value(
+    painter: &Painter,
+    plot: Rect,
+    axis_right: f32,
+    y: f32,
+    text: String,
+    colors: (Color32, Color32),
+    occupied: &[Option<Rect>],
+) -> Option<Rect> {
+    let (text_color, fill) = colors;
+    let height = painter
+        .layout_no_wrap(text.clone(), axis_font(painter.ctx()), Color32::WHITE)
+        .size()
+        .y
+        + 2.0 * TAG_PADDING.y;
+    if !y.is_finite() || height > plot.height() {
+        return None;
+    }
+    let clamp = |y: f32| y.clamp(plot.top() + height / 2.0, plot.bottom() - height / 2.0);
+    let free = |y: f32| {
+        occupied.iter().flatten().all(|rect| {
+            y + height / 2.0 <= rect.top() + 0.001 || y - height / 2.0 >= rect.bottom() - 0.001
+        })
+    };
+    let centre = std::iter::once(clamp(y))
+        .chain(occupied.iter().flatten().flat_map(|rect| {
+            [
+                clamp(rect.top() - height / 2.0),
+                clamp(rect.bottom() + height / 2.0),
+            ]
+        }))
+        .filter(|y| free(*y))
+        .min_by(|a, b| (a - y).abs().total_cmp(&(b - y).abs()))?;
+    let (anchor, align) = price_tag_anchor(plot, axis_right, centre);
+    Some(paint_axis_tag(
+        painter, anchor, align, axis_right, text, text_color, fill,
+    ))
+}
+
+/// Last-bar values of visible study lines, in the same units and colours as their plot.
+pub(crate) fn render_study_tags(
+    painter: &Painter,
+    plot: Rect,
+    map: &PriceMap,
+    study: &dyn crate::studies::Indicator,
+    axis_right: f32,
+    occupied: &mut Vec<Option<Rect>>,
+) {
+    if !study.is_visible() {
+        return;
+    }
+    let values = study.values();
+    let Some(bar) = values.len().checked_sub(1) else {
+        return;
+    };
+    let transform = map.transform();
+    for line in 0..study.line_cnt() {
+        let plot_style = study.plot_style(line);
+        let Some(value) = values.value(line, bar) else {
+            continue;
+        };
+        if !plot_style.visible
+            || plot_style.width <= 0.0
+            || !map.range().contains(transform.to_scale(value))
+        {
+            continue;
+        }
+        let label = transform.label(
+            transform.to_scale(value),
+            study
+                .precision()
+                .unwrap_or_else(|| map.price_precision().unwrap_or(2)),
+        );
+        let color = plot_style.color;
+        occupied.push(render_axis_value(
+            painter,
+            plot,
+            axis_right,
+            map.price_to_y(value),
+            label,
+            (Color32::WHITE, color),
+            occupied,
+        ));
     }
 }
 
@@ -138,7 +231,7 @@ pub fn render_price_line(
 }
 
 // Keep white text on financial colours; pale custom fills still need dark text.
-fn tag_text_color(fill: Color32) -> Color32 {
+pub(crate) fn tag_text_color(fill: Color32) -> Color32 {
     if contrast(Color32::WHITE, fill) >= 2.0 {
         Color32::WHITE
     } else {
@@ -146,7 +239,7 @@ fn tag_text_color(fill: Color32) -> Color32 {
     }
 }
 
-/// Paints a hover tag within the plot's horizontal bounds, reserving its action cell.
+/// Paints a compact hover tag within its axis bounds.
 pub(crate) fn paint_crosshair_tag(
     painter: &Painter,
     anchor: Pos2,
@@ -155,36 +248,42 @@ pub(crate) fn paint_crosshair_tag(
     text: String,
     colors: (Color32, Color32),
     height: f32,
-    action_width: f32,
     covered: Option<Rect>,
 ) -> Rect {
     let (text_color, fill) = colors;
-    let padding = if action_width > 0.0 { 16.0 } else { 32.0 };
+    let padding = 8.0;
     let available = (bounds.end() - bounds.start()).max(0.0);
     let mut job =
         egui::text::LayoutJob::simple_singleline(text, axis_font(painter.ctx()), text_color);
-    job.wrap =
-        egui::text::TextWrapping::truncate_at_width((available - action_width - padding).max(0.0));
+    job.wrap = egui::text::TextWrapping::truncate_at_width((available - padding).max(0.0));
     let galley = painter.layout_job(job);
     let size = Vec2::new(
-        (galley.size().x + padding + action_width).min(available),
+        (galley.size().x + padding).min(available),
         height.max(galley.size().y),
     );
     let mut tag = align.anchor_size(anchor, size);
     tag = tag.translate(Vec2::new((bounds.end() - tag.right()).min(0.0), 0.0));
     tag = tag.translate(Vec2::new((bounds.start() - tag.left()).max(0.0), 0.0));
+    tag = tag.translate(Vec2::new(
+        0.0,
+        (painter.clip_rect().bottom() - tag.bottom()).min(0.0),
+    ));
+    tag = tag.translate(Vec2::new(
+        0.0,
+        (painter.clip_rect().top() - tag.top()).max(0.0),
+    ));
     if let Some(covered) = covered.filter(|covered| covered.intersects(tag)) {
-        tag.min.x = tag.min.x.min(covered.min.x);
-        tag.max.x = tag.max.x.max(covered.max.x);
+        let cover = covered.intersect(Rect::from_x_y_ranges(
+            *bounds.start()..=*bounds.end(),
+            painter.clip_rect().y_range(),
+        ));
+        painter.rect_filled(cover, 0.0, painter.ctx().active_theme().chart.bg);
     }
     tag.min.x = tag.min.x.max(*bounds.start());
     tag.max.x = tag.max.x.min(*bounds.end());
     let painter = painter.with_clip_rect(tag.intersect(painter.clip_rect()));
     painter.rect_filled(tag, 1.0, fill);
-    let text_pos = Pos2::new(
-        tag.left() + action_width + if action_width > 0.0 { 10.0 } else { 16.0 },
-        tag.center().y - galley.size().y / 2.0,
-    );
+    let text_pos = Pos2::new(tag.left() + 4.0, tag.center().y - galley.size().y / 2.0);
     painter.galley(text_pos, galley, text_color);
     tag
 }
@@ -206,7 +305,7 @@ pub fn price_axis_width(painter: &Painter, price_map: &PriceMap, tag_labels: &[&
         .fold(0.0, f32::max)
         + 5.0
         + TAG_PADDING.x * 2.0
-        + 2.0
+        + 8.0
 }
 
 /// Paints independent current close, session and volume readouts, returning their rectangles
@@ -226,7 +325,7 @@ pub fn render_quote_tags(
     axis_right: f32,
 ) -> [Option<Rect>; 3] {
     render_quote_tags_with_countdown(
-        painter, price_rect, price_map, close, session, volume, axis_right, None,
+        painter, price_rect, price_map, close, session, volume, axis_right, None, None, 0.0,
     )
 }
 
@@ -240,6 +339,8 @@ pub(crate) fn render_quote_tags_with_countdown(
     volume: Option<(f64, Color32)>,
     axis_right: f32,
     countdown: Option<&str>,
+    volume_precision: Option<u8>,
+    reserved_top: f32,
 ) -> [Option<Rect>; 3] {
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
@@ -306,7 +407,10 @@ pub(crate) fn render_quote_tags_with_countdown(
         rows.push((
             2,
             price_rect.bottom() - height / 2.0,
-            VolumeFormatter::default().format(value),
+            VolumeFormatter {
+                precision: usize::from(volume_precision.unwrap_or(2)),
+            }
+            .format(value),
             color,
         ));
     }
@@ -317,13 +421,15 @@ pub(crate) fn render_quote_tags_with_countdown(
             .y
             + TAG_PADDING.y * 2.0
     };
-    while rows.iter().map(|row| row_height(&row.2)).sum::<f32>() > price_rect.height() {
+    while rows.iter().map(|row| row_height(&row.2)).sum::<f32>()
+        > price_rect.height() - reserved_top
+    {
         if rows.pop().is_none() {
             break;
         }
     }
     rows.sort_by(|a, b| a.1.total_cmp(&b.1));
-    let mut next = price_rect.top();
+    let mut next = price_rect.top() + reserved_top;
     for row in &mut rows {
         let height = row_height(&row.2);
         row.1 = row.1.max(next + height / 2.0);
@@ -352,9 +458,9 @@ pub(crate) fn render_quote_tags_with_countdown(
     tags
 }
 
-/// Draws and routes the add cell of a crosshair price tag. A click returns the tagged price
+/// Routes a click on a crosshair price tag. A click returns the tagged price
 /// for the host's alert, order or price-line menu. Call before handling price-axis drags.
-/// Pass the resolved label text colour as `foreground` to keep the glyph on the same pair.
+/// Pass the resolved label text colour as `foreground` for the hover outline.
 #[cfg(feature = "icons")]
 pub fn crosshair_price_action(
     ui: &mut egui::Ui,
@@ -362,21 +468,19 @@ pub fn crosshair_price_action(
     price: f64,
     foreground: Color32,
 ) -> Option<f64> {
-    let cell = Rect::from_min_size(tag.min, Vec2::new(21.0, tag.height())).intersect(tag);
     let response = ui.interact(
-        cell,
+        tag,
         ui.scope_id().with("crosshair_price_action"),
         egui::Sense::click(),
     );
-    ui.painter().line_segment(
-        [cell.right_top(), cell.right_bottom()],
-        Stroke::new(0.5, foreground),
-    );
-    ui.painter()
-        .circle_stroke(cell.center(), 7.0, Stroke::new(0.8, foreground));
-    crate::icons::icons::PLUS
-        .as_image_tinted(Vec2::splat(14.0), foreground)
-        .paint_at(ui, Rect::from_center_size(cell.center(), Vec2::splat(14.0)));
+    if response.hovered() {
+        ui.painter().rect_stroke(
+            tag,
+            1.0,
+            Stroke::new(1.0, foreground),
+            egui::StrokeKind::Inside,
+        );
+    }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Add at price"));
     response
         .on_hover_text("Add at price")
@@ -632,6 +736,8 @@ mod tests {
                         Some((1_590_000.0, Color32::RED)),
                         pane.right() + width,
                         countdown,
+                        None,
+                        0.0,
                     );
                 });
                 let labels: Vec<_> = output
@@ -680,25 +786,6 @@ mod tests {
         let ctx = Context::default();
         let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
         let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
-        for (_, theme) in crate::theme::presets() {
-            crate::theme::apply_to_egui(&ctx, &theme);
-            for configured in [Color32::PLACEHOLDER, Color32::WHITE, Color32::BLACK] {
-                let options = crate::config::CrosshairOptions {
-                    label_text_color: configured,
-                    ..Default::default()
-                }
-                .resolved(&ctx);
-                let output = ctx.run_ui(Default::default(), |ui| {
-                    crosshair_price_action(ui, tag, 704.64, options.label_text_color);
-                });
-                let color = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
-                    _ => None,
-                });
-                output.drop_without_applying_deltas();
-                assert_eq!(color, Some(options.label_text_color));
-            }
-        }
         let mut actions = Vec::new();
         for (pos, expected) in [
             (Pos2::new(110.0, 110.0), "add"),

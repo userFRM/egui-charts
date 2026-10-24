@@ -304,7 +304,7 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
         lg: 8.0,
         xl: 12.0,
         pill: 9999.0,
-        button: 6.0,
+        button: 4.0,
         panel: 6.0,
         dialog: 6.0,
     },
@@ -347,7 +347,7 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
             panel_bg_floating_dark: Color32::from_rgb(42, 46, 57), // Popups, menus, tooltips: one step above panels
             text_dark: Color32::from_rgb(219, 219, 219),
             text_secondary_dark: Color32::from_rgb(184, 184, 184),
-            text_muted_dark: Color32::from_rgb(112, 112, 112),
+            text_muted_dark: Color32::from_rgb(150, 150, 150),
             text_disabled_dark: Color32::from_rgb(87, 87, 87),
             border_dark: Color32::from_rgb(74, 74, 74),
             border_subtle_dark: Color32::from_rgb(82, 82, 82),

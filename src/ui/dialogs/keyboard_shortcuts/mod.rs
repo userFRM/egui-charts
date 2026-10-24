@@ -9,7 +9,7 @@ use egui::{
 
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::dialog::{DialogFrame, dialog_frame, dialog_header};
+use crate::ui_kit::dialog::{DialogFrame, dialog_header};
 use crate::widget::ShortcutMap;
 
 /// Action returned by the keyboard shortcuts dialog
@@ -131,19 +131,11 @@ impl KeyboardShortcutsDialog {
         let label_w = (((widest + theme.spacing.xxl) / 4.0).ceil() * 4.0)
             .min((ui.available_width() - theme.spacing.sm) / 2.0);
 
-        // The body scrolls once the dialog would pass the frame's screen cap.
-        let cap = ui.ctx().content_rect().shrink(theme.spacing.xxxl).height()
-            - dialog_frame(ui.style()).total_margin().sum().y
-            - ui.min_rect().height()
-            - ui.spacing().item_spacing.y;
-
         ui.scope(|ui| {
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             ScrollArea::vertical()
                 .auto_shrink([false, true])
-                .max_height(cap)
-                // The window starts at egui's default height; this lets the body grow past it.
-                .min_scrolled_height(cap)
+                .max_height(ui.available_height())
                 .show(ui, |ui| {
                     for (idx, (name, actions)) in categories.iter().enumerate() {
                         if idx > 0 {

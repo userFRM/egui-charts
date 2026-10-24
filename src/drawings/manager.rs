@@ -267,6 +267,15 @@ impl DrawingManager {
         self.selection.select(id);
     }
 
+    /// Replace the selected drawings with the supplied live ids.
+    pub fn select_drawings(&mut self, ids: impl IntoIterator<Item = usize>) {
+        self.selection.deselect_all();
+        self.selection.select_all(
+            ids.into_iter()
+                .filter(|id| self.drawings.iter().any(|d| d.id == *id)),
+        );
+    }
+
     /// Deselects all drawings.
     pub fn deselect(&mut self) {
         self.selection.deselect_all();
@@ -703,14 +712,13 @@ impl DrawingManager {
             self.queue(DrawingSyncAction::Delete(sync_id(&drawing)));
             self.history.push_delete(drawing);
         }
-        if self.selection.primary() == Some(id) {
-            self.selection.deselect_all();
-        }
+        self.selection.deselect(id);
     }
 
-    /// Deletes the currently selected drawing (if any).
+    /// Deletes the selected drawings, keeping any locked ones.
     pub fn delete_selected(&mut self) {
-        if let Some(id) = self.selection.primary() {
+        let ids: Vec<_> = self.selection.selected_ids().collect();
+        for id in ids {
             self.delete_drawing(id);
         }
     }
@@ -755,17 +763,53 @@ impl DrawingManager {
         }
     }
 
+    /// Apply a layer move as one undo step, saving each changed drawing.
+    pub fn reorder_drawings(&mut self, id: usize, layers: &[(usize, i32)]) {
+        let mut previous = Vec::new();
+        for &(id, layer) in layers {
+            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id)
+                && drawing.z_order != layer
+            {
+                previous.push((id, drawing.z_order));
+                drawing.z_order = layer;
+                self.queue(DrawingSyncAction::UpdateDrawing(id));
+            }
+        }
+        if !previous.is_empty() {
+            self.history.push_reorder(id, previous);
+        }
+    }
+
+    /// Duplicate a drawing three bars to the right, recording its creation for undo and saving.
+    pub fn duplicate_drawing(&mut self, id: usize) {
+        let Some(mut copy) = self.drawings.iter().find(|d| d.id == id).cloned() else {
+            return;
+        };
+        copy.stored_id = None;
+        copy.created_at = None;
+        for point in &mut copy.chart_points {
+            point.bar_idx += 3.0;
+        }
+        self.add_synced_drawing(copy);
+    }
+
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
     /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
-    /// saved. A locked drawing accepts only an edit that unlocks it.
+    /// saved. A locked drawing accepts only visibility and name changes, or an edit that unlocks it.
     /// Does nothing if there is no such drawing.
     pub fn edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
             let old = drawing.clone();
             edit(drawing);
             if old.locked && drawing.locked {
-                *drawing = old;
-                return;
+                let visible = drawing.visible;
+                let label = drawing.label.clone();
+                *drawing = old.clone();
+                if visible == old.visible && label == old.label {
+                    return;
+                }
+                drawing.visible = visible;
+                drawing.label = label;
             }
             self.history.push_modify(id, old);
             self.painted
@@ -1063,13 +1107,10 @@ impl DrawingManager {
             drawing.render(painter, price_rect, view);
         }
 
-        // Render handles for selected drawing
-        if let Some(sel_id) = self.selection.primary()
-            && let Some(drawing) = self
-                .drawings
-                .iter()
-                .find(|d| d.id == sel_id && d.is_visible_on_timeframe(&self.curr_timeframe))
-        {
+        // Render handles for every visible selected drawing.
+        for drawing in self.drawings.iter().filter(|d| {
+            self.selection.is_selected(d.id) && d.is_visible_on_timeframe(&self.curr_timeframe)
+        }) {
             self.render_handles(painter, drawing);
         }
     }
@@ -1257,6 +1298,20 @@ mod tests {
         assert_eq!(manager.drawings[0].font_size, 12.0);
         assert!(!manager.can_undo());
         assert!(manager.pending_sync.lock().unwrap().is_empty());
+        // Tree metadata can change without unlocking geometry or style edits.
+        manager.edit_drawing(3, |d| {
+            d.visible = false;
+            d.label = Some("Support".into());
+            d.font_size = 30.0;
+        });
+        assert!(!manager.drawings[0].visible);
+        assert_eq!(manager.drawings[0].label.as_deref(), Some("Support"));
+        assert_eq!(manager.drawings[0].font_size, 12.0);
+        assert!(manager.drawings[0].locked);
+        assert!(manager.undo());
+        assert!(manager.drawings[0].visible);
+        assert_eq!(manager.drawings[0].label, None);
+        assert!(manager.drawings[0].locked);
         manager.edit_drawing(3, |d| d.locked = false);
         manager.edit_drawing(3, |d| d.font_size = 30.0);
         assert_eq!(manager.drawings[0].font_size, 30.0);
@@ -1317,7 +1372,32 @@ mod tests {
     #[test]
     fn every_edit_queues_one_sync_action() {
         type Edit = fn(&mut DrawingManager);
-        let cases: [(Edit, &[&str]); 11] = [
+        let cases: [(Edit, &[&str]); 13] = [
+            (
+                |m| {
+                    m.duplicate_drawing(0);
+                    m.undo();
+                    m.redo();
+                },
+                &["Save(1)", "Delete(1)", "Save(1)"],
+            ),
+            (
+                |m| {
+                    m.add_synced_drawing(Drawing::new(1, DrawingToolType::HorizontalLine));
+                    m.reorder_drawings(0, &[(0, 1), (1, 2)]);
+                    m.undo();
+                    m.redo();
+                },
+                &[
+                    "Save(1)",
+                    "Update(0)",
+                    "Update(1)",
+                    "Update(0)",
+                    "Update(1)",
+                    "Update(0)",
+                    "Update(1)",
+                ],
+            ),
             (|m| m.clear_all(), &["Delete(a1b2)"]),
             (|m| m.toggle_visibility_all(), &["Update(0)"]),
             (|m| m.toggle_lock_all(), &["Update(0)"]),
@@ -1399,7 +1479,7 @@ mod tests {
                 })
                 .collect();
             assert_eq!(queued, expected);
-            if case < 5 || case == 8 || case == 9 {
+            if matches!(case, 0 | 2..=6 | 10 | 11) {
                 assert!(manager.undo(), "case {case} must be undoable");
                 assert_eq!(
                     manager
@@ -1453,6 +1533,17 @@ mod tests {
         manager.select(1);
         assert_eq!(manager.sel_drawing(), Some(1));
         manager.deselect();
+        assert_eq!(manager.sel_drawing(), None);
+        manager.drawings = (1..=3)
+            .map(|id| Drawing::new(id, DrawingToolType::TrendLine))
+            .collect();
+        manager.select_drawings([1, 2, 99]);
+        assert_eq!(manager.selection.selection_count(), 2);
+        manager.delete_selected();
+        assert_eq!(
+            manager.drawings.iter().map(|d| d.id).collect::<Vec<_>>(),
+            [3]
+        );
         assert_eq!(manager.sel_drawing(), None);
     }
 

@@ -7,6 +7,8 @@
 //! These functions are called directly by the chart widget and the modern
 //! rendering layer in [`rendering`](super::rendering).
 
+mod alert_levels;
+mod axis_currency;
 mod bar;
 mod candle;
 mod context;
@@ -18,24 +20,25 @@ mod session_breaks;
 mod tooltip;
 mod volume;
 
+pub use alert_levels::{alert_shortcut_price, render_alert_levels};
+pub use axis_currency::render_axis_currency;
 pub use bar::render_ohlc_bar;
 pub use candle::render_candle;
 pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 
-pub use crosshair::render_crosshair_full;
-#[cfg(feature = "icons")]
-pub(crate) use crosshair::snap_to_nearest_ohlc;
+pub use crosshair::{render_crosshair_full, render_crosshair_with_options};
+pub(crate) use crosshair::{render_crosshair_lines, render_crosshair_price_tag, snap_to_values};
 pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::paint_study_plot;
 pub use labels::{
-    Legend, LegendStatus, QuoteSide, render_price_labels, render_price_labels_at_pos,
+    Legend, LegendStatus, QuoteSide, StudyAction, render_price_labels, render_price_labels_at_pos,
     render_time_labels,
 };
-pub(crate) use labels::{price_decimals, render_time_grid};
+pub(crate) use labels::{price_decimals, render_time_grid, study_controls};
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,
 };
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
-pub use tooltip::render_tooltip_with_options;
+pub use tooltip::{StudyValue, render_tooltip_with_options};
 pub use volume::render_volume_bar;

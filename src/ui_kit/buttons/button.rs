@@ -46,6 +46,7 @@ pub struct Button<'a> {
     enabled: bool,
     selected: bool,
     icon_scale: Option<f32>,
+    text_color: Option<Color32>,
 }
 
 impl<'a> Button<'a> {
@@ -60,6 +61,7 @@ impl<'a> Button<'a> {
             enabled: true,
             selected: false,
             icon_scale: None,
+            text_color: None,
         }
     }
 
@@ -74,6 +76,7 @@ impl<'a> Button<'a> {
             enabled: true,
             selected: false,
             icon_scale: None,
+            text_color: None,
         }
     }
 
@@ -88,6 +91,7 @@ impl<'a> Button<'a> {
             enabled: true,
             selected: false,
             icon_scale: None,
+            text_color: None,
         }
     }
 
@@ -130,6 +134,13 @@ impl<'a> Button<'a> {
     #[must_use]
     pub fn danger(mut self) -> Self {
         self.variant = ButtonVariant::Danger;
+        self
+    }
+
+    /// Override only the label colour, retaining the variant's fill and icon colour.
+    #[must_use]
+    pub fn text_color(mut self, color: Color32) -> Self {
+        self.text_color = Some(color);
         self
     }
 
@@ -224,7 +235,7 @@ impl<'a> Widget for Button<'a> {
         let width = (content_width + 2.0 * padding).max(height);
 
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
 
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
@@ -265,7 +276,8 @@ impl<'a> Widget for Button<'a> {
             }
             if let Some(galley) = galley {
                 let pos = pos2(x, rect.center().y - galley.size().y / 2.0);
-                ui.painter().galley(pos, galley, fg);
+                ui.painter()
+                    .galley(pos, galley, self.text_color.unwrap_or(fg));
             }
         }
 
@@ -352,5 +364,41 @@ mod tests {
             });
         })
         .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn focus_ring_follows_the_button_corners_and_stays_within_two_pixels() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut id = egui::Id::NULL;
+            ctx.run_ui(Default::default(), |ui| {
+                id = Button::new("Focus").show(ui).id;
+            })
+            .drop_without_applying_deltas();
+            ctx.memory_mut(|m| m.request_focus(id));
+            let mut rect = egui::Rect::NOTHING;
+            let output = ctx.run_ui(Default::default(), |ui| {
+                rect = Button::new("Focus").show(ui).rect;
+            });
+            let rings: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.stroke.width == DESIGN_TOKENS.stroke.thick => {
+                        Some(r.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(rings.len(), 1);
+            assert_eq!(rings[0].rect, rect.expand(2.0));
+            assert_eq!(rings[0].stroke_kind, egui::epaint::StrokeKind::Inside);
+            assert_eq!(
+                rings[0].corner_radius,
+                egui::CornerRadius::from(DESIGN_TOKENS.rounding.button + 2.0)
+            );
+        }
     }
 }

@@ -483,6 +483,7 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     // Selection: egui paints selected labels in `selection.stroke`, on top of `bg_fill`, and
     // outlines a focused text input with `selection.stroke`. Dark themes use white on the accent,
     // light themes accent text on a pale accent fill.
+    visuals.text_cursor.stroke.color = ui.text;
     visuals.selection.bg_fill = ui.selection_bg;
     visuals.selection.stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.selection_text);
 
@@ -533,7 +534,7 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
         &mut widgets.active,
         &mut widgets.open,
     ] {
-        state.corner_radius = theme.radius.xs.into();
+        state.corner_radius = theme.radius.sm.into();
     }
 
     // egui keeps a dark and a light style and follows the system appearance by default, so
@@ -777,6 +778,21 @@ mod tests {
             apply_to_egui(&ctx, &theme);
             let visuals = ctx.global_style().visuals.clone();
             let ui = &theme.ui;
+            if visuals.text_cursor.stroke.color != ui.text {
+                failures.push(format!("{name}: caret does not use the theme text colour"));
+            }
+            for state in [
+                &visuals.widgets.inactive,
+                &visuals.widgets.hovered,
+                &visuals.widgets.active,
+                &visuals.widgets.open,
+            ] {
+                if state.corner_radius != egui::CornerRadius::from(theme.radius.sm)
+                    || DESIGN_TOKENS.rounding.button != theme.radius.sm
+                {
+                    failures.push(format!("{name}: interactive radii differ"));
+                }
+            }
             for (role, fg) in [
                 ("text", ui.text),
                 ("secondary text", ui.text_secondary),
@@ -917,16 +933,14 @@ mod tests {
                 check("links", visuals.hyperlink_color, surface, bg, 7.0);
                 check("text", ui.text, surface, bg, text_min);
                 check("label text", visuals.text_color(), surface, bg, text_min);
-                {
-                    check("muted text", ui.text_muted, surface, bg, text_min);
-                    check(
-                        "weak text",
-                        visuals.weak_text_color(),
-                        surface,
-                        bg,
-                        text_min,
-                    );
-                }
+                check("muted text", ui.text_muted, surface, bg, text_min);
+                check(
+                    "weak text",
+                    visuals.weak_text_color(),
+                    surface,
+                    bg,
+                    text_min,
+                );
                 check("success text", ui.success, surface, bg, text_min);
                 check("error text", visuals.error_fg_color, surface, bg, text_min);
                 check("warning text", visuals.warn_fg_color, surface, bg, text_min);
@@ -938,6 +952,13 @@ mod tests {
                     outline_min,
                 );
                 check("keyboard focus ring", focus_ring, surface, bg, outline_min);
+                check(
+                    "text cursor",
+                    visuals.text_cursor.stroke.color,
+                    surface,
+                    bg,
+                    3.0,
+                );
             }
         }
         // An app that styles egui itself and never applies a theme keeps a visible ring.

@@ -16,13 +16,13 @@ pub fn focus_ring_color(ui: &Ui) -> Color32 {
 
 /// Draw a focus ring around a response if it has keyboard focus.
 ///
-/// Call this after creating a response to add an accessible focus indicator.
-pub fn draw_focus_ring(ui: &Ui, response: &Response) {
+/// Pass the control's corner radius so the 2 px outer ring stays concentric.
+pub fn draw_focus_ring(ui: &Ui, response: &Response, radius: impl Into<egui::CornerRadius>) {
     if response.has_focus() {
         let ring_color = focus_ring_color(ui);
         ui.painter().rect_stroke(
             response.rect.expand(DESIGN_TOKENS.spacing.xs),
-            DESIGN_TOKENS.rounding.sm,
+            radius.into() + DESIGN_TOKENS.spacing.xs as u8,
             Stroke::new(DESIGN_TOKENS.stroke.thick, ring_color),
             // Inside the expanded rect, so a control filling a tight strip keeps all four sides.
             StrokeKind::Inside,

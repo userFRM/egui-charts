@@ -120,7 +120,11 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
                         egui::Stroke::new(thick, theme.ui.accent),
                     );
                 }
-                crate::styles::focus::draw_focus_ring(ui, &response);
+                crate::styles::focus::draw_focus_ring(
+                    ui,
+                    &response,
+                    if self.pills { rect.height() / 2.0 } else { 0.0 },
+                );
 
                 if response.clicked() {
                     *self.active = *tab;

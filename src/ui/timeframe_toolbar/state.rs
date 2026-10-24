@@ -30,9 +30,9 @@ impl SessionType {
     /// Get tooltip desc
     pub fn tooltip(&self) -> &'static str {
         match self {
-            SessionType::RTH => "Regular trading hours",
-            SessionType::ETH => "Extended trading hours",
-            SessionType::Full24x7 => "24/7 trading",
+            SessionType::RTH => "Regular trading hours: on",
+            SessionType::ETH => "Regular trading hours: off (extended hours)",
+            SessionType::Full24x7 => "Regular trading hours: off (24/7 trading)",
         }
     }
 }

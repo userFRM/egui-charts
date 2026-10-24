@@ -4,10 +4,7 @@
 
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{
-    Color32, Id, Pos2, Rect, Response, Role, Sense, Stroke, Ui, Vec2, WidgetInfo,
-    epaint::StrokeKind,
-};
+use egui::{Color32, Id, Pos2, Role, Sense, Stroke, Ui, Vec2, WidgetInfo, epaint::StrokeKind};
 
 // ============================================================================
 // COLOR PALETTE - exact colors
@@ -228,8 +225,8 @@ impl<'a> ColorPicker<'a> {
     }
 
     /// Show a color swatch button that opens the picker when clicked
-    /// Returns the selected color if changed
-    pub fn show(mut self, ui: &mut Ui) -> Option<Color32> {
+    /// Returns the picked colour, if changed, and the colour well's response.
+    pub fn show(mut self, ui: &mut Ui) -> egui::InnerResponse<Option<Color32>> {
         let mut color_changed = None;
 
         // Get colors from theme
@@ -242,7 +239,7 @@ impl<'a> ColorPicker<'a> {
                 .y
                 .max(DESIGN_TOKENS.sizing.button_md),
         );
-        let (btn_rect, btn_res) = ui.allocate_exact_size(btn_size, Sense::click());
+        let (btn_rect, mut btn_res) = ui.allocate_exact_size(btn_size, Sense::click());
         btn_res.widget_info(|| {
             WidgetInfo::labeled(Role::ColorWell, ui.is_enabled(), hex(self.state.sel_color))
         });
@@ -271,22 +268,31 @@ impl<'a> ColorPicker<'a> {
             StrokeKind::Inside,
         );
 
-        // Handle button click
+        crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.md);
+
         if btn_res.clicked() {
             self.state.is_open = !self.state.is_open;
             self.state.popup_pos = Some(btn_rect.left_bottom() + Vec2::new(0.0, 4.0));
-            if self.state.is_open {
-                // Mark as just opened to skip close detection this frame
-                self.state.just_opened = true;
-            }
+            self.state.just_opened = self.state.is_open;
+            self.state.custom_mode = false;
+            self.state.custom_color = self.state.sel_color;
         }
-
-        // Show popup if open
+        if self.state.is_open
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.state.is_open = false;
+        }
         if self.state.is_open {
             color_changed = self.show_popup(ui);
         }
-
-        color_changed
+        if !self.state.is_open {
+            self.state.custom_mode = false;
+            self.state.just_opened = false;
+        }
+        if color_changed.is_some() {
+            btn_res.mark_changed();
+        }
+        egui::InnerResponse::new(color_changed, btn_res)
     }
 
     fn show_popup(&mut self, ui: &mut Ui) -> Option<Color32> {
@@ -310,36 +316,12 @@ impl<'a> ColorPicker<'a> {
 
         // Calculate popup size
         let cols = 10;
-        let total_rows = 1 + 1 + 6 + 1; // grayscale + main + variations + custom button
         let popup_width = self.config.padding * 2.0
             + (self.config.swatch_size * cols as f32)
             + (self.config.swatch_spacing * (cols - 1) as f32);
-        let popup_height = self.config.padding * 2.0
-            + (self.config.swatch_size * (total_rows - 1) as f32) // -1 for separators
-            + (self.config.row_spacing * total_rows as f32)
-            + 16.0 // extra for separators and custom button
-            + 32.0; // custom button
-
-        let popup_rect = Rect::from_min_size(popup_pos, Vec2::new(popup_width, popup_height));
-
-        // Check if clicked outside popup (but not on the frame it was opened)
-        if self.state.just_opened {
-            // Clear the just_opened flag for next frame
-            self.state.just_opened = false;
-        } else {
-            // Check for clicks outside the popup to close it
-            let pointer_pos = ui.input(|i| i.pointer.interact_pos());
-            if let Some(pos) = pointer_pos
-                && ui.input(|i| i.pointer.any_released())
-                && !popup_rect.contains(pos)
-            {
-                self.state.is_open = false;
-                return None; // Don't process popup if closing
-            }
-        }
-
         // Draw popup using an egui Area
-        egui::Area::new(self.id.with("popup"))
+        let nested_popup_open = egui::Popup::is_any_open(ui.ctx());
+        let area = egui::Area::new(self.id.with("popup"))
             .fixed_pos(popup_pos)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
@@ -389,9 +371,7 @@ impl<'a> ColorPicker<'a> {
                         ui.add_space(DESIGN_TOKENS.spacing.lg);
 
                         // Custom color button
-                        if self.draw_custom_color_btn(ui) {
-                            // Custom color mode toggled
-                        }
+                        self.draw_custom_color_btn(ui);
 
                         // If custom mode is active, show color editor
                         if self.state.custom_mode {
@@ -410,6 +390,18 @@ impl<'a> ColorPicker<'a> {
                     });
             });
 
+        if self.state.just_opened {
+            self.state.just_opened = false;
+        } else if !nested_popup_open
+            && !egui::Popup::is_any_open(ui.ctx())
+            && ui.input(|i| i.pointer.any_released())
+            && ui
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|pos| !area.response.rect.contains(pos))
+        {
+            self.state.is_open = false;
+        }
+
         // If color changed, update state and close popup
         if let Some(color) = color_changed {
             self.state.sel_color = color;
@@ -427,11 +419,15 @@ impl<'a> ColorPicker<'a> {
         // Get colors from theme
         let visuals = ui.style().visuals.clone();
         let sel_border = if self.config.sel_border_color == Color32::TRANSPARENT {
-            visuals.widgets.active.fg_stroke.color
+            ui.active_theme().ui.accent
         } else {
             self.config.sel_border_color
         };
-        let muted_border = visuals.widgets.noninteractive.fg_stroke.color;
+        let popup_bg = if self.config.bg_color == Color32::TRANSPARENT {
+            visuals.window_fill
+        } else {
+            self.config.bg_color
+        };
         let hover_border = visuals.widgets.hovered.fg_stroke.color;
 
         ui.horizontal(|ui| {
@@ -445,28 +441,38 @@ impl<'a> ColorPicker<'a> {
                 let rounding = self.config.swatch_rounding;
                 ui.painter().rect_filled(rect, rounding, *color);
 
-                // Draw border
-                let is_sel = *color == self.state.sel_color;
-                let is_white = color.r() > 240 && color.g() > 240 && color.b() > 240;
-
-                let border_color = if is_sel {
-                    sel_border
-                } else if is_white {
-                    muted_border
-                } else if response.hovered() {
-                    hover_border
-                } else {
-                    Color32::TRANSPARENT
-                };
-
-                if border_color != Color32::TRANSPARENT {
+                if crate::theme::contrast(*color, popup_bg) < 1.5 {
                     ui.painter().rect_stroke(
                         rect,
                         rounding,
-                        Stroke::new(DESIGN_TOKENS.stroke.thick, border_color),
+                        visuals.window_stroke,
+                        StrokeKind::Inside,
+                    );
+                }
+                let border = if *color == self.state.sel_color {
+                    Some(sel_border)
+                } else if response.hovered() {
+                    Some(hover_border)
+                } else {
+                    None
+                };
+                if let Some(border) = border {
+                    ui.painter().rect_stroke(
+                        rect.expand(1.0),
+                        rounding + 1.0,
+                        Stroke::new(DESIGN_TOKENS.stroke.thick, border),
                         StrokeKind::Outside,
                     );
                 }
+                crate::styles::focus::draw_focus_ring(ui, &response, rounding);
+                response.widget_info(|| {
+                    WidgetInfo::selected(
+                        Role::ColorWell,
+                        ui.is_enabled(),
+                        *color == self.state.sel_color,
+                        hex(*color),
+                    )
+                });
 
                 if response.clicked() {
                     selected = Some(*color);
@@ -480,7 +486,7 @@ impl<'a> ColorPicker<'a> {
     }
 
     /// The hex and opacity row; clicking it toggles the custom colour editor.
-    fn draw_custom_color_btn(&mut self, ui: &mut Ui) -> bool {
+    fn draw_custom_color_btn(&mut self, ui: &mut Ui) {
         let visuals = ui.style().visuals.clone();
         let (rect, response) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), DESIGN_TOKENS.sizing.button_md),
@@ -494,6 +500,7 @@ impl<'a> ColorPicker<'a> {
         } else {
             visuals.window_stroke.color
         };
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
         let painter = ui.painter();
         painter.rect_stroke(
             rect,
@@ -539,11 +546,11 @@ impl<'a> ColorPicker<'a> {
         );
 
         if response.clicked() {
+            if !self.state.custom_mode {
+                self.state.custom_color = self.state.sel_color;
+            }
             self.state.custom_mode = !self.state.custom_mode;
-            return true;
         }
-
-        false
     }
 }
 
@@ -553,35 +560,146 @@ fn hex(color: Color32) -> String {
     format!("#{r:02X}{g:02X}{b:02X}")
 }
 
-// ============================================================================
-// HELPER FUNCTION FOR INLINE COLOR PICKER
-// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Context, Event, Key, Modifiers, PointerButton, RawInput, Rect};
 
-/// Show a color picker button that returns the new color if changed
-pub fn color_picker_btn(
-    ui: &mut Ui,
-    color: &mut Color32,
-    id_src: impl std::hash::Hash + std::fmt::Debug,
-) -> Response {
-    // Create temporary state
-    let id = Id::unique(id_src);
-    let mut state = ui.ctx().data_mut(|d| {
-        d.get_temp::<ColorPickerState>(id)
-            .unwrap_or_else(|| ColorPickerState::new(*color))
-    });
-
-    // Sync the selected color with the input
-    state.sel_color = *color;
-
-    // Show the picker
-    let picker = ColorPicker::new(&mut state, id);
-    if let Some(new_color) = picker.show(ui) {
-        *color = new_color;
+    #[test]
+    fn hex_row_opens_from_the_current_colour_and_escape_resets_the_popup() {
+        for default_state in [false, true] {
+            let ctx = Context::default();
+            let current = Color32::from_rgb(12, 34, 56);
+            let mut state = if default_state {
+                ColorPickerState {
+                    sel_color: current,
+                    ..Default::default()
+                }
+            } else {
+                ColorPickerState::new(current)
+            };
+            let mut frame = |events: Vec<Event>| {
+                let mut hex_row = Rect::NOTHING;
+                let mut well = Rect::NOTHING;
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        well = Rect::from_min_size(ui.cursor().min, Vec2::splat(28.0));
+                        ColorPicker::new(&mut state, "picker-test").show(ui);
+                    },
+                );
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.job.text == "Hex"
+                    {
+                        hex_row = text.visual_bounding_rect();
+                    }
+                }
+                output.drop_without_applying_deltas();
+                (
+                    well,
+                    hex_row,
+                    state.clone(),
+                    ctx.input(|i| i.key_pressed(Key::Escape)),
+                )
+            };
+            let click = |pos| {
+                vec![
+                    Event::PointerMoved(pos),
+                    Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Modifiers::NONE,
+                    },
+                    Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Modifiers::NONE,
+                    },
+                ]
+            };
+            let (well, _, _, _) = frame(vec![]);
+            frame(click(well.center()));
+            let (_, row, _, _) = frame(vec![]);
+            assert!(row.is_finite());
+            frame(click(row.center()));
+            let (_, _, state, _) = frame(vec![]);
+            assert!(state.is_open && state.custom_mode, "Hex closed the popup");
+            assert_eq!(state.custom_color, current);
+            let (_, _, state, escape) = frame(vec![Event::Key {
+                key: Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }]);
+            assert!(!state.is_open && !state.custom_mode);
+            assert!(!escape, "Escape must be consumed");
+            let (_, _, state, _) = frame(click(well.center()));
+            assert!(state.is_open && !state.custom_mode);
+        }
     }
 
-    // Store state
-    ui.ctx().data_mut(|d| d.insert_temp(id, state));
-
-    // Return a dummy response for the button area
-    ui.allocate_response(Vec2::ZERO, Sense::hover())
+    #[test]
+    fn swatches_only_ring_selection_and_edge_low_contrast_colours() {
+        for (name, theme) in crate::theme::presets() {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let colours = [
+                Color32::WHITE,
+                Color32::from_gray(46),
+                Color32::from_gray(15),
+                Color32::BLACK,
+                COLOR_VARIATIONS[0][0],
+            ];
+            for selected in [
+                Color32::from_rgb(12, 34, 56),
+                Color32::BLACK,
+                Color32::WHITE,
+            ] {
+                let mut state = ColorPickerState::new(selected);
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    ColorPicker::new(&mut state, "row").draw_color_row(ui, &colours);
+                });
+                let rects: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(r) => Some(r.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                let rings: Vec<_> = rects.iter().filter(|r| r.stroke.width == 2.0).collect();
+                assert_eq!(
+                    rings.len(),
+                    usize::from(colours.contains(&selected)),
+                    "{name}: {selected:?}"
+                );
+                if let Some(ring) = rings.first() {
+                    assert_eq!(ring.stroke.color, theme.ui.accent);
+                }
+                for colour in colours {
+                    if crate::theme::contrast(colour, theme.ui.panel_bg_floating) < 1.5 {
+                        let swatch = rects.iter().find(|r| r.fill == colour).unwrap();
+                        assert!(
+                            rects.iter().any(|r| r.rect == swatch.rect
+                                && r.stroke.width == 1.0
+                                && r.stroke_kind == StrokeKind::Inside),
+                            "{name}: {colour:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

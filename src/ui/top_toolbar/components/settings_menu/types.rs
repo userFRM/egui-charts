@@ -64,12 +64,8 @@ pub enum SettingsTab {
     ScalesAndLines,
     /// Canvas appearance (background, grid, crosshair, watermark, margins)
     Canvas,
-    /// Trading display options (positions, orders, executions)
-    Trading,
     /// Alert display settings
     Alerts,
-    /// Event marker settings (dividends, splits, earnings)
-    Events,
 }
 
 impl SettingsTab {
@@ -79,9 +75,7 @@ impl SettingsTab {
             SettingsTab::StatusLine,
             SettingsTab::ScalesAndLines,
             SettingsTab::Canvas,
-            SettingsTab::Trading,
             SettingsTab::Alerts,
-            SettingsTab::Events,
         ]
     }
 
@@ -91,9 +85,7 @@ impl SettingsTab {
             SettingsTab::StatusLine => "Status line",
             SettingsTab::ScalesAndLines => "Scales and lines",
             SettingsTab::Canvas => "Canvas",
-            SettingsTab::Trading => "Trading",
             SettingsTab::Alerts => "Alerts",
-            SettingsTab::Events => "Events",
         }
     }
 }
@@ -204,7 +196,7 @@ impl WatermarkMode {
 
     pub fn name(&self) -> &'static str {
         match self {
-            WatermarkMode::ReplayMode => "Replay mode",
+            WatermarkMode::ReplayMode => "Hidden",
             WatermarkMode::Symbol => "Symbol",
             WatermarkMode::SymbolAndDescription => "Symbol and desc",
             WatermarkMode::Custom => "Custom",

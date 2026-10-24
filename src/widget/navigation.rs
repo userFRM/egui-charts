@@ -188,7 +188,7 @@ impl Chart {
                 ui.painter()
                     .rect_filled(response.rect, theme.radius.sm, visuals.bg_fill);
             }
-            crate::styles::focus::draw_focus_ring(ui, &response);
+            crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
             let paint_text = || {
                 ui.painter().text(
                     response.rect.center(),

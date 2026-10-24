@@ -7,6 +7,7 @@
 //! - `Add` - A new drawing was created
 //! - `Delete` - A drawing was deleted
 //! - `Modify` - A drawing was modified (move, resize, style change)
+//! - `Reorder` - Several drawing layers changed in one move
 //!
 //! # Usage
 //!
@@ -54,6 +55,13 @@ pub enum DrawingCommand {
     Add(Drawing),
     /// A drawing was deleted
     Delete(Drawing),
+    /// Several drawing layers changed as one operation.
+    Reorder {
+        /// Drawing the user moved.
+        id: usize,
+        /// Previous layers of every affected drawing.
+        layers: Vec<(usize, i32)>,
+    },
     /// A drawing was modified
     Modify {
         /// Drawing ID
@@ -70,7 +78,7 @@ impl DrawingCommand {
             DrawingCommand::Snapshot { ids, .. } => ids.first().copied().unwrap_or(0),
             DrawingCommand::Add(d) => d.id,
             DrawingCommand::Delete(d) => d.id,
-            DrawingCommand::Modify { id, .. } => *id,
+            DrawingCommand::Modify { id, .. } | DrawingCommand::Reorder { id, .. } => *id,
         }
     }
 
@@ -82,6 +90,7 @@ impl DrawingCommand {
                     drawing.shift_bar_indices(from, delta);
                 }
             }
+            DrawingCommand::Reorder { .. } => {}
             DrawingCommand::Add(d) | DrawingCommand::Delete(d) => {
                 d.shift_bar_indices(from, delta);
             }
@@ -141,6 +150,7 @@ impl HistoryService {
     fn track_affected(&mut self, command: &DrawingCommand) {
         self.affected_ids = match command {
             DrawingCommand::Snapshot { ids, .. } => ids.clone(),
+            DrawingCommand::Reorder { layers, .. } => layers.iter().map(|(id, _)| *id).collect(),
             _ => vec![command.drawing_id()],
         };
         self.affected_ids.sort_unstable();
@@ -162,6 +172,11 @@ impl HistoryService {
         self.push_command(DrawingCommand::Modify { id, old_state });
     }
 
+    /// Record a layer move, including the neighbours whose layers changed.
+    pub(crate) fn push_reorder(&mut self, id: usize, layers: Vec<(usize, i32)>) {
+        self.push_command(DrawingCommand::Reorder { id, layers });
+    }
+
     /// Push a command to the undo stack
     fn push_command(&mut self, command: DrawingCommand) {
         // Clear redo stack on new action
@@ -180,8 +195,8 @@ impl HistoryService {
     /// Returns the ID of the affected drawing, if any.
     pub fn undo(&mut self, drawings: &mut Vec<Drawing>) -> Option<usize> {
         let command = self.undo_stack.pop()?;
+        let affected_id = command.drawing_id();
         self.track_affected(&command);
-        let affected_id = *self.affected_ids.first()?;
 
         match command {
             DrawingCommand::Snapshot {
@@ -193,6 +208,14 @@ impl HistoryService {
                     drawings: current,
                     ids,
                 });
+            }
+            DrawingCommand::Reorder { id, mut layers } => {
+                for (id, layer) in &mut layers {
+                    if let Some(drawing) = drawings.iter_mut().find(|d| d.id == *id) {
+                        std::mem::swap(&mut drawing.z_order, layer);
+                    }
+                }
+                self.redo_stack.push(DrawingCommand::Reorder { id, layers });
             }
             DrawingCommand::Add(drawing) => {
                 // Undo add = remove the drawing
@@ -225,8 +248,8 @@ impl HistoryService {
     /// Returns the ID of the affected drawing, if any.
     pub fn redo(&mut self, drawings: &mut Vec<Drawing>) -> Option<usize> {
         let command = self.redo_stack.pop()?;
+        let affected_id = command.drawing_id();
         self.track_affected(&command);
-        let affected_id = *self.affected_ids.first()?;
 
         match command {
             DrawingCommand::Snapshot {
@@ -238,6 +261,14 @@ impl HistoryService {
                     drawings: current,
                     ids,
                 });
+            }
+            DrawingCommand::Reorder { id, mut layers } => {
+                for (id, layer) in &mut layers {
+                    if let Some(drawing) = drawings.iter_mut().find(|d| d.id == *id) {
+                        std::mem::swap(&mut drawing.z_order, layer);
+                    }
+                }
+                self.undo_stack.push(DrawingCommand::Reorder { id, layers });
             }
             DrawingCommand::Add(drawing) => {
                 // Redo add = add the drawing back
@@ -330,6 +361,7 @@ impl HistoryService {
             DrawingCommand::Add(_) => "Add Drawing",
             DrawingCommand::Delete(_) => "Delete Drawing",
             DrawingCommand::Modify { .. } => "Modify Drawing",
+            DrawingCommand::Reorder { .. } => "Reorder Drawings",
         })
     }
 
@@ -340,6 +372,7 @@ impl HistoryService {
             DrawingCommand::Add(_) => "Add Drawing",
             DrawingCommand::Delete(_) => "Delete Drawing",
             DrawingCommand::Modify { .. } => "Modify Drawing",
+            DrawingCommand::Reorder { .. } => "Reorder Drawings",
         })
     }
 }
@@ -375,9 +408,12 @@ mod tests {
 
     /// The live set as sorted (id, stroke width) pairs, so a test sees which
     /// drawings exist and which state each one is in.
-    fn state(drawings: &[Drawing]) -> Vec<(usize, f32)> {
-        let mut state: Vec<_> = drawings.iter().map(|d| (d.id, d.stroke_width)).collect();
-        state.sort_by_key(|&(id, _)| id);
+    fn state(drawings: &[Drawing]) -> Vec<(usize, f32, i32)> {
+        let mut state: Vec<_> = drawings
+            .iter()
+            .map(|d| (d.id, d.stroke_width, d.z_order))
+            .collect();
+        state.sort_by_key(|&(id, _, _)| id);
         state
     }
 
@@ -387,12 +423,27 @@ mod tests {
     #[test]
     fn undo_and_redo_restore_each_command() {
         type Record = fn(&mut HistoryService);
-        let cases: [(&str, Vec<Drawing>, Vec<Drawing>, Record); 4] = [
+        let cases: [(&str, Vec<Drawing>, Vec<Drawing>, Record); 5] = [
             (
                 "bulk edit and order",
                 vec![drawing(1, 2.0), drawing(2, 3.0)],
                 vec![drawing(2, 8.0)],
                 |h| h.push_snapshot(vec![drawing(1, 2.0), drawing(2, 3.0)]),
+            ),
+            (
+                "reorder",
+                vec![drawing(1, 1.0), drawing(2, 1.0)],
+                vec![
+                    Drawing {
+                        z_order: 1,
+                        ..drawing(1, 1.0)
+                    },
+                    Drawing {
+                        z_order: 2,
+                        ..drawing(2, 1.0)
+                    },
+                ],
+                |h| h.push_reorder(1, vec![(1, 0), (2, 0)]),
             ),
             (
                 "add",

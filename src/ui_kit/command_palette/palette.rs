@@ -17,6 +17,7 @@ pub struct CommandPalette {
     selected_index: usize,
     /// Cached filtered results (command index, match)
     filtered: Vec<(usize, FuzzyMatch)>,
+    focus_search: bool,
 }
 
 impl CommandPalette {
@@ -27,6 +28,7 @@ impl CommandPalette {
             search_query: String::new(),
             selected_index: 0,
             filtered: Vec::new(),
+            focus_search: true,
         }
     }
 
@@ -50,6 +52,7 @@ impl CommandPalette {
         self.search_query.clear();
         self.selected_index = 0;
         self.filtered.clear();
+        self.focus_search = true;
     }
 
     /// Update filtered results based on current query
@@ -113,12 +116,14 @@ impl CommandPalette {
 
         let mut executed_command = None;
 
+        let search_id = egui::Id::unique("command_palette_search");
+        let search_focused = ctx.memory(|m| m.has_focus(search_id));
         // Handle keyboard navigation
         let (move_up, move_down, execute, close) = ctx.input(|i| {
             (
-                i.key_pressed(Key::ArrowUp),
-                i.key_pressed(Key::ArrowDown),
-                i.key_pressed(Key::Enter),
+                search_focused && i.key_pressed(Key::ArrowUp),
+                search_focused && i.key_pressed(Key::ArrowDown),
+                search_focused && i.key_pressed(Key::Enter),
                 i.key_pressed(Key::Escape),
             )
         });
@@ -156,8 +161,9 @@ impl CommandPalette {
                         icons::QUICK_SEARCH
                             .as_image_tinted(Vec2::splat(20.0), ui.visuals().text_color()),
                     );
-                    let search_id = egui::Id::unique("command_palette_search");
-                    ui.memory_mut(|memory| memory.request_focus(search_id));
+                    if std::mem::take(&mut self.focus_search) {
+                        ui.memory_mut(|memory| memory.request_focus(search_id));
+                    }
                     let response = ui.add(
                         TextEdit::singleline(&mut self.search_query)
                             .id(search_id)
@@ -237,7 +243,12 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
         (fill, visuals.text_color(), tint, visuals.weak_text_color())
     };
     let painter = ui.painter();
-    painter.rect_filled(rect, 0.0, fill);
+    painter.rect_filled(
+        rect.shrink2(Vec2::new(theme.spacing.sm, 0.0)),
+        DESIGN_TOKENS.rounding.sm,
+        fill,
+    );
+    crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
 
     // Every row reserves the icon slot, so labels line up.
     let icon_size = DESIGN_TOKENS.sizing.icon_sm;
@@ -389,6 +400,28 @@ mod tests {
         )
         .drop_without_applying_deltas();
         executed
+    }
+
+    #[test]
+    fn tab_leaves_search_and_enter_executes_the_focused_row() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut palette = CommandPalette::new(vec![
+                Command::new("a", "First"),
+                Command::new("b", "Second"),
+            ]);
+            frame(&ctx, &mut palette, None);
+            frame(&ctx, &mut palette, None);
+            let search = ctx.memory(|m| m.focused());
+            frame(&ctx, &mut palette, Some(Key::Tab));
+            assert_ne!(ctx.memory(|m| m.focused()), search);
+            frame(&ctx, &mut palette, Some(Key::Tab));
+            assert_eq!(
+                frame(&ctx, &mut palette, Some(Key::Enter)).as_deref(),
+                Some("b")
+            );
+        }
     }
 
     #[test]

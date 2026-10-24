@@ -3,6 +3,7 @@
 //! A floating toolbar for controlling bar replay.
 //! Displays play/pause, step controls, and speed selector.
 
+use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
@@ -256,16 +257,21 @@ impl FloatingReplayControl {
 
         let mut action = self.shortcut(ctx);
 
-        let dock = self.dock_rect.unwrap_or_else(|| ctx.content_rect());
-        let inset = ctx.active_theme().spacing.lg;
+        let dock = self
+            .dock_rect
+            .unwrap_or_else(|| ctx.content_rect())
+            .intersect(ctx.content_rect());
+        let inset = ctx.active_theme().spacing.lg.max(8.0);
         egui::Area::new(self.id)
             .order(egui::Order::Foreground)
             .movable(true)
             .pivot(Align2::CENTER_BOTTOM)
             .default_pos(pos2(dock.center().x, dock.bottom() - inset))
-            // Not inset: an area clips to its constraint, which would cut off the shadow.
-            .constrain_to(dock)
+            .constrain_to(dock.shrink(inset))
             .show(ctx, |ui| {
+                ui.set_max_width((dock.width() - 2.0 * inset).max(0.0));
+                // Keep the shadow outside the inset while constraining the toolbar itself.
+                ui.set_clip_rect(dock);
                 let clicked = self.render_control(ui);
                 if clicked != ReplayControlAction::None {
                     action = clicked;
@@ -347,159 +353,167 @@ impl FloatingReplayControl {
             .shadow(visuals.popup_shadow)
             .inner_margin(egui::Margin::symmetric(
                 theme.spacing.sm as i8,
-                theme.spacing.xs as i8,
+                (theme.spacing.xs - visuals.window_stroke.width).max(0.0) as i8,
             ))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    // The grip and first separator are laid out before any button sets the height.
-                    ui.set_min_height(row);
-                    ui.spacing_mut().item_spacing.x = theme.spacing.sm;
-                    ui.spacing_mut().interact_size.y = row;
+                egui::ScrollArea::horizontal()
+                    .auto_shrink([true, true])
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            // The grip and first separator are laid out before any button sets the height.
+                            ui.set_min_height(row);
+                            ui.spacing_mut().item_spacing.x = theme.spacing.sm;
+                            ui.spacing_mut().interact_size.y = row;
 
-                    // The whole frame drags the bar; the grip says so.
-                    ui.add(
-                        icons::UI_DRAG_HANDLE
-                            .as_image_tinted(Vec2::splat(icon_sizes::COMPACT), theme.ui.text_muted),
-                    )
-                    .on_hover_cursor(CursorIcon::Grab)
-                    .on_hover_text("Move");
+                            // The whole frame drags the bar; the grip says so.
+                            ui.add(icons::UI_DRAG_HANDLE.as_image_tinted(
+                                Vec2::splat(icon_sizes::COMPACT),
+                                theme.ui.text_muted,
+                            ))
+                            .on_hover_cursor(CursorIcon::Grab)
+                            .on_hover_text("Move");
 
-                    ui.separator();
+                            ui.separator();
 
-                    let at_start = self.state.progress_pct <= 0.0;
-                    let at_end = self.at_end;
-                    if IconButton::new(&icons::MEDIA_SKIP_BACK)
-                        .tooltip("Go to start (Home)")
-                        .enabled(!at_start)
-                        .show(ui)
-                        .clicked()
-                    {
-                        action = ReplayControlAction::GoToStart;
-                    }
-
-                    if IconButton::new(&icons::UI_ARROW_BACK)
-                        .tooltip("Previous bar (Left arrow)")
-                        .enabled(!at_start)
-                        .show(ui)
-                        .clicked()
-                    {
-                        action = ReplayControlAction::PreviousBar;
-                    }
-
-                    let (play_icon, play_tooltip, play_action) = if self.state.is_playing {
-                        (
-                            &icons::MEDIA_PAUSE,
-                            "Pause (Space)",
-                            ReplayControlAction::Pause,
-                        )
-                    } else {
-                        (
-                            &icons::MEDIA_PLAY,
-                            "Play (Space)",
-                            ReplayControlAction::Play,
-                        )
-                    };
-                    if IconButton::new(play_icon)
-                        .tooltip(play_tooltip)
-                        .show(ui)
-                        .clicked()
-                    {
-                        action = play_action;
-                    }
-
-                    if IconButton::new(&icons::UI_ARROW_FORWARD)
-                        .tooltip("Next bar (Right arrow)")
-                        .enabled(!at_end)
-                        .show(ui)
-                        .clicked()
-                    {
-                        action = ReplayControlAction::NextBar;
-                    }
-
-                    if IconButton::new(&icons::MEDIA_SKIP_FORWARD)
-                        .tooltip("Go to end (End)")
-                        .enabled(!at_end)
-                        .show(ui)
-                        .clicked()
-                    {
-                        action = ReplayControlAction::GoToEnd;
-                    }
-
-                    ui.separator();
-
-                    // As wide as the widest label, so the bar keeps its width for every speed.
-                    let font = FontId::proportional(theme.text.label);
-                    let text_width = |ui: &Ui, text: &str| {
-                        ui.painter()
-                            .layout_no_wrap(text.to_owned(), font.clone(), theme.ui.text)
-                            .size()
-                            .x
-                    };
-                    let spacing = ui.spacing();
-                    let combo_width = text_width(ui, ReplaySpeed::X0_5.label())
-                        + spacing.icon_spacing
-                        + spacing.icon_width
-                        + 2.0 * spacing.button_padding.x;
-                    let current_speed = ReplaySpeed::from_multiplier(self.state.speed);
-                    egui::ComboBox::from_id_salt("replay_speed_selector")
-                        .selected_text(
-                            RichText::new(current_speed.label())
-                                .font(font.clone())
-                                .color(theme.ui.text),
-                        )
-                        .width(combo_width)
-                        .show_ui(ui, |ui| {
-                            for speed in ReplaySpeed::all() {
-                                let is_selected = *speed == current_speed;
-                                let response = ui.selectable_label(is_selected, speed.label());
-                                if response.clicked() && !is_selected {
-                                    action = ReplayControlAction::SetSpeed(speed.multiplier());
-                                }
+                            let at_start = self.state.progress_pct <= 0.0;
+                            let at_end = self.at_end;
+                            if IconButton::new(&icons::MEDIA_SKIP_BACK)
+                                .tooltip("Go to start (Home)")
+                                .enabled(!at_start)
+                                .show(ui)
+                                .clicked()
+                            {
+                                action = ReplayControlAction::GoToStart;
                             }
-                        })
-                        .response
-                        .on_hover_text("Playback speed");
 
-                    ui.separator();
+                            if IconButton::new(&icons::UI_ARROW_BACK)
+                                .tooltip("Previous bar (Left arrow)")
+                                .enabled(!at_start)
+                                .show(ui)
+                                .clicked()
+                            {
+                                action = ReplayControlAction::PreviousBar;
+                            }
 
-                    if !self.state.symbol.is_empty() {
-                        ui.label(
-                            RichText::new(&self.state.symbol)
-                                .font(font.clone())
-                                .color(theme.ui.text),
-                        );
-                    }
+                            let (play_icon, play_tooltip, play_action) = if self.state.is_playing {
+                                (
+                                    &icons::MEDIA_PAUSE,
+                                    "Pause (Space)",
+                                    ReplayControlAction::Pause,
+                                )
+                            } else {
+                                (
+                                    &icons::MEDIA_PLAY,
+                                    "Play (Space)",
+                                    ReplayControlAction::Play,
+                                )
+                            };
+                            if IconButton::new(play_icon)
+                                .tooltip(play_tooltip)
+                                .show(ui)
+                                .clicked()
+                            {
+                                action = play_action;
+                            }
 
-                    // A slot as wide as "100.0%", so the bar keeps its width as progress changes.
-                    ui.add_sized(
-                        [text_width(ui, "100.0%"), row],
-                        egui::Label::new(
-                            RichText::new(format!("{:.1}%", self.state.progress_pct))
-                                .font(font.clone())
-                                .color(theme.ui.text_secondary),
-                        ),
-                    );
+                            if IconButton::new(&icons::UI_ARROW_FORWARD)
+                                .tooltip("Next bar (Right arrow)")
+                                .enabled(!at_end)
+                                .show(ui)
+                                .clicked()
+                            {
+                                action = ReplayControlAction::NextBar;
+                            }
 
-                    ui.separator();
+                            if IconButton::new(&icons::MEDIA_SKIP_FORWARD)
+                                .tooltip("Go to end (End)")
+                                .enabled(!at_end)
+                                .show(ui)
+                                .clicked()
+                            {
+                                action = ReplayControlAction::GoToEnd;
+                            }
 
-                    if Button::new("Exit replay")
-                        .secondary()
-                        .size(ButtonSize::MD)
-                        .show(ui)
-                        .clicked()
-                    {
-                        action = ReplayControlAction::Stop;
-                    }
+                            ui.separator();
 
-                    if IconButton::new(&icons::CLOSE)
-                        .size(ButtonSize::SM)
-                        .tooltip("Hide replay controls")
-                        .show(ui)
-                        .clicked()
-                    {
-                        action = ReplayControlAction::Close;
-                    }
-                });
+                            // As wide as the widest label, so the bar keeps its width for every speed.
+                            let font = FontId::proportional(theme.text.label);
+                            let text_width = |ui: &Ui, text: &str| {
+                                ui.painter()
+                                    .layout_no_wrap(text.to_owned(), font.clone(), theme.ui.text)
+                                    .size()
+                                    .x
+                            };
+                            let spacing = ui.spacing();
+                            let combo_width = text_width(ui, ReplaySpeed::X0_5.label())
+                                + spacing.icon_spacing
+                                + spacing.icon_width
+                                + 2.0 * spacing.button_padding.x;
+                            let mut speed = ReplaySpeed::from_multiplier(self.state.speed);
+                            let speed_response = ui.scope(|ui| {
+                                ui.combo_select_width(
+                                    "replay_speed_selector",
+                                    &mut speed,
+                                    ReplaySpeed::all().iter().copied(),
+                                    |speed| speed.label().to_owned(),
+                                    combo_width,
+                                )
+                            });
+                            speed_response.response.on_hover_text("Playback speed");
+                            if speed_response.inner {
+                                action = ReplayControlAction::SetSpeed(speed.multiplier());
+                            }
+
+                            ui.separator();
+
+                            if !self.state.symbol.is_empty() {
+                                ui.label(
+                                    RichText::new(&self.state.symbol)
+                                        .font(font.clone())
+                                        .color(theme.ui.text),
+                                );
+                            }
+
+                            // A slot as wide as "100.0%", so the bar keeps its width as progress changes.
+                            ui.add_sized(
+                                [text_width(ui, "100.0%"), row],
+                                egui::Label::new(
+                                    RichText::new(format!("{:.1}%", self.state.progress_pct))
+                                        .font(font.clone())
+                                        .color(theme.ui.text_secondary),
+                                ),
+                            );
+
+                            ui.separator();
+
+                            if Button::new("Exit replay")
+                                .secondary()
+                                .text_color(theme.ui.error)
+                                .size(ButtonSize::MD)
+                                .show(ui)
+                                .clicked()
+                            {
+                                action = ReplayControlAction::Stop;
+                            }
+
+                            if IconButton::new(&icons::CLOSE)
+                                .size(ButtonSize::MD)
+                                .tooltip("Hide replay controls")
+                                .show(ui)
+                                .clicked()
+                            {
+                                action = ReplayControlAction::Close;
+                            }
+                        });
+                        if let Some(response) = ui
+                            .ctx()
+                            .memory(|m| m.focused())
+                            .and_then(|id| ui.ctx().read_response(id))
+                            && response.layer_id == ui.layer_id()
+                        {
+                            ui.scroll_to_rect(response.rect, None);
+                        }
+                    });
             });
 
         action
@@ -550,6 +564,75 @@ mod tests {
         })
         .drop_without_applying_deltas();
         action
+    }
+
+    #[test]
+    fn replay_surface_fits_the_dock_and_keeps_the_exit_label_readable() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut bar = FloatingReplayControl::new();
+            bar.sync_from(true, false, 1.0, 150, 300);
+            bar.set_symbol("SAMPLE");
+            for width in [900.0, 320.0, 600.0] {
+                let dock = Rect::from_min_max(pos2(0.0, 80.0), pos2(width, 560.0));
+                bar.set_dock_rect(dock);
+                for pass in 0..8 {
+                    let mut neutral = egui::Color32::TRANSPARENT;
+                    let mut output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                Vec2::new(width, 600.0),
+                            )),
+                            events: if width == 320.0 && pass == 4 {
+                                vec![
+                                    Event::PointerMoved(pos2(width / 2.0, dock.bottom() - 24.0)),
+                                    Event::MouseWheel {
+                                        unit: egui::MouseWheelUnit::Point,
+                                        delta: egui::vec2(-1000.0, 0.0),
+                                        phase: egui::TouchPhase::Move,
+                                        source: egui::MouseWheelSource::Wheel,
+                                        modifiers: Modifiers::NONE,
+                                    },
+                                ]
+                            } else {
+                                vec![]
+                            },
+                            time: Some(ctx.input(|i| i.time) + 1.0),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            neutral = crate::ui_kit::buttons::ButtonVariant::Secondary
+                                .bg_color(ui, false, false);
+                            bar.show(ui.ctx());
+                        },
+                    );
+                    output.textures_delta.clear();
+                    if pass == 7 {
+                        let rect = ctx.memory(|m| m.area_rect(bar.id)).unwrap();
+                        assert!(dock.shrink(8.0).contains_rect(rect), "{width}: {rect:?}");
+                        assert_eq!(rect.height(), 32.0);
+                        let text = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.text() == "Exit replay" => {
+                                    Some(text)
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        assert_eq!(text.fallback_color, theme.ui.error);
+                        assert!(rect.contains(text.pos + text.galley.size() / 2.0));
+                        let center = text.pos + text.galley.size() / 2.0;
+                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                                egui::Shape::Rect(rect) if rect.rect.contains(center) && rect.rect.height() == ButtonSize::MD.pixels() && rect.fill == neutral)));
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
     }
 
     /// `current_bar` is zero-based: the first of 300 bars is 0% and the last 100%.

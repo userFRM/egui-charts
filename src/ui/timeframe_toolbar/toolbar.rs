@@ -65,7 +65,7 @@ impl TimeframeToolbarConfig {
             border_color: ui.border,
             text_color: ui.text,
             hover_text_color: ui.text,
-            active_text_color: ui.text,
+            active_text_color: ui.accent,
             separator_color: if theme.dark {
                 ui.border
             } else {
@@ -149,8 +149,15 @@ impl TimeframeToolbar {
             &mut self.config,
             TimeframeToolbarConfig::from_theme,
         );
-        // Update time on each frame
         self.state.update_time();
+        if !self.hidden.contains(&Control::TimeZone) {
+            // Use the same instant for the label and the next whole-second deadline.
+            let nanos = self.state.curr_time.unwrap().timestamp_subsec_nanos();
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_nanos(
+                    1_000_000_000 - u64::from(nanos),
+                ));
+        }
 
         // Background and border are handled by parent Frame in platform.rs
         ResponsiveToolbar::horizontal("timeframe_toolbar_scroll")
@@ -171,10 +178,10 @@ impl TimeframeToolbar {
                 .iter()
                 .map(|range| self.range_btn_width(ui, range.label()))
                 .sum();
+            let mut time_text = self.state.formatted_time();
             let mut reserved = DESIGN_TOKENS.spacing.lg;
             if !self.hidden.contains(&Control::TimeZone) {
-                reserved += self.text_btn_width(ui, &self.state.formatted_time())
-                    + DESIGN_TOKENS.spacing.lg;
+                reserved += self.text_btn_width(ui, &time_text) + DESIGN_TOKENS.spacing.lg;
             }
             if !self.hidden.contains(&Control::Session) {
                 reserved += self.text_btn_width(ui, self.state.session_type.label());
@@ -184,14 +191,29 @@ impl TimeframeToolbar {
                     + stroke::HAIRLINE
                     + self.text_btn_width(ui, "ADJ");
             }
+            let compact =
+                self.range_btn_width(ui, "Ranges") + reserved + 48.0 > ui.available_width();
+            if compact && !self.hidden.contains(&Control::TimeZone) {
+                reserved -= self.text_btn_width(ui, &time_text);
+                time_text.truncate(8);
+                reserved += self.text_btn_width(ui, &time_text);
+            }
             if ranges_width + reserved + 48.0 > ui.available_width() {
                 let response = ui.add(
-                    egui::Button::new(egui::RichText::new("Ranges").size(self.config.font_size))
-                        .frame(false),
+                    egui::Button::new(
+                        egui::RichText::new(if compact { "…" } else { "Ranges" })
+                            .size(self.config.font_size),
+                    )
+                    .frame(false),
                 );
+                let response = response.on_hover_text("Date ranges");
                 egui::Popup::menu(&response).show(|ui| {
                     for range in ranges {
-                        if ui.button(range.label()).clicked() {
+                        if ui
+                            .button(range.label())
+                            .on_hover_text(range.tooltip())
+                            .clicked()
+                        {
                             self.state.set_date_range(range);
                             result_action = TimeframeToolbarAction::DateRangeChanged(range);
                             ui.close();
@@ -230,8 +252,15 @@ impl TimeframeToolbar {
             // Right section: Timezone, Session, Dividends
             // Timezone button with time
             if !self.hidden.contains(&Control::TimeZone) {
-                let time_text = self.state.formatted_time();
-                if self.text_btn(ui, &time_text, "Timezone", false).clicked() {
+                if self
+                    .text_btn(
+                        ui,
+                        &time_text,
+                        &format!("Timezone: {}", self.state.timezone),
+                        false,
+                    )
+                    .clicked()
+                {
                     result_action = TimeframeToolbarAction::OpenTimezoneMenu;
                 }
                 ui.space_lg();
@@ -242,7 +271,12 @@ impl TimeframeToolbar {
                 let session_label = self.state.session_type.label();
                 let session_tooltip = self.state.session_type.tooltip();
                 if self
-                    .text_btn(ui, session_label, session_tooltip, false)
+                    .text_btn(
+                        ui,
+                        session_label,
+                        session_tooltip,
+                        self.state.session_type == SessionType::RTH,
+                    )
                     .clicked()
                 {
                     result_action = TimeframeToolbarAction::OpenSessionMenu;
@@ -257,7 +291,16 @@ impl TimeframeToolbar {
 
                 let adj_active = self.state.adjust_for_dividends;
                 if self
-                    .text_btn(ui, "ADJ", "Adjust data for dividends", adj_active)
+                    .text_btn(
+                        ui,
+                        "ADJ",
+                        if adj_active {
+                            "Dividend adjustment: on"
+                        } else {
+                            "Dividend adjustment: off"
+                        },
+                        adj_active,
+                    )
                     .clicked()
                 {
                     self.state.adjust_for_dividends = !adj_active;
@@ -305,7 +348,7 @@ impl TimeframeToolbar {
             text_color,
         );
 
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tooltip)
         });
@@ -351,6 +394,14 @@ impl TimeframeToolbar {
                 .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg_color);
         }
 
+        if is_active {
+            ui.painter().hline(
+                rect.x_range(),
+                rect.bottom() - 1.0,
+                Stroke::new(2.0, self.config.active_text_color),
+            );
+        }
+
         // Draw text
         ui.painter().text(
             rect.center(),
@@ -360,9 +411,9 @@ impl TimeframeToolbar {
             text_color,
         );
 
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tooltip)
+            egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_active, tooltip)
         });
         response.on_hover_text(tooltip)
     }
@@ -378,16 +429,25 @@ impl TimeframeToolbar {
         let (rect, response) = ui.allocate_exact_size(btn_size, Sense::click());
 
         // Draw hover background
-        if response.hovered() {
-            ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.md, self.config.hover_bg);
+        if self.state.date_picker_open || response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                DESIGN_TOKENS.rounding.md,
+                if self.state.date_picker_open {
+                    self.config.active_bg
+                } else {
+                    self.config.hover_bg
+                },
+            );
         }
 
         // Center the icon in the button
         let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
 
         // Render the icon with theme-aware coloring
-        let icon_color = if response.hovered() {
+        let icon_color = if self.state.date_picker_open {
+            self.config.active_text_color
+        } else if response.hovered() {
             ui.visuals().widgets.hovered.fg_stroke.color
         } else {
             ui.visuals().widgets.noninteractive.fg_stroke.color
@@ -396,9 +456,14 @@ impl TimeframeToolbar {
             .as_image_tinted(Vec2::splat(icon_size), icon_color)
             .paint_at(ui, icon_rect);
 
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tooltip)
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                ui.is_enabled(),
+                self.state.date_picker_open,
+                tooltip,
+            )
         });
         response.on_hover_text(tooltip)
     }
@@ -461,12 +526,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn visible_clock_schedules_the_next_whole_second() {
+        use chrono::Timelike;
+        use std::time::Duration;
+        for visible in [true, false] {
+            let ctx = egui::Context::default();
+            let mut toolbar = TimeframeToolbar::new();
+            toolbar.set_control_visible(Control::TimeZone, visible);
+            for frame in 0..5 {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    toolbar.show(ui);
+                });
+                output.textures_delta.clear();
+                if frame == 4 {
+                    let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+                    let now = toolbar.state.curr_time.unwrap();
+                    let boundary = now.with_nanosecond(0).unwrap() + chrono::Duration::seconds(1);
+                    let expected = (boundary - now).to_std().unwrap();
+                    assert_eq!(delay, if visible { expected } else { Duration::MAX });
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    #[test]
+    fn active_modes_and_open_calendar_use_the_accent() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for active in [false, true] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut toolbar =
+                    TimeframeToolbar::with_config(TimeframeToolbarConfig::from_theme(&theme));
+                toolbar.state.date_picker_open = active;
+                let mut calendar = egui::Rect::NOTHING;
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    toolbar.text_btn(ui, "ADJ", "Dividend adjustment", active);
+                    calendar = toolbar.icon_button_calendar(ui, "Go to").rect;
+                });
+                output.textures_delta.clear();
+                assert_eq!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Rect(rect) if rect.rect == calendar && rect.fill == toolbar.config.active_bg)), active);
+                let label = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "ADJ" => Some(text),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(
+                    label.galley.job.sections[0].format.color,
+                    if active {
+                        theme.ui.accent
+                    } else {
+                        theme.ui.text
+                    }
+                );
+                assert_eq!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::LineSegment { stroke, .. } if stroke.width == 2.0 && stroke.color == theme.ui.accent)), active);
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    #[test]
     fn right_controls_stay_at_the_edge_when_text_sizes_or_visibility_change() {
         for (theme, width, font_size, timezone) in [
             (Theme::light(), 900.0, 12.0, "UTC"),
             (Theme::dark(), 900.0, 14.0, "UTC"),
             (Theme::light(), 600.0, 14.0, "America/New_York"),
             (Theme::dark(), 640.0, 14.0, "America/New_York"),
+            (Theme::light(), 320.0, 14.0, "UTC"),
+            (Theme::dark(), 320.0, 14.0, "America/New_York"),
         ] {
             for hidden in [
                 vec![],
@@ -507,9 +639,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        expected = ui.available_rect_before_wrap().max.x
-                            - padding
-                            - toolbar.text_btn_width(ui, &last) / 2.0;
+                        expected = ui.available_rect_before_wrap().max.x - padding;
                         toolbar.show_contents(ui);
                     },
                 );
@@ -517,10 +647,18 @@ mod tests {
                     .shapes
                     .iter()
                     .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == last => Some(text),
+                        egui::Shape::Text(text)
+                            if text.galley.text() == last
+                                || last.starts_with(&format!("{} ", text.galley.text())) =>
+                        {
+                            Some(text)
+                        }
                         _ => None,
                     })
                     .expect("the last visible control must be drawn");
+                expected -= (text.galley.size().x + 2.0 * toolbar.config.btn_padding_h)
+                    .max(DESIGN_TOKENS.sizing.button_md)
+                    / 2.0;
                 let center = text.pos.x + text.galley.size().x / 2.0;
                 output.drop_without_applying_deltas();
                 assert!(

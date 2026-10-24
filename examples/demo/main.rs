@@ -9,6 +9,7 @@
 //! Run (native):   `cargo run` from this directory
 
 mod controller;
+mod panel_alerts;
 mod sampledata;
 
 use controller::DemoApp;

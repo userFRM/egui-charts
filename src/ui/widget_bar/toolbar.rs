@@ -112,6 +112,8 @@ pub enum WidgetBarAction {
 pub struct WidgetBar {
     pub config: WidgetBarConfig,
     pub icons: Vec<RightBarIcon>,
+    /// Currently open built-in panel. Clicks toggle this value; the host must keep it
+    /// in step with panels opened or closed elsewhere before calling `show`.
     pub active_icon: Option<RightBarIcon>,
     /// Host widget entries, empty until the host supplies them.
     pub widgets: Vec<WidgetBarWidget>,
@@ -319,7 +321,7 @@ impl WidgetBar {
 
         // Check for clicks
         let btn_res = ui.interact(btn_rect, id, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &btn_res);
+        crate::styles::focus::draw_focus_ring(ui, &btn_res, self.config.hover_rounding);
         let is_hovered = btn_res.hovered();
         let is_pressed = btn_res.is_pointer_button_down_on();
 

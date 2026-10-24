@@ -1,36 +1,14 @@
-//! Actions from the alert creation dialog.
+//! Actions from the typed alert dialog.
 
-/// Alert data for creation
-#[derive(Clone, Debug)]
-pub enum AlertData {
-    Price {
-        symbol: String,
-        price: f64,
-        condition: String,
-        message: String,
-        repeating: bool,
-    },
-    Indicator {
-        symbol: String,
-        indicator_a: String,
-        indicator_b: Option<String>,
-        threshold: Option<f64>,
-        condition: String,
-        message: String,
-        repeating: bool,
-    },
-    Volume {
-        symbol: String,
-        multiplier: f64,
-        lookback: u32,
-        message: String,
-    },
-}
+use crate::model::Alert;
 
-/// Actions from the alert dialog
+/// Dialog result; only a submitted alert reaches the host service.
 #[derive(Clone, Debug)]
 pub enum AlertDialogAction {
+    /// No change.
     None,
+    /// Dismissed without saving.
     Cancel,
-    Create(AlertData),
+    /// Create or replace the alert, identified by its optional host id.
+    Create(Box<Alert>),
 }

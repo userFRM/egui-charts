@@ -2,7 +2,7 @@
 //!
 //! Renders individual items (drawings, indicators) in the tree.
 
-use egui::{Color32, Rect, Sense, Stroke, Ui, vec2};
+use egui::{Rect, Sense, Stroke, Ui, vec2};
 
 use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons as embedded_icons};
@@ -11,6 +11,7 @@ use crate::theme::ThemeExt;
 
 use super::actions::ObjectTreeAction;
 use super::config::ObjectTreeConfig;
+use super::context_menu::render_item_menu;
 use super::state::ObjectTreeState;
 use super::types::{SourceItem, SourceType};
 use crate::ext::UiExt;
@@ -41,8 +42,20 @@ pub fn render_item_row(
 
     // Render if visible
     if ui.is_rect_visible(rect) {
-        render_row_content(ui, rect, item, config, state, indent, &mut action);
+        render_row_content(ui, &response, item, config, state, indent, &mut action);
     }
+    crate::styles::focus::draw_focus_ring(ui, &response, 0.0);
+
+    if config.enable_context_menu {
+        response.context_menu(|ui| {
+            let menu_action = render_item_menu(ui, item, state);
+            if !menu_action.is_none() {
+                action = menu_action;
+            }
+        });
+    }
+
+    response.on_hover_text(item.full_display_name());
 
     // Handle expand/collapse for items with properties
     if item.source_type == SourceType::Drawing && state.is_item_expanded(id) {
@@ -85,14 +98,6 @@ fn handle_interactions(
         action = ObjectTreeAction::ZoomTo(id);
     }
 
-    // Right-click context menu
-    if response.secondary_clicked()
-        && config.enable_context_menu
-        && let Some(pos) = response.interact_pointer_pos()
-    {
-        state.open_context_menu(pos, Some(id));
-    }
-
     // Drag start
     if config.enable_drag_drop
         && response.drag_started()
@@ -112,15 +117,16 @@ fn handle_interactions(
 /// Render the row content (background, icons, text, buttons)
 fn render_row_content(
     ui: &mut Ui,
-    rect: Rect,
+    response: &egui::Response,
     item: &SourceItem,
     config: &ObjectTreeConfig,
     state: &mut ObjectTreeState,
     indent: f32,
     action: &mut ObjectTreeAction,
 ) {
+    let rect = response.rect;
     let is_selected = state.is_selected(item.id);
-    let is_hovered = state.hovered_id == Some(item.id);
+    let is_hovered = response.hovered();
     let is_dragging = state.dragging_id == Some(item.id);
 
     let center_y = rect.center().y;
@@ -129,14 +135,10 @@ fn render_row_content(
     {
         let painter = ui.painter();
         let accent = ui.active_theme().ui.accent;
-        let accent_fill = {
-            let [r, g, b, _] = accent.to_array();
-            Color32::from_rgba_unmultiplied(r, g, b, 40)
-        };
 
         // Background
         if is_selected {
-            painter.rect_filled(rect, 0.0, accent_fill);
+            painter.rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
         } else if is_hovered && !is_dragging {
             painter.rect_filled(rect, 0.0, ui.style().visuals.widgets.hovered.bg_fill);
         }
@@ -216,18 +218,23 @@ fn render_row_content(
         }
 
         // Name
-        let name_color = if item.visible {
+        let name_color = if is_selected {
+            ui.visuals().selection.stroke.color
+        } else if item.visible {
             ui.style().visuals.text_color()
         } else {
             DESIGN_TOKENS.semantic.extended.gray
         };
-        painter.text(
-            egui::pos2(x, center_y),
-            egui::Align2::LEFT_CENTER,
+        let mut job = egui::text::LayoutJob::simple(
             item.full_display_name(),
             egui::FontId::proportional(typography::SM_MD),
             name_color,
+            (rect.right() - DESIGN_TOKENS.spacing.sm - 40.0 - x).max(0.0),
         );
+        job.wrap.max_rows = 1;
+        let galley = painter.layout_job(job);
+        let pos = egui::pos2(x, center_y - galley.size().y / 2.0);
+        painter.galley(pos, galley, name_color);
     } // painter dropped
 
     // Second pass: interactive elements
@@ -236,7 +243,8 @@ fn render_row_content(
     // Expand/collapse button
     if config.show_expand_chevron && item.source_type == SourceType::Drawing {
         let chevron_rect = Rect::from_center_size(egui::pos2(x + 6.0, center_y), vec2(14.0, 14.0));
-        let chevron_response = ui.put(chevron_rect, egui::Label::new("").sense(Sense::click()));
+        let chevron_response = ui.allocate_rect(chevron_rect, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &chevron_response, 0.0);
         if chevron_response.clicked() {
             state.toggle_item(item.id);
         }
@@ -251,8 +259,11 @@ fn render_row_content(
         &embedded_icons::EYE_HIDE
     };
     let vis_response = ui.allocate_rect(vis_rect, Sense::click());
+    crate::styles::focus::draw_focus_ring(ui, &vis_response, 0.0);
     if ui.is_rect_visible(vis_rect) {
-        let icon_color = if vis_response.hovered() {
+        let icon_color = if is_selected {
+            ui.visuals().selection.stroke.color
+        } else if vis_response.hovered() {
             ui.visuals().widgets.hovered.fg_stroke.color
         } else {
             ui.visuals().widgets.noninteractive.fg_stroke.color
@@ -276,8 +287,11 @@ fn render_row_content(
             &embedded_icons::UNLOCK
         };
         let lock_response = ui.allocate_rect(lock_rect, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &lock_response, 0.0);
         if ui.is_rect_visible(lock_rect) {
-            let icon_color = if lock_response.hovered() {
+            let icon_color = if is_selected {
+                ui.visuals().selection.stroke.color
+            } else if lock_response.hovered() {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
                 ui.visuals().widgets.noninteractive.fg_stroke.color
@@ -292,26 +306,22 @@ fn render_row_content(
         lock_response.on_hover_text(if item.locked { "Unlock" } else { "Lock" });
     }
 
-    // Right-side buttons
-    let mut right_x = rect.right() - DESIGN_TOKENS.spacing.sm;
-
-    // Delete button
-    let del_rect = Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-    let del_response = ui.put(del_rect, egui::Label::new("X").sense(Sense::click()));
-    if del_response.clicked() {
-        *action = if item.source_type == SourceType::Indicator {
-            ObjectTreeAction::RemoveIndicator(item.id)
-        } else {
-            ObjectTreeAction::Delete(item.id)
-        };
-    }
-    del_response.on_hover_text("Remove");
-    right_x -= 20.0;
+    // Right-side buttons, registered in visual order for keyboard navigation.
+    let right_x = rect.right() - DESIGN_TOKENS.spacing.sm;
+    let button_color = if is_selected {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().text_color()
+    };
 
     // Settings/Properties button
     let settings_rect =
-        Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-    let settings_response = ui.put(settings_rect, egui::Label::new("S").sense(Sense::click()));
+        Rect::from_center_size(egui::pos2(right_x - 28.0, center_y), vec2(16.0, 16.0));
+    let settings_response = ui.put(
+        settings_rect,
+        egui::Label::new(egui::RichText::new("S").color(button_color)).sense(Sense::click()),
+    );
+    crate::styles::focus::draw_focus_ring(ui, &settings_response, 0.0);
     if settings_response.clicked() {
         *action = if item.source_type == SourceType::Indicator {
             ObjectTreeAction::OpenIndicatorSettings(item.id)
@@ -320,6 +330,25 @@ fn render_row_content(
         };
     }
     settings_response.on_hover_text("Settings");
+
+    // Delete button
+    if item.source_type != SourceType::DataSource {
+        let del_rect =
+            Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
+        let del_response = ui.put(
+            del_rect,
+            egui::Label::new(egui::RichText::new("X").color(button_color)).sense(Sense::click()),
+        );
+        crate::styles::focus::draw_focus_ring(ui, &del_response, 0.0);
+        if del_response.clicked() {
+            *action = if item.source_type == SourceType::Indicator {
+                ObjectTreeAction::RemoveIndicator(item.id)
+            } else {
+                ObjectTreeAction::Delete(item.id)
+            };
+        }
+        del_response.on_hover_text("Remove");
+    }
 }
 
 /// Render expandable properties for a drawing
@@ -392,5 +421,114 @@ fn get_tool_abbreviation(tool_type: DrawingToolType) -> &'static str {
         DrawingToolType::ElliottImpulse => "EI",
         DrawingToolType::Measure => "MS",
         _ => "••",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::Color32;
+
+    #[test]
+    fn selected_names_use_selection_colours_and_end_before_the_buttons() {
+        for (_, theme) in crate::theme::presets() {
+            for width in [220.0, 280.0] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 200.0))),
+                    ..Default::default()
+                };
+                let mut row = Rect::NOTHING;
+                let mut selection = egui::style::Selection::default();
+                let mut output = ctx.run_ui(input, |ui| {
+                    selection = ui.visuals().selection;
+                    let mut item =
+                        SourceItem::drawing(1, DrawingToolType::ElliottTripleCombo, Color32::BLUE);
+                    let mut state = ObjectTreeState::new();
+                    state.select(1);
+                    row = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 24.0));
+                    render_item_row(ui, &mut item, &ObjectTreeConfig::default(), &mut state, 0);
+                });
+                output.textures_delta.clear();
+                assert!(output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == row && rect.fill == selection.bg_fill)
+                }));
+                let name = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if text.galley.text().starts_with("Elliott Triple") =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(name.fallback_color, selection.stroke.color);
+                assert!(name.galley.elided);
+                assert!(
+                    name.pos.x + name.galley.rect.right()
+                        <= row.right() - DESIGN_TOKENS.spacing.sm - 40.0
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    #[test]
+    fn tab_visits_the_row_and_its_actions_in_visual_order_with_visible_focus() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut item = SourceItem::drawing(1, DrawingToolType::TrendLine, Color32::RED);
+            let mut state = ObjectTreeState::default();
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(400.0, 200.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        render_item_row(ui, &mut item, &ObjectTreeConfig::default(), &mut state, 0);
+                    },
+                );
+                let rings: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.stroke.width == 2.0 => Some(rect.rect),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                let focused = ctx
+                    .memory(|m| m.focused())
+                    .and_then(|id| ctx.read_response(id));
+                (rings, focused)
+            };
+            assert!(frame(vec![]).0.is_empty());
+            let mut right = 0.0;
+            for index in 0..6 {
+                let (rings, focused) = frame(vec![egui::Event::Key {
+                    key: egui::Key::Tab,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+                let focused = focused.unwrap();
+                assert_eq!(rings, vec![focused.rect.expand(2.0)]);
+                if index > 1 {
+                    assert!(focused.rect.left() >= right, "Tab moved backwards");
+                }
+                right = focused.rect.right();
+            }
+        }
     }
 }

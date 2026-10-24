@@ -472,6 +472,7 @@ impl UiExt for Ui {
         let size = DESIGN_TOKENS.sizing.button_md;
         let icon_size = icons::MEDIUM;
         let (rect, response) = self.allocate_exact_size(Vec2::splat(size), Sense::click());
+        crate::styles::focus::draw_focus_ring(self, &response, DESIGN_TOKENS.rounding.button);
 
         if self.is_rect_visible(rect) {
             let visuals = &self.style().visuals;
@@ -548,6 +549,7 @@ impl UiExt for Ui {
             Vec2::new(total_width, DESIGN_TOKENS.sizing.button_md),
             Sense::click(),
         );
+        crate::styles::focus::draw_focus_ring(self, &response, DESIGN_TOKENS.rounding.button);
 
         if self.is_rect_visible(rect) {
             let visuals = self.style().visuals.clone();
@@ -637,6 +639,7 @@ impl UiExt for Ui {
         let selected_text = display(value);
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
+            .icon(crate::ui_kit::buttons::combo_chevron)
             .selected_text(selected_text)
             .show_ui(self, |ui| {
                 for option in options {
@@ -660,6 +663,7 @@ impl UiExt for Ui {
         let selected_text = display(value);
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
+            .icon(crate::ui_kit::buttons::combo_chevron)
             .selected_text(selected_text)
             .width(width)
             .show_ui(self, |ui| {
@@ -681,6 +685,7 @@ impl UiExt for Ui {
     ) -> bool {
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
+            .icon(crate::ui_kit::buttons::combo_chevron)
             .selected_text(value.as_str())
             .show_ui(self, |ui| {
                 for &option in options {
@@ -704,6 +709,7 @@ impl UiExt for Ui {
     ) -> bool {
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
+            .icon(crate::ui_kit::buttons::combo_chevron)
             .selected_text(value.as_str())
             .width(width)
             .show_ui(self, |ui| {

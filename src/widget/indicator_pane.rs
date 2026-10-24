@@ -234,6 +234,10 @@ pub struct PaneInteraction {
     /// Interaction response for the legend's close "x", or `None` when the pane
     /// shows no legend and therefore exposes no remove affordance.
     pub close_response: Option<Response>,
+    /// Visibility button response, when the legend is shown.
+    pub visibility_response: Option<Response>,
+    /// Settings button response, when the legend is shown.
+    pub settings_response: Option<Response>,
 }
 
 /// A separate-pane indicator panel rendered via direct egui painting.
@@ -248,12 +252,18 @@ pub struct PaneInteraction {
 /// - Optional vertical grid lines aligned with the main chart
 pub struct IndicatorPane {
     config: IndicatorPaneConfig,
+    pub(super) bar_index: Option<usize>,
+    pub(super) measured_axis_width: f32,
 }
 
 impl IndicatorPane {
     /// Create a new indicator panel with custom configuration
     pub fn with_config(config: IndicatorPaneConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            bar_index: None,
+            measured_axis_width: 0.0,
+        }
     }
 
     /// Render the indicator panel with proper x-axis alignment
@@ -327,15 +337,18 @@ impl IndicatorPane {
         // Draw y-axis labels
         self.draw_y_axis_labels(
             painter,
-            (rect, chart_rect),
-            (y_min, y_max),
-            text_color,
-            indicator.precision().unwrap_or(2),
+            rect,
+            chart_rect,
+            y_min,
+            y_max,
+            indicator,
+            Some(crate::scales::PriceScaleId::Right),
+            None,
         );
 
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
-        self.draw_legend(painter, chart_rect, indicator, text_color, None, false);
+        self.draw_legend(painter, chart_rect, indicator, text_color);
     }
 
     /// Render with explicit coordinate parameters for perfect x-axis alignment.
@@ -419,15 +432,18 @@ impl IndicatorPane {
         // Draw y-axis labels
         self.draw_y_axis_labels(
             painter,
-            (rect, chart_rect),
-            (y_min, y_max),
-            text_color,
-            indicator.precision().unwrap_or(2),
+            rect,
+            chart_rect,
+            y_min,
+            y_max,
+            indicator,
+            Some(crate::scales::PriceScaleId::Right),
+            None,
         );
 
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
-        self.draw_legend(painter, chart_rect, indicator, text_color, None, false);
+        self.draw_legend(painter, chart_rect, indicator, text_color);
     }
 
     /// Render with coordinate alignment and return layout info for hit testing.
@@ -450,7 +466,16 @@ impl IndicatorPane {
         visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) -> Option<PaneInteraction> {
-        self.show_aligned_interactive_in(ui, indicator, visible_range, coords, None, false)
+        self.show_aligned_interactive_in(
+            ui,
+            indicator,
+            visible_range,
+            coords,
+            None,
+            false,
+            Some(crate::scales::PriceScaleId::Right),
+            None,
+        )
     }
 
     pub(super) fn show_aligned_interactive_in(
@@ -461,6 +486,8 @@ impl IndicatorPane {
         coords: IndicatorCoordParams,
         plot_x: Option<egui::emath::Rangef>,
         collapsed: bool,
+        axis: Option<crate::scales::PriceScaleId>,
+        hover: Option<(Pos2, crate::config::CrosshairOptions)>,
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
             return None;
@@ -493,6 +520,7 @@ impl IndicatorPane {
         // Calculate drawing area to match main chart layout
         let left_padding = layout::LEFT_PADDING;
         let right_padding = layout::RIGHT_PADDING;
+        let left_axis = axis == Some(crate::scales::PriceScaleId::Left);
         let plot_x = plot_x.unwrap_or_else(|| {
             egui::emath::Rangef::new(
                 rect.left() + left_padding,
@@ -507,6 +535,25 @@ impl IndicatorPane {
         // Determine y-axis range
         let (y_min, y_max) = self.calculate_y_range(indicator, &visible_range);
 
+        let mapping = coords.to_mapping(chart_rect, y_min, y_max);
+        let crosshair = hover.map(|(mut pos, options)| {
+            if let Some(index) = self.bar_index {
+                pos.x = mapping.idx_to_x(index);
+                if options.mode == crate::config::CrosshairMode::Magnet
+                    && chart_rect.contains(pos)
+                    && let Some(value) = crate::chart::renderers::snap_to_values(
+                        pos.y,
+                        &mapping.price,
+                        (0..indicator.line_cnt())
+                            .filter(|line| indicator.plot_style(*line).visible)
+                            .filter_map(|line| indicator.values().value(line, index)),
+                    )
+                {
+                    pos.y = mapping.price_to_y(value);
+                }
+            }
+            (pos, options)
+        });
         if !collapsed {
             let plot_painter = &painter.with_clip_rect(chart_rect.intersect(painter.clip_rect()));
             // Draw zone fills (colored bands)
@@ -541,37 +588,73 @@ impl IndicatorPane {
                 &coords,
             );
 
+            let context = crate::chart::renderers::RenderContext::new(painter, chart_rect);
+            let tag = crosshair.and_then(|(pos, options)| {
+                crate::chart::renderers::render_crosshair_lines(
+                    &context,
+                    pos,
+                    &options,
+                    chart_rect.bottom(),
+                );
+                axis?;
+                crate::chart::renderers::render_crosshair_price_tag(
+                    &context,
+                    pos,
+                    &mapping.price.with_price_precision(Some(
+                        indicator.precision().unwrap_or(2).min(255) as u8,
+                    )),
+                    &options,
+                    if left_axis {
+                        chart_rect.left()
+                    } else {
+                        rect.right()
+                    },
+                    None,
+                )
+            });
             // Draw y-axis labels
-            self.draw_y_axis_labels(
-                painter,
-                (rect, chart_rect),
-                (y_min, y_max),
-                text_color,
-                indicator.precision().unwrap_or(2),
+            self.measured_axis_width = self.draw_y_axis_labels(
+                painter, rect, chart_rect, y_min, y_max, indicator, axis, tag,
             );
         }
 
-        // Reserve the legend's close "x" and make it independently clickable so
-        // it can surface a remove request without stealing pane-line clicks.
-        let close_rect = self
-            .legend_close_rect(painter, chart_rect, indicator)
-            .map(|close| close.intersect(chart_rect));
-        let close_response = close_rect
-            .map(|cr| ui.interact(cr, response.id.with("indicator_pane_close"), Sense::click()));
-        let close_hovered = close_response.as_ref().is_some_and(|r| r.hovered());
-        if close_hovered {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        if collapsed && let Some((pos, mut options)) = crosshair {
+            options.horz_line_visible = false;
+            crate::chart::renderers::render_crosshair_lines(
+                &crate::chart::renderers::RenderContext::new(painter, chart_rect),
+                pos,
+                &options,
+                chart_rect.bottom(),
+            );
         }
-
-        // Draw indicator legend (and the close glyph) at top-left.
+        let controls = self.legend_controls_rect(painter, chart_rect, indicator);
+        let responses = controls.map(|controls| {
+            let row = Rect::from_min_max(chart_rect.min, controls.right_bottom());
+            crate::chart::renderers::study_controls(
+                ui,
+                row,
+                controls,
+                response.id.with("study_controls"),
+                indicator.is_visible(),
+            )
+        });
+        let legend_rect = Rect::from_min_max(
+            chart_rect.min,
+            Pos2::new(
+                controls.map_or(chart_rect.right(), |rect| rect.left()),
+                chart_rect.bottom(),
+            ),
+        );
         self.draw_legend(
-            &painter.with_clip_rect(chart_rect.intersect(ui.clip_rect())),
+            &painter.with_clip_rect(legend_rect.intersect(ui.clip_rect())),
             chart_rect,
             indicator,
             text_color,
-            close_rect,
-            close_hovered,
         );
+        let (visibility_response, settings_response, close_response) = match responses {
+            Some([visibility, settings, close]) => (Some(visibility), Some(settings), Some(close)),
+            None => (None, None, None),
+        };
 
         // Return panel info for hit testing
         Some(PaneInteraction {
@@ -581,6 +664,8 @@ impl IndicatorPane {
             y_max,
             response,
             close_response,
+            visibility_response,
+            settings_response,
         })
     }
 
@@ -687,16 +772,20 @@ impl IndicatorPane {
         y_min: f64,
         y_max: f64,
         grid_color: Color32,
-        bullish: Color32,
-        bearish: Color32,
+        _bullish: Color32,
+        _bearish: Color32,
     ) {
         // Draw zone lines with dashed style
         if self.config.show_zones {
             for (level, color, _label) in &self.config.zones {
-                let live_color = if *color == DESIGN_TOKENS.semantic.extended.bullish {
-                    bullish
-                } else if *color == DESIGN_TOKENS.semantic.extended.bearish {
-                    bearish
+                let live_color = if [
+                    DESIGN_TOKENS.semantic.extended.bullish,
+                    DESIGN_TOKENS.semantic.extended.bearish,
+                    DESIGN_TOKENS.semantic.extended.chart_text,
+                ]
+                .contains(color)
+                {
+                    grid_color
                 } else {
                     *color
                 };
@@ -956,32 +1045,76 @@ impl IndicatorPane {
     fn draw_y_axis_labels(
         &self,
         painter: &egui::Painter,
-        rects: (Rect, Rect),
-        range: (f64, f64),
-        text_color: Color32,
-        precision: usize,
-    ) {
-        let (full_rect, chart_rect) = rects;
-        let (y_min, y_max) = range;
-        let range = y_max - y_min;
-        let step = self.calculate_nice_step(range, 5);
-        let label_x = chart_rect.max.x + DESIGN_TOKENS.spacing.sm;
+        full_rect: Rect,
+        chart_rect: Rect,
+        y_min: f64,
+        y_max: f64,
+        indicator: &dyn Indicator,
+        axis: Option<crate::scales::PriceScaleId>,
+        crosshair_tag: Option<Rect>,
+    ) -> f32 {
+        let Some(axis) = axis else {
+            return 0.0;
+        };
+        let left = axis == crate::scales::PriceScaleId::Left;
+        let align = if left {
+            egui::Align2::RIGHT_CENTER
+        } else {
+            egui::Align2::LEFT_CENTER
+        };
+        let axis_edge = if left {
+            chart_rect.left()
+        } else {
+            full_rect.right()
+        };
+        let text_color = painter.ctx().active_theme().chart.axis_text;
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(y_min, y_max),
+            chart_rect.top(),
+            chart_rect.bottom(),
+            false,
+        )
+        .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
+        let mut tags = vec![crosshair_tag];
+        if self.config.show_values {
+            crate::chart::rendering::axes::render_study_tags(
+                painter, chart_rect, &map, indicator, axis_edge, &mut tags,
+            );
+        }
+        let mut width = crate::chart::rendering::axes::price_axis_width(painter, &map, &[]);
+        for tag in tags.iter().flatten() {
+            width = width.max(tag.width() + 5.0 + 8.0);
+        }
+        let label_x = if left {
+            chart_rect.left() - DESIGN_TOKENS.spacing.sm
+        } else {
+            chart_rect.right() + DESIGN_TOKENS.spacing.sm
+        };
 
-        let mut y_val = (y_min / step).ceil() * step;
-        while y_val <= y_max {
-            let y = self.value_to_y(y_val, chart_rect, y_min, y_max);
+        for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
+            let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = format!("{y_val:.precision$}");
-                painter.text(
-                    Pos2::new(label_x, y),
-                    egui::Align2::LEFT_CENTER,
+                let label = mark.label;
+                let galley = painter.layout_no_wrap(
                     label,
                     crate::chart::rendering::axes::axis_font(painter.ctx()),
                     text_color,
                 );
+                let bounds = align.anchor_size(Pos2::new(label_x, y), galley.size());
+                if tags.iter().flatten().any(|tag| tag.intersects(bounds)) {
+                    continue;
+                }
+                painter.text(
+                    Pos2::new(label_x, y),
+                    align,
+                    galley.text(),
+                    crate::chart::rendering::axes::axis_font(painter.ctx()),
+                    text_color,
+                );
             }
-            y_val += step;
         }
+        width
     }
 
     /// Builds the legend text (indicator name plus its current value) shown at
@@ -996,7 +1129,7 @@ impl IndicatorPane {
             legend_parts.push(self.config.inputs.clone());
         }
         if self.config.show_values
-            && let Some(bar) = values.len().checked_sub(1)
+            && let Some(bar) = self.bar_index.or_else(|| values.len().checked_sub(1))
         {
             for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
             {
@@ -1010,11 +1143,8 @@ impl IndicatorPane {
         legend_parts.join(" ")
     }
 
-    /// Computes the screen rect of the close "x" trailing the legend text for a
-    /// pane drawn into `rect`, or `None` when the legend (and thus the remove
-    /// affordance) is hidden. Layout is measured through `painter` so the hit
-    /// region matches the painted glyph exactly.
-    fn legend_close_rect(
+    /// Reserves three controls after the legend, keeping them inside short panes.
+    fn legend_controls_rect(
         &self,
         painter: &egui::Painter,
         rect: Rect,
@@ -1023,69 +1153,42 @@ impl IndicatorPane {
         if !self.config.show_legend {
             return None;
         }
-
         let galley = painter.layout_no_wrap(
             self.legend_text(indicator),
             egui::FontId::proportional(typography::MD),
             Color32::WHITE,
         );
-        let text_left = rect.min.x + DESIGN_TOKENS.spacing.sm;
-        let center_y = rect.min.y + 12.0_f32.min(rect.height() / 2.0);
-        let glyph_size = typography::MD;
-        let center = Pos2::new(
-            text_left + galley.size().x + DESIGN_TOKENS.spacing.md,
-            center_y,
-        );
-        let pad = DESIGN_TOKENS.spacing.sm;
-        Some(Rect::from_center_size(
-            center,
-            egui::vec2(glyph_size + pad, glyph_size + pad),
-        ))
+        let x =
+            (rect.left() + DESIGN_TOKENS.spacing.sm + galley.size().x + DESIGN_TOKENS.spacing.md)
+                .min(rect.right() - 60.0)
+                .max(rect.left());
+        Some(
+            Rect::from_min_size(Pos2::new(x, rect.top() + 2.0), egui::vec2(60.0, 20.0))
+                .intersect(rect),
+        )
     }
 
-    /// Draws the indicator legend (name + current value) at the pane's
-    /// top-left, plus a subtle close "x" inside
-    /// `close_rect` when one was reserved by [`Self::legend_close_rect`]. The
-    /// glyph dims at rest and brightens to the text color when `close_hovered`,
-    /// so it reads as clickable without competing with the indicator readout.
+    /// Draws the selected bar's study values beside its name and inputs.
     fn draw_legend(
         &self,
         painter: &egui::Painter,
         rect: Rect,
         indicator: &dyn Indicator,
         text_color: Color32,
-        close_rect: Option<Rect>,
-        close_hovered: bool,
     ) {
         if !self.config.show_legend {
             return;
         }
-
         painter.text(
             Pos2::new(
-                rect.min.x + DESIGN_TOKENS.spacing.sm,
-                rect.min.y + 12.0_f32.min(rect.height() / 2.0),
+                rect.left() + DESIGN_TOKENS.spacing.sm,
+                rect.top() + 12.0_f32.min(rect.height() / 2.0),
             ),
             egui::Align2::LEFT_CENTER,
             self.legend_text(indicator),
             egui::FontId::proportional(typography::MD),
             text_color,
         );
-
-        if let Some(close_rect) = close_rect {
-            let glyph_color = if close_hovered {
-                text_color
-            } else {
-                Color32::from_rgba_unmultiplied(text_color.r(), text_color.g(), text_color.b(), 140)
-            };
-            painter.text(
-                close_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "\u{00d7}",
-                egui::FontId::proportional(typography::MD),
-                glyph_color,
-            );
-        }
     }
 
     fn value_to_y(&self, value: f64, rect: Rect, y_min: f64, y_max: f64) -> f32 {

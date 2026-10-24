@@ -99,7 +99,7 @@ impl<'a> PairButton<'a> {
         // Icon button (centered in full width for visual balance)
         let icon_rect = Rect::from_center_size(pair_rect.center(), Vec2::splat(icon_size));
         let icon_res = ui.allocate_rect(icon_rect, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &icon_res);
+        crate::styles::focus::draw_focus_ring(ui, &icon_res, DESIGN_TOKENS.rounding.button);
 
         // Arrow button (right edge)
         let arrow_rect = Rect::from_min_size(
@@ -107,7 +107,7 @@ impl<'a> PairButton<'a> {
             Vec2::new(arrow_width, height),
         );
         let arrow_res = ui.allocate_rect(arrow_rect, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &arrow_res);
+        crate::styles::focus::draw_focus_ring(ui, &arrow_res, DESIGN_TOKENS.rounding.button);
 
         // Draw icon button background (with visibility check)
         if ui.is_rect_visible(icon_rect) {
@@ -227,9 +227,9 @@ impl<'a> PairButton<'a> {
 
         // Use Response-based interactions instead of manual pointer polling
         let icon_res = ui.allocate_rect(icon_zone_rect, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &icon_res);
+        crate::styles::focus::draw_focus_ring(ui, &icon_res, inner_rounding);
         let arrow_res = ui.allocate_rect(arrow_rect, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &arrow_res);
+        crate::styles::focus::draw_focus_ring(ui, &arrow_res, inner_rounding);
 
         let icon_hovered = icon_res.hovered();
         let arrow_hovered = arrow_res.hovered();

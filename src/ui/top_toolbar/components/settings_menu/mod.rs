@@ -16,6 +16,7 @@
 
 // Module declarations
 pub mod actions;
+mod apply;
 pub mod config;
 pub mod data;
 pub mod dialog;

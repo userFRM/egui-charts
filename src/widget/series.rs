@@ -33,6 +33,10 @@ impl Chart {
         let (bars, rejected) = clean(bars, &self.clock());
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();
+        self.pending_box_sizes = self
+            .chart_type_params
+            .size_methods()
+            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
         let before = self.edge();
         let prepended = before
             .first
@@ -209,6 +213,25 @@ impl Chart {
         true
     }
 
+    /// Show or hide the main price series, its volume and its legend without unloading its bars.
+    /// Studies and drawings remain visible and continue to receive data.
+    pub fn set_main_series_visible(&mut self, visible: bool) {
+        self.main_series_visible = visible;
+        if !visible
+            && matches!(
+                self.selection.selected_id(),
+                Some(ChartElementId::Series(_))
+            )
+        {
+            self.selection.deselect();
+        }
+    }
+
+    /// Whether the main price series is visible.
+    pub fn is_main_series_visible(&self) -> bool {
+        self.main_series_visible
+    }
+
     /// Includes or excludes study `id` from the main price auto-scale, without hiding it.
     /// Defaults to `true`; only visible overlay studies contribute. Returns `false` for an id
     /// that is not a study of the chart.
@@ -324,6 +347,8 @@ impl Chart {
 
     /// Shows the cached elements before input, keeping the view in the series' slots.
     pub(super) fn show_elements(&mut self) {
+        self.chart_type_params
+            .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
         let built = crate::chart::rendering::candles::price_based::elements(
             self.chart_type,
             &self.chart_type_params,
