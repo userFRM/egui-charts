@@ -407,9 +407,10 @@ impl TimeframeSelector {
         }
     }
 
-    /// Restrict interval choices to those the connected source can serve. `None` allows
-    /// every interval; an empty list allows none. Update this when the source or symbol
-    /// changes. Saved favourites and custom intervals are retained while unavailable.
+    /// Restrict interval choices to those the connected source can serve, such as the chart
+    /// instrument's [`supported_timeframes`](crate::model::Instrument::supported_timeframes).
+    /// `None` allows every interval; an empty list allows none. Update this when the source or
+    /// symbol changes. Saved favourites and custom intervals are retained while unavailable.
     pub fn set_supported_timeframes(&mut self, timeframes: Option<Vec<crate::model::Timeframe>>) {
         self.supported_timeframes = timeframes.map(|values| values.into_iter().collect());
     }

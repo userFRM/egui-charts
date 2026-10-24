@@ -109,7 +109,9 @@ use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 pub mod indicator_pane;
-pub use crate::chart::renderers::{Legend, LegendStatus, QuoteSide, StudyAction, StudyValue};
+pub use crate::chart::renderers::{
+    Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, Watermark, WatermarkLine,
+};
 pub use crate::chart::selection::{ChartElementId, SeriesId};
 pub use builder::ChartBuilder;
 use egui::{Pos2, Rect, Vec2};
@@ -122,12 +124,13 @@ use crate::chart::state;
 
 mod anchors;
 pub mod builder;
+mod change_marks;
 mod clipboard;
 mod crosshair;
 mod events;
 mod feed;
 mod marks;
-pub use events::{ChartEvent, ChartPointer};
+pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
 pub mod export;
 mod frame;
 mod history;
@@ -145,6 +148,7 @@ mod replay;
 mod selection;
 mod series;
 pub use price_series::SeriesOptions;
+pub use series::PriceLineId;
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
@@ -311,6 +315,7 @@ pub struct Chart {
     currency_choices: Vec<String>,
     currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
+    watermark: Option<Watermark>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
@@ -363,8 +368,14 @@ pub struct Chart {
     // =========================================================================
     /// Bar marks (annotations on chart bars, e.g., trade signals); see [`Chart::set_markers`].
     pub(crate) marks: Vec<crate::model::Marker>,
+    /// Fit and layer of the main series' marks; see [`Chart::set_marker_options`].
+    marker_options: crate::model::MarkerOptions,
+    /// Marks of the main series' recent changes; see [`Chart::set_change_markers`].
+    change_marks: Option<change_marks::ChangeMarks>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
-    price_lines: Vec<crate::model::PriceLine>,
+    price_lines: Vec<(PriceLineId, crate::model::PriceLine)>,
+    /// The number of price line handles issued.
+    next_price_line: u64,
     /// Price axis tags of the trading lines drawn over the last frame, shown once on the next.
     #[cfg(feature = "ui")]
     pub(crate) trading_tags: Vec<(f64, egui::Color32)>,
@@ -508,6 +519,13 @@ impl Chart {
     /// Supplies a host-owned instrument image for the legend. `None` hides it.
     pub fn set_legend_badge(&mut self, badge: Option<egui::ImageSource<'static>>) {
         self.legend_badge = badge;
+    }
+
+    /// Paints `watermark` behind the series of the price pane, in addition to the symbol
+    /// watermark of [`ChartConfig::show_watermark`](crate::config::ChartConfig::show_watermark).
+    /// `None` removes it.
+    pub fn set_watermark(&mut self, watermark: Option<Watermark>) {
+        self.watermark = watermark;
     }
 
     /// Supplies status marks and their host-defined meaning and colours.
