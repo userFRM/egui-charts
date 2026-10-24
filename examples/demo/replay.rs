@@ -3,7 +3,7 @@
 use super::DemoApp;
 use egui_charts::model::{BarClock, Timeframe};
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplayStartAction};
-use egui_charts::widget::{ChartEvent, SeriesId};
+use egui_charts::widget::SeriesId;
 
 impl DemoApp {
     pub(super) fn toggle_replay(&mut self) {
@@ -254,33 +254,28 @@ impl DemoApp {
         }
     }
 
-    pub(super) fn handle_replay_bar_click(&mut self, ctx: &egui::Context) {
+    pub(super) fn handle_replay_bar_click(
+        &mut self,
+        ctx: &egui::Context,
+        time: chrono::DateTime<chrono::Utc>,
+    ) {
         if !self.replay_selecting {
             return;
         }
-        let time = self.chart.drain_events().find_map(|event| match event {
-            ChartEvent::Click {
-                position,
-                button: egui::PointerButton::Primary,
-            } if position.series == SeriesId::MAIN => Some(position.time),
-            _ => None,
-        });
-        if let Some(time) = time {
-            ctx.request_repaint();
-            let bars = self.chart.bars(SeriesId::MAIN);
-            let index = bars
-                .partition_point(|bar| bar.time <= time)
-                .saturating_sub(1);
-            if bars.first().is_none_or(|bar| time < bar.time) || time > bars.last().unwrap().time {
-                return;
-            }
-            self.replay_selecting = false;
-            self.start_replay();
-            if let Some(replay) = &mut self.replay {
-                replay.handle_action(ReplayAction::JumpToBar(index));
-            }
-            self.push_replay_window_to_chart();
+        ctx.request_repaint();
+        let bars = self.chart.bars(SeriesId::MAIN);
+        let index = bars
+            .partition_point(|bar| bar.time <= time)
+            .saturating_sub(1);
+        if bars.first().is_none_or(|bar| time < bar.time) || time > bars.last().unwrap().time {
+            return;
         }
+        self.replay_selecting = false;
+        self.start_replay();
+        if let Some(replay) = &mut self.replay {
+            replay.handle_action(ReplayAction::JumpToBar(index));
+        }
+        self.push_replay_window_to_chart();
     }
 }
 

@@ -174,6 +174,7 @@ impl DemoApp {
     }
 
     fn refresh_active_chart(&mut self) {
+        self.last_chart_click = None;
         self.state.symbol = self.chart.symbol().to_owned();
         self.state.timeframe = self.chart.timeframe().unwrap_or(Timeframe::Min1);
         self.state.chart_type = self.chart.chart_type();

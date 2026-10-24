@@ -33,7 +33,9 @@ use egui_charts::model::{Alert, AlertCondition};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
-use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
+use egui_charts::ui::context_menu::{
+    ChartContextAction, ChartMenus, ContextMenuAction, HostMenuEntry,
+};
 use egui_charts::ui::dialogs::DrawingContextMenuAction;
 use egui_charts::ui::dialogs::{
     AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
@@ -54,7 +56,7 @@ use egui_charts::ui::top_toolbar::components::indicator_dialog::{
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
-use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
+use egui_charts::ui::top_toolbar::{ToolbarEntry, TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
@@ -168,6 +170,7 @@ pub struct DemoApp {
     footprint_scale: Option<(f32, f32)>,
     feed_before_footprint: bool,
     menus: ChartMenus,
+    last_chart_click: Option<egui_charts::widget::ChartPointer>,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     pub theme: Theme,
@@ -277,6 +280,17 @@ impl DemoApp {
                 1,
                 egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute,
             );
+        top_toolbar.host_entries = vec![
+            ToolbarEntry::new("research", "Research")
+                .with_icon(&egui_charts::icons::icons::QUICK_SEARCH),
+            ToolbarEntry::new("host-tools", "Host tools")
+                .with_items(vec![ToolbarEntry::new("copy-symbol", "Copy symbol")]),
+        ];
+        let mut menus = ChartMenus::default();
+        menus.host_entries.push(
+            HostMenuEntry::new("research", "Open in research")
+                .with_icon(&egui_charts::icons::icons::QUICK_SEARCH),
+        );
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
         widget_bar
@@ -287,6 +301,24 @@ impl DemoApp {
                 tooltip: "Data Window".into(),
                 section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
             });
+        let mut notes = String::new();
+        widget_bar.register_panel(
+            egui_charts::ui::widget_bar::WidgetBarWidget {
+                id: 2,
+                icon: egui_charts::icons::icons::TEXT,
+                tooltip: "Session notes".into(),
+                section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
+            },
+            move |ui| {
+                ui.label("Host panel · notes stay in this session");
+                ui.add(
+                    egui::TextEdit::multiline(&mut notes)
+                        .hint_text("Write your research notes…")
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(12),
+                );
+            },
+        );
         if let Some(preferences) = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "interval_preferences"))
@@ -310,7 +342,8 @@ impl DemoApp {
             footprint: None,
             footprint_scale: None,
             feed_before_footprint: false,
-            menus: ChartMenus::default(),
+            menus,
+            last_chart_click: None,
             state: DemoAppState {
                 symbol: symbol.into(),
                 timeframe,
@@ -1044,6 +1077,27 @@ impl DemoApp {
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
+            TopToolbarAction::Host(id) => {
+                if id == "copy-symbol" {
+                    ctx.copy_text(self.chart.symbol().to_string());
+                }
+                if id == "research" {
+                    if let Some(click) = self.last_chart_click {
+                        self.toasts.info(format!(
+                            "Host action: {id}, last chart click: {}, price: {:.4}",
+                            click.time.to_rfc3339(),
+                            click.price
+                        ));
+                    } else {
+                        self.toasts
+                            .info("Click the chart to choose a research time and price");
+                    }
+                } else {
+                    self.toasts
+                        .info(format!("Host action: {id} ({})", self.chart.symbol()));
+                }
+                return;
+            }
             TopToolbarAction::Save => {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Save);
                 return;
@@ -1106,7 +1160,10 @@ impl DemoApp {
             }
             // Light/dark toggle is a real, cheap visual change.
             TopToolbarAction::ThemeToggle => self.toggle_theme(ctx),
-            TopToolbarAction::Layout(_) | TopToolbarAction::Save | TopToolbarAction::None => {}
+            TopToolbarAction::Layout(_)
+            | TopToolbarAction::Save
+            | TopToolbarAction::Host(_)
+            | TopToolbarAction::None => {}
         }
     }
 
@@ -1324,8 +1381,11 @@ impl DemoApp {
             Some(SidePanel::Alerts) => Some(RightBarIcon::Alerts),
             _ => None,
         };
-        self.widget_bar.active_widget =
-            (self.open_panel == Some(SidePanel::DataWindow)).then_some(1);
+        if self.open_panel == Some(SidePanel::DataWindow) {
+            self.widget_bar.active_widget = Some(1);
+        } else if self.open_panel.is_some() || self.widget_bar.active_widget == Some(1) {
+            self.widget_bar.active_widget = None;
+        }
         egui::Panel::right("widget_bar")
             .resizable(false)
             .exact_size(49.0)
@@ -1345,6 +1405,7 @@ impl DemoApp {
                             Some(SidePanel::DataWindow)
                         };
                     }
+                    WidgetBarAction::WidgetClicked(_) => self.open_panel = None,
                     _ => {}
                 }
             });
@@ -1369,6 +1430,7 @@ impl DemoApp {
     }
 
     fn show_side_panel(&mut self, ui: &mut egui::Ui) {
+        self.widget_bar.show_panel(ui);
         let Some(which) = self.open_panel else {
             return;
         };
@@ -1688,7 +1750,25 @@ impl DemoApp {
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
         }
-        self.handle_replay_bar_click(ui.ctx());
+        let mut replay_click = None;
+        for event in self.chart.drain_events() {
+            match event {
+                egui_charts::widget::ChartEvent::Click { position, button } => {
+                    self.last_chart_click = Some(position);
+                    if button == egui::PointerButton::Primary && position.series == SeriesId::MAIN {
+                        replay_click.get_or_insert(position.time);
+                    }
+                }
+                egui_charts::widget::ChartEvent::SymbolChanged(_)
+                | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
+                    self.last_chart_click = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(time) = replay_click {
+            self.handle_replay_bar_click(ui.ctx(), time);
+        }
         // Right-click context actions resolve after the chart is shown.
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(action);
@@ -1697,6 +1777,16 @@ impl DemoApp {
 
     fn handle_context_action(&mut self, action: ChartContextAction) {
         match action {
+            ChartContextAction::Host { id, context } => {
+                self.toasts.info(format!(
+                    "Host action: {id}, time: {}, price: {:.4}, target: {:?}",
+                    context
+                        .time
+                        .map_or_else(|| "outside loaded data".into(), |time| time.to_rfc3339()),
+                    context.price,
+                    context.target
+                ));
+            }
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
             ChartContextAction::Drawing(a) => self.handle_drawing_context(a),
@@ -2081,6 +2171,91 @@ mod tests {
     use super::*;
     use egui_charts::ui::dialogs::{DrawingLineStyle, DrawingProps};
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn research_toolbar_reports_the_last_chart_click() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new(&cc);
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_chart(ui, app.theme.ui.panel_bg),
+            )
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![]);
+        }
+        let map = app.chart.get_chart_mapping();
+        let index = app.chart.state().shown().len() - 5;
+        let time = app.chart.state().shown()[index].time;
+        let pos = egui::pos2(map.idx_to_x(index), map.rect.center().y);
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Host("research".into()));
+        let message = &app.toasts.toasts().last().unwrap().message;
+        assert!(
+            message.contains(&time.to_rfc3339()),
+            "{message}, expected {time}"
+        );
+        assert!(
+            message.contains(&format!("price: {:.4}", map.y_to_price(pos.y))),
+            "{message}"
+        );
+        app.replay_selecting = true;
+        let index = index - 3;
+        let time = app.chart.state().shown()[index].time;
+        let pos = egui::pos2(map.idx_to_x(index), map.rect.center().y);
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert!(!app.replay_selecting);
+        let replay = app.replay.as_ref().unwrap();
+        assert_eq!(replay.state.curr_bar, index);
+        assert!(!replay.state.is_playing());
+        assert_eq!(app.last_chart_click.unwrap().time, time);
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Host("research".into()));
+        let message = &app.toasts.toasts().last().unwrap().message;
+        assert!(message.contains(&time.to_rfc3339()), "{message}");
+        assert!(
+            message.contains(&format!("price: {:.4}", map.y_to_price(pos.y))),
+            "{message}"
+        );
+        app.switch_symbol("AAPL");
+        frame(&mut app, vec![]);
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Host("research".into()));
+        assert_eq!(
+            app.toasts.toasts().last().unwrap().message,
+            "Click the chart to choose a research time and price"
+        );
+    }
 
     #[test]
     fn application_storage_restores_drawings_after_restart() {

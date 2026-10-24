@@ -12,9 +12,8 @@ use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::{Theme, ThemeExt};
 use crate::ui::Control;
 use crate::ui::app_state::set_control_visible;
-use crate::ui::dialogs::{
-    DrawingContextMenu, DrawingContextMenuAction, SeriesContextMenu, SeriesContextMenuAction,
-};
+use crate::ui::dialogs::drawing_context_menu::DRAWING_MENU_OFFSET;
+use crate::ui::dialogs::{DrawingContextMenu, SeriesContextMenu};
 use crate::widget::{Chart, RightClickTarget};
 
 use crate::tokens::DESIGN_TOKENS;
@@ -210,6 +209,9 @@ pub(crate) fn show_menu<A: Clone>(
     entries: &[MenuEntry<A>],
     just_opened: bool,
 ) -> Option<Option<A>> {
+    if entries.is_empty() {
+        return Some(None);
+    }
     let t = &DESIGN_TOKENS.sizing.context_menu;
     let frame = egui::Frame::menu(&ctx.global_style())
         .inner_margin(theme.spacing.sm)
@@ -660,6 +662,55 @@ impl ChartContextMenu {
     }
 }
 
+/// The original click retained while a host menu action is being chosen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HostMenuContext {
+    /// Background, series, study or drawing that was clicked, including its screen position.
+    pub target: RightClickTarget,
+    /// UTC time of the nearest displayed bar or element; `None` outside loaded data.
+    pub time: Option<chrono::DateTime<chrono::Utc>>,
+    /// Value at the click, using the clicked pane's scale for drawings.
+    pub price: f64,
+}
+
+/// A host row appended to the chart, series and drawing menus in registration order.
+///
+/// Use [`Self::when`] to restrict a row to particular click targets. Host ids must be unique
+/// within one [`ChartMenus`]. The host owns any services invoked by the returned action.
+pub struct HostMenuEntry {
+    /// Stable id returned in [`ChartContextAction::Host`].
+    pub id: String,
+    /// Text painted with the built-in menu style.
+    pub label: String,
+    /// Optional icon painted with the built-in tint and size.
+    pub icon: Option<&'static Icon>,
+    condition: Box<dyn Fn(&HostMenuContext) -> bool>,
+}
+
+impl HostMenuEntry {
+    /// Create a row visible for every chart, series and drawing click.
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: None,
+            condition: Box::new(|_| true),
+        }
+    }
+
+    /// Paint an icon beside the label.
+    pub fn with_icon(mut self, icon: &'static Icon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// Omit this row when the predicate is false for the original click.
+    pub fn when(mut self, condition: impl Fn(&HostMenuContext) -> bool + 'static) -> Self {
+        self.condition = Box::new(condition);
+        self
+    }
+}
+
 /// A context-menu action surfaced by the turnkey right-click path, tagged with
 /// the menu it came from.
 ///
@@ -669,6 +720,13 @@ impl ChartContextMenu {
 /// type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChartContextAction {
+    /// A registered host entry, with the original click context.
+    Host {
+        /// The registered entry id.
+        id: String,
+        /// The click that opened the menu, retained even if the pointer or chart moves.
+        context: HostMenuContext,
+    },
     /// An action from the chart-background menu.
     Chart(ContextMenuAction),
     /// An action from the series/indicator menu.
@@ -683,12 +741,25 @@ pub enum ChartContextAction {
 /// [`Chart::show`]: a right-click on the chart opens the menu for what it landed on, and the
 /// item the user picks comes back as a [`ChartContextAction`]. The menus follow the theme
 /// applied with [`apply_to_egui`](crate::theme::apply_to_egui).
+///
+/// ```
+/// use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, HostMenuEntry};
+/// use egui_charts::widget::RightClickTarget;
+/// let mut menus = ChartMenus::default();
+/// menus.host_entries.push(HostMenuEntry::new("ticket", "Send to ticket")
+///     .when(|click| matches!(click.target, RightClickTarget::Background { .. })));
+/// // After chart.show(ui), handle ChartContextAction::Host { id, context } from menus.show.
+/// ```
 #[derive(Default)]
 pub struct ChartMenus {
     chart: ChartContextMenu,
     series: SeriesContextMenu,
     drawing: DrawingContextMenu,
     axes: super::axis_context_menu::AxisMenus,
+    /// Host rows in display order. Empty by default.
+    pub host_entries: Vec<HostMenuEntry>,
+    context: Option<HostMenuContext>,
+    just_opened: bool,
 }
 
 impl ChartMenus {
@@ -709,6 +780,7 @@ impl ChartMenus {
             self.series.close();
             self.drawing.close();
             self.axes.close();
+            self.context = None;
             chart.take_right_click();
             chart.menu_open = false;
             return None;
@@ -717,9 +789,39 @@ impl ChartMenus {
             self.chart.close();
             self.series.close();
             self.drawing.close();
+            self.context = None;
         }
         if let Some(target) = chart.take_right_click() {
             self.axes.close();
+            let pos = match target {
+                RightClickTarget::Element { pos, .. }
+                | RightClickTarget::Drawing { pos, .. }
+                | RightClickTarget::Background { pos, .. } => pos,
+            };
+            let mapping = chart.get_chart_mapping();
+            let index = mapping.x_to_idx_f32(pos.x).round();
+            let time = (index >= 0.0)
+                .then(|| chart.state().shown().get(index as usize))
+                .flatten()
+                .map(|bar| bar.time);
+            let price = match target {
+                RightClickTarget::Element { price, .. }
+                | RightClickTarget::Background { price, .. } => price,
+                RightClickTarget::Drawing { .. } => chart
+                    .get_rendered_indicator_panes()
+                    .iter()
+                    .find(|pane| pane.chart_rect.contains(pos))
+                    .map_or_else(
+                        || mapping.y_to_price(pos.y),
+                        |pane| pane.mapping.y_to_price(pos.y),
+                    ),
+            };
+            self.context = Some(HostMenuContext {
+                target,
+                time,
+                price,
+            });
+            self.just_opened = true;
             // A new right-click supersedes any menu still open.
             self.chart.close();
             self.series.close();
@@ -761,12 +863,30 @@ impl ChartMenus {
         }
 
         let theme = ctx.active_theme();
-        self.chart
-            .show_with_shortcuts(ctx, &theme, chart.shortcuts());
-        self.series
-            .show_with_shortcuts(ctx, &theme, chart.shortcuts());
-        self.drawing
-            .show_with_shortcuts(ctx, &theme, chart.shortcuts());
+        let mut menu_action = None;
+        if let Some(context) = self.context {
+            let (pos, gap) = match context.target {
+                RightClickTarget::Element { pos, .. }
+                | RightClickTarget::Background { pos, .. } => (pos, POINTER_GAP),
+                RightClickTarget::Drawing { pos, .. } => (pos, DRAWING_MENU_OFFSET),
+            };
+            let entries = self.build_menu_items(chart.shortcuts(), context);
+            if let Some(picked) = show_menu(
+                ctx,
+                Id::unique("chart_host_menu"),
+                &theme,
+                pos,
+                gap,
+                &entries,
+                std::mem::take(&mut self.just_opened),
+            ) {
+                menu_action = picked;
+                self.context = None;
+                self.chart.close();
+                self.series.close();
+                self.drawing.close();
+            }
+        }
         let axis_action = chart.user_action(|chart| self.axes.show(ctx, chart));
         chart.menu_open = self.chart.is_open()
             || self.series.is_open()
@@ -774,18 +894,69 @@ impl ChartMenus {
             || self.axes.is_open();
 
         // At most one menu is open at a time, so at most one action resolves.
-        let chart_action = axis_action.unwrap_or_else(|| self.chart.take_action());
-        let series_action = self.series.take_action();
-        let drawing_action = self.drawing.take_action();
-        if chart_action != ContextMenuAction::None {
-            Some(ChartContextAction::Chart(chart_action))
-        } else if series_action != SeriesContextMenuAction::None {
-            Some(ChartContextAction::Series(series_action))
-        } else if drawing_action != DrawingContextMenuAction::None {
-            Some(ChartContextAction::Drawing(drawing_action))
-        } else {
-            None
+        axis_action.map(ChartContextAction::Chart).or(menu_action)
+    }
+
+    fn build_menu_items(
+        &self,
+        shortcuts: &crate::widget::ShortcutMap,
+        context: HostMenuContext,
+    ) -> Vec<MenuEntry<ChartContextAction>> {
+        fn tagged<A>(
+            entries: Vec<MenuEntry<A>>,
+            tag: impl Fn(A) -> ChartContextAction,
+        ) -> Vec<MenuEntry<ChartContextAction>> {
+            entries
+                .into_iter()
+                .map(|entry| match entry {
+                    MenuEntry::Separator => MenuEntry::Separator,
+                    MenuEntry::Item(item) => MenuEntry::Item(MenuItem {
+                        label: item.label,
+                        shortcut: item.shortcut,
+                        icon: item.icon,
+                        action: tag(item.action),
+                        enabled: item.enabled,
+                        danger: item.danger,
+                    }),
+                })
+                .collect()
         }
+        let mut entries = match context.target {
+            RightClickTarget::Background { .. } => tagged(
+                self.chart.build_menu_items(shortcuts),
+                ChartContextAction::Chart,
+            ),
+            RightClickTarget::Element { .. } => tagged(
+                self.series.build_menu_items(shortcuts),
+                ChartContextAction::Series,
+            ),
+            RightClickTarget::Drawing { .. } => tagged(
+                self.drawing.build_menu_items(shortcuts),
+                ChartContextAction::Drawing,
+            ),
+        };
+        let mut separated = false;
+        for entry in &self.host_entries {
+            if !(entry.condition)(&context) {
+                continue;
+            }
+            if !separated {
+                if !entries.is_empty() {
+                    entries.push(MenuEntry::Separator);
+                }
+                separated = true;
+            }
+            let mut item = MenuItem::new(
+                &entry.label,
+                ChartContextAction::Host {
+                    id: entry.id.clone(),
+                    context,
+                },
+            );
+            item.icon = entry.icon;
+            entries.push(MenuEntry::Item(item));
+        }
+        entries
     }
 }
 
@@ -840,22 +1011,57 @@ mod tests {
                     for control in controls {
                         menus.set_control_visible(control, visible);
                     }
-                    if series {
-                        menus.series.set_context("SYNTH", 105.0);
-                        menus.series.open(Pos2::new(30.0, 30.0), SeriesId::MAIN);
+                    chart.symbol = "SYNTH".into();
+                    chart.right_click = Some(if series {
+                        RightClickTarget::Element {
+                            id: ChartElementId::Series(SeriesId::MAIN),
+                            bar_idx: 0,
+                            pos: Pos2::new(30.0, 30.0),
+                            price: 105.0,
+                        }
                     } else {
-                        menus.chart.set_symbol("SYNTH");
-                        menus.chart.open(Pos2::new(30.0, 30.0), 105.0);
-                    }
+                        RightClickTarget::Background {
+                            pos: Pos2::new(30.0, 30.0),
+                            price: 105.0,
+                        }
+                    });
                     frame(&mut menus, &mut chart);
                     let labels = frame(&mut menus, &mut chart);
                     assert_eq!(!labels.is_empty(), visible, "{labels:?}");
                     assert_eq!(menus.chart.is_open() || menus.series.is_open(), visible);
+                    if !visible {
+                        menus
+                            .host_entries
+                            .push(HostMenuEntry::new("host-only", "Host only"));
+                        chart.right_click = Some(RightClickTarget::Background {
+                            pos: Pos2::new(30.0, 30.0),
+                            price: 105.0,
+                        });
+                        frame(&mut menus, &mut chart);
+                        assert!(
+                            frame(&mut menus, &mut chart)
+                                .iter()
+                                .any(|label| label == "Host only")
+                        );
+                        assert!(
+                            matches!(
+                                menus
+                                    .build_menu_items(chart.shortcuts(), menus.context.unwrap())
+                                    .first(),
+                                Some(MenuEntry::Item(_))
+                            ),
+                            "host-only menus have no leading separator"
+                        );
+                        menus.host_entries.clear();
+                    }
                 }
                 menus.set_control_visible(Control::Settings, false);
                 menus.set_control_visible(Control::ObjectTree, false);
                 menus.set_control_visible(Control::Indicators, false);
-                menus.chart.open(Pos2::new(30.0, 30.0), 105.0);
+                chart.right_click = Some(RightClickTarget::Background {
+                    pos: Pos2::new(30.0, 30.0),
+                    price: 105.0,
+                });
                 let labels = frame(&mut menus, &mut chart);
                 assert!(labels.iter().any(|label| label.starts_with("Copy price")));
                 assert!(!labels.iter().any(|label| label.contains("Settings")
@@ -864,6 +1070,151 @@ mod tests {
                 menus.set_control_visible(Control::ContextMenus, false);
                 assert!(frame(&mut menus, &mut chart).is_empty());
                 assert!(!chart.menu_open);
+                menus.set_control_visible(Control::ContextMenus, true);
+                assert!(
+                    frame(&mut menus, &mut chart).is_empty(),
+                    "closed menus stay closed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn host_menu_entries_filter_targets_and_return_the_original_click() {
+        use egui::{Event, PointerButton, RawInput, Shape};
+        for theme in [Theme::light(), Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = crate::widget::test_frames::chart(&[100.0; 10], &[110.0; 10]);
+            let mut menus = ChartMenus {
+                host_entries: vec![
+                    HostMenuEntry::new("ticket", "Send to ticket").when(|context| {
+                        matches!(context.target, RightClickTarget::Background { .. })
+                    }),
+                    HostMenuEntry::new("research", "Open in research"),
+                ],
+                ..Default::default()
+            };
+            let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
+                let mut action = None;
+                let right_click = chart.right_click.take();
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 900.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                        if right_click.is_some() {
+                            chart.right_click = right_click;
+                        }
+                        action = menus.show(ui.ctx(), chart);
+                    },
+                );
+                let text = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.pos + text.galley.size() / 2.0,
+                        )),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                output.drop_without_applying_deltas();
+                (action, text)
+            };
+            frame(&mut chart, &mut menus, vec![]);
+            let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(5), 100.0);
+            let time = chart.state().shown()[5].time;
+            for target in [
+                RightClickTarget::Background { pos, price: 123.25 },
+                RightClickTarget::Element {
+                    id: ChartElementId::Series(SeriesId::MAIN),
+                    pos,
+                    bar_idx: 5,
+                    price: 321.5,
+                },
+                RightClickTarget::Drawing {
+                    drawing_id: 42,
+                    pos,
+                },
+            ] {
+                chart.right_click = Some(target);
+                frame(&mut chart, &mut menus, vec![]);
+                let (_, text) = frame(&mut chart, &mut menus, vec![]);
+                let background = matches!(target, RightClickTarget::Background { .. });
+                assert_eq!(
+                    text.iter().any(|(label, _)| label == "Send to ticket"),
+                    background
+                );
+                let label = if background {
+                    "Send to ticket"
+                } else {
+                    "Open in research"
+                };
+                let pick = text
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .expect("host row must be rendered")
+                    .1;
+                if background {
+                    let ticket = text
+                        .iter()
+                        .position(|(label, _)| label == "Send to ticket")
+                        .unwrap();
+                    let research = text
+                        .iter()
+                        .position(|(label, _)| label == "Open in research")
+                        .unwrap();
+                    assert!(ticket < research, "registration order");
+                }
+                let original = menus.context.unwrap();
+                assert_eq!(original.time, Some(time));
+                assert_eq!(original.target, target);
+                match target {
+                    RightClickTarget::Background { .. } => assert_eq!(original.price, 123.25),
+                    RightClickTarget::Element { .. } => assert_eq!(original.price, 321.5),
+                    RightClickTarget::Drawing { .. } => {
+                        // Linear scale: the top pixel is max and the bottom pixel is min.
+                        let map = chart.get_chart_mapping();
+                        let range = chart.state().price_scale().range();
+                        let expected = range.max
+                            - (pos.y - map.rect.top()) as f64 / map.rect.height() as f64
+                                * (range.max - range.min);
+                        assert!((original.price - expected).abs() < 0.00001);
+                    }
+                }
+                frame(&mut chart, &mut menus, vec![Event::PointerMoved(pick)]);
+                let mut chosen = None;
+                for pressed in [true, false] {
+                    let (action, _) = frame(
+                        &mut chart,
+                        &mut menus,
+                        vec![Event::PointerButton {
+                            pos: pick,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                    chosen = chosen.or(action);
+                }
+                assert_eq!(
+                    chosen,
+                    Some(ChartContextAction::Host {
+                        id: if background { "ticket" } else { "research" }.into(),
+                        context: original,
+                    })
+                );
+                assert!(!chart.menu_open);
+                assert_eq!(
+                    frame(&mut chart, &mut menus, vec![]).0,
+                    None,
+                    "one action per choice"
+                );
             }
         }
     }
