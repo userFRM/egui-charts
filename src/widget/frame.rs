@@ -1638,6 +1638,8 @@ impl Chart {
                 .unwrap_or_else(|| self.state.shown().len().saturating_sub(1));
             if let Some(bar) = self.state.shown().get(selected) {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
+                #[cfg(feature = "ui")]
+                let order_quantity = self.order_quantity.take();
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
@@ -1677,7 +1679,7 @@ impl Chart {
                     && self.config.show_legend_volume;
                 #[cfg(feature = "ui")]
                 {
-                    legend.quantity = self.order_quantity;
+                    legend.quantity = order_quantity;
                 }
                 let (quote_action, study_settings, bottom, quantity) = ui
                     .push_id(shown.id, |ui| {

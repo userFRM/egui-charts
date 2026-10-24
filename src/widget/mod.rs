@@ -377,7 +377,8 @@ pub struct Chart {
     /// Price axis tags of the trading lines drawn over the last frame, shown once on the next.
     #[cfg(feature = "ui")]
     pub(crate) trading_tags: Vec<(f64, egui::Color32)>,
-    /// The order quantity the legend shows under the quote buttons' spread, set by trading.
+    /// The order quantity the legend shows under the quote buttons' spread, set by trading for
+    /// the next frame only, so the box goes when trading stops drawing.
     #[cfg(feature = "ui")]
     pub(crate) order_quantity: Option<f64>,
     /// The legend's quantity box, when the user clicked it, for trading to open its calculator.
