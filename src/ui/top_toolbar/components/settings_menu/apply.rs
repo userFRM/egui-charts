@@ -13,11 +13,14 @@ use crate::{
 use egui::Color32;
 
 impl ChartSettingsState {
-    /// Read the chart's current display settings. Host-managed trading, alert and event groups
+    /// Read the chart's current display settings. Host-managed trading and alert groups
     /// retain defaults; hosts preserve their current values when refreshing chart settings.
     pub fn from_chart(chart: &Chart) -> Self {
         let config = chart.config();
-        let mut settings = Self::default();
+        let mut settings = Self {
+            events: chart.event_visibility().clone(),
+            ..Self::default()
+        };
         settings.candle_colors.body_up = config.bullish_color;
         settings.candle_colors.body_down = config.bearish_color;
         settings.candle_colors.border_up =
@@ -172,10 +175,11 @@ impl ChartSettingsState {
     }
 
     /// Apply the display controls offered by the dialog without rebuilding the chart or feed.
-    /// Host-owned trading, alerts and events are left to their providers. Invalid timezone,
+    /// Host-owned trading and alerts are left to their providers. Invalid timezone,
     /// margins or crosshair width returns an error before changing the chart.
     pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), &'static str> {
         let timezone = self.validate()?;
+        chart.set_event_visibility(self.events.clone());
         let watermark_text = if self.watermark.mode == WatermarkMode::SymbolAndDescription {
             Some(
                 chart

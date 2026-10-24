@@ -14,7 +14,11 @@ pub fn render_markers(
     price_scale: &PriceMap,
     coords: &ChartMapping,
 ) {
-    for marker in markers {
+    let mut tooltip_shown = false;
+    for (marker_index, marker) in markers.iter().enumerate() {
+        if !marker.size.is_finite() || marker.size <= 0.0 {
+            continue;
+        }
         if let Some(index) = crate::widget::sync::index_at(visible_data, marker.time) {
             let bar_idx = index.round().clamp(0.0, (visible_data.len() - 1) as f64) as usize;
             let bar = &visible_data[bar_idx];
@@ -55,25 +59,52 @@ pub fn render_markers(
                 marker.size,
             );
 
+            let mut hit_rect = Rect::from_center_size(pos, Vec2::splat(24.0 * marker.size));
             // Render text label if present
             if let Some(text) = &marker.text {
                 let text_pos = Pos2::new(pos.x, pos.y + 12.0 * marker.size);
-                context.painter.text(
+                hit_rect = hit_rect.union(context.painter.text(
                     text_pos,
                     egui::Align2::CENTER_TOP,
                     text,
                     FontId::proportional(10.0 * marker.size),
                     marker.color,
-                );
+                ));
             }
 
-            // TODO: Add tooltip on hover (requires hover detection in chart widget)
+            let ctx = context.painter.ctx();
+            let hit_rect = hit_rect
+                .intersect(context.rect)
+                .intersect(context.painter.clip_rect());
+            if !tooltip_shown
+                && let Some(tooltip) = &marker.tooltip
+                && ctx.pointer_hover_pos().is_some_and(|p| {
+                    hit_rect.contains(p) && ctx.layer_id_at(p) == Some(context.painter.layer_id())
+                })
+            {
+                egui::Tooltip::always_open(
+                    ctx.clone(),
+                    context.painter.layer_id(),
+                    egui::Id::unique((
+                        "bar-mark",
+                        context.rect.min.x.to_bits(),
+                        context.rect.min.y.to_bits(),
+                        marker_index,
+                    )),
+                    hit_rect,
+                )
+                .show(|ui| {
+                    ui.label(tooltip);
+                });
+                tooltip_shown = true;
+            }
         }
     }
 }
 
 /// Draws host-supplied event badges just above `baseline`, using the chart's time mapping.
-/// An event between bars uses the first bar at or after its time. Returns the clicked event ID;
+/// An event between bars uses the first bar at or after its time; whitespace extrapolates the
+/// nearest bar interval. Colliding badges stack upward. Returns the clicked event ID;
 /// callers handle that action before starting a chart drag. The badges use the event's colour,
 /// text and tooltip, without assigning any market meaning to them.
 pub fn render_event_band(
@@ -85,18 +116,22 @@ pub fn render_event_band(
 ) -> Option<String> {
     use crate::theme::ThemeExt;
     let mut clicked = None;
-    let first = visible_data.first()?;
-    let last = visible_data.last().unwrap();
+    visible_data.first()?;
+    let mut placed = Vec::<Rect>::new();
     for (index, event) in events.iter().enumerate() {
-        if event.time < first.time || event.time > last.time {
+        let at = crate::widget::sync::index_at(visible_data, event.time)?.ceil();
+        let x = coords.idx_to_x(coords.start_idx) + at as f32 * coords.bar_spacing;
+        let mut rect = Rect::from_center_size(Pos2::new(x, baseline - 11.0), Vec2::splat(22.0));
+        while placed.iter().any(|other| other.intersects(rect)) {
+            rect = rect.translate(Vec2::new(0.0, -24.0));
+        }
+        if rect.left() < coords.rect.left()
+            || rect.right() > coords.rect.right()
+            || rect.top() < coords.rect.top()
+        {
             continue;
         }
-        let at = visible_data.partition_point(|bar| bar.time < event.time);
-        let x = coords.idx_to_x(coords.start_idx + at);
-        let rect = Rect::from_center_size(Pos2::new(x, baseline - 11.0), Vec2::splat(22.0));
-        if rect.left() < coords.rect.left() || rect.right() > coords.rect.right() {
-            continue;
-        }
+        placed.push(rect);
         let response = ui.interact(
             rect,
             ui.scope_id().with(("event", &event.id, index)),
@@ -342,19 +377,40 @@ mod tests {
             ] {
                 for seconds in [-2, 0, 1, 3] {
                     let marker = Marker::new(t + chrono::Duration::seconds(seconds))
+                        .with_tooltip("Host bar annotation")
                         .with_pos(position)
                         .with_shape(MarkerShape::Circle);
-                    let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                        let painter =
-                            Painter::new(ui.ctx().clone(), egui::LayerId::background(), rect);
-                        render_markers(
-                            &RenderContext::new(&painter, rect),
-                            std::slice::from_ref(&marker),
-                            &bars,
-                            &map,
-                            &coords,
+                    let ctx = egui::Context::default();
+                    let hover = Pos2::new(coords.idx_to_x(12) + seconds as f32 * 5.0, want);
+                    let mut output = egui::FullOutput::default();
+                    for _ in 0..3 {
+                        output = ctx.run_ui(
+                            egui::RawInput {
+                                events: vec![egui::Event::PointerMoved(hover)],
+                                ..Default::default()
+                            },
+                            |ui| {
+                                let painter = Painter::new(
+                                    ui.ctx().clone(),
+                                    egui::LayerId::background(),
+                                    rect,
+                                );
+                                render_markers(
+                                    &RenderContext::new(&painter, rect),
+                                    std::slice::from_ref(&marker),
+                                    &bars,
+                                    &map,
+                                    &coords,
+                                );
+                            },
                         );
-                    });
+                        output.textures_delta.clear();
+                    }
+                    assert!(
+                        output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        Shape::Text(text) if text.galley.text() == "Host bar annotation")),
+                        "the marker tooltip must appear at its painted position"
+                    );
                     let center = output.shapes.iter().find_map(|c| match &c.shape {
                         Shape::Circle(circle) => Some(circle.center),
                         _ => None,
@@ -371,7 +427,8 @@ mod tests {
             }
         }
     }
-    /// Event targets follow the same bar centre after a pan and zoom and return the host ID.
+    /// x = 500 - (35 + offset - index + 0.5) * spacing - 1.
+    /// Events at slots 11 and 30 keep distinct click targets, including a stacked duplicate.
     #[test]
     fn event_band_follows_time_mapping_and_returns_the_clicked_id() {
         use egui::{Context, Event, Modifiers, PointerButton, RawInput};
@@ -391,7 +448,12 @@ mod tests {
             .collect();
         let event =
             Marker::event(bars[10].time + chrono::Duration::minutes(15), "E").with_id("event-42");
-        for (spacing, offset) in [(10.0, 0.0), (15.0, 2.0)] {
+        let events = [
+            event.clone(),
+            event.with_id("event-43"),
+            Marker::event(bars[29].time + chrono::Duration::hours(1), "N").with_id("future"),
+        ];
+        for (spacing, offset, x) in [(10.0, 0.0, [254.0, 444.0]), (15.0, 2.0, [101.5, 386.5])] {
             let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 300.0));
             let map = PriceMap::new(
                 PriceTransform::default(),
@@ -400,33 +462,42 @@ mod tests {
                 200.0,
                 false,
             );
-            let coords = ChartMapping::new(rect, spacing, 0, 29, offset, map);
-            let centre = Pos2::new(coords.idx_to_x(11), 289.0);
-            let mut clicked = None;
-            for pressed in [None, Some(true), Some(false)] {
-                let mut input = RawInput::default();
-                input.events.push(Event::PointerMoved(centre));
-                if let Some(pressed) = pressed {
-                    input.events.push(Event::PointerButton {
-                        pos: centre,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Modifiers::NONE,
-                    });
-                }
-                let output = ctx.run_ui(input, |ui| {
-                    clicked =
-                        render_event_band(ui, std::slice::from_ref(&event), &bars, &coords, 300.0)
+            let coords = ChartMapping::new(rect, spacing, 0, 35, offset, map);
+            let centres = [
+                Pos2::new(x[0], 289.0),
+                Pos2::new(x[0], 265.0),
+                Pos2::new(x[1], 289.0),
+            ];
+            for (centre, event) in centres.into_iter().zip(&events) {
+                let mut clicked = None;
+                for pressed in [None, Some(true), Some(false)] {
+                    let mut input = RawInput::default();
+                    input.events.push(Event::PointerMoved(centre));
+                    if let Some(pressed) = pressed {
+                        input.events.push(Event::PointerButton {
+                            pos: centre,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        });
+                    }
+                    let output = ctx.run_ui(input, |ui| {
+                        clicked = render_event_band(ui, &events, &bars, &coords, 300.0)
                             .or(clicked.take());
-                });
-                let circle = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    Shape::Circle(circle) => Some(circle.center),
-                    _ => None,
-                });
-                output.drop_without_applying_deltas();
-                assert_eq!(circle, Some(centre));
+                    });
+                    let circles: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            Shape::Circle(circle) => Some(circle.center),
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    assert_eq!(circles, centres);
+                }
+                assert_eq!(clicked.as_deref(), event.id.as_deref());
             }
-            assert_eq!(clicked.as_deref(), Some("event-42"));
         }
     }
 }

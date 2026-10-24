@@ -17,6 +17,8 @@ use layouts::{DemoChart, LayoutTab};
 
 #[path = "comparison.rs"]
 mod comparison;
+#[path = "marks.rs"]
+mod marks;
 #[path = "replay.rs"]
 mod replay;
 #[path = "templates.rs"]
@@ -579,6 +581,8 @@ impl DemoApp {
             }]);
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
+        self.chart
+            .set_mark_source(Some(Arc::new(marks::DemoMarks(self.bars.clone()))));
     }
 
     // --- alerts ------------------------------------------------------------
