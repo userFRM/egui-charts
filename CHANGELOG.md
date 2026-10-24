@@ -163,7 +163,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Applying drawing templates preserves the target study pane, and saved defaults omit pane ownership. Standalone drawing managers release cached geometry after drawings are deleted. ([#151](https://github.com/userFRM/egui-charts/issues/151))
+- Applying drawing templates preserves the target study pane, and saved defaults omit pane ownership. Standalone drawing managers release cached geometry after drawings are deleted. Chart layouts keep study-owned drawings local rather than copying their chart-local study ids into another chart. ([#151](https://github.com/userFRM/egui-charts/issues/151))
 
 - The study refresh regression checks one full recompute per frame without assuming measured update costs preserve registration order. Unequal refresh deadlines exercise that order independently of timer precision. ([#747](https://github.com/userFRM/egui-charts/issues/747))
 
