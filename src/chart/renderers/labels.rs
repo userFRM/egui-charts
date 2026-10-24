@@ -12,7 +12,7 @@ use egui::layers::ShapeIdx;
 use egui::{Color32, FontId, Pos2, Rect, Shape};
 
 /// Length of the tick marks on the price axis, from the plot edge.
-const PRICE_TICK_LENGTH: f32 = 5.0;
+const PRICE_TICK_LENGTH: f32 = 3.0;
 
 /// Paints the price labels on the right side into `slot`, using smart tick mark generation and
 /// leaving out the labels the `tags` (the price line, last price and crosshair tags) would cut
@@ -66,25 +66,28 @@ pub fn render_price_labels_at_pos(
             .size()
             .y
             / 2.0;
-        let edges = [context.rect.top() + inset, context.rect.bottom() - inset];
-        // An edge label replaces the marks closer to it than they are to each other.
-        let step = marks
-            .windows(2)
-            .map(|pair| (pair[1].y_coord - pair[0].y_coord).abs())
-            .reduce(f32::min)
-            .unwrap_or(inset * 4.0);
-        marks.retain(|mark| edges.iter().all(|y| (mark.y_coord - y).abs() >= step));
-        marks.extend(edges.map(|y| {
-            let value = price_scale.y_to_scale(y);
-            PriceMark {
-                price: value,
-                label: price_scale
-                    .transform()
-                    .label(value, tick_decimals(price_scale, y)),
-                y_coord: y,
-                weight: 0,
-            }
-        }));
+        // A pane too short for two labels gets none at its edges.
+        if context.rect.height() >= inset * 4.0 {
+            let edges = [context.rect.top() + inset, context.rect.bottom() - inset];
+            // An edge label replaces the marks closer to it than they are to each other.
+            let step = marks
+                .windows(2)
+                .map(|pair| (pair[1].y_coord - pair[0].y_coord).abs())
+                .reduce(f32::min)
+                .unwrap_or(inset * 4.0);
+            marks.retain(|mark| edges.iter().all(|y| (mark.y_coord - y).abs() >= step));
+            marks.extend(edges.map(|y| {
+                let value = price_scale.y_to_scale(y);
+                PriceMark {
+                    price: value,
+                    label: price_scale
+                        .transform()
+                        .label(value, tick_decimals(price_scale, y)),
+                    y_coord: y,
+                    weight: 0,
+                }
+            }));
+        }
     }
 
     let painter = if axis.hide_clipped_labels {
@@ -99,11 +102,9 @@ pub fn render_price_labels_at_pos(
     };
     let mut shapes = Vec::new();
     if axis.border_visible {
-        let color = if axis.border_color == Color32::PLACEHOLDER {
-            context.painter.ctx().active_theme().ui.border
-        } else {
-            axis.border_color
-        };
+        let color = axis
+            .border_color
+            .unwrap_or_else(|| context.painter.ctx().active_theme().ui.border);
         shapes.push(Shape::line_segment(
             [
                 Pos2::new(edge + side * 0.5, context.rect.top()),
@@ -640,7 +641,7 @@ mod tests {
             });
             let tick_count = segments
                 .iter()
-                .filter(|[a, b]| a.x == plot.right() && b.x == plot.right() + 5.0 && a.y == b.y)
+                .filter(|[a, b]| a.x == plot.right() && b.x == plot.right() + 3.0 && a.y == b.y)
                 .count();
             let at_edges = labels
                 .iter()

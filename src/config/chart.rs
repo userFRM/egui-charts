@@ -57,7 +57,8 @@ pub enum SessionBreakStyle {
     Dotted,
 }
 
-/// Appearance of the price axis: its border, tick marks and which labels it shows.
+/// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
+/// the main and series price axes; study panes draw their own axes.
 ///
 /// Tick spacing is a property of each scale, set through
 /// [`PriceScaleOptions::tick_marks`](crate::scales::PriceScaleOptions::tick_marks).
@@ -66,9 +67,9 @@ pub struct PriceAxisOptions {
     /// Draw a line between the plot and the axis.
     /// Default: false
     pub border_visible: bool,
-    /// Colour of the border. `PLACEHOLDER` uses the active theme's border colour.
-    /// Default: `PLACEHOLDER`
-    pub border_color: Color32,
+    /// Colour of the border; `None` uses the theme's border colour.
+    /// Default: None
+    pub border_color: Option<Color32>,
     /// Draw a short horizontal tick beside each label.
     /// Default: false
     pub ticks_visible: bool,
@@ -84,7 +85,7 @@ impl Default for PriceAxisOptions {
     fn default() -> Self {
         Self {
             border_visible: false,
-            border_color: Color32::PLACEHOLDER,
+            border_color: None,
             ticks_visible: false,
             edge_ticks_visible: false,
             hide_clipped_labels: true,
